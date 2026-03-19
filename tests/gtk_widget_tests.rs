@@ -221,25 +221,131 @@ fn nested_paned_rebuild_cycle() {
 }
 
 /// Verify that nested Paned widgets get proper size allocation.
-/// This catches the bug where connect_realize sets position to 0
-/// because inner Paneds realize before the outer one allocates space.
+/// Proves that Paned width is 0 at construction time — the root cause
+/// of the "nested splits go dark" bug. connect_realize fires at this
+/// point, so set_position(0.5 * 0) = 0, giving the first child no space.
 #[test]
-fn nested_paned_position_not_zero() {
+fn paned_has_zero_size_before_allocation() {
     require_display!();
 
-    let outer = gtk4::Paned::new(gtk4::Orientation::Horizontal);
-    let inner = gtk4::Paned::new(gtk4::Orientation::Vertical);
-    let t1 = gtk4::Label::new(Some("t1"));
-    let t2 = gtk4::Label::new(Some("t2"));
-    let t3 = gtk4::Label::new(Some("t3"));
+    let paned = gtk4::Paned::new(gtk4::Orientation::Horizontal);
+    let left = gtk4::Label::new(Some("left"));
+    let right = gtk4::Label::new(Some("right"));
+    paned.set_start_child(Some(&left));
+    paned.set_end_child(Some(&right));
 
-    inner.set_start_child(Some(&t1));
-    inner.set_end_child(Some(&t2));
-    outer.set_start_child(Some(&inner));
-    outer.set_end_child(Some(&t3));
+    assert_eq!(paned.width(), 0);
+    assert_eq!(paned.height(), 0);
+}
 
-    // At construction time, width/height are 0 — this is why
-    // connect_realize was wrong for setting position
-    assert_eq!(outer.width(), 0, "Paned width should be 0 before realization");
-    assert_eq!(inner.width(), 0, "Inner Paned width should be 0 before realization");
+/// Regression test: build_layout_widget with nested splits must set
+/// Paned positions via notify::width (not connect_realize). We call
+/// the real build_layout_widget, then trigger allocation and verify
+/// positions are non-zero.
+#[test]
+fn build_layout_widget_sets_position_after_allocation() {
+    require_display!();
+
+    use rttx::session::layout::*;
+    use rttx::session::build_layout_widget;
+
+    // (t1 / t2) | t3 — nested split
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            orientation: SplitOrientation::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Terminal {
+                uuid: "t1".into(), profile: None, cwd: None, custom_title: None,
+            }),
+            second: Box::new(LayoutNode::Terminal {
+                uuid: "t2".into(), profile: None, cwd: None, custom_title: None,
+            }),
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t3".into(), profile: None, cwd: None, custom_title: None,
+        }),
+    };
+
+    let widget = build_layout_widget(&layout, &|_uuid, _cwd, _profile, _title| {
+        gtk4::Label::new(Some("terminal")).upcast()
+    });
+
+    let outer = widget.downcast_ref::<gtk4::Paned>()
+        .expect("Root must be Paned");
+
+    // Before allocation, position is 0 — expected
+    assert_eq!(outer.position(), 0);
+
+    // Trigger allocation — this fires notify::width, which sets position
+    outer.set_size_request(800, 600);
+    outer.allocate(800, 600, -1, None);
+
+    assert!(
+        outer.position() > 0,
+        "Outer Paned position must be > 0 after allocation, got {}. \
+         Regression: notify handler not firing.",
+        outer.position()
+    );
+}
+
+/// Regression test: triple-nested split must not leave any Paned at position 0.
+/// This is the exact user scenario: split, split again, third split.
+#[test]
+fn triple_nested_split_all_paneds_nonzero() {
+    require_display!();
+
+    use rttx::session::layout::*;
+    use rttx::session::build_layout_widget;
+
+    // ((t1 | t2) | t3) | t4
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            orientation: SplitOrientation::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                orientation: SplitOrientation::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Terminal {
+                    uuid: "t1".into(), profile: None, cwd: None, custom_title: None,
+                }),
+                second: Box::new(LayoutNode::Terminal {
+                    uuid: "t2".into(), profile: None, cwd: None, custom_title: None,
+                }),
+            }),
+            second: Box::new(LayoutNode::Terminal {
+                uuid: "t3".into(), profile: None, cwd: None, custom_title: None,
+            }),
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t4".into(), profile: None, cwd: None, custom_title: None,
+        }),
+    };
+
+    let widget = build_layout_widget(&layout, &|_uuid, _cwd, _profile, _title| {
+        gtk4::Label::new(Some("terminal")).upcast()
+    });
+
+    let root = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    root.set_size_request(800, 600);
+    root.allocate(800, 600, -1, None);
+
+    fn check_all_paneds(widget: &gtk4::Widget, depth: usize) {
+        if let Some(paned) = widget.downcast_ref::<gtk4::Paned>() {
+            assert!(
+                paned.position() > 0,
+                "Paned at depth {depth} has position 0 — nested split sizing regression"
+            );
+            if let Some(ref start) = paned.start_child() {
+                check_all_paneds(start, depth + 1);
+            }
+            if let Some(ref end) = paned.end_child() {
+                check_all_paneds(end, depth + 1);
+            }
+        }
+    }
+    check_all_paneds(widget.upcast_ref(), 0);
 }
