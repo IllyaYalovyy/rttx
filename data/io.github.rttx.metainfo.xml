@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.rttx</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>rttx</name>
+  <summary>A tiling terminal emulator for GNOME</summary>
+  <description>
+    <p>
+      rttx is a tiling terminal emulator built with GTK4 and Libadwaita.
+      It features split-screen terminals, sidebar-based session management,
+      session persistence, input synchronization, and drag-and-drop rearrangement.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.rttx.desktop</launchable>
+  <url type="homepage">https://github.com/rttx/rttx</url>
+  <url type="bugtracker">https://github.com/rttx/rttx/issues</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>rttx</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+</component>

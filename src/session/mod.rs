@@ -41,15 +41,15 @@ pub fn load_window_state() -> WindowState {
 /// Build the GTK widget tree for a layout node.
 pub fn build_layout_widget(
     node: &LayoutNode,
-    make_terminal: &dyn Fn(&str, Option<&str>, Option<&str>) -> gtk4::Widget,
+    make_terminal: &dyn Fn(&str, Option<&str>, Option<&str>, Option<&str>) -> gtk4::Widget,
 ) -> gtk4::Widget {
     match node {
         LayoutNode::Terminal {
             uuid,
             cwd,
-            custom_title: _,
+            custom_title,
             profile: _,
-        } => make_terminal(uuid, cwd.as_deref(), None),
+        } => make_terminal(uuid, cwd.as_deref(), None, custom_title.as_deref()),
         LayoutNode::Split {
             orientation,
             ratio,

@@ -107,3 +107,54 @@ fn preferences_backward_compat_missing_input_sync() {
     let state: rttx::session::layout::WindowState = serde_json::from_str(json).unwrap();
     assert!(!state.sessions[0].input_sync);
 }
+
+#[test]
+fn custom_title_persists_in_layout() {
+    use rttx::session::layout::{LayoutNode, SessionState, WindowState};
+
+    let state = WindowState {
+        sessions: vec![SessionState {
+            uuid: "s1".into(),
+            name: "Dev".into(),
+            layout: LayoutNode::Terminal {
+                uuid: "t1".into(),
+                profile: None,
+                cwd: Some("/home/user".into()),
+                custom_title: Some("my editor".into()),
+            },
+            input_sync: false,
+        }],
+        active_session_index: 0,
+        width: 800,
+        height: 600,
+        is_maximized: false,
+    };
+
+    let json = serde_json::to_string(&state).unwrap();
+    let loaded: WindowState = serde_json::from_str(&json).unwrap();
+    if let LayoutNode::Terminal { custom_title, .. } = &loaded.sessions[0].layout {
+        assert_eq!(custom_title.as_deref(), Some("my editor"));
+    } else {
+        panic!("Expected Terminal node");
+    }
+}
+
+#[test]
+fn custom_title_backward_compat_null() {
+    // Old JSON without custom_title should deserialize as None
+    let json = r#"{
+        "sessions": [{
+            "uuid": "s1",
+            "name": "Test",
+            "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}}
+        }],
+        "active_session_index": 0,
+        "width": 800,
+        "height": 600,
+        "is_maximized": false
+    }"#;
+    let state: rttx::session::layout::WindowState = serde_json::from_str(json).unwrap();
+    if let rttx::session::layout::LayoutNode::Terminal { custom_title, .. } = &state.sessions[0].layout {
+        assert_eq!(*custom_title, None);
+    }
+}

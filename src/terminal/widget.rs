@@ -11,6 +11,7 @@ mod imp {
     #[derive(Default)]
     pub struct TerminalWidget {
         pub uuid: RefCell<String>,
+        pub custom_title: RefCell<Option<String>>,
         pub vte: vte4::Terminal,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
@@ -67,6 +68,50 @@ mod imp {
             self.header.append(&self.split_h_button);
             self.header.append(&self.split_v_button);
             self.header.append(&self.close_button);
+
+            // Double-click title label to edit custom title
+            let gesture = gtk4::GestureClick::new();
+            gesture.set_button(1);
+            let header = self.header.clone();
+            let label = self.title_label.clone();
+            let obj_weak = obj.downgrade();
+            gesture.connect_released(move |g, n_press, _, _| {
+                if n_press == 2 {
+                    if let Some(obj) = obj_weak.upgrade() {
+                        let entry = gtk4::Entry::new();
+                        entry.set_text(&label.label());
+                        entry.set_hexpand(true);
+
+                        // Replace label with entry
+                        label.set_visible(false);
+                        header.prepend(&entry);
+                        entry.grab_focus();
+
+                        let header2 = header.clone();
+                        let label2 = label.clone();
+                        let obj2 = obj.clone();
+                        let commit = move |entry: &gtk4::Entry| {
+                            let text = entry.text().to_string();
+                            if !text.is_empty() {
+                                label2.set_label(&text);
+                                obj2.imp().custom_title.replace(Some(text));
+                            }
+                            label2.set_visible(true);
+                            header2.remove(entry);
+                        };
+
+                        let commit2 = commit.clone();
+                        entry.connect_activate(move |e| commit2(e));
+
+                        let focus_ctrl = gtk4::EventControllerFocus::new();
+                        let entry_ref = entry.clone();
+                        focus_ctrl.connect_leave(move |_| commit(&entry_ref));
+                        entry.add_controller(focus_ctrl);
+                    }
+                    g.set_state(gtk4::EventSequenceState::Claimed);
+                }
+            });
+            self.title_label.add_controller(gesture);
 
             // Search bar
             self.search_entry.set_hexpand(true);
@@ -141,6 +186,11 @@ impl TerminalWidget {
         self.imp().title_label.set_label(title);
     }
 
+    /// Get the custom title, if set by the user.
+    pub fn custom_title(&self) -> Option<String> {
+        self.imp().custom_title.borrow().clone()
+    }
+
     pub fn toggle_search(&self) {
         let bar = &self.imp().search_bar;
         bar.set_search_mode(!bar.is_search_mode());
@@ -164,11 +214,14 @@ impl TerminalWidget {
 
         let vte = self.imp().vte.clone();
         let title_label = self.imp().title_label.clone();
+        let custom_title = self.imp().custom_title.clone();
 
-        // Update title when VTE title changes
+        // Update title when VTE title changes (only if no custom title set)
         vte.connect_window_title_changed(move |vte| {
-            if let Some(title) = vte.window_title() {
-                title_label.set_label(&title);
+            if custom_title.borrow().is_none() {
+                if let Some(title) = vte.window_title() {
+                    title_label.set_label(&title);
+                }
             }
         });
 

@@ -162,6 +162,8 @@ impl Window {
             ("zoom-in",        &["<Ctrl>plus", "<Ctrl>equal"], |w| w.zoom_focused(1)),
             ("zoom-out",       &["<Ctrl>minus"],         |w| w.zoom_focused(-1)),
             ("zoom-reset",     &["<Ctrl>0"],             |w| w.zoom_focused(0)),
+            ("copy",           &["<Ctrl><Shift>c"],      |w| w.clipboard_copy()),
+            ("paste",          &["<Ctrl><Shift>v"],      |w| w.clipboard_paste()),
         ];
 
         for &(name, accels, callback) in actions {
@@ -282,9 +284,10 @@ impl Window {
 
     fn update_cwds(&self, layout: &mut LayoutNode) {
         match layout {
-            LayoutNode::Terminal { uuid, cwd, .. } => {
+            LayoutNode::Terminal { uuid, cwd, custom_title, .. } => {
                 if let Some(term) = self.imp().terminals.borrow().get(uuid.as_str()) {
                     *cwd = term.current_directory();
+                    *custom_title = term.custom_title();
                 }
             }
             LayoutNode::Split { first, second, .. } => {
@@ -299,8 +302,12 @@ impl Window {
 
         let win = self.clone();
         let content =
-            session::build_layout_widget(&session_state.layout, &|uuid, cwd, _| {
+            session::build_layout_widget(&session_state.layout, &|uuid, cwd, _, custom_title| {
                 let term = TerminalWidget::new(uuid, cwd);
+                if let Some(title) = custom_title {
+                    term.set_title(title);
+                    term.imp().custom_title.replace(Some(title.to_string()));
+                }
                 win.connect_terminal_signals(&term);
                 win.imp()
                     .terminals
@@ -392,7 +399,12 @@ impl Window {
 
         let win = self.clone();
         let uuid = term.uuid();
-        let handler_id = term.vte().connect_child_exited(move |_, _| {
+        let handler_id = term.vte().connect_child_exited(move |_, status| {
+            // Notify if this terminal wasn't focused
+            let focused = win.imp().focused_terminal_uuid.borrow().clone();
+            if focused.as_deref() != Some(&uuid) {
+                win.notify_process_completed(&uuid, status);
+            }
             win.close_terminal(&uuid);
         });
         term.imp().child_exited_handler.replace(Some(handler_id));
@@ -595,7 +607,7 @@ impl Window {
         // creating + connecting signals for genuinely new ones.
         let win = self.clone();
         let content =
-            session::build_layout_widget(&session_state.layout, &|uuid, cwd, _| {
+            session::build_layout_widget(&session_state.layout, &|uuid, cwd, _, custom_title| {
                 // Reuse existing terminal (already has signal handlers)
                 let terminals = win.imp().terminals.borrow();
                 if let Some(existing) = terminals.get(uuid) {
@@ -605,6 +617,10 @@ impl Window {
 
                 // New terminal — create and connect signals
                 let term = TerminalWidget::new(uuid, cwd);
+                if let Some(title) = custom_title {
+                    term.set_title(title);
+                    term.imp().custom_title.replace(Some(title.to_string()));
+                }
                 win.connect_terminal_signals(&term);
                 win.imp()
                     .terminals
@@ -759,6 +775,41 @@ impl Window {
                     -1 => { let s = vte.font_scale(); vte.set_font_scale(s / 1.1); }
                     _ => vte.set_font_scale(1.0),
                 }
+            }
+        }
+    }
+
+    fn notify_process_completed(&self, terminal_uuid: &str, status: i32) {
+        let title = self.imp().terminals.borrow()
+            .get(terminal_uuid)
+            .map(|t| t.title_label().label().to_string())
+            .unwrap_or_else(|| "Terminal".into());
+
+        let body = if status == 0 {
+            format!("\"{}\" completed successfully", title)
+        } else {
+            format!("\"{}\" exited with status {}", title, status)
+        };
+
+        let notification = gtk4::gio::Notification::new("Process completed");
+        notification.set_body(Some(&body));
+        if let Some(app) = self.application() {
+            app.send_notification(None, &notification);
+        }
+    }
+
+    fn clipboard_copy(&self) {
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.vte().copy_clipboard_format(vte4::Format::Text);
+            }
+        }
+    }
+
+    fn clipboard_paste(&self) {
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.vte().paste_clipboard();
             }
         }
     }
