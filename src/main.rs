@@ -1,4 +1,5 @@
 mod application;
+mod preferences_window;
 mod sidebar;
 mod terminal;
 mod window;

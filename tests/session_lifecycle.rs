@@ -81,16 +81,19 @@ fn workflow_multi_session_state() {
             uuid: "s1".into(),
             name: "Editor".into(),
             layout: hsplit(term("editor-main"), vsplit(term("editor-side"), term("editor-term"))),
+            input_sync: false,
         },
         SessionState {
             uuid: "s2".into(),
             name: "Build".into(),
             layout: vsplit(term("build-output"), term("build-logs")),
+            input_sync: false,
         },
         SessionState {
             uuid: "s3".into(),
             name: "Monitoring".into(),
             layout: term("htop"),
+            input_sync: false,
         },
     ];
 
@@ -141,6 +144,7 @@ fn workflow_persist_and_restore_with_cwds() {
                     custom_title: Some("cargo watch".into()),
                 },
             ),
+            input_sync: false,
         }],
         active_session_index: 0,
         width: 1200,
@@ -218,10 +222,11 @@ fn deeply_nested_layout_serializes() {
 #[test]
 fn empty_session_name_is_valid() {
     let session = SessionState {
-        uuid: "s1".into(),
-        name: String::new(),
-        layout: term("t1"),
-    };
+                uuid: "s1".into(),
+                name: String::new(),
+                layout: term("t1"),
+                input_sync: false,
+            };
     let json = serde_json::to_string(&session).unwrap();
     let restored: SessionState = serde_json::from_str(&json).unwrap();
     assert_eq!(session, restored);

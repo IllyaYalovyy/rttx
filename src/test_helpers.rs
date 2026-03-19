@@ -69,6 +69,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
         uuid: id.to_string(),
         name: name.to_string(),
         layout,
+        input_sync: false,
     }
 }
 

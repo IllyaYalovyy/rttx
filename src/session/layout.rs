@@ -30,6 +30,8 @@ pub struct SessionState {
     pub uuid: String,
     pub name: String,
     pub layout: LayoutNode,
+    #[serde(default)]
+    pub input_sync: bool,
 }
 
 /// Persistent state of the entire application window.
@@ -172,6 +174,50 @@ impl LayoutNode {
             }
         }
     }
+
+    /// Swap two terminals in the tree by UUID.
+    pub fn swap_terminals(&mut self, uuid_a: &str, uuid_b: &str) {
+        if uuid_a == uuid_b { return; }
+        Self::swap_in_tree(self, uuid_a, uuid_b);
+    }
+
+    /// Recursively swap terminal data. We do a single pass, collecting
+    /// mutable references to both target nodes, then swap their fields.
+    fn swap_in_tree(node: &mut LayoutNode, a: &str, b: &str) {
+        // Collect all terminal nodes as mutable pointers, find the two targets, swap.
+        let mut terminals: Vec<*mut LayoutNode> = Vec::new();
+        Self::collect_terminal_ptrs(node, &mut terminals);
+
+        let mut ptr_a: Option<*mut LayoutNode> = None;
+        let mut ptr_b: Option<*mut LayoutNode> = None;
+
+        for &ptr in &terminals {
+            // SAFETY: we have exclusive access to the tree via &mut self,
+            // and we only read uuid to find the targets.
+            let n = unsafe { &*ptr };
+            if let LayoutNode::Terminal { uuid, .. } = n {
+                if uuid == a { ptr_a = Some(ptr); }
+                if uuid == b { ptr_b = Some(ptr); }
+            }
+        }
+
+        if let (Some(pa), Some(pb)) = (ptr_a, ptr_b) {
+            // SAFETY: pa and pb point to different nodes in the tree
+            // (since uuid_a != uuid_b and UUIDs are unique).
+            // We have &mut access to the whole tree.
+            unsafe { std::ptr::swap(pa, pb); }
+        }
+    }
+
+    fn collect_terminal_ptrs(node: &mut LayoutNode, out: &mut Vec<*mut LayoutNode>) {
+        match node {
+            LayoutNode::Terminal { .. } => out.push(node as *mut LayoutNode),
+            LayoutNode::Split { first, second, .. } => {
+                Self::collect_terminal_ptrs(first, out);
+                Self::collect_terminal_ptrs(second, out);
+            }
+        }
+    }
 }
 
 impl SessionState {
@@ -180,6 +226,7 @@ impl SessionState {
             uuid: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             layout: LayoutNode::new_terminal(),
+            input_sync: false,
         }
     }
 }
@@ -433,20 +480,50 @@ mod tests {
         let layout = hsplit(term("t1"), term("t2"));
         let original_count = layout.terminal_count();
 
-        // Split t1
         let after_split = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
         assert_eq!(after_split.terminal_count(), original_count + 1);
 
-        // Find the new terminal (the one that's not t1 or t2)
         let new_uuid = after_split
             .terminal_uuids()
             .into_iter()
             .find(|u| u != "t1" && u != "t2")
             .unwrap();
 
-        // Remove it
         let after_remove = after_split.remove_terminal(&new_uuid).unwrap();
         assert_eq!(after_remove.terminal_count(), original_count);
+    }
+
+    #[test]
+    fn swap_terminals_exchanges_positions() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+        layout.swap_terminals("t1", "t2");
+        let uuids = layout.terminal_uuids();
+        // After swap, t2 is in first position, t1 in second
+        assert_eq!(uuids, vec!["t2".to_string(), "t1".to_string()]);
+    }
+
+    #[test]
+    fn swap_terminals_preserves_count() {
+        let mut layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        let count_before = layout.terminal_count();
+        layout.swap_terminals("t1", "t3");
+        assert_eq!(layout.terminal_count(), count_before);
+    }
+
+    #[test]
+    fn swap_nonexistent_terminal_is_noop() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+        let before = layout.clone();
+        layout.swap_terminals("t1", "nonexistent");
+        assert_eq!(layout, before);
+    }
+
+    #[test]
+    fn swap_same_terminal_is_noop() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+        let before = layout.clone();
+        layout.swap_terminals("t1", "t1");
+        assert_eq!(layout, before);
     }
 }
 

@@ -22,6 +22,7 @@ mod imp {
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<std::collections::HashMap<String, TerminalWidget>>,
+        pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
     impl Default for Window {
@@ -33,6 +34,7 @@ mod imp {
                 add_session_button: gtk4::Button::from_icon_name("list-add-symbolic"),
                 state: RefCell::new(WindowState::default()),
                 terminals: RefCell::new(std::collections::HashMap::new()),
+                focused_terminal_uuid: RefCell::new(None),
             }
         }
     }
@@ -66,6 +68,14 @@ mod imp {
 
             let menu_button = gtk4::MenuButton::new();
             menu_button.set_icon_name("open-menu-symbolic");
+
+            let menu = gtk4::gio::Menu::new();
+            menu.append(Some("Preferences"), Some("win.preferences"));
+            menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
+            menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
+            menu.append(Some("Fullscreen"), Some("win.fullscreen"));
+            menu_button.set_menu_model(Some(&menu));
+
             header.pack_end(&menu_button);
 
             // Sidebar
@@ -127,9 +137,65 @@ impl Window {
         let obj: Self = glib::Object::builder()
             .property("application", app)
             .build();
+        obj.setup_actions(app);
         obj.setup_signals();
         obj.restore_state();
         obj
+    }
+
+    fn setup_actions(&self, app: &adw::Application) {
+        let actions: &[(&str, &[&str], fn(&Window))] = &[
+            ("new-session",    &["<Ctrl><Shift>t"], |w| w.add_session()),
+            ("close-terminal", &["<Ctrl><Shift>w"], |w| w.close_focused_terminal()),
+            ("split-h",        &["<Ctrl><Shift>e"], |w| w.split_focused(SplitOrientation::Horizontal)),
+            ("split-v",        &["<Ctrl><Shift>o"], |w| w.split_focused(SplitOrientation::Vertical)),
+            ("toggle-search",  &["<Ctrl><Shift>f"], |w| w.toggle_focused_search()),
+            ("toggle-sidebar", &["<Ctrl><Shift>n"], |w| {
+                let sv = &w.imp().split_view;
+                sv.set_show_sidebar(!sv.shows_sidebar());
+            }),
+            ("fullscreen",     &["F11"],            |w| {
+                if w.is_fullscreen() { w.unfullscreen() } else { w.fullscreen() }
+            }),
+            ("next-session",   &["<Ctrl>Tab"],           |w| w.cycle_session(1)),
+            ("prev-session",   &["<Ctrl><Shift>Tab"],    |w| w.cycle_session(-1)),
+            ("zoom-in",        &["<Ctrl>plus", "<Ctrl>equal"], |w| w.zoom_focused(1)),
+            ("zoom-out",       &["<Ctrl>minus"],         |w| w.zoom_focused(-1)),
+            ("zoom-reset",     &["<Ctrl>0"],             |w| w.zoom_focused(0)),
+        ];
+
+        for &(name, accels, callback) in actions {
+            let action = gtk4::gio::SimpleAction::new(name, None);
+            let win = self.clone();
+            action.connect_activate(move |_, _| callback(&win));
+            self.add_action(&action);
+            app.set_accels_for_action(&format!("win.{name}"), accels);
+        }
+
+        // Input sync toggle (stateful action)
+        let sync_action = gtk4::gio::SimpleAction::new_stateful(
+            "toggle-input-sync",
+            None,
+            &false.to_variant(),
+        );
+        let win = self.clone();
+        sync_action.connect_activate(move |action, _| {
+            let current = action.state().and_then(|v| v.get::<bool>()).unwrap_or(false);
+            let new_val = !current;
+            action.set_state(&new_val.to_variant());
+            win.set_input_sync(new_val);
+        });
+        self.add_action(&sync_action);
+        app.set_accels_for_action("win.toggle-input-sync", &["<Ctrl><Shift>i"]);
+
+        // Preferences action (no accelerator, triggered from menu)
+        let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
+        let win = self.clone();
+        prefs_action.connect_activate(move |_, _| {
+            crate::preferences_window::show(&win);
+        });
+        self.add_action(&prefs_action);
+        app.set_accels_for_action("win.preferences", &["<Ctrl>comma"]);
     }
 
     fn setup_signals(&self) {
@@ -264,6 +330,48 @@ impl Window {
     }
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
+        // Apply current preferences
+        self.apply_preferences_to_terminal(term);
+
+        // Track focus
+        let win = self.clone();
+        let uuid = term.uuid();
+        let focus_controller = gtk4::EventControllerFocus::new();
+        focus_controller.connect_enter(move |_| {
+            win.imp().focused_terminal_uuid.replace(Some(uuid.clone()));
+        });
+        term.vte().add_controller(focus_controller);
+
+        // Input sync: forward commit text to sibling terminals
+        let win = self.clone();
+        let uuid = term.uuid();
+        term.vte().connect_commit(move |_, text, _| {
+            win.forward_input(&uuid, text);
+        });
+
+        // Drag and drop: drag from header to swap terminals
+        let drag_source = gtk4::DragSource::new();
+        drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+        let uuid = term.uuid();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gtk4::gdk::ContentProvider::for_value(&uuid.to_value()))
+        });
+        term.imp().header.add_controller(drag_source);
+
+        let drop_target = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+        let win = self.clone();
+        let target_uuid = term.uuid();
+        drop_target.connect_drop(move |_, value, _, _| {
+            if let Ok(source_uuid) = value.get::<String>() {
+                if source_uuid != target_uuid {
+                    win.swap_terminals(&source_uuid, &target_uuid);
+                    return true;
+                }
+            }
+            false
+        });
+        term.add_controller(drop_target);
+
         let win = self.clone();
         let uuid = term.uuid();
         term.split_h_button().connect_clicked(move |_| {
@@ -525,6 +633,133 @@ impl Window {
                 }
             }
             idx += 1;
+        }
+    }
+
+    // ── Keyboard shortcut helpers ────────────────────────────────────
+
+    fn set_input_sync(&self, enabled: bool) {
+        let mut state = self.imp().state.borrow_mut();
+        let active_idx = self.imp().sidebar_list.selected_row()
+            .map(|r| r.index() as usize)
+            .unwrap_or(0);
+        if let Some(session) = state.sessions.get_mut(active_idx) {
+            session.input_sync = enabled;
+        }
+    }
+
+    /// Forward input from one terminal to all siblings in the same session
+    /// when input sync is enabled.
+    fn apply_preferences_to_terminal(&self, term: &TerminalWidget) {
+        let prefs = rttx::preferences::load();
+        let vte = term.vte();
+        let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
+        vte.set_font(Some(&font_desc));
+        vte.set_scrollback_lines(prefs.scrollback_lines);
+        vte.set_scroll_on_keystroke(prefs.scroll_on_keystroke);
+        vte.set_scroll_on_output(prefs.scroll_on_output);
+
+        // Header visibility
+        if !prefs.show_headerbar {
+            term.imp().header.set_visible(false);
+        }
+
+        // Load and apply color scheme
+        if prefs.color_scheme != "default" {
+            let mut scheme_path = glib::user_config_dir();
+            scheme_path.push(rttx::config::CONFIG_DIR);
+            scheme_path.push(rttx::config::SCHEMES_DIR);
+            scheme_path.push(format!("{}.json", prefs.color_scheme));
+            if let Ok(scheme) = rttx::color_scheme::load_scheme_file(&scheme_path) {
+                term.apply_color_scheme(&scheme);
+            }
+        }
+    }
+
+    /// Forward input from one terminal to all siblings in the same session
+    /// when input sync is enabled.
+    fn forward_input(&self, source_uuid: &str, text: &str) {
+        let state = self.imp().state.borrow();
+        let session = state.sessions.iter().find(|s| {
+            s.input_sync && s.layout.terminal_uuids().contains(&source_uuid.to_string())
+        });
+        let Some(session) = session else { return };
+        let uuids = session.layout.terminal_uuids();
+        drop(state);
+
+        let terminals = self.imp().terminals.borrow();
+        for uuid in &uuids {
+            if uuid != source_uuid {
+                if let Some(term) = terminals.get(uuid) {
+                    term.vte().feed_child(text.as_bytes());
+                }
+            }
+        }
+    }
+
+    fn focused_terminal_uuid(&self) -> Option<String> {
+        self.imp().focused_terminal_uuid.borrow().clone()
+    }
+
+    fn close_focused_terminal(&self) {
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            self.close_terminal(&uuid);
+        }
+    }
+
+    fn split_focused(&self, orientation: SplitOrientation) {
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            self.split_terminal(&uuid, orientation);
+        }
+    }
+
+    fn toggle_focused_search(&self) {
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.toggle_search();
+            }
+        }
+    }
+
+    fn cycle_session(&self, delta: i32) {
+        let imp = self.imp();
+        let state = imp.state.borrow();
+        let len = state.sessions.len() as i32;
+        if len == 0 { return; }
+        let current = imp.sidebar_list.selected_row()
+            .map(|r| r.index())
+            .unwrap_or(0);
+        let next = (current + delta).rem_euclid(len);
+        drop(state);
+        if let Some(row) = imp.sidebar_list.row_at_index(next) {
+            imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
+    fn swap_terminals(&self, uuid_a: &str, uuid_b: &str) {
+        let imp = self.imp();
+        let (session_uuid, session_state) = {
+            let mut state = imp.state.borrow_mut();
+            let session = state.sessions.iter_mut().find(|s| {
+                s.layout.contains_terminal(uuid_a) && s.layout.contains_terminal(uuid_b)
+            });
+            let Some(session) = session else { return };
+            session.layout.swap_terminals(uuid_a, uuid_b);
+            (session.uuid.clone(), session.clone())
+        };
+        self.rebuild_session_content(&session_uuid, &session_state);
+    }
+
+    fn zoom_focused(&self, direction: i32) {
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                let vte = term.vte();
+                match direction {
+                    1 => { let s = vte.font_scale(); vte.set_font_scale(s * 1.1); }
+                    -1 => { let s = vte.font_scale(); vte.set_font_scale(s / 1.1); }
+                    _ => vte.set_font_scale(1.0),
+                }
+            }
         }
     }
 }
