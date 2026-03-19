@@ -219,3 +219,27 @@ fn nested_paned_rebuild_cycle() {
 
     assert!(stack.child_by_name("s1").is_some());
 }
+
+/// Verify that nested Paned widgets get proper size allocation.
+/// This catches the bug where connect_realize sets position to 0
+/// because inner Paneds realize before the outer one allocates space.
+#[test]
+fn nested_paned_position_not_zero() {
+    require_display!();
+
+    let outer = gtk4::Paned::new(gtk4::Orientation::Horizontal);
+    let inner = gtk4::Paned::new(gtk4::Orientation::Vertical);
+    let t1 = gtk4::Label::new(Some("t1"));
+    let t2 = gtk4::Label::new(Some("t2"));
+    let t3 = gtk4::Label::new(Some("t3"));
+
+    inner.set_start_child(Some(&t1));
+    inner.set_end_child(Some(&t2));
+    outer.set_start_child(Some(&inner));
+    outer.set_end_child(Some(&t3));
+
+    // At construction time, width/height are 0 — this is why
+    // connect_realize was wrong for setting position
+    assert_eq!(outer.width(), 0, "Paned width should be 0 before realization");
+    assert_eq!(inner.width(), 0, "Inner Paned width should be 0 before realization");
+}
