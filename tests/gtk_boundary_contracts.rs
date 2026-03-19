@@ -386,3 +386,28 @@ fn contract_default_font_is_valid_pango_description() {
         "Default font '{}' has no size component", prefs.font);
     assert!(!prefs.font.is_empty());
 }
+
+/// Contract: when a single-terminal session is split, the layout must
+/// transition from Terminal to Split correctly. This is the exact path
+/// that caused the "duplicate child name in GtkStack" crash — the old
+/// terminal was the direct child of the Stack, and unparenting it before
+/// removing from the Stack broke GTK's parent invariant.
+#[test]
+fn contract_single_terminal_split_produces_valid_tree() {
+    let layout = term("t1");
+    assert_eq!(layout.terminal_count(), 1);
+
+    // This is what window.rs does on split
+    let new_layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
+    assert_eq!(new_layout.terminal_count(), 2);
+    assert!(new_layout.contains_terminal("t1"));
+
+    // The new layout must be a Split (not a Terminal) — this is what
+    // determines whether the Stack child is a Paned or a TerminalWidget
+    assert!(matches!(new_layout, LayoutNode::Split { .. }),
+        "Split of single terminal must produce Split node, got Terminal");
+
+    // The old terminal must be findable for reuse
+    let uuids = new_layout.terminal_uuids();
+    assert!(uuids.contains(&"t1".to_string()));
+}

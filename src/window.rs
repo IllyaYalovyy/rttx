@@ -584,8 +584,19 @@ impl Window {
     ) {
         let imp = self.imp();
 
-        // Step 1: Unparent all existing terminals that belong to this session
-        // so they can be reparented into the new Paned tree.
+        // Step 1: Remove old container from the stack FIRST.
+        // This detaches the entire widget subtree (Paned + terminals) from
+        // the stack. We must do this before unparenting terminals, because
+        // if the session has a single terminal, that terminal IS the stack's
+        // direct child — unparenting it first would break the stack's
+        // parent-child invariant.
+        let old_content = imp.session_stack.child_by_name(session_uuid);
+        if let Some(ref old) = old_content {
+            imp.session_stack.remove(old);
+        }
+
+        // Step 2: Unparent all existing terminals from the now-detached
+        // Paned tree so they can be reparented into the new tree.
         {
             let terminals = imp.terminals.borrow();
             for uuid in session_state.layout.terminal_uuids() {
@@ -596,12 +607,8 @@ impl Window {
                 }
             }
         }
-
-        // Step 2: Remove old container from the stack (now safe — terminals
-        // have been detached).
-        if let Some(old) = imp.session_stack.child_by_name(session_uuid) {
-            imp.session_stack.remove(&old);
-        }
+        // Drop the old content reference so the detached Paned tree can be freed.
+        drop(old_content);
 
         // Step 3: Build new widget tree, reusing existing terminals and only
         // creating + connecting signals for genuinely new ones.
