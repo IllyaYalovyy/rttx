@@ -394,8 +394,12 @@ mod tests {
     #[test]
     fn remove_nonexistent_returns_unchanged() {
         let layout = hsplit(term("t1"), term("t2"));
-        let result = layout.remove_terminal("ghost").unwrap();
+        let result = layout.remove_terminal("ghost");
+        // Removing a nonexistent terminal should return the tree unchanged
+        assert!(result.is_some());
+        let result = result.unwrap();
         assert_eq!(result.terminal_count(), 2);
+        assert_eq!(result, layout, "Tree must be structurally identical when removing nonexistent UUID");
     }
 
     #[test]
@@ -524,6 +528,99 @@ mod tests {
         let before = layout.clone();
         layout.swap_terminals("t1", "t1");
         assert_eq!(layout, before);
+    }
+
+    /// Requirement: swap must move ALL terminal data (cwd, profile, custom_title),
+    /// not just the UUID. This catches bugs in the unsafe ptr::swap.
+    #[test]
+    fn swap_preserves_full_terminal_data() {
+        let mut layout = hsplit(
+            term_full("t1", "/home/alice", "editor"),
+            term_full("t2", "/tmp", "build"),
+        );
+        layout.swap_terminals("t1", "t2");
+
+        let uuids = layout.terminal_uuids();
+        assert_eq!(uuids, vec!["t2", "t1"]);
+
+        // The first position should now have t2's ORIGINAL data
+        if let LayoutNode::Split { first, second, .. } = &layout {
+            if let LayoutNode::Terminal { uuid, cwd, custom_title, .. } = first.as_ref() {
+                assert_eq!(uuid, "t2");
+                assert_eq!(cwd.as_deref(), Some("/tmp"));
+                assert_eq!(custom_title.as_deref(), Some("build"));
+            } else { panic!("Expected Terminal"); }
+            if let LayoutNode::Terminal { uuid, cwd, custom_title, .. } = second.as_ref() {
+                assert_eq!(uuid, "t1");
+                assert_eq!(cwd.as_deref(), Some("/home/alice"));
+                assert_eq!(custom_title.as_deref(), Some("editor"));
+            } else { panic!("Expected Terminal"); }
+        } else { panic!("Expected Split"); }
+    }
+
+    /// Requirement: splitting a terminal must not alter sibling ratios.
+    #[test]
+    fn split_preserves_parent_ratio() {
+        let layout = split_ratio(SplitOrientation::Horizontal, 0.7, term("t1"), term("t2"));
+        let result = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
+        if let LayoutNode::Split { ratio, .. } = &result {
+            assert!(
+                (*ratio - 0.7).abs() < f64::EPSILON,
+                "Parent ratio changed from 0.7 to {ratio}"
+            );
+        } else { panic!("Expected Split"); }
+    }
+
+    /// Requirement: removing a terminal must not alter sibling ratios.
+    #[test]
+    fn remove_preserves_sibling_ratio() {
+        // (t1 | t2) at 0.3 / t3 at 0.7
+        let inner = split_ratio(SplitOrientation::Horizontal, 0.3, term("t1"), term("t2"));
+        let layout = split_ratio(SplitOrientation::Vertical, 0.7, inner, term("t3"));
+        let result = layout.remove_terminal("t1").unwrap();
+        // After removing t1, the outer split should still have ratio 0.7
+        if let LayoutNode::Split { ratio, .. } = &result {
+            assert!(
+                (*ratio - 0.7).abs() < f64::EPSILON,
+                "Outer ratio changed from 0.7 to {ratio}"
+            );
+        } else { panic!("Expected Split"); }
+    }
+
+    /// Requirement: remove_terminal on a single terminal must return None,
+    /// not an empty tree or a crash.
+    #[test]
+    fn remove_last_terminal_returns_none_not_empty_tree() {
+        let layout = term("only");
+        let result = layout.remove_terminal("only");
+        assert!(result.is_none(), "Removing the only terminal must return None");
+    }
+
+    /// Requirement: new_terminal UUIDs must be valid UUID v4 format.
+    #[test]
+    fn new_terminal_uuid_is_valid_v4() {
+        let node = LayoutNode::new_terminal();
+        if let LayoutNode::Terminal { uuid, .. } = &node {
+            assert!(
+                uuid::Uuid::parse_str(uuid).is_ok(),
+                "UUID '{uuid}' is not valid UUID format"
+            );
+            assert_eq!(
+                uuid::Uuid::parse_str(uuid).unwrap().get_version(),
+                Some(uuid::Version::Random),
+                "UUID must be v4 (random)"
+            );
+        }
+    }
+
+    /// Requirement: split ratio must be clamped to (0, 1) exclusive.
+    #[test]
+    fn split_ratio_is_valid() {
+        let node = term("t1");
+        let split = node.split(SplitOrientation::Horizontal);
+        if let LayoutNode::Split { ratio, .. } = &split {
+            assert!(*ratio > 0.0 && *ratio < 1.0, "Ratio {ratio} out of (0,1)");
+        }
     }
 }
 
@@ -670,6 +767,40 @@ mod proptests {
             let uuids = layout.terminal_uuids();
             let unique: std::collections::HashSet<_> = uuids.iter().collect();
             prop_assert_eq!(uuids.len(), unique.len());
+        }
+
+        /// Swap preserves all UUIDs (no duplicates, no losses).
+        #[test]
+        fn swap_preserves_all_uuids(layout in arb_layout(3)) {
+            let uuids = layout.terminal_uuids();
+            if uuids.len() >= 2 {
+                let mut swapped = layout.clone();
+                swapped.swap_terminals(&uuids[0], &uuids[uuids.len() - 1]);
+                let mut after = swapped.terminal_uuids();
+                let mut before = uuids.clone();
+                before.sort();
+                after.sort();
+                prop_assert_eq!(before, after, "Swap must preserve the set of UUIDs");
+            }
+        }
+
+        /// Split then remove restores original UUID set.
+        #[test]
+        fn split_remove_restores_uuids(layout in arb_layout(3)) {
+            let original_uuids: std::collections::HashSet<_> = layout.terminal_uuids().into_iter().collect();
+            if let Some(target) = layout.terminal_uuids().first().cloned() {
+                if let Some(after_split) = layout.split_terminal(&target, SplitOrientation::Horizontal) {
+                    let new_uuid = after_split.terminal_uuids().into_iter()
+                        .find(|u| !original_uuids.contains(u));
+                    if let Some(new_uuid) = new_uuid {
+                        if let Some(after_remove) = after_split.remove_terminal(&new_uuid) {
+                            let restored: std::collections::HashSet<_> = after_remove.terminal_uuids().into_iter().collect();
+                            prop_assert_eq!(original_uuids, restored,
+                                "Split+remove must restore original UUID set");
+                        }
+                    }
+                }
+            }
         }
     }
 }

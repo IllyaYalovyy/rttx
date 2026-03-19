@@ -160,4 +160,54 @@ mod tests {
         let loaded = load_from(&path);
         assert!((loaded.background_opacity - opacity).abs() < f64::EPSILON);
     }
+
+    /// Requirement: negative scrollback should still roundtrip (VTE treats
+    /// negative as "unlimited"). We don't reject it at the prefs layer.
+    #[test]
+    fn negative_scrollback_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        let prefs = Preferences { scrollback_lines: -1, ..Default::default() };
+        save_to(&prefs, &path).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.scrollback_lines, -1);
+    }
+
+    /// Requirement: empty font string should roundtrip without crash.
+    /// The UI layer is responsible for validation, not the persistence layer.
+    #[test]
+    fn empty_font_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        let prefs = Preferences { font: String::new(), ..Default::default() };
+        save_to(&prefs, &path).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.font, "");
+    }
+
+    /// Requirement: out-of-range opacity should roundtrip. Clamping is the
+    /// UI's job, not the persistence layer's.
+    #[test]
+    fn out_of_range_opacity_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, r#"{"background_opacity": 1.5}"#).unwrap();
+        let loaded = load_from(&path);
+        assert!((loaded.background_opacity - 1.5).abs() < f64::EPSILON);
+    }
+
+    /// Requirement: all boolean fields that default to true must actually
+    /// default to true when missing from JSON. This catches serde(default)
+    /// misconfiguration.
+    #[test]
+    fn boolean_defaults_are_correct() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{}").unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.show_headerbar, "show_headerbar should default true");
+        assert!(loaded.scroll_on_keystroke, "scroll_on_keystroke should default true");
+        assert!(!loaded.scroll_on_output, "scroll_on_output should default false");
+        assert!(loaded.audible_bell, "audible_bell should default true");
+    }
 }
