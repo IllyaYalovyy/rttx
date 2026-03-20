@@ -159,9 +159,7 @@ impl LayoutNode {
     pub fn depth(&self) -> usize {
         match self {
             LayoutNode::Terminal { .. } => 1,
-            LayoutNode::Split { first, second, .. } => {
-                1 + first.depth().max(second.depth())
-            }
+            LayoutNode::Split { first, second, .. } => 1 + first.depth().max(second.depth()),
         }
     }
 
@@ -177,44 +175,62 @@ impl LayoutNode {
 
     /// Swap two terminals in the tree by UUID.
     pub fn swap_terminals(&mut self, uuid_a: &str, uuid_b: &str) {
-        if uuid_a == uuid_b { return; }
+        if uuid_a == uuid_b {
+            return;
+        }
         Self::swap_in_tree(self, uuid_a, uuid_b);
     }
 
-    /// Recursively swap terminal data. We do a single pass, collecting
-    /// mutable references to both target nodes, then swap their fields.
     fn swap_in_tree(node: &mut LayoutNode, a: &str, b: &str) {
-        // Collect all terminal nodes as mutable pointers, find the two targets, swap.
-        let mut terminals: Vec<*mut LayoutNode> = Vec::new();
-        Self::collect_terminal_ptrs(node, &mut terminals);
-
-        let mut ptr_a: Option<*mut LayoutNode> = None;
-        let mut ptr_b: Option<*mut LayoutNode> = None;
-
-        for &ptr in &terminals {
-            // SAFETY: we have exclusive access to the tree via &mut self,
-            // and we only read uuid to find the targets.
-            let n = unsafe { &*ptr };
-            if let LayoutNode::Terminal { uuid, .. } = n {
-                if uuid == a { ptr_a = Some(ptr); }
-                if uuid == b { ptr_b = Some(ptr); }
-            }
-        }
-
-        if let (Some(pa), Some(pb)) = (ptr_a, ptr_b) {
-            // SAFETY: pa and pb point to different nodes in the tree
-            // (since uuid_a != uuid_b and UUIDs are unique).
-            // We have &mut access to the whole tree.
-            unsafe { std::ptr::swap(pa, pb); }
+        // Clone both target nodes before any mutation so that sequential
+        // replacements don't interfere (a node just written under uuid_a
+        // must not be found again when searching for uuid_b).
+        let node_a = Self::find_clone_terminal(node, a);
+        let node_b = Self::find_clone_terminal(node, b);
+        if let (Some(na), Some(nb)) = (node_a, node_b) {
+            // Replace both in one traversal: each replacement is consumed
+            // exactly once (Option::take) so the clones don't cross-match.
+            Self::replace_two(node, a, &mut Some(nb), b, &mut Some(na));
         }
     }
 
-    fn collect_terminal_ptrs(node: &mut LayoutNode, out: &mut Vec<*mut LayoutNode>) {
+    fn find_clone_terminal(node: &LayoutNode, uuid: &str) -> Option<LayoutNode> {
         match node {
-            LayoutNode::Terminal { .. } => out.push(node as *mut LayoutNode),
+            LayoutNode::Terminal { uuid: u, .. } if u == uuid => Some(node.clone()),
+            LayoutNode::Terminal { .. } => None,
+            LayoutNode::Split { first, second, .. } => Self::find_clone_terminal(first, uuid)
+                .or_else(|| Self::find_clone_terminal(second, uuid)),
+        }
+    }
+
+    /// Single-pass replacement of two terminal nodes identified by uuid.
+    /// Both replacements are consumed (`take`n) when their respective target
+    /// is found; they must not be confused even when one UUID equals the other
+    /// node's new UUID value (hence a single pass, not two sequential ones).
+    fn replace_two(
+        node: &mut LayoutNode,
+        uuid_a: &str,
+        rep_a: &mut Option<LayoutNode>,
+        uuid_b: &str,
+        rep_b: &mut Option<LayoutNode>,
+    ) {
+        match node {
+            LayoutNode::Terminal { uuid, .. } => {
+                if uuid.as_str() == uuid_a {
+                    if let Some(r) = rep_a.take() {
+                        *node = r;
+                    }
+                } else if uuid.as_str() == uuid_b {
+                    if let Some(r) = rep_b.take() {
+                        *node = r;
+                    }
+                }
+            }
             LayoutNode::Split { first, second, .. } => {
-                Self::collect_terminal_ptrs(first, out);
-                Self::collect_terminal_ptrs(second, out);
+                Self::replace_two(first, uuid_a, rep_a, uuid_b, rep_b);
+                if rep_a.is_some() || rep_b.is_some() {
+                    Self::replace_two(second, uuid_a, rep_a, uuid_b, rep_b);
+                }
             }
         }
     }
@@ -278,7 +294,12 @@ mod tests {
         let node = term("t1");
         let split = node.split(orientation);
         assert_eq!(split.terminal_count(), 2);
-        if let LayoutNode::Split { orientation: o, ratio, .. } = &split {
+        if let LayoutNode::Split {
+            orientation: o,
+            ratio,
+            ..
+        } = &split
+        {
             assert_eq!(*o, orientation);
             assert!((ratio - 0.5).abs() < f64::EPSILON);
         } else {
@@ -349,13 +370,18 @@ mod tests {
     #[test]
     fn split_nonexistent_terminal_returns_none() {
         let layout = hsplit(term("t1"), term("t2"));
-        assert!(layout.split_terminal("ghost", SplitOrientation::Horizontal).is_none());
+        assert!(layout
+            .split_terminal("ghost", SplitOrientation::Horizontal)
+            .is_none());
     }
 
     #[test]
     fn split_deeply_nested_terminal() {
         // ((t1 | t2) / t3) | t4
-        let layout = hsplit(vsplit(hsplit(term("t1"), term("t2")), term("t3")), term("t4"));
+        let layout = hsplit(
+            vsplit(hsplit(term("t1"), term("t2")), term("t3")),
+            term("t4"),
+        );
         let result = layout.split_terminal("t1", SplitOrientation::Vertical);
         assert!(result.is_some());
         let new_layout = result.unwrap();
@@ -399,7 +425,10 @@ mod tests {
         assert!(result.is_some());
         let result = result.unwrap();
         assert_eq!(result.terminal_count(), 2);
-        assert_eq!(result, layout, "Tree must be structurally identical when removing nonexistent UUID");
+        assert_eq!(
+            result, layout,
+            "Tree must be structurally identical when removing nonexistent UUID"
+        );
     }
 
     #[test]
@@ -442,7 +471,11 @@ mod tests {
     fn window_state_roundtrip() {
         let state = window_state(vec![
             session("s1", "Session 1", term("t1")),
-            session("s2", "Session 2", hsplit(term("t2"), vsplit(term("t3"), term("t4")))),
+            session(
+                "s2",
+                "Session 2",
+                hsplit(term("t2"), vsplit(term("t3"), term("t4"))),
+            ),
         ]);
         let json = serde_json::to_string_pretty(&state).unwrap();
         let deserialized: WindowState = serde_json::from_str(&json).unwrap();
@@ -484,7 +517,9 @@ mod tests {
         let layout = hsplit(term("t1"), term("t2"));
         let original_count = layout.terminal_count();
 
-        let after_split = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
+        let after_split = layout
+            .split_terminal("t1", SplitOrientation::Vertical)
+            .unwrap();
         assert_eq!(after_split.terminal_count(), original_count + 1);
 
         let new_uuid = after_split
@@ -531,7 +566,7 @@ mod tests {
     }
 
     /// Requirement: swap must move ALL terminal data (cwd, profile, custom_title),
-    /// not just the UUID. This catches bugs in the unsafe ptr::swap.
+    /// not just the UUID.
     #[test]
     fn swap_preserves_full_terminal_data() {
         let mut layout = hsplit(
@@ -545,30 +580,52 @@ mod tests {
 
         // The first position should now have t2's ORIGINAL data
         if let LayoutNode::Split { first, second, .. } = &layout {
-            if let LayoutNode::Terminal { uuid, cwd, custom_title, .. } = first.as_ref() {
+            if let LayoutNode::Terminal {
+                uuid,
+                cwd,
+                custom_title,
+                ..
+            } = first.as_ref()
+            {
                 assert_eq!(uuid, "t2");
                 assert_eq!(cwd.as_deref(), Some("/tmp"));
                 assert_eq!(custom_title.as_deref(), Some("build"));
-            } else { panic!("Expected Terminal"); }
-            if let LayoutNode::Terminal { uuid, cwd, custom_title, .. } = second.as_ref() {
+            } else {
+                panic!("Expected Terminal");
+            }
+            if let LayoutNode::Terminal {
+                uuid,
+                cwd,
+                custom_title,
+                ..
+            } = second.as_ref()
+            {
                 assert_eq!(uuid, "t1");
                 assert_eq!(cwd.as_deref(), Some("/home/alice"));
                 assert_eq!(custom_title.as_deref(), Some("editor"));
-            } else { panic!("Expected Terminal"); }
-        } else { panic!("Expected Split"); }
+            } else {
+                panic!("Expected Terminal");
+            }
+        } else {
+            panic!("Expected Split");
+        }
     }
 
     /// Requirement: splitting a terminal must not alter sibling ratios.
     #[test]
     fn split_preserves_parent_ratio() {
         let layout = split_ratio(SplitOrientation::Horizontal, 0.7, term("t1"), term("t2"));
-        let result = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
+        let result = layout
+            .split_terminal("t1", SplitOrientation::Vertical)
+            .unwrap();
         if let LayoutNode::Split { ratio, .. } = &result {
             assert!(
                 (*ratio - 0.7).abs() < f64::EPSILON,
                 "Parent ratio changed from 0.7 to {ratio}"
             );
-        } else { panic!("Expected Split"); }
+        } else {
+            panic!("Expected Split");
+        }
     }
 
     /// Requirement: removing a terminal must not alter sibling ratios.
@@ -584,7 +641,9 @@ mod tests {
                 (*ratio - 0.7).abs() < f64::EPSILON,
                 "Outer ratio changed from 0.7 to {ratio}"
             );
-        } else { panic!("Expected Split"); }
+        } else {
+            panic!("Expected Split");
+        }
     }
 
     /// Requirement: remove_terminal on a single terminal must return None,
@@ -593,7 +652,10 @@ mod tests {
     fn remove_last_terminal_returns_none_not_empty_tree() {
         let layout = term("only");
         let result = layout.remove_terminal("only");
-        assert!(result.is_none(), "Removing the only terminal must return None");
+        assert!(
+            result.is_none(),
+            "Removing the only terminal must return None"
+        );
     }
 
     /// Requirement: new_terminal UUIDs must be valid UUID v4 format.
@@ -672,13 +734,38 @@ mod proptests {
     fn layouts_equal_approx(a: &LayoutNode, b: &LayoutNode) -> bool {
         match (a, b) {
             (
-                LayoutNode::Terminal { uuid: ua, profile: pa, cwd: ca, custom_title: ta },
-                LayoutNode::Terminal { uuid: ub, profile: pb, cwd: cb, custom_title: tb },
+                LayoutNode::Terminal {
+                    uuid: ua,
+                    profile: pa,
+                    cwd: ca,
+                    custom_title: ta,
+                },
+                LayoutNode::Terminal {
+                    uuid: ub,
+                    profile: pb,
+                    cwd: cb,
+                    custom_title: tb,
+                },
             ) => ua == ub && pa == pb && ca == cb && ta == tb,
             (
-                LayoutNode::Split { orientation: oa, ratio: ra, first: fa, second: sa },
-                LayoutNode::Split { orientation: ob, ratio: rb, first: fb, second: sb },
-            ) => oa == ob && (ra - rb).abs() < 1e-14 && layouts_equal_approx(fa, fb) && layouts_equal_approx(sa, sb),
+                LayoutNode::Split {
+                    orientation: oa,
+                    ratio: ra,
+                    first: fa,
+                    second: sa,
+                },
+                LayoutNode::Split {
+                    orientation: ob,
+                    ratio: rb,
+                    first: fb,
+                    second: sb,
+                },
+            ) => {
+                oa == ob
+                    && (ra - rb).abs() < 1e-14
+                    && layouts_equal_approx(fa, fb)
+                    && layouts_equal_approx(sa, sb)
+            }
             _ => false,
         }
     }
