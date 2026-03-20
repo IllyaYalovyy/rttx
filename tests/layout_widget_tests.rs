@@ -1,9 +1,28 @@
 use gtk4::prelude::*;
 use rttx::session::*;
+use std::sync::OnceLock;
 
-#[gtk4::test]
+static GTK_INIT: OnceLock<bool> = OnceLock::new();
+
+fn ensure_gtk_init() -> bool {
+    *GTK_INIT.get_or_init(|| {
+        std::env::set_var("GTK_A11Y", "none");
+        gtk4::init().is_ok()
+    })
+}
+
+macro_rules! require_display {
+    () => {
+        if !ensure_gtk_init() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+    };
+}
+
+#[test]
 fn test_build_layout_widget_multiple_splits() {
-    let _app = gtk4::Application::builder().application_id("io.github.rttx.layout_test").build();
+    require_display!();
 
     let layout = LayoutNode::Split {
         orientation: SplitOrientation::Vertical,
@@ -45,9 +64,9 @@ fn test_build_layout_widget_multiple_splits() {
     assert!(created_uuids.contains(&"t3".to_string()));
 }
 
-#[gtk4::test]
+#[test]
 fn test_rebuild_session_content_reuses_terminals() {
-    let _app = gtk4::Application::builder().application_id("io.github.rttx.rebuild_test").build();
+    require_display!();
 
     let layout1 = LayoutNode::Terminal {
         uuid: "t1".to_string(),
@@ -56,7 +75,8 @@ fn test_rebuild_session_content_reuses_terminals() {
         custom_title: None,
     };
 
-    let terminals = std::cell::RefCell::new(std::collections::HashMap::<String, gtk4::Widget>::new());
+    let terminals =
+        std::cell::RefCell::new(std::collections::HashMap::<String, gtk4::Widget>::new());
 
     let build_widget = |layout: &LayoutNode| {
         build_layout_widget(layout, &|uuid, _, _, _| {
@@ -91,14 +111,19 @@ fn test_rebuild_session_content_reuses_terminals() {
     }
 
     let widget2 = build_widget(&layout2);
-    let root_paned = widget2.downcast_ref::<gtk4::Paned>().expect("Root should be a Paned");
+    let root_paned = widget2
+        .downcast_ref::<gtk4::Paned>()
+        .expect("Root should be a Paned");
     let t1_widget = root_paned.start_child().expect("Should have t1");
-    assert_eq!(t1_widget.downcast_ref::<gtk4::Label>().unwrap().label(), "t1");
+    assert_eq!(
+        t1_widget.downcast_ref::<gtk4::Label>().unwrap().label(),
+        "t1"
+    );
 }
 
-#[gtk4::test]
+#[test]
 fn test_build_layout_widget_with_parented_terminals() {
-    let _app = gtk4::Application::builder().application_id("io.github.rttx.parent_test").build();
+    require_display!();
 
     let t1 = gtk4::Label::new(Some("t1")).upcast::<gtk4::Widget>();
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);

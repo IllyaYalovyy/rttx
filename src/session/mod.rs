@@ -73,27 +73,39 @@ pub fn build_layout_widget(
             paned.set_end_child(Some(&second_widget));
 
             let ratio_val = *ratio;
-            // Use notify::width/height to set position once the Paned
-            // has its actual allocated size. connect_realize is too early
-            // for nested Paneds — inner ones realize before the outer
-            // Paned has allocated space, so width()/height() returns 0.
-            let signal_id: std::rc::Rc<std::cell::RefCell<Option<gtk4::glib::SignalHandlerId>>> =
-                std::rc::Rc::new(std::cell::RefCell::new(None));
-            let signal_id_clone = signal_id.clone();
-            let prop = if gtk_orientation == gtk4::Orientation::Horizontal { "width" } else { "height" };
-            let id = paned.connect_notify_local(Some(prop), move |p, _| {
+            // Keep the handler connected permanently so that every allocation
+            // pass (including the second pass triggered by queue_resize after
+            // the outer Paned's position is corrected) updates inner Paneds to
+            // their ratio-correct positions.  The handler is safe to leave
+            // connected: notify::width fires on container resize, not on user
+            // drag (which only changes notify::position), so user-adjusted
+            // split positions are preserved between resizes.
+            let prop = if gtk_orientation == gtk4::Orientation::Horizontal {
+                "width"
+            } else {
+                "height"
+            };
+            paned.connect_notify_local(Some(prop), move |p, _| {
                 let size = match gtk_orientation {
                     gtk4::Orientation::Horizontal => p.width(),
                     _ => p.height(),
                 };
                 if size > 0 {
                     p.set_position((size as f64 * ratio_val) as i32);
-                    if let Some(id) = signal_id_clone.borrow_mut().take() {
-                        p.disconnect(id);
-                    }
                 }
             });
-            signal_id.replace(Some(id));
+
+            // If the Paned already has an allocation at construction time,
+            // set the position immediately rather than waiting for the next
+            // notify::width signal.
+            let size = if gtk_orientation == gtk4::Orientation::Horizontal {
+                paned.width()
+            } else {
+                paned.height()
+            };
+            if size > 0 {
+                paned.set_position((size as f64 * ratio_val) as i32);
+            }
 
             paned.upcast()
         }
