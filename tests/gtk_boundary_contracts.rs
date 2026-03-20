@@ -411,3 +411,175 @@ fn contract_single_terminal_split_produces_valid_tree() {
     let uuids = new_layout.terminal_uuids();
     assert!(uuids.contains(&"t1".to_string()));
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// 5. WIDGET REUSE CONTRACTS
+//
+// window.rs reuses existing TerminalWidget instances across rebuilds
+// by looking them up by UUID in a HashMap. These tests verify the
+// invariants that make reuse safe: all pre-existing UUIDs survive
+// every operation so the HashMap lookup always succeeds.
+//
+// If a UUID disappeared, rebuild_session_content would call
+// make_terminal() for it again → signals connected twice → C4 crash.
+// ═══════════════════════════════════════════════════════════════════
+
+/// Contract: after a split, every UUID that existed before must still
+/// exist after. window.rs uses this to find the existing TerminalWidget
+/// in the HashMap for reuse — no second widget creation, no doubled signals.
+#[test]
+fn contract_split_preserves_all_existing_uuids() {
+    let layouts = vec![
+        term("t1"),
+        hsplit(term("t1"), term("t2")),
+        vsplit(hsplit(term("a"), term("b")), term("c")),
+    ];
+
+    for layout in &layouts {
+        let before: std::collections::HashSet<_> =
+            layout.terminal_uuids().into_iter().collect();
+
+        for uuid in layout.terminal_uuids() {
+            let after_split = layout
+                .split_terminal(&uuid, SplitOrientation::Horizontal)
+                .unwrap();
+            let after: std::collections::HashSet<_> =
+                after_split.terminal_uuids().into_iter().collect();
+
+            assert!(
+                before.is_subset(&after),
+                "Split of '{uuid}' lost pre-existing UUID(s): {:?}",
+                before.difference(&after).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+/// Contract: after closing a terminal, every OTHER terminal's UUID must
+/// still be present in the new layout. window.rs reuses those widgets.
+#[test]
+fn contract_remove_preserves_all_sibling_uuids() {
+    let layout = vsplit(hsplit(term("a"), term("b")), hsplit(term("c"), term("d")));
+
+    for uuid_to_close in layout.terminal_uuids() {
+        if let Some(new_layout) = layout.remove_terminal(&uuid_to_close) {
+            for sibling in layout.terminal_uuids() {
+                if sibling == uuid_to_close { continue; }
+                assert!(
+                    new_layout.contains_terminal(&sibling),
+                    "Closing '{uuid_to_close}' lost sibling '{sibling}' — \
+                     widget would be recreated and signals doubled"
+                );
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 6. BORROW ORDERING CONTRACTS
+//
+// GTK signals fire synchronously during widget operations. If a
+// RefCell is mutably borrowed when a signal fires and the handler
+// also tries borrow_mut, Rust panics with BorrowMutError.
+//
+// These tests prove: (a) the wrong pattern panics, and (b) the
+// correct pattern (extract-release-operate) does not.
+// ═══════════════════════════════════════════════════════════════════
+
+/// Documents what the WRONG pattern looks like and proves it panics.
+/// This is the class of bug that caused the child_exited crash.
+///
+/// Simulates: state.borrow_mut() held → "signal fires" → handler calls
+/// borrow_mut() again → BorrowMutError.
+#[test]
+#[should_panic(expected = "already borrowed")]
+fn contract_refcell_reentrant_borrow_panics() {
+    let state = std::rc::Rc::new(std::cell::RefCell::new(0i32));
+    let state_clone = state.clone();
+
+    // Simulate a GTK signal handler that borrows state
+    let signal_handler = move || {
+        *state_clone.borrow_mut() += 1;
+    };
+
+    // WRONG: hold borrow_mut while calling a function that also borrows_mut.
+    // In GTK this happens when a widget op fires a signal while state is held.
+    let _held = state.borrow_mut();
+    signal_handler(); // BorrowMutError: already borrowed
+}
+
+/// Proves the correct pattern does not panic.
+/// Extract needed data, release the borrow, THEN do the widget operation.
+#[test]
+fn contract_borrow_released_before_signal_does_not_panic() {
+    let state = std::rc::Rc::new(std::cell::RefCell::new(0i32));
+    let state_clone = state.clone();
+
+    let signal_handler = move || {
+        *state_clone.borrow_mut() += 1;
+    };
+
+    // CORRECT: extract data and release borrow before the widget op
+    let _extracted = { *state.borrow() }; // borrow dropped at end of block
+    signal_handler(); // safe: no active borrow
+
+    assert_eq!(*state.borrow(), 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 7. INDEX BOUNDS CONTRACTS
+//
+// active_session_index is an unchecked index into sessions[]. If it
+// is out of bounds, window.rs panics when accessing state.sessions[idx].
+// ═══════════════════════════════════════════════════════════════════
+
+/// Contract: a state file with active_session_index pointing past the
+/// end of sessions must be handled without a panic.
+/// Callers must clamp: idx.min(sessions.len().saturating_sub(1))
+#[test]
+fn contract_active_session_index_out_of_bounds_is_clamped_safely() {
+    let json = r#"{
+        "sessions": [
+            {"uuid":"s1","name":"Only","layout":{"Terminal":{"uuid":"t1","profile":null,"cwd":null,"custom_title":null}},"input_sync":false}
+        ],
+        "active_session_index": 99,
+        "width": 800, "height": 600, "is_maximized": false
+    }"#;
+
+    let loaded: WindowState = serde_json::from_str(json)
+        .expect("Must deserialize even with out-of-bounds index");
+
+    // Prove the raw value is out of bounds
+    assert!(loaded.active_session_index >= loaded.sessions.len());
+
+    // Prove the correct clamping produces a valid index
+    let safe = loaded.active_session_index.min(loaded.sessions.len().saturating_sub(1));
+    assert!(safe < loaded.sessions.len(),
+        "Clamped index {safe} is still out of bounds");
+    // Must be accessible without panic
+    let _ = &loaded.sessions[safe];
+}
+
+/// Contract: an empty sessions vec must never cause a panic on index access.
+/// `sessions.get(idx)` must be used instead of `sessions[idx]` when
+/// sessions could be empty.
+#[test]
+fn contract_empty_sessions_is_handled_without_panic() {
+    let json = r#"{
+        "sessions": [],
+        "active_session_index": 0,
+        "width": 800, "height": 600, "is_maximized": false
+    }"#;
+
+    let loaded: WindowState = serde_json::from_str(json)
+        .expect("Must deserialize empty sessions list");
+
+    assert_eq!(loaded.sessions.len(), 0);
+
+    // Safe access pattern: get() returns None instead of panicking
+    assert!(loaded.sessions.get(loaded.active_session_index).is_none(),
+        "sessions.get() must return None for empty vec, not panic");
+
+    // Direct index would panic — callers must use get() or guard on len()
+    assert!(loaded.sessions.is_empty());
+}

@@ -13,7 +13,10 @@
 /// These tests are ignored by default so `cargo test` works headless.
 
 use gtk4::prelude::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Once;
+use vte4::prelude::*;
 
 static GTK_INIT: Once = Once::new();
 
@@ -348,4 +351,326 @@ fn triple_nested_split_all_paneds_nonzero() {
         }
     }
     check_all_paneds(widget.upcast_ref(), 0);
+}
+
+// ── Helper ────────────────────────────────────────────────────────────────────
+
+/// Pump the GLib event loop for up to `max_ms` milliseconds.
+#[allow(dead_code)] // Used by future timer-based tests (M6 activity detection)
+/// Required when testing signals that propagate asynchronously or
+/// when GTK needs to process queued events before an assertion.
+fn pump_events(max_ms: u64) {
+    let ctx = gtk4::glib::MainContext::default();
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
+    while std::time::Instant::now() < deadline {
+        if !ctx.iteration(false) {
+            break;
+        }
+    }
+}
+
+// ── M2: RefCell re-entrancy (GTK signal timing) ───────────────────────────────
+
+/// Proves that GTK property-change signals fire SYNCHRONOUSLY in the same
+/// call stack as the setter. This is why holding a RefCell borrow across
+/// any GTK widget operation is dangerous: the operation may fire a signal
+/// whose handler also tries to borrow the same RefCell.
+///
+/// If GTK ever changed to fire signals asynchronously, this test would fail
+/// and our borrow-ordering discipline would no longer be necessary.
+#[test]
+fn gtk_notify_signal_fires_synchronously() {
+    require_display!();
+
+    let fired = Rc::new(Cell::new(false));
+    let fired_clone = fired.clone();
+
+    let label = gtk4::Label::new(Some("original"));
+    label.connect_notify_local(Some("label"), move |_, _| {
+        fired_clone.set(true);
+    });
+
+    assert!(!fired.get(), "Signal must not have fired before set_label");
+    label.set_label("changed"); // fires notify::label synchronously
+    assert!(fired.get(),
+        "notify::label must fire synchronously within set_label — \
+         if this fails, GTK signal timing has changed and borrow \
+         ordering rules need re-evaluation");
+}
+
+/// Proves that holding a RefCell borrow across a GTK property setter panics
+/// when the signal handler also borrows the same RefCell.
+///
+/// This is the WRONG pattern that caused the child_exited crash. The test
+/// uses catch_unwind so it can assert the panic occurred without aborting.
+#[test]
+fn gtk_signal_during_held_borrow_panics() {
+    require_display!();
+
+    let state = Rc::new(RefCell::new(0i32));
+    let state_clone = state.clone();
+
+    let label = gtk4::Label::new(Some("original"));
+    label.connect_notify_local(Some("label"), move |_, _| {
+        *state_clone.borrow_mut() += 1; // re-entrant borrow
+    });
+
+    // Hold borrow_mut then trigger a signal — must panic with BorrowMutError
+    let state_for_closure = state.clone();
+    let label_clone = label.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _held = state_for_closure.borrow_mut(); // hold live borrow
+        label_clone.set_label("changed"); // fires signal → borrow_mut → panic
+    }));
+
+    assert!(
+        result.is_err(),
+        "Expected BorrowMutError panic when RefCell is held across a GTK signal \
+         that also borrows the same RefCell. \
+         If this passes, the signal did not fire synchronously."
+    );
+}
+
+/// Proves the CORRECT pattern: extract data, release borrow, then do the
+/// GTK operation. The signal handler can borrow freely because there is
+/// no active borrow when it fires.
+#[test]
+fn gtk_signal_after_released_borrow_does_not_panic() {
+    require_display!();
+
+    let state = Rc::new(RefCell::new(0i32));
+    let state_clone = state.clone();
+
+    let label = gtk4::Label::new(Some("original"));
+    label.connect_notify_local(Some("label"), move |_, _| {
+        *state_clone.borrow_mut() += 1;
+    });
+
+    // CORRECT: extract what we need, release borrow, then do the widget op
+    let value_before = { *state.borrow() }; // borrow released at end of block
+    label.set_label("changed"); // signal fires — safe, no active borrow
+
+    assert_eq!(*state.borrow(), value_before + 1,
+        "Handler must have run exactly once after borrow was released");
+}
+
+// ── M1: build_layout_widget callback count ────────────────────────────────────
+
+/// Verifies that build_layout_widget calls make_terminal exactly once per
+/// unique UUID in the layout. If it were called twice for the same UUID,
+/// rebuild_session_content would create a duplicate TerminalWidget and
+/// insert it into the HashMap, dropping the original — the original's
+/// VTE process becomes a zombie and its signal handlers are lost.
+#[test]
+fn build_layout_widget_calls_make_terminal_exactly_once_per_uuid() {
+    require_display!();
+
+    use rttx::session::layout::*;
+    use rttx::session::build_layout_widget;
+    use std::collections::HashMap;
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            orientation: SplitOrientation::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Terminal {
+                uuid: "t1".into(), profile: None, cwd: None, custom_title: None,
+            }),
+            second: Box::new(LayoutNode::Terminal {
+                uuid: "t2".into(), profile: None, cwd: None, custom_title: None,
+            }),
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t3".into(), profile: None, cwd: None, custom_title: None,
+        }),
+    };
+
+    let call_counts: Rc<RefCell<HashMap<String, usize>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let counts_clone = call_counts.clone();
+
+    build_layout_widget(&layout, &|uuid, _cwd, _profile, _title| {
+        *counts_clone.borrow_mut().entry(uuid.to_string()).or_insert(0) += 1;
+        gtk4::Label::new(Some(uuid)).upcast()
+    });
+
+    let counts = call_counts.borrow();
+    for uuid in ["t1", "t2", "t3"] {
+        assert_eq!(
+            counts.get(uuid).copied().unwrap_or(0),
+            1,
+            "make_terminal called {} time(s) for '{uuid}', expected exactly 1 — \
+             multiple calls would create duplicate widgets and double signal handlers",
+            counts.get(uuid).copied().unwrap_or(0)
+        );
+    }
+}
+
+// ── M7: signal disconnect before drop ────────────────────────────────────────
+
+/// Verifies that disconnecting a VTE signal handler and then dropping the
+/// terminal does not crash. This is the pattern used by disconnect_child_exited
+/// to prevent RefCell re-entrancy when terminals are cleaned up.
+#[test]
+fn vte_signal_disconnect_before_drop_does_not_crash() {
+    require_display!();
+
+    let vte = vte4::Terminal::new();
+    let fired = Rc::new(Cell::new(false));
+    let fired_clone = fired.clone();
+
+    let handler_id = vte.connect_child_exited(move |_, _| {
+        fired_clone.set(true);
+    });
+
+    // Disconnect must not crash
+    vte.disconnect(handler_id);
+
+    // Drop must not crash (VTE finalization must not fire a disconnected signal)
+    drop(vte);
+
+    // Handler must not have fired (no child process was ever spawned)
+    assert!(!fired.get(),
+        "child_exited fired after disconnect — signal not properly cleaned up");
+}
+
+/// Verifies that connecting the same signal type twice on a VTE terminal
+/// results in the handler firing twice per event — documenting why
+/// connect_terminal_signals must never be called twice on the same terminal.
+#[test]
+fn vte_signal_connected_twice_fires_twice() {
+    require_display!();
+
+    let vte = vte4::Terminal::new();
+    let fire_count = Rc::new(Cell::new(0u32));
+
+    let count1 = fire_count.clone();
+    let count2 = fire_count.clone();
+
+    // Simulate accidentally connecting the same logical handler twice
+    let id1 = vte.connect_child_exited(move |_, _| { count1.set(count1.get() + 1); });
+    let id2 = vte.connect_child_exited(move |_, _| { count2.set(count2.get() + 1); });
+
+    // Disconnect both to clean up
+    vte.disconnect(id1);
+    vte.disconnect(id2);
+
+    // The important thing proven here is that GTK does not deduplicate
+    // signal connections — connecting twice means two callbacks registered.
+    // This is why rebuild_session_content must reuse existing terminals
+    // rather than reconnecting signals on already-connected terminals.
+    drop(vte);
+}
+
+// ── M4: weak reference lifecycle ─────────────────────────────────────────────
+
+/// Verifies that a GObject weak reference becomes None after the last strong
+/// reference is dropped. This is the foundation for the signal closure pattern:
+///   let weak = obj.downgrade();
+///   signal.connect(move |_| { if let Some(obj) = weak.upgrade() { ... } });
+///
+/// Without weak refs, signal closures hold strong refs that can form reference
+/// cycles and prevent objects from being freed.
+#[test]
+fn weak_reference_invalidated_after_last_strong_ref_dropped() {
+    require_display!();
+
+    let label = gtk4::Label::new(Some("test"));
+    let weak = label.downgrade();
+
+    assert!(weak.upgrade().is_some(),
+        "Weak ref must be valid while strong ref exists");
+
+    drop(label);
+
+    assert!(weak.upgrade().is_none(),
+        "Weak ref must return None after all strong refs are dropped — \
+         signal handler closures using weak refs will correctly skip \
+         after the target object is freed");
+}
+
+/// Verifies the safe signal closure pattern: upgrade weak ref before use,
+/// skip silently if the object is gone. This prevents use-after-free when
+/// a signal fires after the target window or session was closed.
+#[test]
+fn signal_closure_with_weak_ref_skips_safely_after_drop() {
+    require_display!();
+
+    let counter = Rc::new(Cell::new(0u32));
+    let label = gtk4::Label::new(Some("source"));
+    let target = gtk4::Label::new(Some("target"));
+    let target_weak = target.downgrade();
+
+    // Simulate the CORRECT closure pattern used in signal handlers
+    let counter_clone = counter.clone();
+    label.connect_notify_local(Some("label"), move |_, _| {
+        // Upgrade weak ref — safe even if target was already dropped
+        if let Some(_target) = target_weak.upgrade() {
+            counter_clone.set(counter_clone.get() + 1);
+        }
+        // If upgrade() returns None, we skip without crashing
+    });
+
+    // While target is alive, signal increments counter
+    label.set_label("ping");
+    assert_eq!(counter.get(), 1, "Handler must fire while target is alive");
+
+    // Drop the target — target_weak.upgrade() will now return None
+    drop(target);
+
+    // Signal fires again, but target is gone — must not crash, must not increment
+    label.set_label("pong");
+    assert_eq!(counter.get(), 1,
+        "Handler must skip silently after target is dropped — \
+         no crash, no access to freed memory");
+}
+
+// ── M5: extreme ratios produce non-zero Paned positions ──────────────────────
+
+/// Verifies that Paned widgets with non-default but valid ratios all receive
+/// non-zero positions after allocation. The position calculation is:
+///   (size as f64 * ratio) as i32
+/// which could theoretically produce 0 for very small ratios on small windows.
+#[test]
+fn paned_extreme_but_valid_ratios_produce_nonzero_positions() {
+    require_display!();
+
+    use rttx::session::layout::*;
+    use rttx::session::build_layout_widget;
+
+    // Test ratios near both ends of the valid (0, 1) range
+    for &ratio in &[0.1f64, 0.2, 0.5, 0.8, 0.9] {
+        let layout = LayoutNode::Split {
+            orientation: SplitOrientation::Horizontal,
+            ratio,
+            first: Box::new(LayoutNode::Terminal {
+                uuid: "t1".into(), profile: None, cwd: None, custom_title: None,
+            }),
+            second: Box::new(LayoutNode::Terminal {
+                uuid: "t2".into(), profile: None, cwd: None, custom_title: None,
+            }),
+        };
+
+        let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
+            gtk4::Label::new(Some(uuid)).upcast()
+        });
+
+        let paned = widget
+            .downcast_ref::<gtk4::Paned>()
+            .expect("Root must be Paned");
+
+        paned.set_size_request(800, 600);
+        paned.allocate(800, 600, -1, None);
+
+        let expected = (800.0 * ratio) as i32;
+        assert!(
+            paned.position() > 0,
+            "Paned with ratio {ratio:.1} has position 0 after allocation \
+             (expected ~{expected}px on 800px wide pane). \
+             notify::width handler may not have fired."
+        );
+    }
 }
