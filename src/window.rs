@@ -137,9 +137,7 @@ glib::wrapper! {
 
 impl Window {
     pub fn new(app: &adw::Application) -> Self {
-        let obj: Self = glib::Object::builder()
-            .property("application", app)
-            .build();
+        let obj: Self = glib::Object::builder().property("application", app).build();
         obj.setup_actions(app);
         obj.setup_signals();
         obj.restore_state();
@@ -148,25 +146,41 @@ impl Window {
 
     fn setup_actions(&self, app: &adw::Application) {
         let actions: &[(&str, &[&str], fn(&Window))] = &[
-            ("new-session",    &["<Ctrl><Shift>t"], |w| w.add_session()),
-            ("close-terminal", &["<Ctrl><Shift>w"], |w| w.close_focused_terminal()),
-            ("split-h",        &["<Ctrl><Shift>e"], |w| w.split_focused(SplitOrientation::Horizontal)),
-            ("split-v",        &["<Ctrl><Shift>o"], |w| w.split_focused(SplitOrientation::Vertical)),
-            ("toggle-search",  &["<Ctrl><Shift>f"], |w| w.toggle_focused_search()),
+            ("new-session", &["<Ctrl><Shift>t"], |w| w.add_session()),
+            ("close-terminal", &["<Ctrl><Shift>w"], |w| {
+                w.close_focused_terminal()
+            }),
+            ("split-h", &["<Ctrl><Shift>e"], |w| {
+                w.split_focused(SplitOrientation::Horizontal)
+            }),
+            ("split-v", &["<Ctrl><Shift>o"], |w| {
+                w.split_focused(SplitOrientation::Vertical)
+            }),
+            ("toggle-search", &["<Ctrl><Shift>f"], |w| {
+                w.toggle_focused_search()
+            }),
             ("toggle-sidebar", &["<Ctrl><Shift>n"], |w| {
                 let sv = &w.imp().split_view;
                 sv.set_show_sidebar(!sv.shows_sidebar());
             }),
-            ("fullscreen",     &["F11"],            |w| {
-                if w.is_fullscreen() { w.unfullscreen() } else { w.fullscreen() }
+            ("fullscreen", &["F11"], |w| {
+                if w.is_fullscreen() {
+                    w.unfullscreen()
+                } else {
+                    w.fullscreen()
+                }
             }),
-            ("next-session",   &["<Ctrl>Tab"],           |w| w.cycle_session(1)),
-            ("prev-session",   &["<Ctrl><Shift>Tab"],    |w| w.cycle_session(-1)),
-            ("zoom-in",        &["<Ctrl>plus", "<Ctrl>equal"], |w| w.zoom_focused(1)),
-            ("zoom-out",       &["<Ctrl>minus"],         |w| w.zoom_focused(-1)),
-            ("zoom-reset",     &["<Ctrl>0"],             |w| w.zoom_focused(0)),
-            ("copy",           &["<Ctrl><Shift>c"],      |w| w.clipboard_copy()),
-            ("paste",          &["<Ctrl><Shift>v"],      |w| w.clipboard_paste()),
+            ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
+            ("prev-session", &["<Ctrl><Shift>Tab"], |w| {
+                w.cycle_session(-1)
+            }),
+            ("zoom-in", &["<Ctrl>plus", "<Ctrl>equal"], |w| {
+                w.zoom_focused(1)
+            }),
+            ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
+            ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
+            ("copy", &["<Ctrl><Shift>c"], |w| w.clipboard_copy()),
+            ("paste", &["<Ctrl><Shift>v"], |w| w.clipboard_paste()),
         ];
 
         for &(name, accels, callback) in actions {
@@ -178,14 +192,14 @@ impl Window {
         }
 
         // Input sync toggle (stateful action)
-        let sync_action = gtk4::gio::SimpleAction::new_stateful(
-            "toggle-input-sync",
-            None,
-            &false.to_variant(),
-        );
+        let sync_action =
+            gtk4::gio::SimpleAction::new_stateful("toggle-input-sync", None, &false.to_variant());
         let win = self.clone();
         sync_action.connect_activate(move |action, _| {
-            let current = action.state().and_then(|v| v.get::<bool>()).unwrap_or(false);
+            let current = action
+                .state()
+                .and_then(|v| v.get::<bool>())
+                .unwrap_or(false);
             let new_val = !current;
             action.set_state(&new_val.to_variant());
             win.set_input_sync(new_val);
@@ -210,14 +224,12 @@ impl Window {
         });
 
         let win = self.clone();
-        self.imp()
-            .sidebar_list
-            .connect_row_selected(move |_, row| {
-                if let Some(row) = row {
-                    let index = row.index() as usize;
-                    win.switch_to_session(index);
-                }
-            });
+        self.imp().sidebar_list.connect_row_selected(move |_, row| {
+            if let Some(row) = row {
+                let index = row.index() as usize;
+                win.switch_to_session(index);
+            }
+        });
 
         let win = self.clone();
         self.connect_close_request(move |_| {
@@ -265,6 +277,11 @@ impl Window {
         for session_state in &state.sessions {
             let mut captured = session_state.clone();
             self.update_cwds(&mut captured.layout);
+            // Capture current Paned divider positions as ratios so they are
+            // restored correctly on the next launch.
+            if let Some(root) = imp.session_stack.child_by_name(&session_state.uuid) {
+                session::capture_paned_ratios(&mut captured.layout, &root);
+            }
             sessions.push(captured);
         }
 
@@ -287,7 +304,12 @@ impl Window {
 
     fn update_cwds(&self, layout: &mut LayoutNode) {
         match layout {
-            LayoutNode::Terminal { uuid, cwd, custom_title, .. } => {
+            LayoutNode::Terminal {
+                uuid,
+                cwd,
+                custom_title,
+                ..
+            } => {
                 if let Some(term) = self.imp().terminals.borrow().get(uuid.as_str()) {
                     *cwd = term.current_directory();
                     *custom_title = term.custom_title();
@@ -485,7 +507,9 @@ impl Window {
                 loop {
                     match imp.sidebar_list.row_at_index(idx) {
                         Some(r) => {
-                            if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
+                            if let Some(sr) =
+                                r.child().and_then(|c| c.downcast::<SessionRow>().ok())
+                            {
                                 if sr.uuid() == session_uuid {
                                     break idx;
                                 }
@@ -516,10 +540,9 @@ impl Window {
         });
 
         if let Some(idx) = session_idx {
-            if let Some(new_layout) =
-                state.sessions[idx]
-                    .layout
-                    .split_terminal(terminal_uuid, orientation)
+            if let Some(new_layout) = state.sessions[idx]
+                .layout
+                .split_terminal(terminal_uuid, orientation)
             {
                 state.sessions[idx].layout = new_layout;
                 let session_uuid = state.sessions[idx].uuid.clone();
@@ -536,19 +559,26 @@ impl Window {
         // Step 1: Update state, extract what we need, release borrow.
         enum Action {
             CloseSession(String),
-            Rebuild { session_uuid: String, session_state: SessionState },
+            Rebuild {
+                session_uuid: String,
+                session_state: SessionState,
+            },
         }
 
         let action = {
             let mut state = imp.state.borrow_mut();
             let session_idx = state.sessions.iter().position(|s| {
-                s.layout.terminal_uuids().contains(&terminal_uuid.to_string())
+                s.layout
+                    .terminal_uuids()
+                    .contains(&terminal_uuid.to_string())
             });
             let Some(idx) = session_idx else { return };
 
             if state.sessions[idx].layout.terminal_count() <= 1 {
                 Action::CloseSession(state.sessions[idx].uuid.clone())
-            } else if let Some(new_layout) = state.sessions[idx].layout.remove_terminal(terminal_uuid) {
+            } else if let Some(new_layout) =
+                state.sessions[idx].layout.remove_terminal(terminal_uuid)
+            {
                 state.sessions[idx].layout = new_layout;
                 Action::Rebuild {
                     session_uuid: state.sessions[idx].uuid.clone(),
@@ -562,7 +592,10 @@ impl Window {
 
         match action {
             Action::CloseSession(uuid) => self.close_session(&uuid),
-            Action::Rebuild { session_uuid, session_state } => {
+            Action::Rebuild {
+                session_uuid,
+                session_state,
+            } => {
                 // Disconnect signal before removing from map
                 if let Some(term) = imp.terminals.borrow().get(terminal_uuid) {
                     term.disconnect_child_exited();
@@ -580,11 +613,7 @@ impl Window {
     /// widget to be added to a new parent while still attached to an old one.
     /// We also must NOT reconnect signals on reused terminals — they already
     /// have their handlers from the initial build_session call.
-    fn rebuild_session_content(
-        &self,
-        session_uuid: &str,
-        session_state: &SessionState,
-    ) {
+    fn rebuild_session_content(&self, session_uuid: &str, session_state: &SessionState) {
         let imp = self.imp();
 
         // Step 1: Remove old container from the stack FIRST.
@@ -648,8 +677,7 @@ impl Window {
                 term.upcast()
             });
 
-        imp.session_stack
-            .add_named(&content, Some(session_uuid));
+        imp.session_stack.add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
 
         // Ensure the new layout is processed and drawn
@@ -676,9 +704,7 @@ impl Window {
         let imp = self.imp();
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(session_row) =
-                row.child().and_then(|c| c.downcast::<SessionRow>().ok())
-            {
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
                 if session_row.uuid() == session_uuid {
                     session_row.update_terminal_count(count);
                     return;
@@ -692,7 +718,10 @@ impl Window {
 
     fn set_input_sync(&self, enabled: bool) {
         let mut state = self.imp().state.borrow_mut();
-        let active_idx = self.imp().sidebar_list.selected_row()
+        let active_idx = self
+            .imp()
+            .sidebar_list
+            .selected_row()
             .map(|r| r.index() as usize)
             .unwrap_or(0);
         if let Some(session) = state.sessions.get_mut(active_idx) {
@@ -732,9 +761,10 @@ impl Window {
     /// when input sync is enabled.
     fn forward_input(&self, source_uuid: &str, text: &str) {
         let state = self.imp().state.borrow();
-        let session = state.sessions.iter().find(|s| {
-            s.input_sync && s.layout.terminal_uuids().contains(&source_uuid.to_string())
-        });
+        let session = state
+            .sessions
+            .iter()
+            .find(|s| s.input_sync && s.layout.terminal_uuids().contains(&source_uuid.to_string()));
         let Some(session) = session else { return };
         let uuids = session.layout.terminal_uuids();
         drop(state);
@@ -777,8 +807,12 @@ impl Window {
         let imp = self.imp();
         let state = imp.state.borrow();
         let len = state.sessions.len() as i32;
-        if len == 0 { return; }
-        let current = imp.sidebar_list.selected_row()
+        if len == 0 {
+            return;
+        }
+        let current = imp
+            .sidebar_list
+            .selected_row()
             .map(|r| r.index())
             .unwrap_or(0);
         let next = (current + delta).rem_euclid(len);
@@ -792,9 +826,10 @@ impl Window {
         let imp = self.imp();
         let (session_uuid, session_state) = {
             let mut state = imp.state.borrow_mut();
-            let session = state.sessions.iter_mut().find(|s| {
-                s.layout.contains_terminal(uuid_a) && s.layout.contains_terminal(uuid_b)
-            });
+            let session = state
+                .sessions
+                .iter_mut()
+                .find(|s| s.layout.contains_terminal(uuid_a) && s.layout.contains_terminal(uuid_b));
             let Some(session) = session else { return };
             session.layout.swap_terminals(uuid_a, uuid_b);
             (session.uuid.clone(), session.clone())
@@ -807,8 +842,14 @@ impl Window {
             if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
                 let vte = term.vte();
                 match direction {
-                    1 => { let s = vte.font_scale(); vte.set_font_scale(s * 1.1); }
-                    -1 => { let s = vte.font_scale(); vte.set_font_scale(s / 1.1); }
+                    1 => {
+                        let s = vte.font_scale();
+                        vte.set_font_scale(s * 1.1);
+                    }
+                    -1 => {
+                        let s = vte.font_scale();
+                        vte.set_font_scale(s / 1.1);
+                    }
                     _ => vte.set_font_scale(1.0),
                 }
             }
@@ -816,7 +857,10 @@ impl Window {
     }
 
     fn notify_process_completed(&self, terminal_uuid: &str, status: i32) {
-        let title = self.imp().terminals.borrow()
+        let title = self
+            .imp()
+            .terminals
+            .borrow()
             .get(terminal_uuid)
             .map(|t| t.title_label().label().to_string())
             .unwrap_or_else(|| "Terminal".into());

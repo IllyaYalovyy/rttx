@@ -38,6 +38,39 @@ pub fn load_window_state() -> WindowState {
     }
 }
 
+/// Walk the live widget tree and update each `Split` node's `ratio` to
+/// reflect the current divider position.  Call this before serialising
+/// state so that user-adjusted splits are preserved across restarts.
+pub fn capture_paned_ratios(layout: &mut LayoutNode, widget: &gtk4::Widget) {
+    let LayoutNode::Split {
+        orientation,
+        ratio,
+        first,
+        second,
+    } = layout
+    else {
+        return;
+    };
+    let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
+        return;
+    };
+    let total = match orientation {
+        SplitOrientation::Horizontal => paned.width(),
+        SplitOrientation::Vertical => paned.height(),
+    };
+    if total > 0 {
+        let new_ratio = paned.position() as f64 / total as f64;
+        // Clamp to a sensible range so neither pane collapses to zero.
+        *ratio = new_ratio.clamp(0.05, 0.95);
+    }
+    if let Some(start) = paned.start_child() {
+        capture_paned_ratios(first, &start);
+    }
+    if let Some(end) = paned.end_child() {
+        capture_paned_ratios(second, &end);
+    }
+}
+
 /// Build the GTK widget tree for a layout node.
 pub fn build_layout_widget(
     node: &LayoutNode,

@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use rttx::session::*;
+use rttx::session::{self, *};
 use std::sync::OnceLock;
 
 static GTK_INIT: OnceLock<bool> = OnceLock::new();
@@ -146,4 +146,123 @@ fn test_build_layout_widget_with_parented_terminals() {
 
     assert_eq!(widget, t1);
     assert!(t1.parent().is_none());
+}
+
+/// capture_paned_ratios must read the live Paned divider position back into
+/// the layout's ratio field.  This is the invariant that makes split positions
+/// persist across restarts: capture_state calls capture_paned_ratios before
+/// serialising, so user-dragged positions are saved as ratios.
+#[test]
+fn test_capture_paned_ratios_reads_position() {
+    require_display!();
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t2".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
+        gtk4::Label::new(Some(uuid)).upcast()
+    });
+
+    let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    paned.set_size_request(800, 600);
+    paned.allocate(800, 600, -1, None);
+
+    // Simulate the user dragging the handle to 30% from the left.
+    paned.set_position(240); // 240/800 = 0.3
+
+    let mut updated = layout.clone();
+    session::capture_paned_ratios(&mut updated, &widget);
+
+    let LayoutNode::Split { ratio, .. } = updated else {
+        panic!("Expected Split layout node");
+    };
+    assert!(
+        (ratio - 0.3).abs() < 0.02,
+        "ratio should be ≈0.3 after capture, got {ratio}"
+    );
+}
+
+/// capture_paned_ratios must recurse into nested splits.
+#[test]
+fn test_capture_paned_ratios_nested() {
+    require_display!();
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            orientation: SplitOrientation::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Terminal {
+                uuid: "t1".into(),
+                profile: None,
+                cwd: None,
+                custom_title: None,
+            }),
+            second: Box::new(LayoutNode::Terminal {
+                uuid: "t2".into(),
+                profile: None,
+                cwd: None,
+                custom_title: None,
+            }),
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t3".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
+        gtk4::Label::new(Some(uuid)).upcast()
+    });
+
+    let outer = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    outer.set_size_request(800, 600);
+    outer.allocate(800, 600, -1, None);
+    outer.set_position(400); // 0.5
+
+    let inner = outer
+        .start_child()
+        .unwrap()
+        .downcast::<gtk4::Paned>()
+        .unwrap();
+    // Force inner to a known position on a known total.
+    inner.set_size_request(400, 600);
+    inner.allocate(400, 600, -1, None);
+    inner.set_position(100); // 100/400 = 0.25
+
+    let mut updated = layout.clone();
+    session::capture_paned_ratios(&mut updated, &widget);
+
+    let LayoutNode::Split { ratio: outer_ratio, first, .. } = updated else {
+        panic!("Expected outer Split");
+    };
+    let LayoutNode::Split { ratio: inner_ratio, .. } = *first else {
+        panic!("Expected inner Split");
+    };
+
+    assert!(
+        (outer_ratio - 0.5).abs() < 0.02,
+        "outer ratio should be ≈0.5, got {outer_ratio}"
+    );
+    assert!(
+        (inner_ratio - 0.25).abs() < 0.02,
+        "inner ratio should be ≈0.25, got {inner_ratio}"
+    );
 }
