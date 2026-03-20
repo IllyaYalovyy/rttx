@@ -203,10 +203,10 @@ impl TerminalWidget {
 
     /// Get the current working directory from VTE, if available.
     pub fn current_directory(&self) -> Option<String> {
-        self.imp().vte.current_directory_uri().and_then(|uri| {
-            let uri_str = uri.as_str();
-            uri_str.strip_prefix("file://").map(|p| p.to_string())
-        })
+        self.imp()
+            .vte
+            .current_directory_uri()
+            .and_then(|uri| parse_file_uri(uri.as_str()))
     }
 
     fn spawn_shell(&self, cwd: Option<&str>) {
@@ -283,5 +283,74 @@ impl TerminalWidget {
                 vte.set_color_bold(Some(&bold));
             }
         }
+    }
+}
+
+/// Convert a `file://` URI from VTE into a plain filesystem path.
+///
+/// VTE's `current_directory_uri()` returns a `file://` URI.  Simple
+/// `strip_prefix("file://")` works for the common `file:///path` form but
+/// silently mis-parses percent-encoded characters (%20 in a path becomes a
+/// literal "%20") and the optional host component in `file://hostname/path`.
+/// `glib::filename_from_uri` handles both correctly.
+pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
+    glib::filename_from_uri(uri)
+        .ok()
+        .map(|(path, _hostname)| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_file_uri;
+
+    #[test]
+    fn parse_standard_vte_uri() {
+        // VTE always emits file:///path (empty hostname, triple slash).
+        assert_eq!(
+            parse_file_uri("file:///home/user/projects"),
+            Some("/home/user/projects".into())
+        );
+    }
+
+    #[test]
+    fn parse_uri_with_percent_encoding() {
+        // Directories with spaces are percent-encoded by VTE.
+        assert_eq!(
+            parse_file_uri("file:///home/user/my%20project"),
+            Some("/home/user/my project".into())
+        );
+    }
+
+    #[test]
+    fn parse_uri_root() {
+        assert_eq!(parse_file_uri("file:///"), Some("/".into()));
+    }
+
+    #[test]
+    fn parse_non_file_uri_returns_none() {
+        // Non-file URIs must not silently produce a path.
+        assert_eq!(parse_file_uri("https://example.com/path"), None);
+        assert_eq!(parse_file_uri("ssh://host/path"), None);
+    }
+
+    #[test]
+    fn parse_empty_string_returns_none() {
+        assert_eq!(parse_file_uri(""), None);
+    }
+
+    #[test]
+    fn strip_prefix_regression() {
+        // The OLD strip_prefix("file://") approach would return "/path" for
+        // "file:///path" (correct by accident) but "/my%20dir" for encoded
+        // paths.  The new implementation must decode percent-encoding.
+        let old_way = "file:///home/user/my%20dir"
+            .strip_prefix("file://")
+            .map(|p| p.to_string());
+        let new_way = parse_file_uri("file:///home/user/my%20dir");
+        // Old way: still has raw %20
+        assert_eq!(old_way, Some("/home/user/my%20dir".into()));
+        // New way: decoded
+        assert_eq!(new_way, Some("/home/user/my dir".into()));
+        assert_ne!(old_way, new_way, "new implementation must differ from the old broken one");
     }
 }
