@@ -14,6 +14,11 @@ metainfodir = datadir / 'metainfo'
 
 app_id = 'io.github.rttx'
 
+# Dependencies (checked early for better user feedback)
+dependency('gtk4', version: '>= 4.14')
+dependency('libadwaita-1', version: '>= 1.5')
+dependency('vte-2.91-gtk4', version: '>= 0.76')
+
 # Find cargo
 cargo = find_program('cargo')
 
