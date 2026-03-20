@@ -3,7 +3,8 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-use rttx::preferences::{self, Preferences};
+use crate::config;
+use crate::preferences::{self, Preferences};
 
 /// Build and present the preferences window.
 pub fn show(parent: &impl IsA<gtk4::Window>) {
@@ -51,9 +52,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     appearance_group.add(&font_row);
 
     // Color scheme
-    let scheme_row = adw::ComboRow::builder()
-        .title("Color scheme")
-        .build();
+    let scheme_row = adw::ComboRow::builder().title("Color scheme").build();
     let schemes = load_scheme_names();
     let model = gtk4::StringList::new(&schemes.iter().map(|s| s.as_str()).collect::<Vec<_>>());
     scheme_row.set_model(Some(&model));
@@ -141,8 +140,8 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 fn load_scheme_names() -> Vec<String> {
     let mut names = vec!["default".to_string()];
     let mut dir = glib::user_config_dir();
-    dir.push(rttx::config::CONFIG_DIR);
-    dir.push(rttx::config::SCHEMES_DIR);
+    dir.push(config::CONFIG_DIR);
+    dir.push(config::SCHEMES_DIR);
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             if entry.path().extension().is_some_and(|e| e == "json") {

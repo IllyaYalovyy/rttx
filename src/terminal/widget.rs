@@ -4,6 +4,8 @@ use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use vte4::prelude::*;
 
+use crate::color_scheme;
+
 mod imp {
     use super::*;
     use std::cell::RefCell;
@@ -208,8 +210,7 @@ impl TerminalWidget {
     }
 
     fn spawn_shell(&self, cwd: Option<&str>) {
-        let shell =
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
         let cwd_path = cwd.map(|s| s.to_string());
 
         let vte = self.imp().vte.clone();
@@ -248,7 +249,7 @@ impl TerminalWidget {
     }
 
     /// Apply a color scheme to this terminal.
-    pub fn apply_color_scheme(&self, scheme: &rttx::color_scheme::ColorScheme) {
+    pub fn apply_color_scheme(&self, scheme: &color_scheme::ColorScheme) {
         let vte = &self.imp().vte;
 
         if let Some(fg) = scheme.foreground_rgba() {
@@ -260,35 +261,25 @@ impl TerminalWidget {
         }
 
         if scheme.use_cursor_color {
-            if let Some(cursor_fg) =
-                rttx::color_scheme::ColorScheme::parse_color(&scheme.cursor_fg)
-            {
+            if let Some(cursor_fg) = color_scheme::ColorScheme::parse_color(&scheme.cursor_fg) {
                 vte.set_color_cursor_foreground(Some(&cursor_fg));
             }
-            if let Some(cursor_bg) =
-                rttx::color_scheme::ColorScheme::parse_color(&scheme.cursor_bg)
-            {
+            if let Some(cursor_bg) = color_scheme::ColorScheme::parse_color(&scheme.cursor_bg) {
                 vte.set_color_cursor(Some(&cursor_bg));
             }
         }
 
         if scheme.use_highlight_color {
-            if let Some(hl_fg) =
-                rttx::color_scheme::ColorScheme::parse_color(&scheme.highlight_fg)
-            {
+            if let Some(hl_fg) = color_scheme::ColorScheme::parse_color(&scheme.highlight_fg) {
                 vte.set_color_highlight_foreground(Some(&hl_fg));
             }
-            if let Some(hl_bg) =
-                rttx::color_scheme::ColorScheme::parse_color(&scheme.highlight_bg)
-            {
+            if let Some(hl_bg) = color_scheme::ColorScheme::parse_color(&scheme.highlight_bg) {
                 vte.set_color_highlight(Some(&hl_bg));
             }
         }
 
         if scheme.use_bold_color {
-            if let Some(bold) =
-                rttx::color_scheme::ColorScheme::parse_color(&scheme.bold_color)
-            {
+            if let Some(bold) = color_scheme::ColorScheme::parse_color(&scheme.bold_color) {
                 vte.set_color_bold(Some(&bold));
             }
         }

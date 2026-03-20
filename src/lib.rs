@@ -3,5 +3,11 @@ pub mod config;
 pub mod preferences;
 pub mod session;
 
+pub mod application;
+pub mod preferences_window;
+pub mod sidebar;
+pub mod terminal;
+pub mod window;
+
 #[cfg(test)]
 pub mod test_helpers;

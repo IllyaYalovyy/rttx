@@ -7,7 +7,10 @@ use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
 use vte4::prelude::*;
 
-use rttx::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
+use crate::color_scheme;
+use crate::config;
+use crate::preferences;
+use crate::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
 use crate::sidebar::SessionRow;
 use crate::terminal::widget::TerminalWidget;
 
@@ -700,7 +703,7 @@ impl Window {
     /// Forward input from one terminal to all siblings in the same session
     /// when input sync is enabled.
     fn apply_preferences_to_terminal(&self, term: &TerminalWidget) {
-        let prefs = rttx::preferences::load();
+        let prefs = preferences::load();
         let vte = term.vte();
         let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
         vte.set_font(Some(&font_desc));
@@ -716,10 +719,10 @@ impl Window {
         // Load and apply color scheme
         if prefs.color_scheme != "default" {
             let mut scheme_path = glib::user_config_dir();
-            scheme_path.push(rttx::config::CONFIG_DIR);
-            scheme_path.push(rttx::config::SCHEMES_DIR);
+            scheme_path.push(config::CONFIG_DIR);
+            scheme_path.push(config::SCHEMES_DIR);
             scheme_path.push(format!("{}.json", prefs.color_scheme));
-            if let Ok(scheme) = rttx::color_scheme::load_scheme_file(&scheme_path) {
+            if let Ok(scheme) = color_scheme::load_scheme_file(&scheme_path) {
                 term.apply_color_scheme(&scheme);
             }
         }
