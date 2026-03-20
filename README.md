@@ -44,9 +44,19 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - Libadwaita 1.5+
 - VTE 0.76+ (GTK4 variant)
 
-On Ubuntu/Debian:
+**Ubuntu/Debian:**
 ```bash
 sudo apt install libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
+```
+
+**Fedora:**
+```bash
+sudo dnf install gtk4-devel libadwaita-devel vte291-gtk4-devel
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S gtk4 libadwaita vte4
 ```
 
 ### Build and run
@@ -65,8 +75,14 @@ meson install -C build
 
 ## Testing
 
+Run the standard test suite:
 ```bash
 cargo test
+```
+
+To run GTK widget tests in a headless environment (CI or no active X11/Wayland session), use the Broadway backend:
+```bash
+GDK_BACKEND=broadway GTK_A11Y=none cargo test
 ```
 
 102 tests covering layout tree operations, session persistence, color scheme compatibility,
