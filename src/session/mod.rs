@@ -62,6 +62,9 @@ pub fn build_layout_widget(
             };
             let paned = gtk4::Paned::new(gtk_orientation);
             paned.set_wide_handle(true);
+            // Set a reasonable default position so nested splits are visible
+            // even before they receive a full allocation.
+            paned.set_position(200);
 
             let first_widget = build_layout_widget(first, make_terminal);
             let second_widget = build_layout_widget(second, make_terminal);

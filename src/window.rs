@@ -640,6 +640,10 @@ impl Window {
             .add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
 
+        // Ensure the new layout is processed and drawn
+        content.queue_allocate();
+        content.queue_draw();
+
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
     }
 
