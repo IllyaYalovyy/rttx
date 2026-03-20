@@ -140,8 +140,56 @@ impl Window {
         let obj: Self = glib::Object::builder().property("application", app).build();
         obj.setup_actions(app);
         obj.setup_signals();
+        // Register the shortcuts overlay so the "Keyboard Shortcuts" menu item works.
+        // set_help_overlay automatically provides the win.show-help-overlay action.
+        obj.set_help_overlay(Some(&Self::build_shortcuts_window()));
         obj.restore_state();
         obj
+    }
+
+    fn build_shortcuts_window() -> gtk4::ShortcutsWindow {
+        fn sc(title: &str, accel: &str) -> gtk4::ShortcutsShortcut {
+            gtk4::ShortcutsShortcut::builder()
+                .title(title)
+                .accelerator(accel)
+                .build()
+        }
+
+        let sessions = gtk4::ShortcutsGroup::builder().title("Sessions").build();
+        sessions.append(&sc("New Session", "<Ctrl><Shift>t"));
+        sessions.append(&sc("Close Terminal", "<Ctrl><Shift>w"));
+        sessions.append(&sc("Next Session", "<Ctrl>Tab"));
+        sessions.append(&sc("Previous Session", "<Ctrl><Shift>Tab"));
+        sessions.append(&sc("Toggle Sidebar", "<Ctrl><Shift>n"));
+
+        let splits = gtk4::ShortcutsGroup::builder().title("Splits").build();
+        splits.append(&sc("Split Right", "<Ctrl><Shift>e"));
+        splits.append(&sc("Split Down", "<Ctrl><Shift>o"));
+
+        let terminal = gtk4::ShortcutsGroup::builder().title("Terminal").build();
+        terminal.append(&sc("Copy", "<Ctrl><Shift>c"));
+        terminal.append(&sc("Paste", "<Ctrl><Shift>v"));
+        terminal.append(&sc("Find", "<Ctrl><Shift>f"));
+        terminal.append(&sc("Zoom In", "<Ctrl>plus"));
+        terminal.append(&sc("Zoom Out", "<Ctrl>minus"));
+        terminal.append(&sc("Reset Zoom", "<Ctrl>0"));
+
+        let app_group = gtk4::ShortcutsGroup::builder().title("Application").build();
+        app_group.append(&sc("Preferences", "<Ctrl>comma"));
+        app_group.append(&sc("Toggle Input Sync", "<Ctrl><Shift>i"));
+        app_group.append(&sc("Fullscreen", "F11"));
+
+        let section = gtk4::ShortcutsSection::builder()
+            .section_name("shortcuts")
+            .build();
+        section.append(&sessions);
+        section.append(&splits);
+        section.append(&terminal);
+        section.append(&app_group);
+
+        let win = gtk4::ShortcutsWindow::builder().modal(true).build();
+        win.add_section(&section);
+        win
     }
 
     fn setup_actions(&self, app: &adw::Application) {
