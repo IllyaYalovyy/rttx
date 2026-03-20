@@ -777,8 +777,9 @@ impl Window {
         }
     }
 
-    /// Forward input from one terminal to all siblings in the same session
-    /// when input sync is enabled.
+    /// Apply all user preferences (font, colors, scrollback, bell, …) to a
+    /// terminal widget.  Called when a new terminal is created and when
+    /// preferences change.
     fn apply_preferences_to_terminal(&self, term: &TerminalWidget) {
         let prefs = preferences::load();
         let vte = term.vte();
@@ -787,6 +788,7 @@ impl Window {
         vte.set_scrollback_lines(prefs.scrollback_lines);
         vte.set_scroll_on_keystroke(prefs.scroll_on_keystroke);
         vte.set_scroll_on_output(prefs.scroll_on_output);
+        vte.set_audible_bell(prefs.audible_bell);
 
         // Header visibility
         if !prefs.show_headerbar {
