@@ -85,6 +85,8 @@ mod imp {
             self.sidebar_list
                 .set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");
+            self.sidebar_list
+                .update_property(&[gtk4::accessible::Property::Label("Sessions")]);
 
             let sidebar_scroll = gtk4::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Never)
