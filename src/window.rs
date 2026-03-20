@@ -498,9 +498,21 @@ impl Window {
 
     fn switch_to_session(&self, index: usize) {
         let imp = self.imp();
-        let state = imp.state.borrow();
-        if let Some(session) = state.sessions.get(index) {
-            imp.session_stack.set_visible_child_name(&session.uuid);
+        let (uuid, input_sync) = {
+            let state = imp.state.borrow();
+            let Some(session) = state.sessions.get(index) else {
+                return;
+            };
+            (session.uuid.clone(), session.input_sync)
+        };
+        imp.session_stack.set_visible_child_name(&uuid);
+        // Keep the toggle-input-sync menu button in sync with the session we
+        // just switched to.  Without this update the button can show the
+        // previous session's state.
+        if let Some(action) = self.lookup_action("toggle-input-sync") {
+            if let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>() {
+                action.set_state(&input_sync.to_variant());
+            }
         }
     }
 
