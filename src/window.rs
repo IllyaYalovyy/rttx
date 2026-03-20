@@ -742,9 +742,17 @@ impl Window {
         imp.session_stack.add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
 
-        // Ensure the new layout is processed and drawn
-        content.queue_allocate();
-        content.queue_draw();
+        // Apply ratio-correct Paned positions once layout passes have settled.
+        // We use an idle so that the HIGH_IDLE layout passes finish first and
+        // each Paned's allocated size is final when we read it.
+        let layout = session_state.layout.clone();
+        glib::idle_add_local_once(glib::clone!(
+            #[weak]
+            content,
+            move || {
+                session::apply_paned_ratios(&layout, &content);
+            }
+        ));
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
     }

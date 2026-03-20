@@ -38,6 +38,38 @@ pub fn load_window_state() -> WindowState {
     }
 }
 
+/// Walk the live widget tree and apply each `Split` node's `ratio` to the
+/// corresponding `GtkPaned` position.  Call this after the widget has been
+/// allocated (e.g. from a `glib::idle_add_local_once` so all layout passes
+/// have completed) to guarantee ratio-correct initial split positions.
+pub fn apply_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
+    let LayoutNode::Split {
+        orientation,
+        ratio,
+        first,
+        second,
+    } = layout
+    else {
+        return;
+    };
+    let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
+        return;
+    };
+    let total = match orientation {
+        SplitOrientation::Horizontal => paned.width(),
+        SplitOrientation::Vertical => paned.height(),
+    };
+    if total > 0 {
+        paned.set_position((total as f64 * ratio.clamp(0.05, 0.95)) as i32);
+    }
+    if let Some(start) = paned.start_child() {
+        apply_paned_ratios(first, &start);
+    }
+    if let Some(end) = paned.end_child() {
+        apply_paned_ratios(second, &end);
+    }
+}
+
 /// Walk the live widget tree and update each `Split` node's `ratio` to
 /// reflect the current divider position.  Call this before serialising
 /// state so that user-adjusted splits are preserved across restarts.

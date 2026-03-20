@@ -274,3 +274,46 @@ fn test_capture_paned_ratios_nested() {
         "inner ratio should be ≈0.25, got {inner_ratio}"
     );
 }
+
+/// apply_paned_ratios must set Paned positions from layout ratios and
+/// current allocated sizes.  This is the inverse of capture_paned_ratios
+/// and is called (via idle) after adding the widget tree to the window so
+/// splits are visually equal on first display.
+#[test]
+fn test_apply_paned_ratios_sets_position() {
+    require_display!();
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t2".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
+        gtk4::Label::new(Some(uuid)).upcast()
+    });
+
+    let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    paned.set_size_request(800, 600);
+    paned.allocate(800, 600, -1, None);
+
+    // Now apply_paned_ratios should read width=800 and set position=400.
+    session::apply_paned_ratios(&layout, &widget);
+
+    let pos = paned.position();
+    assert!(
+        (pos - 400).abs() <= 5,
+        "position should be ≈400 (0.5 × 800) after apply_paned_ratios, got {pos}"
+    );
+}
