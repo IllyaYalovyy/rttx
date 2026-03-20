@@ -1,14 +1,22 @@
 use gtk4::prelude::*;
 use rttx::session::{self, *};
-use std::sync::OnceLock;
+use std::sync::Once;
 
-static GTK_INIT: OnceLock<bool> = OnceLock::new();
+static GTK_INIT: Once = Once::new();
 
 fn ensure_gtk_init() -> bool {
-    *GTK_INIT.get_or_init(|| {
+    let mut success = false;
+    GTK_INIT.call_once(|| {
         std::env::set_var("GTK_A11Y", "none");
-        gtk4::init().is_ok()
-    })
+        success = gtk4::init().is_ok();
+    });
+    if !success {
+        success = std::panic::catch_unwind(|| {
+            let _ = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        })
+        .is_ok();
+    }
+    success
 }
 
 macro_rules! require_display {

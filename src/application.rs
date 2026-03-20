@@ -7,7 +7,7 @@ use crate::window::Window;
 
 /// Build and run the application.
 pub fn run() -> glib::ExitCode {
-    tracing_subscriber::fmt::init();
+    pretty_env_logger::init();
 
     let app = adw::Application::builder()
         .application_id(config::APP_ID)
