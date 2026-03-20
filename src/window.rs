@@ -597,15 +597,16 @@ impl Window {
 
         // Step 2: Unparent all existing terminals from the now-detached
         // Paned tree so they can be reparented into the new tree.
-        {
-            let terminals = imp.terminals.borrow();
-            for uuid in session_state.layout.terminal_uuids() {
-                if let Some(term) = terminals.get(&uuid) {
-                    if term.parent().is_some() {
-                        term.unparent();
-                    }
-                }
-            }
+        //
+        // Important: detach via the old container API (`set_*_child(None)`),
+        // not via `child.unparent()`. Calling `unparent()` directly on a
+        // reused leaf leaves stale child pointers behind in the detached old
+        // `GtkPaned`s, and when that old tree is later destroyed it clears the
+        // child's parent pointer out from under the new tree. The result is
+        // exactly the observed bug: after multiple splits only the newest
+        // terminal remains live.
+        if let Some(ref old) = old_content {
+            Self::detach_terminals_from_detached_tree(old);
         }
         // Drop the old content reference so the detached Paned tree can be freed.
         drop(old_content);
@@ -616,11 +617,19 @@ impl Window {
         let content =
             session::build_layout_widget(&session_state.layout, &|uuid, cwd, _, custom_title| {
                 // Reuse existing terminal (already has signal handlers)
-                let terminals = win.imp().terminals.borrow();
-                if let Some(existing) = terminals.get(uuid) {
-                    return existing.clone().upcast();
+                let existing = {
+                    let terminals = win.imp().terminals.borrow();
+                    terminals.get(uuid).cloned()
+                };
+                if let Some(existing) = existing {
+                    // Defensive detach: if a reused terminal is still attached to
+                    // the detached old tree, GTK will refuse to insert it into the
+                    // new Paned hierarchy and the leaf will render blank.
+                    if existing.parent().is_some() {
+                        existing.unparent();
+                    }
+                    return existing.upcast();
                 }
-                drop(terminals);
 
                 // New terminal — create and connect signals
                 let term = TerminalWidget::new(uuid, cwd);
@@ -645,6 +654,19 @@ impl Window {
         content.queue_draw();
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
+    }
+
+    fn detach_terminals_from_detached_tree(widget: &gtk4::Widget) {
+        if let Some(paned) = widget.downcast_ref::<gtk4::Paned>() {
+            if let Some(start) = paned.start_child() {
+                Self::detach_terminals_from_detached_tree(&start);
+                paned.set_start_child(None::<&gtk4::Widget>);
+            }
+            if let Some(end) = paned.end_child() {
+                Self::detach_terminals_from_detached_tree(&end);
+                paned.set_end_child(None::<&gtk4::Widget>);
+            }
+        }
     }
 
     fn update_sidebar_count(&self, session_uuid: &str, count: usize) {
