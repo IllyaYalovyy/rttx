@@ -7,6 +7,7 @@ use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
 use vte4::prelude::*;
 
+use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::preferences;
 use crate::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
@@ -59,6 +60,7 @@ mod imp {
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
+            menu.append(Some("Bookmarks"), Some("win.bookmarks"));
             menu.append(Some("Preferences"), Some("win.preferences"));
             menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
             menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
@@ -214,6 +216,9 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
+            ("bookmarks", &["<Ctrl><Shift>B"], |w| {
+                crate::bookmarks_window::show(w);
+            }),
         ];
 
         for (name, accels, callback) in actions {
@@ -501,6 +506,20 @@ impl Window {
         }
     }
 
+    pub(crate) fn execute_bookmark(&self, bookmark: &Bookmark) {
+        let Some(command) = bookmark.command() else {
+            return;
+        };
+        let Some(term) = self.command_target_terminal() else {
+            return;
+        };
+
+        let command = format!("{command}\n");
+        term.vte().feed_child(command.as_bytes());
+        let _ = term.vte().grab_focus();
+        self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
+    }
+
     fn switch_to_session(&self, index: usize) {
         let imp = self.imp();
         let (uuid, input_sync) = {
@@ -548,6 +567,20 @@ impl Window {
                 win.imp().focused_terminal_uuid.replace(Some(target_uuid));
             }
         });
+    }
+
+    fn command_target_terminal(&self) -> Option<TerminalWidget> {
+        let visible_session_uuid = self.imp().session_stack.visible_child_name().map(|name| name.to_string());
+        let target_uuid = {
+            let state = self.imp().state.borrow();
+            preferred_command_target_uuid(
+                self.focused_terminal_uuid().as_deref(),
+                visible_session_uuid.as_deref(),
+                &state,
+            )
+        }?;
+
+        self.imp().terminals.borrow().get(&target_uuid).cloned()
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -1073,6 +1106,27 @@ impl Window {
     }
 }
 
+fn preferred_command_target_uuid(
+    focused_terminal_uuid: Option<&str>,
+    visible_session_uuid: Option<&str>,
+    state: &WindowState,
+) -> Option<String> {
+    if let Some(focused_terminal_uuid) = focused_terminal_uuid {
+        return Some(focused_terminal_uuid.to_string());
+    }
+
+    if let Some(visible_session_uuid) = visible_session_uuid {
+        if let Some(session) = state.sessions.iter().find(|session| session.uuid == visible_session_uuid) {
+            return session.layout.terminal_uuids().into_iter().next();
+        }
+    }
+
+    state
+        .sessions
+        .get(state.active_session_index)
+        .and_then(|session| session.layout.terminal_uuids().into_iter().next())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1124,6 +1178,66 @@ mod tests {
             }
         }
         condition()
+    }
+
+    #[test]
+    fn preferred_command_target_uuid_uses_focused_terminal_first() {
+        let state = WindowState {
+            active_session_index: 0,
+            width: 800,
+            height: 600,
+            is_maximized: false,
+            sessions: vec![SessionState {
+                uuid: "s1".into(),
+                name: "Session 1".into(),
+                layout: LayoutNode::Split {
+                    orientation: SplitOrientation::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::new_terminal_with_uuid("t1")),
+                    second: Box::new(LayoutNode::new_terminal_with_uuid("t2")),
+                },
+                input_sync: false,
+            }],
+        };
+
+        assert_eq!(
+            preferred_command_target_uuid(Some("t2"), Some("s1"), &state).as_deref(),
+            Some("t2")
+        );
+    }
+
+    #[test]
+    fn preferred_command_target_uuid_falls_back_to_visible_session() {
+        let state = WindowState {
+            active_session_index: 1,
+            width: 800,
+            height: 600,
+            is_maximized: false,
+            sessions: vec![
+                SessionState {
+                    uuid: "s1".into(),
+                    name: "Session 1".into(),
+                    layout: LayoutNode::new_terminal_with_uuid("t1"),
+                    input_sync: false,
+                },
+                SessionState {
+                    uuid: "s2".into(),
+                    name: "Session 2".into(),
+                    layout: LayoutNode::Split {
+                        orientation: SplitOrientation::Vertical,
+                        ratio: 0.5,
+                        first: Box::new(LayoutNode::new_terminal_with_uuid("t2")),
+                        second: Box::new(LayoutNode::new_terminal_with_uuid("t3")),
+                    },
+                    input_sync: false,
+                },
+            ],
+        };
+
+        assert_eq!(
+            preferred_command_target_uuid(None, Some("s2"), &state).as_deref(),
+            Some("t2")
+        );
     }
 
     #[test]

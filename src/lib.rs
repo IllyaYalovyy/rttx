@@ -1,3 +1,5 @@
+pub mod bookmarks;
+pub mod bookmarks_window;
 pub mod color_scheme;
 pub mod config;
 pub mod preferences;
