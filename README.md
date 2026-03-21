@@ -4,17 +4,35 @@ A tiling terminal emulator for GNOME, built with Rust, GTK4, and Libadwaita.
 
 Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from scratch.
 
+## Motivation
+
+There is no shortage of terminal emulators. New ones appear constantly, usually competing on rendering tricks, portability, customization systems, or novelty. `rttx` exists for a different reason.
+
+This project is not trying to be the most feature-packed terminal, the most portable terminal, or the most technically flashy terminal. It is not interested in GPU marketing, gimmicks, or turning the terminal into a media player. It is focused on something much more practical: being an excellent terminal emulator for GNOME on Linux.
+
+The goals are simple:
+
+- tight desktop integration, so the application feels native instead of visually and behaviorally out of place
+- practical features that matter in real work: tiling splits, sessions, persistence, search, synchronization, and workflow-oriented ergonomics
+- simple configuration, without forcing users to learn a new language or adopt a configuration ecosystem just to change basic behavior
+- rock-solid stability for long-running work, with a strong bias toward correctness over cleverness
+
+That last point is central. A terminal is not a toy window. It often stays open for days, weeks, or months and is frequently used during critical work. It should not randomly crash, corrupt state, or slowly leak memory until it becomes unusable. `rttx` is written in Rust for a reason, and the project puts unusual emphasis on test coverage, especially around the Rust/GTK boundary where many subtle bugs tend to hide.
+
+The scope is intentionally narrow: GNOME, Linux, practical features, and reliability first.
+
 ## Features
 
 - **Split-screen terminals** — split horizontally (Ctrl+Shift+E) or vertically (Ctrl+Shift+O)
 - **Sidebar session management** — multiple sessions with named tabs, not horizontal tab bar
 - **Session persistence** — layout, CWDs, and custom titles saved on exit, restored on launch
 - **Input synchronization** — type in one terminal, replicate to all others in the session
-- **Drag and drop** — rearrange terminals by dragging headers
+- **Terminal swapping by drag and drop** — drag one terminal header onto another to swap them
 - **Custom titles** — double-click terminal header to set a custom name
-- **Preferences** — font, color scheme, scrollback, opacity, and more
-- **Tilix color scheme compatibility** — load existing Tilix JSON color scheme files
-- **Process notifications** — desktop notification when a background process completes
+- **Preferences** — font, terminal theme mode, light/dark terminal palettes, scrollback, header visibility, bell, and scroll behavior
+- **Built-in terminal themes** — bundled light and dark palettes with optional system light/dark following
+- **Tilix color scheme compatibility** — load Tilix JSON color scheme files
+- **Process exit notifications** — desktop notification when an unfocused terminal process exits
 - **Keyboard-driven** — comprehensive shortcuts for all operations
 
 ## Keyboard Shortcuts
@@ -80,13 +98,22 @@ Run the standard test suite:
 cargo test
 ```
 
-To run GTK widget tests in a headless environment (CI or no active X11/Wayland session), use the Broadway backend:
+To run GTK widget tests in a headless environment, start Broadway and point GTK at it:
 ```bash
-GDK_BACKEND=broadway GTK_A11Y=none cargo test
+broadwayd :5
+GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 GTK_A11Y=none cargo test
 ```
 
-102 tests covering layout tree operations, session persistence, color scheme compatibility,
-preferences, and property-based testing with proptest.
+The repository includes unit, integration, GTK widget, and property-based tests covering layout
+operations, session persistence, preferences, and Rust/GTK boundary behavior.
+
+## Author
+
+Illya Yalovyy
+
+- LinkedIn: https://www.linkedin.com/in/illyayalovyy/
+- Medium: https://medium.com/@yalovoy
+- GitHub: https://github.com/IllyaYalovyy
 
 ## License
 
