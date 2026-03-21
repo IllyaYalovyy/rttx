@@ -7,6 +7,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use std::fs;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 /// Returns the path to the sessions directory in `XDG_CONFIG_HOME`.
 #[must_use]
@@ -127,15 +128,21 @@ where
             let ratio_val = *ratio;
             let prop =
                 if gtk_orientation == gtk4::Orientation::Horizontal { "width" } else { "height" };
-            paned.connect_notify_local(Some(prop), move |p, _| {
+            let handler = Rc::new(std::cell::RefCell::new(None));
+            let handler_ref = handler.clone();
+            let handler_id = paned.connect_notify_local(Some(prop), move |p, _| {
                 let size = match gtk_orientation {
                     gtk4::Orientation::Horizontal => p.width(),
                     _ => p.height(),
                 };
                 if size > 0 {
                     p.set_position((f64::from(size) * ratio_val) as i32);
+                    if let Some(id) = handler_ref.borrow_mut().take() {
+                        p.disconnect(id);
+                    }
                 }
             });
+            *handler.borrow_mut() = Some(handler_id);
 
             let size = if gtk_orientation == gtk4::Orientation::Horizontal {
                 paned.width()

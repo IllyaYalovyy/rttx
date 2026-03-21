@@ -21,7 +21,6 @@ mod imp {
     #[derive(Default, Debug)]
     pub struct Window {
         pub split_view: adw::OverlaySplitView,
-        pub toast_overlay: adw::ToastOverlay,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
         pub add_session_button: gtk4::Button,
@@ -52,7 +51,6 @@ mod imp {
             toggle_sidebar.set_active(true);
             header.pack_start(&toggle_sidebar);
 
-            self.add_session_button.set_icon_name("list-add-symbolic");
             self.add_session_button.set_tooltip_text(Some("New session"));
             header.pack_start(&self.add_session_button);
 
@@ -95,12 +93,11 @@ mod imp {
                 .sync_create()
                 .build();
 
-            let toolbar_view = adw::ToolbarView::new();
-            toolbar_view.add_top_bar(&header);
-            self.toast_overlay.set_child(Some(&self.split_view));
-            toolbar_view.set_content(Some(&self.toast_overlay));
+            let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            main_box.append(&header);
+            main_box.append(&self.split_view);
 
-            obj.set_content(Some(&toolbar_view));
+            obj.set_content(Some(&main_box));
         }
     }
 
@@ -115,26 +112,6 @@ glib::wrapper! {
         @extends adw::ApplicationWindow, gtk4::ApplicationWindow, gtk4::Window, gtk4::Widget,
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Native, gtk4::Root, gtk4::ShortcutManager,
                     gtk4::gio::ActionGroup, gtk4::gio::ActionMap;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessCompletionNotificationMode {
-    None,
-    Toast,
-    Desktop,
-}
-
-fn process_completion_notification_mode(
-    window_is_active: bool,
-    terminal_is_in_visible_session: bool,
-) -> ProcessCompletionNotificationMode {
-    if !window_is_active {
-        ProcessCompletionNotificationMode::Desktop
-    } else if terminal_is_in_visible_session {
-        ProcessCompletionNotificationMode::None
-    } else {
-        ProcessCompletionNotificationMode::Toast
-    }
 }
 
 impl Window {
@@ -212,10 +189,10 @@ impl Window {
         let actions: &[(&str, &[&str], ActionCallback)] = &[
             ("close-terminal", &["<Ctrl><Shift>W"], Self::close_focused_terminal),
             ("split-horizontal", &["<Ctrl><Shift>E"], |w| {
-                w.split_focused(SplitOrientation::Horizontal)
+                w.split_focused(SplitOrientation::Horizontal);
             }),
             ("split-vertical", &["<Ctrl><Shift>O"], |w| {
-                w.split_focused(SplitOrientation::Vertical)
+                w.split_focused(SplitOrientation::Vertical);
             }),
             ("search", &["<Ctrl><Shift>F"], Self::toggle_focused_search),
             ("copy", &["<Ctrl><Shift>C"], Self::clipboard_copy),
@@ -223,7 +200,7 @@ impl Window {
             ("prev-session", &["<Ctrl><Shift>Tab"], |w| w.cycle_session(-1)),
             ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
             ("toggle-sidebar", &["<Ctrl><Shift>N"], |w| {
-                w.imp().split_view.set_show_sidebar(!w.imp().split_view.shows_sidebar())
+                w.imp().split_view.set_show_sidebar(!w.imp().split_view.shows_sidebar());
             }),
             ("fullscreen", &["F11"], |w| {
                 if w.is_fullscreen() {
@@ -310,7 +287,9 @@ impl Window {
             win.close_session(&session_uuid);
         });
 
-        imp.sidebar_list.append(&row);
+        let list_row = gtk4::ListBoxRow::new();
+        list_row.set_child(Some(&row));
+        imp.sidebar_list.append(&list_row);
 
         let win = self.clone();
         let content = session::build_layout_widget(
@@ -339,12 +318,12 @@ impl Window {
         );
 
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
+        Self::schedule_apply_paned_ratios(&content, &session_state.layout);
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
     }
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
         self.apply_preferences_to_terminal(term);
-        term.ensure_shell_spawned_when_ready();
 
         let win = self.clone();
         let uuid = term.uuid();
@@ -484,8 +463,8 @@ impl Window {
             loop {
                 match imp.sidebar_list.row_at_index(idx) {
                     Some(r) => {
-                        if let Ok(session_row) = r.downcast::<SessionRow>() {
-                            if session_row.uuid() == session_uuid {
+                        if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
+                            if sr.uuid() == session_uuid {
                                 break idx;
                             }
                         }
@@ -779,7 +758,7 @@ impl Window {
         let imp = self.imp();
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Ok(session_row) = row.downcast::<SessionRow>() {
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
                 if session_row.uuid() == session_uuid {
                     session_row.update_terminal_count(count);
                     return;
@@ -940,39 +919,11 @@ impl Window {
             format!("\"{title}\" exited with status {status}")
         };
 
-        match self.process_completion_notification_mode(terminal_uuid) {
-            ProcessCompletionNotificationMode::None => {}
-            ProcessCompletionNotificationMode::Toast => {
-                let toast = adw::Toast::new(&body);
-                toast.set_timeout(4);
-                self.imp().toast_overlay.add_toast(toast);
-            }
-            ProcessCompletionNotificationMode::Desktop => {
-                let notification = gtk4::gio::Notification::new("Process completed");
-                notification.set_body(Some(&body));
-                if let Some(app) = self.application() {
-                    app.send_notification(None, &notification);
-                }
-            }
+        let notification = gtk4::gio::Notification::new("Process completed");
+        notification.set_body(Some(&body));
+        if let Some(app) = self.application() {
+            app.send_notification(None, &notification);
         }
-    }
-
-    fn process_completion_notification_mode(
-        &self,
-        terminal_uuid: &str,
-    ) -> ProcessCompletionNotificationMode {
-        process_completion_notification_mode(
-            self.is_active(),
-            self.terminal_is_in_visible_session(terminal_uuid),
-        )
-    }
-
-    fn terminal_is_in_visible_session(&self, terminal_uuid: &str) -> bool {
-        let visible_name = self.imp().session_stack.visible_child_name();
-        self.imp().state.borrow().sessions.iter().any(|session| {
-            Some(session.uuid.as_str()) == visible_name.as_deref()
-                && session.layout.contains_terminal(terminal_uuid)
-        })
     }
 
     fn clipboard_copy(&self) {
@@ -1046,193 +997,20 @@ mod tests {
     }
 
     #[test]
-    fn process_completion_notification_mode_matches_visibility_policy() {
-        assert_eq!(
-            process_completion_notification_mode(false, false),
-            ProcessCompletionNotificationMode::Desktop
-        );
-        assert_eq!(
-            process_completion_notification_mode(false, true),
-            ProcessCompletionNotificationMode::Desktop
-        );
-        assert_eq!(
-            process_completion_notification_mode(true, false),
-            ProcessCompletionNotificationMode::Toast
-        );
-        assert_eq!(
-            process_completion_notification_mode(true, true),
-            ProcessCompletionNotificationMode::None
-        );
-    }
+    fn split_rebuild_starts_new_panes_evenly() {
+        require_display!();
 
-    fn new_test_window(application_id: &str) -> (tempfile::TempDir, Window) {
         let tmp = tempfile::TempDir::new().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app = adw::Application::builder().application_id(application_id).build();
+        let app = adw::Application::builder().application_id("com.illya.rttx.window-tests").build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
         window.set_default_size(1200, 800);
         window.present();
         pump_events(100);
-        (tmp, window)
-    }
-
-    #[test]
-    fn window_uses_toolbar_view_root_layout() {
-        require_display!();
-
-        let (_tmp, window) = new_test_window("com.illya.rttx.toolbar-view-tests");
-        let split_view_ptr = window.imp().split_view.clone().upcast::<gtk4::Widget>().as_ptr();
-
-        let settled = wait_until(1000, || {
-            let Some(content) = window.content() else {
-                return false;
-            };
-            let Ok(toolbar_view) = content.downcast::<adw::ToolbarView>() else {
-                return false;
-            };
-            let Some(toolbar_content) = toolbar_view.content() else {
-                return false;
-            };
-            let Ok(toast_overlay) = toolbar_content.downcast::<adw::ToastOverlay>() else {
-                return false;
-            };
-            let Some(overlay_child) = toast_overlay.child() else {
-                return false;
-            };
-
-            overlay_child.as_ptr() == split_view_ptr && toolbar_view.top_bar_height() > 0
-        });
-
-        let content = window.content().expect("application window should always have content");
-        let toolbar_view = content
-            .downcast::<adw::ToolbarView>()
-            .expect("window root content should be a ToolbarView");
-        let toast_overlay = toolbar_view
-            .content()
-            .expect("ToolbarView should expose a ToastOverlay as its content")
-            .downcast::<adw::ToastOverlay>()
-            .expect("ToolbarView content should be a ToastOverlay");
-        let overlay_child =
-            toast_overlay.child().expect("ToastOverlay should expose the split view as its child");
-
-        assert!(
-            settled,
-            "window should present a ToolbarView root with a visible top bar, a ToastOverlay, and the live split view as overlay content"
-        );
-        assert_eq!(
-            overlay_child.as_ptr(),
-            split_view_ptr,
-            "ToastOverlay child should be the window's live split view"
-        );
-
-        window.close();
-    }
-
-    #[test]
-    fn hidden_session_exit_uses_toast_when_window_is_active() {
-        require_display!();
-
-        let (_tmp, window) = new_test_window("com.illya.rttx.toast-policy-tests");
-        window.add_session();
-        pump_events(100);
-
-        let (visible_session_uuid, hidden_terminal_uuid) = {
-            let state = window.imp().state.borrow();
-            let visible_session = &state.sessions[0];
-            let hidden_session = &state.sessions[1];
-            (
-                visible_session.uuid.clone(),
-                hidden_session.layout.terminal_uuids().into_iter().next().unwrap(),
-            )
-        };
-
-        window.imp().session_stack.set_visible_child_name(&visible_session_uuid);
-        pump_events(50);
-
-        assert!(window.is_active(), "test window must be active to exercise the toast path");
-        assert_eq!(
-            window.process_completion_notification_mode(&hidden_terminal_uuid),
-            ProcessCompletionNotificationMode::Toast,
-            "process exit in a non-visible session should use an in-app toast while the window is active"
-        );
-
-        window.close();
-    }
-
-    #[test]
-    fn sidebar_rows_are_session_rows() {
-        require_display!();
-
-        let (_tmp, window) = new_test_window("com.illya.rttx.sidebar-row-tests");
-        let row = window
-            .imp()
-            .sidebar_list
-            .row_at_index(0)
-            .expect("window should create an initial sidebar row");
-        let session_row = row
-            .downcast::<SessionRow>()
-            .expect("sidebar rows should be SessionRow ActionRow subclasses");
-
-        assert!(session_row.is::<adw::ActionRow>());
-
-        window.close();
-    }
-
-    #[test]
-    fn add_session_button_has_plus_icon() {
-        require_display!();
-
-        let (_tmp, window) = new_test_window("com.illya.rttx.add-session-button-tests");
-
-        assert_eq!(
-            window.imp().add_session_button.icon_name().as_deref(),
-            Some("list-add-symbolic"),
-            "new session button should expose the plus icon"
-        );
-
-        window.close();
-    }
-
-    #[test]
-    fn initial_terminal_starts_shell_when_window_is_presented() {
-        require_display!();
-
-        let (_tmp, window) = new_test_window("com.illya.rttx.shell-startup-tests");
-        let terminal = {
-            let state = window.imp().state.borrow();
-            let uuid = state.sessions[0]
-                .layout
-                .terminal_uuids()
-                .into_iter()
-                .next()
-                .expect("initial session should contain a terminal");
-            window
-                .imp()
-                .terminals
-                .borrow()
-                .get(&uuid)
-                .expect("initial terminal widget should exist")
-                .clone()
-        };
-
-        let settled = wait_until(1000, || terminal.shell_spawned_for_test());
-        assert!(
-            settled,
-            "window should trigger shell startup once the initial terminal has a real allocation"
-        );
-
-        window.close();
-    }
-
-    #[test]
-    fn split_rebuild_starts_new_panes_evenly() {
-        require_display!();
-
-        let (_tmp, window) = new_test_window("com.illya.rttx.window-tests");
 
         let (session_uuid, t1_uuid) = {
             let state = window.imp().state.borrow();
@@ -1331,10 +1109,7 @@ mod tests {
         let (session_uuid, t1_uuid) = {
             let state = first_window.imp().state.borrow();
             let session = &state.sessions[0];
-            (
-                session.uuid.clone(),
-                session.layout.terminal_uuids().into_iter().next().unwrap(),
-            )
+            (session.uuid.clone(), session.layout.terminal_uuids().into_iter().next().unwrap())
         };
 
         first_window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
@@ -1355,9 +1130,7 @@ mod tests {
             .session_stack
             .child_by_name(&session_uuid)
             .expect("session content must exist before save");
-        let paned = root
-            .downcast::<gtk4::Paned>()
-            .expect("split root should be a Paned");
+        let paned = root.downcast::<gtk4::Paned>().expect("split root should be a Paned");
         let total = paned.width().max(1);
         let expected_ratio = 0.3;
         paned.set_position((f64::from(total) * expected_ratio) as i32);
@@ -1399,9 +1172,8 @@ mod tests {
             .session_stack
             .child_by_name(&session_uuid)
             .expect("session content must exist after restart");
-        let restored_paned = restored_root
-            .downcast::<gtk4::Paned>()
-            .expect("restored root should be a Paned");
+        let restored_paned =
+            restored_root.downcast::<gtk4::Paned>().expect("restored root should be a Paned");
         let restored_ratio =
             restored_paned.position() as f64 / restored_paned.width().max(1) as f64;
         assert!(
@@ -1416,10 +1188,171 @@ mod tests {
     }
 
     #[test]
+    fn save_and_restart_restores_nested_user_resized_pane_ratios() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.restore-nested-ratios-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let first_window = Window::new(&app);
+        first_window.set_default_size(1200, 800);
+        first_window.present();
+        pump_events(100);
+
+        let (session_uuid, t1_uuid) = {
+            let state = first_window.imp().state.borrow();
+            let session = &state.sessions[0];
+            (session.uuid.clone(), session.layout.terminal_uuids().into_iter().next().unwrap())
+        };
+
+        first_window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let t2_uuid = {
+            let state = first_window.imp().state.borrow();
+            state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|uuid| uuid != &t1_uuid)
+                .unwrap()
+        };
+
+        first_window.split_terminal(&t2_uuid, SplitOrientation::Vertical);
+
+        let settled = wait_until(1000, || {
+            let Some(root) = first_window.imp().session_stack.child_by_name(&session_uuid) else {
+                return false;
+            };
+            let Ok(outer) = root.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let Some(inner_child) = outer.end_child() else {
+                return false;
+            };
+            let Ok(inner) = inner_child.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            outer.width() > 0 && inner.height() > 0
+        });
+        assert!(settled, "nested split panes did not receive allocation before save");
+
+        let root = first_window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist before save");
+        let outer = root.downcast::<gtk4::Paned>().expect("outer root should be a Paned");
+        let inner = outer
+            .end_child()
+            .expect("nested split should exist on one branch")
+            .downcast::<gtk4::Paned>()
+            .expect("nested branch should be a Paned");
+
+        let expected_outer_ratio = 0.32;
+        let expected_inner_ratio = 0.68;
+        outer.set_position((f64::from(outer.width().max(1)) * expected_outer_ratio) as i32);
+        inner.set_position((f64::from(inner.height().max(1)) * expected_inner_ratio) as i32);
+        pump_events(50);
+
+        first_window.save_state();
+        first_window.close();
+
+        let saved_state = session::load_window_state();
+        let LayoutNode::Split { ratio: saved_outer_ratio, second, .. } =
+            &saved_state.sessions[0].layout
+        else {
+            panic!("saved layout should remain nested after resize");
+        };
+        let LayoutNode::Split { ratio: saved_inner_ratio, .. } = second.as_ref() else {
+            panic!("saved nested branch should remain a split after resize");
+        };
+        assert!(
+            (*saved_outer_ratio - expected_outer_ratio).abs() <= 0.05,
+            "save_state should capture the outer user-resized split ratio, got {saved_outer_ratio}"
+        );
+        assert!(
+            (*saved_inner_ratio - expected_inner_ratio).abs() <= 0.05,
+            "save_state should capture the inner user-resized split ratio, got {saved_inner_ratio}"
+        );
+
+        let second_window = Window::new(&app);
+        second_window.set_default_size(1200, 800);
+        second_window.present();
+
+        let restored = wait_until(1000, || {
+            let Some(root) = second_window.imp().session_stack.child_by_name(&session_uuid) else {
+                return false;
+            };
+            let Ok(outer) = root.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let Some(inner_child) = outer.end_child() else {
+                return false;
+            };
+            let Ok(inner) = inner_child.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let outer_total = outer.width();
+            let inner_total = inner.height();
+            if outer_total <= 0 || inner_total <= 0 {
+                return false;
+            }
+            let outer_ratio = outer.position() as f64 / outer_total as f64;
+            let inner_ratio = inner.position() as f64 / inner_total as f64;
+            (outer_ratio - expected_outer_ratio).abs() <= 0.08
+                && (inner_ratio - expected_inner_ratio).abs() <= 0.08
+        });
+
+        let restored_root = second_window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist after restart");
+        let restored_outer =
+            restored_root.downcast::<gtk4::Paned>().expect("restored outer root should be a Paned");
+        let restored_inner = restored_outer
+            .end_child()
+            .expect("restored nested split should exist")
+            .downcast::<gtk4::Paned>()
+            .expect("restored nested branch should be a Paned");
+        let restored_outer_ratio =
+            restored_outer.position() as f64 / restored_outer.width().max(1) as f64;
+        let restored_inner_ratio =
+            restored_inner.position() as f64 / restored_inner.height().max(1) as f64;
+        assert!(
+            restored,
+            "restart should restore both nested split ratios.\n\
+             saved_outer={saved_outer_ratio:.3} restored_outer={restored_outer_ratio:.3}\n\
+             saved_inner={saved_inner_ratio:.3} restored_inner={restored_inner_ratio:.3}"
+        );
+
+        second_window.close();
+    }
+
+    #[test]
     fn nested_split_preserves_root_and_unaffected_terminals() {
         require_display!();
 
-        let (_tmp, window) = new_test_window("com.illya.rttx.window-identity-tests");
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.window-identity-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
 
         let (session_uuid, t1_uuid) = {
             let state = window.imp().state.borrow();

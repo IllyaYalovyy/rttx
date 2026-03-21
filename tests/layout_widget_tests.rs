@@ -296,3 +296,45 @@ fn test_apply_paned_ratios_sets_position() {
         "position should be ≈400 (0.5 × 800) after apply_paned_ratios, got {pos}"
     );
 }
+
+#[test]
+fn test_initial_allocation_hook_does_not_clobber_user_resized_ratio() {
+    require_display!();
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t2".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget =
+        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    paned.set_size_request(800, 600);
+    paned.allocate(800, 600, -1, None);
+    paned.set_position(240);
+
+    paned.allocate(801, 600, -1, None);
+
+    let mut updated = layout.clone();
+    session::capture_paned_ratios(&mut updated, &widget);
+
+    let LayoutNode::Split { ratio, .. } = updated else {
+        panic!("Expected Split layout node");
+    };
+    assert!(
+        (ratio - 0.3).abs() < 0.03,
+        "later allocations must not reset a user-resized split back to its original ratio, got {ratio}"
+    );
+}
