@@ -45,7 +45,9 @@ fn workflow_split_split_close_close() {
     assert_eq!(layout.terminal_count(), 1);
 
     // Split right → t1 | t2
-    layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
+    layout = layout
+        .split_terminal("t1", SplitOrientation::Horizontal)
+        .unwrap();
     let t2 = layout
         .terminal_uuids()
         .into_iter()
@@ -54,7 +56,9 @@ fn workflow_split_split_close_close() {
     assert_eq!(layout.terminal_count(), 2);
 
     // Split t1 down → (t1 / t3) | t2
-    layout = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
+    layout = layout
+        .split_terminal("t1", SplitOrientation::Vertical)
+        .unwrap();
     let t3 = layout
         .terminal_uuids()
         .into_iter()
@@ -80,7 +84,10 @@ fn workflow_multi_session_state() {
         SessionState {
             uuid: "s1".into(),
             name: "Editor".into(),
-            layout: hsplit(term("editor-main"), vsplit(term("editor-side"), term("editor-term"))),
+            layout: hsplit(
+                term("editor-main"),
+                vsplit(term("editor-side"), term("editor-term")),
+            ),
             input_sync: false,
         },
         SessionState {
@@ -156,17 +163,27 @@ fn workflow_persist_and_restore_with_cwds() {
     let json = serde_json::to_string_pretty(&state).unwrap();
     std::fs::write(&path, &json).unwrap();
 
-    let loaded: WindowState = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let loaded: WindowState =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
     // CWDs survived
-    if let LayoutNode::Terminal { cwd, custom_title, .. } = &loaded.sessions[0].layout {
+    if let LayoutNode::Terminal {
+        cwd, custom_title, ..
+    } = &loaded.sessions[0].layout
+    {
         panic!("Expected Split at root, got Terminal");
     } else if let LayoutNode::Split { first, second, .. } = &loaded.sessions[0].layout {
-        if let LayoutNode::Terminal { cwd, custom_title, .. } = first.as_ref() {
+        if let LayoutNode::Terminal {
+            cwd, custom_title, ..
+        } = first.as_ref()
+        {
             assert_eq!(cwd.as_deref(), Some("/home/user/project/src"));
             assert_eq!(custom_title.as_deref(), Some("vim"));
         }
-        if let LayoutNode::Terminal { cwd, custom_title, .. } = second.as_ref() {
+        if let LayoutNode::Terminal {
+            cwd, custom_title, ..
+        } = second.as_ref()
+        {
             assert_eq!(cwd.as_deref(), Some("/home/user/project"));
             assert_eq!(custom_title.as_deref(), Some("cargo watch"));
         }
@@ -222,11 +239,11 @@ fn deeply_nested_layout_serializes() {
 #[test]
 fn empty_session_name_is_valid() {
     let session = SessionState {
-                uuid: "s1".into(),
-                name: String::new(),
-                layout: term("t1"),
-                input_sync: false,
-            };
+        uuid: "s1".into(),
+        name: String::new(),
+        layout: term("t1"),
+        input_sync: false,
+    };
     let json = serde_json::to_string(&session).unwrap();
     let restored: SessionState = serde_json::from_str(&json).unwrap();
     assert_eq!(session, restored);

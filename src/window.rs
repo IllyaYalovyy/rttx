@@ -393,6 +393,7 @@ impl Window {
 
         imp.session_stack
             .add_named(&content, Some(&session_state.uuid));
+        Self::schedule_apply_paned_ratios(&content, &session_state.layout);
 
         let row = SessionRow::new(
             &session_state.uuid,
@@ -742,17 +743,7 @@ impl Window {
         imp.session_stack.add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
 
-        // Apply ratio-correct Paned positions once layout passes have settled.
-        // We use an idle so that the HIGH_IDLE layout passes finish first and
-        // each Paned's allocated size is final when we read it.
-        let layout = session_state.layout.clone();
-        glib::idle_add_local_once(glib::clone!(
-            #[weak]
-            content,
-            move || {
-                session::apply_paned_ratios(&layout, &content);
-            }
-        ));
+        Self::schedule_apply_paned_ratios(&content, &session_state.layout);
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
     }
@@ -768,6 +759,47 @@ impl Window {
                 paned.set_end_child(None::<&gtk4::Widget>);
             }
         }
+    }
+
+    fn schedule_apply_paned_ratios(content: &gtk4::Widget, layout: &LayoutNode) {
+        let LayoutNode::Split { orientation, .. } = layout else {
+            return;
+        };
+
+        // Fast path: one idle turn is often enough once the new tree has been
+        // attached to the stack and GTK has finished the immediate layout work.
+        let idle_layout = layout.clone();
+        glib::idle_add_local_once(glib::clone!(
+            #[weak]
+            content,
+            move || {
+                session::apply_paned_ratios(&idle_layout, &content);
+            }
+        ));
+
+        // The idle pass is not sufficient in every live rebuild. In practice
+        // the root Paned can still be sitting at its fallback 200px divider
+        // when the idle runs. Apply again on the first rendered frame whose
+        // root Paned has a real allocation, then stop so user drags are not
+        // overridden on subsequent frames.
+        let tick_layout = layout.clone();
+        let root_orientation = *orientation;
+        content.add_tick_callback(move |widget, _| {
+            session::apply_paned_ratios(&tick_layout, widget);
+
+            let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
+                return glib::ControlFlow::Break;
+            };
+            let total = match root_orientation {
+                SplitOrientation::Horizontal => paned.width(),
+                SplitOrientation::Vertical => paned.height(),
+            };
+            if total > 0 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn update_sidebar_count(&self, session_uuid: &str, count: usize) {
@@ -964,5 +996,158 @@ impl Window {
                 term.vte().paste_clipboard();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+    use std::time::{Duration, Instant};
+
+    static GTK_INIT: Once = Once::new();
+
+    fn ensure_gtk_init() -> bool {
+        let mut success = false;
+        GTK_INIT.call_once(|| {
+            std::env::set_var("GTK_A11Y", "none");
+            success = gtk4::init().is_ok();
+        });
+        if !success {
+            success = std::panic::catch_unwind(|| {
+                let _ = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            })
+            .is_ok();
+        }
+        success
+    }
+
+    macro_rules! require_display {
+        () => {
+            if !ensure_gtk_init() {
+                eprintln!("SKIPPED: no display available");
+                return;
+            }
+        };
+    }
+
+    fn pump_events(max_ms: u64) {
+        let ctx = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        while Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    fn wait_until(max_ms: u64, condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        while Instant::now() < deadline {
+            pump_events(20);
+            if condition() {
+                return true;
+            }
+        }
+        condition()
+    }
+
+    #[test]
+    fn split_rebuild_starts_new_panes_evenly() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.window-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
+
+        let (session_uuid, t1_uuid) = {
+            let state = window.imp().state.borrow();
+            let session = &state.sessions[0];
+            (
+                session.uuid.clone(),
+                session.layout.terminal_uuids().into_iter().next().unwrap(),
+            )
+        };
+
+        window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let t2_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|uuid| uuid != &t1_uuid)
+                .unwrap()
+        };
+        window.split_terminal(&t2_uuid, SplitOrientation::Vertical);
+
+        let settled = wait_until(1000, || {
+            let Some(root) = window.imp().session_stack.child_by_name(&session_uuid) else {
+                return false;
+            };
+            let Ok(outer) = root.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let outer_total = outer.width();
+            if outer_total <= 0 {
+                return false;
+            }
+            let outer_ratio = outer.position() as f64 / outer_total as f64;
+
+            let Some(inner_child) = outer.end_child() else {
+                return false;
+            };
+            let Ok(inner) = inner_child.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let inner_total = inner.height();
+            if inner_total <= 0 {
+                return false;
+            }
+            let inner_ratio = inner.position() as f64 / inner_total as f64;
+
+            (outer_ratio - 0.5).abs() <= 0.08 && (inner_ratio - 0.5).abs() <= 0.08
+        });
+
+        let root = window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist");
+        let outer = root
+            .downcast::<gtk4::Paned>()
+            .expect("root after split must be a Paned");
+        let inner = outer
+            .end_child()
+            .expect("second split should produce nested Paned on the right")
+            .downcast::<gtk4::Paned>()
+            .expect("right child must be a nested Paned");
+        let outer_ratio = outer.position() as f64 / outer.width().max(1) as f64;
+        let inner_ratio = inner.position() as f64 / inner.height().max(1) as f64;
+
+        assert!(
+            settled,
+            "newly rebuilt splits must settle near 50/50.\n\
+             outer: pos={} total={} ratio={outer_ratio:.3}\n\
+             inner: pos={} total={} ratio={inner_ratio:.3}",
+            outer.position(),
+            outer.width(),
+            inner.position(),
+            inner.height(),
+        );
+
+        window.close();
     }
 }

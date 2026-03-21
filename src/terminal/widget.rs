@@ -148,7 +148,9 @@ impl TerminalWidget {
     pub fn new(uuid: &str, cwd: Option<&str>) -> Self {
         let obj: Self = glib::Object::builder().build();
         obj.imp().uuid.replace(uuid.to_string());
-        obj.spawn_shell(cwd);
+        if std::env::var_os("RTTX_DISABLE_SHELL_SPAWN").is_none() {
+            obj.spawn_shell(cwd);
+        }
         obj
     }
 

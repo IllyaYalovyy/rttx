@@ -154,7 +154,9 @@ fn custom_title_backward_compat_null() {
         "is_maximized": false
     }"#;
     let state: rttx::session::layout::WindowState = serde_json::from_str(json).unwrap();
-    if let rttx::session::layout::LayoutNode::Terminal { custom_title, .. } = &state.sessions[0].layout {
+    if let rttx::session::layout::LayoutNode::Terminal { custom_title, .. } =
+        &state.sessions[0].layout
+    {
         assert_eq!(*custom_title, None);
     }
 }

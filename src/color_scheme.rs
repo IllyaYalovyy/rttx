@@ -95,9 +95,7 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
     schemes
 }
 
-pub fn load_scheme_file(
-    path: &std::path::Path,
-) -> Result<ColorScheme, Box<dyn std::error::Error>> {
+pub fn load_scheme_file(path: &std::path::Path) -> Result<ColorScheme, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let scheme: ColorScheme = serde_json::from_str(&content)?;
     if scheme.palette.len() != 16 {
@@ -153,25 +151,38 @@ mod tests {
     #[case("#0000FF", 0.0, 0.0, 1.0)]
     #[case("#FFFFFF", 1.0, 1.0, 1.0)]
     #[case("#000000", 0.0, 0.0, 0.0)]
-    fn parse_hex_colors(
-        #[case] hex: &str,
-        #[case] r: f32,
-        #[case] g: f32,
-        #[case] b: f32,
-    ) {
+    fn parse_hex_colors(#[case] hex: &str, #[case] r: f32, #[case] g: f32, #[case] b: f32) {
         let rgba = ColorScheme::parse_color(hex).unwrap();
-        assert!((rgba.red() - r).abs() < 0.02, "red: {} != {}", rgba.red(), r);
-        assert!((rgba.green() - g).abs() < 0.02, "green: {} != {}", rgba.green(), g);
-        assert!((rgba.blue() - b).abs() < 0.02, "blue: {} != {}", rgba.blue(), b);
+        assert!(
+            (rgba.red() - r).abs() < 0.02,
+            "red: {} != {}",
+            rgba.red(),
+            r
+        );
+        assert!(
+            (rgba.green() - g).abs() < 0.02,
+            "green: {} != {}",
+            rgba.green(),
+            g
+        );
+        assert!(
+            (rgba.blue() - b).abs() < 0.02,
+            "blue: {} != {}",
+            rgba.blue(),
+            b
+        );
     }
 
     #[rstest]
     #[case("")]
     #[case("not-a-color")]
-    #[case("FFFFFF")]  // missing #
+    #[case("FFFFFF")] // missing #
     #[case("#GG0000")] // invalid hex
     fn parse_invalid_colors_returns_none(#[case] input: &str) {
-        assert!(ColorScheme::parse_color(input).is_none(), "Should fail for '{input}'");
+        assert!(
+            ColorScheme::parse_color(input).is_none(),
+            "Should fail for '{input}'"
+        );
     }
 
     #[test]

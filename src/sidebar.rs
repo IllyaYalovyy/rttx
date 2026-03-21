@@ -47,8 +47,7 @@ mod imp {
 
             self.label.set_hexpand(true);
             self.label.set_xalign(0.0);
-            self.label
-                .set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            self.label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
 
             self.terminal_count_label.add_css_class("dim-label");
             self.terminal_count_label.add_css_class("caption");

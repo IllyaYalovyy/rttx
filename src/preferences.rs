@@ -24,11 +24,21 @@ pub struct Preferences {
     pub background_opacity: f64,
 }
 
-fn default_font() -> String { "Monospace 12".into() }
-fn default_color_scheme() -> String { "default".into() }
-fn default_scrollback() -> i64 { 10000 }
-fn default_true() -> bool { true }
-fn default_opacity() -> f64 { 1.0 }
+fn default_font() -> String {
+    "Monospace 12".into()
+}
+fn default_color_scheme() -> String {
+    "default".into()
+}
+fn default_scrollback() -> i64 {
+    10000
+}
+fn default_true() -> bool {
+    true
+}
+fn default_opacity() -> f64 {
+    1.0
+}
 
 impl Default for Preferences {
     fn default() -> Self {
@@ -81,7 +91,10 @@ pub fn load_from(path: &std::path::Path) -> Preferences {
 }
 
 /// Save to a specific path (for testing without glib).
-pub fn save_to(prefs: &Preferences, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn save_to(
+    prefs: &Preferences,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -155,7 +168,10 @@ mod tests {
     fn opacity_roundtrip(#[case] opacity: f64) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("prefs.json");
-        let prefs = Preferences { background_opacity: opacity, ..Default::default() };
+        let prefs = Preferences {
+            background_opacity: opacity,
+            ..Default::default()
+        };
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert!((loaded.background_opacity - opacity).abs() < f64::EPSILON);
@@ -167,7 +183,10 @@ mod tests {
     fn negative_scrollback_roundtrips() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("prefs.json");
-        let prefs = Preferences { scrollback_lines: -1, ..Default::default() };
+        let prefs = Preferences {
+            scrollback_lines: -1,
+            ..Default::default()
+        };
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.scrollback_lines, -1);
@@ -179,7 +198,10 @@ mod tests {
     fn empty_font_roundtrips() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("prefs.json");
-        let prefs = Preferences { font: String::new(), ..Default::default() };
+        let prefs = Preferences {
+            font: String::new(),
+            ..Default::default()
+        };
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.font, "");
@@ -206,8 +228,14 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let loaded = load_from(&path);
         assert!(loaded.show_headerbar, "show_headerbar should default true");
-        assert!(loaded.scroll_on_keystroke, "scroll_on_keystroke should default true");
-        assert!(!loaded.scroll_on_output, "scroll_on_output should default false");
+        assert!(
+            loaded.scroll_on_keystroke,
+            "scroll_on_keystroke should default true"
+        );
+        assert!(
+            !loaded.scroll_on_output,
+            "scroll_on_output should default false"
+        );
         assert!(loaded.audible_bell, "audible_bell should default true");
     }
 }

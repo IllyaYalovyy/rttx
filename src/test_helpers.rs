@@ -88,10 +88,8 @@ pub fn window_state(sessions: Vec<SessionState>) -> WindowState {
 
 /// Standard Tango-like test palette.
 pub const TEST_PALETTE: [&str; 16] = [
-    "#2E3436", "#CC0000", "#4E9A06", "#C4A000",
-    "#3465A4", "#75507B", "#06989A", "#D3D7CF",
-    "#555753", "#EF2929", "#8AE234", "#FCE94F",
-    "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
+    "#2E3436", "#CC0000", "#4E9A06", "#C4A000", "#3465A4", "#75507B", "#06989A", "#D3D7CF",
+    "#555753", "#EF2929", "#8AE234", "#FCE94F", "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
 ];
 
 pub fn test_scheme(name: &str) -> ColorScheme {

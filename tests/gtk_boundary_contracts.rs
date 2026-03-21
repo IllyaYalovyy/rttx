@@ -9,26 +9,40 @@
 /// 2. Serialization contracts (what we persist must be valid when restored)
 /// 3. State machine contracts (valid operation sequences)
 /// 4. Data integrity contracts (what crosses the Rust/C boundary)
-
 use pretty_assertions::assert_eq;
 use rttx::session::layout::*;
 
 fn term(id: &str) -> LayoutNode {
-    LayoutNode::Terminal { uuid: id.into(), profile: None, cwd: None, custom_title: None }
+    LayoutNode::Terminal {
+        uuid: id.into(),
+        profile: None,
+        cwd: None,
+        custom_title: None,
+    }
 }
 fn term_full(id: &str, cwd: &str, title: &str) -> LayoutNode {
     LayoutNode::Terminal {
-        uuid: id.into(), profile: Some("default".into()),
-        cwd: Some(cwd.into()), custom_title: Some(title.into()),
+        uuid: id.into(),
+        profile: Some("default".into()),
+        cwd: Some(cwd.into()),
+        custom_title: Some(title.into()),
     }
 }
 fn hsplit(a: LayoutNode, b: LayoutNode) -> LayoutNode {
-    LayoutNode::Split { orientation: SplitOrientation::Horizontal, ratio: 0.5,
-        first: Box::new(a), second: Box::new(b) }
+    LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(a),
+        second: Box::new(b),
+    }
 }
 fn vsplit(a: LayoutNode, b: LayoutNode) -> LayoutNode {
-    LayoutNode::Split { orientation: SplitOrientation::Vertical, ratio: 0.5,
-        first: Box::new(a), second: Box::new(b) }
+    LayoutNode::Split {
+        orientation: SplitOrientation::Vertical,
+        ratio: 0.5,
+        first: Box::new(a),
+        second: Box::new(b),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -47,21 +61,31 @@ fn contract_all_uuids_unique_after_any_operation_sequence() {
 
     // Split 5 times
     for _ in 0..5 {
-        layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
+        layout = layout
+            .split_terminal("t1", SplitOrientation::Horizontal)
+            .unwrap();
     }
 
     let uuids = layout.terminal_uuids();
     let unique: std::collections::HashSet<_> = uuids.iter().collect();
-    assert_eq!(uuids.len(), unique.len(),
-        "Duplicate UUIDs after splits: {:?}", uuids);
+    assert_eq!(
+        uuids.len(),
+        unique.len(),
+        "Duplicate UUIDs after splits: {:?}",
+        uuids
+    );
 
     // Remove some, split others
     let to_remove = uuids[1].clone();
     layout = layout.remove_terminal(&to_remove).unwrap();
     let remaining = layout.terminal_uuids();
     let unique2: std::collections::HashSet<_> = remaining.iter().collect();
-    assert_eq!(remaining.len(), unique2.len(),
-        "Duplicate UUIDs after remove: {:?}", remaining);
+    assert_eq!(
+        remaining.len(),
+        unique2.len(),
+        "Duplicate UUIDs after remove: {:?}",
+        remaining
+    );
 }
 
 /// Contract: terminal_count must always equal terminal_uuids().len().
@@ -75,8 +99,12 @@ fn contract_count_equals_uuid_vec_length() {
         vsplit(hsplit(term("a"), term("b")), hsplit(term("c"), term("d"))),
     ];
     for layout in layouts {
-        assert_eq!(layout.terminal_count(), layout.terminal_uuids().len(),
-            "Count/UUID mismatch for: {:?}", layout);
+        assert_eq!(
+            layout.terminal_count(),
+            layout.terminal_uuids().len(),
+            "Count/UUID mismatch for: {:?}",
+            layout
+        );
     }
 }
 
@@ -87,13 +115,19 @@ fn contract_count_equals_uuid_vec_length() {
 fn contract_split_never_loses_original() {
     let layout = hsplit(vsplit(term("a"), term("b")), term("c"));
     for uuid in layout.terminal_uuids() {
-        let result = layout.split_terminal(&uuid, SplitOrientation::Horizontal).unwrap();
-        assert!(result.contains_terminal(&uuid),
-            "Original terminal '{uuid}' lost after split");
+        let result = layout
+            .split_terminal(&uuid, SplitOrientation::Horizontal)
+            .unwrap();
+        assert!(
+            result.contains_terminal(&uuid),
+            "Original terminal '{uuid}' lost after split"
+        );
         // All OTHER terminals must also survive
         for other in layout.terminal_uuids() {
-            assert!(result.contains_terminal(&other),
-                "Sibling terminal '{other}' lost when splitting '{uuid}'");
+            assert!(
+                result.contains_terminal(&other),
+                "Sibling terminal '{other}' lost when splitting '{uuid}'"
+            );
         }
     }
 }
@@ -107,10 +141,14 @@ fn contract_remove_leaves_no_dangling_references() {
     let layout = hsplit(vsplit(term("a"), term("b")), hsplit(term("c"), term("d")));
     for uuid in layout.terminal_uuids() {
         if let Some(result) = layout.remove_terminal(&uuid) {
-            assert!(!result.contains_terminal(&uuid),
-                "Terminal '{uuid}' still in tree after removal");
-            assert!(!result.terminal_uuids().contains(&uuid.to_string()),
-                "Terminal '{uuid}' still in UUID list after removal");
+            assert!(
+                !result.contains_terminal(&uuid),
+                "Terminal '{uuid}' still in tree after removal"
+            );
+            assert!(
+                !result.terminal_uuids().contains(&uuid.to_string()),
+                "Terminal '{uuid}' still in UUID list after removal"
+            );
         }
     }
 }
@@ -131,34 +169,66 @@ fn contract_any_constructible_state_roundtrips() {
         WindowState::default(),
         // Empty session name
         WindowState {
-            sessions: vec![SessionState { uuid: "s".into(), name: "".into(),
-                layout: term("t"), input_sync: false }],
-            active_session_index: 0, width: 1, height: 1, is_maximized: false,
+            sessions: vec![SessionState {
+                uuid: "s".into(),
+                name: "".into(),
+                layout: term("t"),
+                input_sync: false,
+            }],
+            active_session_index: 0,
+            width: 1,
+            height: 1,
+            is_maximized: false,
         },
         // Unicode in names
         WindowState {
-            sessions: vec![SessionState { uuid: "s".into(), name: "日本語セッション".into(),
-                layout: term_full("t", "/home/用户", "编辑器"), input_sync: true }],
-            active_session_index: 0, width: 800, height: 600, is_maximized: false,
+            sessions: vec![SessionState {
+                uuid: "s".into(),
+                name: "日本語セッション".into(),
+                layout: term_full("t", "/home/用户", "编辑器"),
+                input_sync: true,
+            }],
+            active_session_index: 0,
+            width: 800,
+            height: 600,
+            is_maximized: false,
         },
         // Deep nesting
         {
             let mut l = term("t0");
-            for i in 1..20 { l = hsplit(l, term(&format!("t{i}"))); }
+            for i in 1..20 {
+                l = hsplit(l, term(&format!("t{i}")));
+            }
             WindowState {
-                sessions: vec![SessionState { uuid: "s".into(), name: "Deep".into(),
-                    layout: l, input_sync: false }],
-                active_session_index: 0, width: 800, height: 600, is_maximized: false,
+                sessions: vec![SessionState {
+                    uuid: "s".into(),
+                    name: "Deep".into(),
+                    layout: l,
+                    input_sync: false,
+                }],
+                active_session_index: 0,
+                width: 800,
+                height: 600,
+                is_maximized: false,
             }
         },
         // Many sessions
         {
-            let sessions: Vec<_> = (0..50).map(|i|
-                SessionState { uuid: format!("s{i}"), name: format!("Session {i}"),
-                    layout: term(&format!("t{i}")), input_sync: i % 2 == 0 }
-            ).collect();
-            WindowState { sessions, active_session_index: 25,
-                width: 1920, height: 1080, is_maximized: true }
+            let sessions: Vec<_> = (0..50)
+                .map(|i| SessionState {
+                    uuid: format!("s{i}"),
+                    name: format!("Session {i}"),
+                    layout: term(&format!("t{i}")),
+                    input_sync: i % 2 == 0,
+                })
+                .collect();
+            WindowState {
+                sessions,
+                active_session_index: 25,
+                width: 1920,
+                height: 1080,
+                is_maximized: true,
+            }
         },
     ];
 
@@ -188,8 +258,8 @@ fn contract_forward_compat_missing_fields() {
         "active_session_index": 0, "width": 800, "height": 600, "is_maximized": false
     }"#;
 
-    let state: WindowState = serde_json::from_str(old_json)
-        .expect("Must load old format without error");
+    let state: WindowState =
+        serde_json::from_str(old_json).expect("Must load old format without error");
     assert_eq!(state.sessions[0].layout.terminal_count(), 2);
     assert!(!state.sessions[0].input_sync); // default
 }
@@ -211,8 +281,8 @@ fn contract_backward_compat_extra_fields() {
         "future_window_field": true
     }"#;
 
-    let state: WindowState = serde_json::from_str(future_json)
-        .expect("Must tolerate unknown fields");
+    let state: WindowState =
+        serde_json::from_str(future_json).expect("Must tolerate unknown fields");
     assert_eq!(state.sessions[0].name, "Future");
 }
 
@@ -240,9 +310,13 @@ fn contract_single_terminal_session_close_path() {
 #[test]
 fn contract_split_then_close_new_terminal() {
     let layout = term("t1");
-    let after_split = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
+    let after_split = layout
+        .split_terminal("t1", SplitOrientation::Horizontal)
+        .unwrap();
 
-    let new_uuid = after_split.terminal_uuids().into_iter()
+    let new_uuid = after_split
+        .terminal_uuids()
+        .into_iter()
         .find(|u| u != "t1")
         .expect("Must be able to find the new terminal's UUID");
 
@@ -259,8 +333,12 @@ fn contract_rapid_split_close_cycles() {
 
     for _ in 0..10 {
         // Split t1
-        layout = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
-        let new_uuid = layout.terminal_uuids().into_iter()
+        layout = layout
+            .split_terminal("t1", SplitOrientation::Vertical)
+            .unwrap();
+        let new_uuid = layout
+            .terminal_uuids()
+            .into_iter()
             .find(|u| u != "t1" && u != "t2")
             .unwrap();
         // Close the new one
@@ -313,15 +391,17 @@ fn contract_cwd_paths_are_valid_utf8() {
     let paths = vec![
         "/home/user/project",
         "/tmp/build-output",
-        "/home/用户/项目",           // CJK
-        "/home/user/my project",    // spaces
-        "/home/user/.config/rttx",  // dots
+        "/home/用户/项目",         // CJK
+        "/home/user/my project",   // spaces
+        "/home/user/.config/rttx", // dots
     ];
 
     for path in paths {
         let layout = LayoutNode::Terminal {
-            uuid: "t1".into(), profile: None,
-            cwd: Some(path.into()), custom_title: None,
+            uuid: "t1".into(),
+            profile: None,
+            cwd: Some(path.into()),
+            custom_title: None,
         };
         let json = serde_json::to_string(&layout).unwrap();
         let restored: LayoutNode = serde_json::from_str(&json).unwrap();
@@ -338,14 +418,14 @@ fn contract_test_palette_colors_are_valid() {
     use rttx::color_scheme::ColorScheme;
 
     let palette = [
-        "#2E3436", "#CC0000", "#4E9A06", "#C4A000",
-        "#3465A4", "#75507B", "#06989A", "#D3D7CF",
-        "#555753", "#EF2929", "#8AE234", "#FCE94F",
-        "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
+        "#2E3436", "#CC0000", "#4E9A06", "#C4A000", "#3465A4", "#75507B", "#06989A", "#D3D7CF",
+        "#555753", "#EF2929", "#8AE234", "#FCE94F", "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
     ];
     for (i, color) in palette.iter().enumerate() {
-        assert!(ColorScheme::parse_color(color).is_some(),
-            "Palette[{i}] = '{color}' failed to parse");
+        assert!(
+            ColorScheme::parse_color(color).is_some(),
+            "Palette[{i}] = '{color}' failed to parse"
+        );
     }
 }
 
@@ -354,15 +434,20 @@ fn contract_test_palette_colors_are_valid() {
 /// gets zero size → GTK rendering issues or division by zero.
 #[test]
 fn contract_split_ratios_in_valid_range() {
-    let layout = hsplit(
-        vsplit(term("a"), term("b")),
-        hsplit(term("c"), term("d")),
-    );
+    let layout = hsplit(vsplit(term("a"), term("b")), hsplit(term("c"), term("d")));
 
     fn check_ratios(node: &LayoutNode) {
-        if let LayoutNode::Split { ratio, first, second, .. } = node {
-            assert!(*ratio > 0.0 && *ratio < 1.0,
-                "Invalid ratio {ratio} — must be in (0, 1)");
+        if let LayoutNode::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } = node
+        {
+            assert!(
+                *ratio > 0.0 && *ratio < 1.0,
+                "Invalid ratio {ratio} — must be in (0, 1)"
+            );
             check_ratios(first);
             check_ratios(second);
         }
@@ -370,7 +455,9 @@ fn contract_split_ratios_in_valid_range() {
     check_ratios(&layout);
 
     // Also check after split operations
-    let after = layout.split_terminal("a", SplitOrientation::Vertical).unwrap();
+    let after = layout
+        .split_terminal("a", SplitOrientation::Vertical)
+        .unwrap();
     check_ratios(&after);
 }
 
@@ -382,8 +469,11 @@ fn contract_default_font_is_valid_pango_description() {
     let prefs = rttx::preferences::Preferences::default();
     // Pango font descriptions have format "Family Size" or "Family Style Size"
     // At minimum, must contain a size number
-    assert!(prefs.font.chars().any(|c| c.is_ascii_digit()),
-        "Default font '{}' has no size component", prefs.font);
+    assert!(
+        prefs.font.chars().any(|c| c.is_ascii_digit()),
+        "Default font '{}' has no size component",
+        prefs.font
+    );
     assert!(!prefs.font.is_empty());
 }
 
@@ -398,14 +488,18 @@ fn contract_single_terminal_split_produces_valid_tree() {
     assert_eq!(layout.terminal_count(), 1);
 
     // This is what window.rs does on split
-    let new_layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
+    let new_layout = layout
+        .split_terminal("t1", SplitOrientation::Horizontal)
+        .unwrap();
     assert_eq!(new_layout.terminal_count(), 2);
     assert!(new_layout.contains_terminal("t1"));
 
     // The new layout must be a Split (not a Terminal) — this is what
     // determines whether the Stack child is a Paned or a TerminalWidget
-    assert!(matches!(new_layout, LayoutNode::Split { .. }),
-        "Split of single terminal must produce Split node, got Terminal");
+    assert!(
+        matches!(new_layout, LayoutNode::Split { .. }),
+        "Split of single terminal must produce Split node, got Terminal"
+    );
 
     // The old terminal must be findable for reuse
     let uuids = new_layout.terminal_uuids();
@@ -436,8 +530,7 @@ fn contract_split_preserves_all_existing_uuids() {
     ];
 
     for layout in &layouts {
-        let before: std::collections::HashSet<_> =
-            layout.terminal_uuids().into_iter().collect();
+        let before: std::collections::HashSet<_> = layout.terminal_uuids().into_iter().collect();
 
         for uuid in layout.terminal_uuids() {
             let after_split = layout
@@ -464,7 +557,9 @@ fn contract_remove_preserves_all_sibling_uuids() {
     for uuid_to_close in layout.terminal_uuids() {
         if let Some(new_layout) = layout.remove_terminal(&uuid_to_close) {
             for sibling in layout.terminal_uuids() {
-                if sibling == uuid_to_close { continue; }
+                if sibling == uuid_to_close {
+                    continue;
+                }
                 assert!(
                     new_layout.contains_terminal(&sibling),
                     "Closing '{uuid_to_close}' lost sibling '{sibling}' — \
@@ -546,16 +641,20 @@ fn contract_active_session_index_out_of_bounds_is_clamped_safely() {
         "width": 800, "height": 600, "is_maximized": false
     }"#;
 
-    let loaded: WindowState = serde_json::from_str(json)
-        .expect("Must deserialize even with out-of-bounds index");
+    let loaded: WindowState =
+        serde_json::from_str(json).expect("Must deserialize even with out-of-bounds index");
 
     // Prove the raw value is out of bounds
     assert!(loaded.active_session_index >= loaded.sessions.len());
 
     // Prove the correct clamping produces a valid index
-    let safe = loaded.active_session_index.min(loaded.sessions.len().saturating_sub(1));
-    assert!(safe < loaded.sessions.len(),
-        "Clamped index {safe} is still out of bounds");
+    let safe = loaded
+        .active_session_index
+        .min(loaded.sessions.len().saturating_sub(1));
+    assert!(
+        safe < loaded.sessions.len(),
+        "Clamped index {safe} is still out of bounds"
+    );
     // Must be accessible without panic
     let _ = &loaded.sessions[safe];
 }
@@ -571,14 +670,16 @@ fn contract_empty_sessions_is_handled_without_panic() {
         "width": 800, "height": 600, "is_maximized": false
     }"#;
 
-    let loaded: WindowState = serde_json::from_str(json)
-        .expect("Must deserialize empty sessions list");
+    let loaded: WindowState =
+        serde_json::from_str(json).expect("Must deserialize empty sessions list");
 
     assert_eq!(loaded.sessions.len(), 0);
 
     // Safe access pattern: get() returns None instead of panicking
-    assert!(loaded.sessions.get(loaded.active_session_index).is_none(),
-        "sessions.get() must return None for empty vec, not panic");
+    assert!(
+        loaded.sessions.get(loaded.active_session_index).is_none(),
+        "sessions.get() must return None for empty vec, not panic"
+    );
 
     // Direct index would panic — callers must use get() or guard on len()
     assert!(loaded.sessions.is_empty());

@@ -22,12 +22,19 @@ mod tests {
     #[test]
     fn app_id_is_valid_reverse_dns() {
         let segments: Vec<&str> = APP_ID.split('.').collect();
-        assert!(segments.len() >= 3, "APP_ID needs >= 3 segments for Flatpak: {APP_ID}");
+        assert!(
+            segments.len() >= 3,
+            "APP_ID needs >= 3 segments for Flatpak: {APP_ID}"
+        );
         for seg in &segments {
             assert!(!seg.is_empty());
-            assert!(seg.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
-            assert!(seg.chars().next().unwrap().is_alphabetic(),
-                "Each segment must start with a letter: '{seg}'");
+            assert!(seg
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+            assert!(
+                seg.chars().next().unwrap().is_alphabetic(),
+                "Each segment must start with a letter: '{seg}'"
+            );
         }
     }
 
@@ -38,7 +45,8 @@ mod tests {
         assert!(
             SETTINGS_PROFILE_BASE_PATH.starts_with(&expected_prefix),
             "Profile path '{}' must start with '{}'",
-            SETTINGS_PROFILE_BASE_PATH, expected_prefix
+            SETTINGS_PROFILE_BASE_PATH,
+            expected_prefix
         );
         assert!(
             SETTINGS_PROFILE_BASE_PATH.ends_with('/'),
