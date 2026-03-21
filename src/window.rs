@@ -460,7 +460,7 @@ impl Window {
         let content = self.build_session_content(session_state);
 
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
-        Self::schedule_apply_paned_ratios(&content, &session_state.layout);
+        session::schedule_initial_paned_ratios(&content, &session_state.layout);
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
     }
 
@@ -1081,8 +1081,7 @@ impl Window {
 
         imp.session_stack.add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
-
-        Self::schedule_apply_paned_ratios(&content, &session_state.layout);
+        session::schedule_initial_paned_ratios(&content, &session_state.layout);
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
     }
@@ -1097,38 +1096,6 @@ impl Window {
                 Self::detach_terminals_from_detached_tree(&end);
                 paned.set_end_child(None::<&gtk4::Widget>);
             }
-        }
-    }
-
-    fn schedule_apply_paned_ratios(content: &gtk4::Widget, layout: &LayoutNode) {
-        if let LayoutNode::Split { orientation, .. } = layout {
-            let idle_layout = layout.clone();
-            glib::idle_add_local_once(glib::clone!(
-                #[weak]
-                content,
-                move || {
-                    session::apply_paned_ratios(&idle_layout, &content);
-                }
-            ));
-
-            let tick_layout = layout.clone();
-            let root_orientation = *orientation;
-            content.add_tick_callback(move |widget, _| {
-                session::apply_paned_ratios(&tick_layout, widget);
-
-                let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
-                    return glib::ControlFlow::Break;
-                };
-                let total = match root_orientation {
-                    SplitOrientation::Horizontal => paned.width(),
-                    SplitOrientation::Vertical => paned.height(),
-                };
-                if total > 0 {
-                    glib::ControlFlow::Break
-                } else {
-                    glib::ControlFlow::Continue
-                }
-            });
         }
     }
 
@@ -1202,7 +1169,7 @@ impl Window {
             let branch = build_branch();
             stack.add_named(&branch, Some(session_uuid));
             stack.set_visible_child_name(session_uuid);
-            Self::schedule_apply_paned_ratios(&branch, &branch_layout);
+            session::schedule_initial_paned_ratios(&branch, &branch_layout);
             return true;
         }
 
@@ -1234,7 +1201,7 @@ impl Window {
         } else {
             paned.set_end_child(Some(&branch));
         }
-        Self::schedule_apply_paned_ratios(&branch, &branch_layout);
+        session::schedule_initial_paned_ratios(&branch, &branch_layout);
         true
     }
 

@@ -1,6 +1,7 @@
 use gtk4::prelude::*;
 use rttx::session::{self, *};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 static GTK_INIT: Once = Once::new();
 
@@ -26,6 +27,27 @@ macro_rules! require_display {
             return;
         }
     };
+}
+
+fn pump_events(max_ms: u64) {
+    let ctx = gtk4::glib::MainContext::default();
+    let deadline = Instant::now() + Duration::from_millis(max_ms);
+    while Instant::now() < deadline {
+        if !ctx.iteration(false) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+fn wait_until(max_ms: u64, condition: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(max_ms);
+    while Instant::now() < deadline {
+        pump_events(20);
+        if condition() {
+            return true;
+        }
+    }
+    condition()
 }
 
 #[test]
@@ -298,7 +320,7 @@ fn test_apply_paned_ratios_sets_position() {
 }
 
 #[test]
-fn test_initial_allocation_hook_does_not_clobber_user_resized_ratio() {
+fn test_scheduled_initial_paned_ratios_apply_once_widget_has_size() {
     require_display!();
 
     let layout = LayoutNode::Split {
@@ -320,12 +342,67 @@ fn test_initial_allocation_hook_does_not_clobber_user_resized_ratio() {
 
     let widget =
         build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    session::schedule_initial_paned_ratios(&widget, &layout);
+
+    let window = gtk4::Window::new();
+    window.set_default_size(800, 600);
+    window.set_child(Some(&widget));
+    window.present();
+
+    let settled = wait_until(1000, || {
+        let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
+        paned.width() > 0 && (paned.position() - (paned.width() / 2)).abs() <= 5
+    });
+
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
-    paned.set_size_request(800, 600);
-    paned.allocate(800, 600, -1, None);
+    assert!(
+        settled,
+        "scheduled ratio application should settle the initial split near 50/50, got position={} width={}",
+        paned.position(),
+        paned.width()
+    );
+
+    window.close();
+}
+
+#[test]
+fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
+    require_display!();
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t2".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget =
+        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    session::schedule_initial_paned_ratios(&widget, &layout);
+
+    let window = gtk4::Window::new();
+    window.set_default_size(800, 600);
+    window.set_child(Some(&widget));
+    window.present();
+
+    let settled = wait_until(1000, || widget.downcast_ref::<gtk4::Paned>().unwrap().width() > 0);
+    assert!(settled, "test widget should receive an allocation before resize assertions");
+
+    let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
     paned.set_position(240);
 
     paned.allocate(801, 600, -1, None);
+    pump_events(50);
 
     let mut updated = layout.clone();
     session::capture_paned_ratios(&mut updated, &widget);
@@ -337,4 +414,6 @@ fn test_initial_allocation_hook_does_not_clobber_user_resized_ratio() {
         (ratio - 0.3).abs() < 0.03,
         "later allocations must not reset a user-resized split back to its original ratio, got {ratio}"
     );
+
+    window.close();
 }

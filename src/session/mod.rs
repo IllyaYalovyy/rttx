@@ -10,7 +10,6 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use std::fs;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 /// Returns the path to the sessions directory in `XDG_CONFIG_HOME`.
 #[must_use]
@@ -113,7 +112,7 @@ where
         LayoutNode::Terminal { uuid, cwd, profile, custom_title } => {
             make_terminal(uuid, cwd.as_deref(), profile.as_deref(), custom_title.as_deref())
         }
-        LayoutNode::Split { orientation, ratio, first, second } => {
+        LayoutNode::Split { orientation, ratio: _, first, second } => {
             let gtk_orientation = match orientation {
                 SplitOrientation::Horizontal => gtk4::Orientation::Horizontal,
                 SplitOrientation::Vertical => gtk4::Orientation::Vertical,
@@ -128,36 +127,89 @@ where
             paned.set_start_child(Some(&first_widget));
             paned.set_end_child(Some(&second_widget));
 
-            let ratio_val = *ratio;
-            let prop =
-                if gtk_orientation == gtk4::Orientation::Horizontal { "width" } else { "height" };
-            let handler = Rc::new(std::cell::RefCell::new(None));
-            let handler_ref = handler.clone();
-            let handler_id = paned.connect_notify_local(Some(prop), move |p, _| {
-                let size = match gtk_orientation {
-                    gtk4::Orientation::Horizontal => p.width(),
-                    _ => p.height(),
-                };
-                if size > 0 {
-                    p.set_position((f64::from(size) * ratio_val) as i32);
-                    if let Some(id) = handler_ref.borrow_mut().take() {
-                        p.disconnect(id);
-                    }
-                }
-            });
-            *handler.borrow_mut() = Some(handler_id);
-
-            let size = if gtk_orientation == gtk4::Orientation::Horizontal {
-                paned.width()
-            } else {
-                paned.height()
-            };
-            if size > 0 {
-                paned.set_position((f64::from(size) * ratio_val) as i32);
-            }
-
             paned.upcast()
         }
+    }
+}
+
+pub fn schedule_initial_paned_ratios(content: &gtk4::Widget, layout: &LayoutNode) {
+    if !matches!(layout, LayoutNode::Split { .. }) {
+        return;
+    }
+
+    let idle_layout = layout.clone();
+    glib::idle_add_local_once(glib::clone!(
+        #[weak]
+        content,
+        move || {
+            apply_initial_paned_ratios(&idle_layout, &content);
+        }
+    ));
+
+    let tick_layout = layout.clone();
+    content.add_tick_callback(move |widget, _| {
+        apply_initial_paned_ratios(&tick_layout, widget);
+        if all_split_widgets_allocated(&tick_layout, widget) {
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+}
+
+fn all_split_widgets_allocated(layout: &LayoutNode, widget: &gtk4::Widget) -> bool {
+    let LayoutNode::Split { orientation, first, second, .. } = layout else {
+        return true;
+    };
+
+    let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
+        return false;
+    };
+    let total = match orientation {
+        SplitOrientation::Horizontal => paned.width(),
+        SplitOrientation::Vertical => paned.height(),
+    };
+    if total <= 0 {
+        return false;
+    }
+
+    let Some(first_child) = paned.start_child() else {
+        return false;
+    };
+    let Some(second_child) = paned.end_child() else {
+        return false;
+    };
+
+    all_split_widgets_allocated(first, &first_child)
+        && all_split_widgets_allocated(second, &second_child)
+}
+
+fn apply_initial_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
+    let LayoutNode::Split { orientation, ratio, first, second } = layout else {
+        return;
+    };
+
+    let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
+        return;
+    };
+
+    let total = match orientation {
+        SplitOrientation::Horizontal => paned.width(),
+        SplitOrientation::Vertical => paned.height(),
+    };
+
+    if total > 0 {
+        let current = paned.position();
+        if current == 0 || current == 200 {
+            paned.set_position((f64::from(total) * ratio.clamp(0.05, 0.95)) as i32);
+        }
+    }
+
+    if let Some(first_child) = paned.start_child() {
+        apply_initial_paned_ratios(first, &first_child);
+    }
+    if let Some(second_child) = paned.end_child() {
+        apply_initial_paned_ratios(second, &second_child);
     }
 }
 
