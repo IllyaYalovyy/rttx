@@ -25,6 +25,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
 - **Custom titles** — Double-click any terminal header to rename it for your current task.
 - **Bookmarks** — Save folder, SSH, tmux, or combined bookmarks, search them in the right tools sidebar, run them in the current pane, or start a new session from one click.
+- **Commands launcher** — Save searchable single-line or multiline commands in the right tools sidebar and either run them immediately or insert them into the active terminal.
 - **Optional smart clipboard** — An opt-in mode lets plain `Ctrl+C` copy selected terminal text and `Ctrl+V` paste from the clipboard.
 - **Built-in terminal themes** — Native "Nightfall" and "Daybreak" schemes with full Tilix color scheme compatibility.
 - **Smart Notifications** — Process exit in a hidden session shows an in-app toast while `rttx` is focused, and falls back to a desktop notification when the window is not active.

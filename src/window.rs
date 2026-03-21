@@ -9,6 +9,7 @@ use vte4::prelude::*;
 
 use crate::bookmarks::Bookmark;
 use crate::color_scheme;
+use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::preferences;
 use crate::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
 use crate::sidebar::SessionRow;
@@ -27,6 +28,8 @@ mod imp {
         pub utility_sidebar_revealer: gtk4::Revealer,
         pub bookmark_search_entry: gtk4::SearchEntry,
         pub bookmark_list: gtk4::ListBox,
+        pub command_search_entry: gtk4::SearchEntry,
+        pub command_list: gtk4::ListBox,
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
@@ -69,6 +72,7 @@ mod imp {
 
             let menu = gtk4::gio::Menu::new();
             menu.append(Some("Manage Bookmarks"), Some("win.manage-bookmarks"));
+            menu.append(Some("Manage Commands"), Some("win.manage-commands"));
             menu.append(Some("Preferences"), Some("win.preferences"));
             menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
             menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
@@ -84,6 +88,9 @@ mod imp {
             self.bookmark_list.add_css_class("boxed-list");
             self.bookmark_list
                 .update_property(&[gtk4::accessible::Property::Label("Bookmarks")]);
+            self.command_list.set_selection_mode(gtk4::SelectionMode::None);
+            self.command_list.add_css_class("boxed-list");
+            self.command_list.update_property(&[gtk4::accessible::Property::Label("Commands")]);
 
             let sidebar_scroll = gtk4::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Never)
@@ -117,12 +124,31 @@ mod imp {
                 .child(&self.bookmark_list)
                 .build();
 
-            let commands_placeholder = gtk4::Label::new(Some("Commands will live here."));
-            commands_placeholder.set_wrap(true);
-            commands_placeholder.set_margin_start(18);
-            commands_placeholder.set_margin_end(18);
-            commands_placeholder.set_margin_top(18);
-            commands_placeholder.set_margin_bottom(18);
+            let manage_commands_button = gtk4::Button::with_label("Manage");
+            manage_commands_button.set_action_name(Some("win.manage-commands"));
+            let commands_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+            commands_header.set_margin_start(12);
+            commands_header.set_margin_end(12);
+            commands_header.set_margin_top(12);
+            let commands_title = gtk4::Label::new(Some("Commands"));
+            commands_title.set_xalign(0.0);
+            commands_title.set_hexpand(true);
+            commands_title.add_css_class("title-4");
+            commands_header.append(&commands_title);
+            commands_header.append(&manage_commands_button);
+
+            self.command_search_entry.set_placeholder_text(Some("Search commands"));
+            self.command_search_entry.set_margin_start(12);
+            self.command_search_entry.set_margin_end(12);
+            self.command_search_entry.set_margin_top(12);
+            self.command_search_entry.set_margin_bottom(12);
+
+            let command_scroll = gtk4::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk4::PolicyType::Never)
+                .vexpand(true)
+                .child(&self.command_list)
+                .build();
+
             let templates_placeholder =
                 gtk4::Label::new(Some("Session templates will live here."));
             templates_placeholder.set_wrap(true);
@@ -136,9 +162,14 @@ mod imp {
             bookmarks_page.append(&self.bookmark_search_entry);
             bookmarks_page.append(&bookmark_scroll);
 
+            let commands_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            commands_page.append(&commands_header);
+            commands_page.append(&self.command_search_entry);
+            commands_page.append(&command_scroll);
+
             let utility_stack = gtk4::Stack::new();
             utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
-            utility_stack.add_titled(&commands_placeholder, Some("commands"), "Commands");
+            utility_stack.add_titled(&commands_page, Some("commands"), "Commands");
             utility_stack.add_titled(&templates_placeholder, Some("templates"), "Templates");
 
             let utility_switcher = gtk4::StackSwitcher::builder().stack(&utility_stack).build();
@@ -307,6 +338,9 @@ impl Window {
             ("manage-bookmarks", &[], |w| {
                 crate::bookmarks_window::show(w);
             }),
+            ("manage-commands", &[], |w| {
+                crate::commands_window::show(w);
+            }),
         ];
 
         for (name, accels, callback) in actions {
@@ -361,6 +395,11 @@ impl Window {
         });
 
         let win = self.clone();
+        self.imp().command_search_entry.connect_changed(move |_| {
+            win.refresh_command_sidebar();
+        });
+
+        let win = self.clone();
         self.connect_close_request(move |_| {
             win.save_state();
             glib::Propagation::Proceed
@@ -372,6 +411,7 @@ impl Window {
         });
 
         self.refresh_bookmark_sidebar();
+        self.refresh_command_sidebar();
     }
 
     fn build_session(&self, session_state: &SessionState) {
@@ -623,7 +663,10 @@ impl Window {
             return;
         };
 
-        self.execute_bookmark_in_terminal(bookmark, &term.uuid());
+        let Some(command) = bookmark.command() else {
+            return;
+        };
+        self.send_input_to_terminal(&term.uuid(), &format!("{command}\n"));
     }
 
     fn switch_to_session(&self, index: usize) {
@@ -734,16 +777,71 @@ impl Window {
         }
     }
 
+    pub(crate) fn refresh_command_sidebar(&self) {
+        let imp = self.imp();
+        while let Some(row) = imp.command_list.row_at_index(0) {
+            imp.command_list.remove(&row);
+        }
+
+        let query = imp.command_search_entry.text();
+        for command in commands::load()
+            .into_iter()
+            .filter(|command| commands::matches_query(command, query.as_str()))
+        {
+            let row = gtk4::ListBoxRow::new();
+            let action_row = adw::ActionRow::new();
+            action_row.set_title(&command.title);
+            action_row.set_subtitle(&command.preview());
+
+            let run_button = gtk4::Button::builder()
+                .icon_name("go-next-symbolic")
+                .tooltip_text("Run in current pane")
+                .valign(gtk4::Align::Center)
+                .build();
+            let insert_button = gtk4::Button::builder()
+                .icon_name("insert-text-symbolic")
+                .tooltip_text("Insert into current pane")
+                .valign(gtk4::Align::Center)
+                .build();
+
+            action_row.add_suffix(&run_button);
+            action_row.add_suffix(&insert_button);
+            row.set_child(Some(&action_row));
+            imp.command_list.append(&row);
+
+            let win = self.clone();
+            let command_for_run = command.clone();
+            run_button.connect_clicked(move |_| {
+                win.execute_saved_command(&command_for_run, CommandRunMode::Run);
+            });
+
+            let win = self.clone();
+            insert_button.connect_clicked(move |_| {
+                win.execute_saved_command(&command, CommandRunMode::Insert);
+            });
+        }
+    }
+
+    pub(crate) fn execute_saved_command(&self, command: &SavedCommand, run_mode: CommandRunMode) {
+        let Some(term) = self.command_target_terminal() else {
+            return;
+        };
+
+        self.send_input_to_terminal(&term.uuid(), &command.input_for(run_mode));
+    }
+
     fn execute_bookmark_in_terminal(&self, bookmark: &Bookmark, terminal_uuid: &str) {
         let Some(command) = bookmark.command() else {
             return;
         };
+        self.send_input_to_terminal(terminal_uuid, &format!("{command}\n"));
+    }
+
+    fn send_input_to_terminal(&self, terminal_uuid: &str, input: &str) {
         let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() else {
             return;
         };
-
-        let command = format!("{command}\n");
-        term.vte().feed_child(command.as_bytes());
+        term.vte().feed_child(input.as_bytes());
         let _ = term.vte().grab_focus();
         self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
     }
@@ -1502,6 +1600,45 @@ mod tests {
             window.imp().bookmark_list.observe_children().n_items(),
             1,
             "search should filter the utility sidebar bookmark list"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn utility_sidebar_shows_and_filters_commands() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let run = crate::commands::SavedCommand::new("Restart app", "systemctl restart app");
+        let insert = crate::commands::SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
+        crate::commands::save(&[run, insert]).unwrap();
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.utility-command-sidebar-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.present();
+        pump_events(100);
+
+        assert_eq!(
+            window.imp().command_list.observe_children().n_items(),
+            2,
+            "utility sidebar should show saved commands"
+        );
+
+        window.imp().command_search_entry.set_text("deploy");
+        pump_events(50);
+        assert_eq!(
+            window.imp().command_list.observe_children().n_items(),
+            1,
+            "search should filter the utility sidebar command list"
         );
 
         window.close();
