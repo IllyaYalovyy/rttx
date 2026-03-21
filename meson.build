@@ -30,19 +30,13 @@ custom_target('rttx-binary',
     cargo.full_path() + ' fmt && ' +
     cargo.full_path() + ' clippy -- -D warnings && ' +
     cargo.full_path() + ' build --release --manifest-path ' + meson.project_source_root() / 'Cargo.toml' +
-    ' --target-dir ' + meson.project_build_root() / 'cargo-target'
+    ' --target-dir ' + meson.project_build_root() / 'cargo-target && ' +
+    'cp ' + meson.project_build_root() / 'cargo-target' / 'release' / 'rttx' + ' @OUTPUT@'
   ],
   install: true,
   install_dir: bindir,
   console: true,
   build_always_stale: true,
-)
-
-# Install the actual binary (cargo puts it in a nested path)
-meson.add_install_script('sh', '-c',
-  'install -Dm755 ' +
-  meson.project_build_root() / 'cargo-target' / 'release' / 'rttx' +
-  ' ' + bindir / 'rttx'
 )
 
 # Desktop file
