@@ -420,6 +420,7 @@ impl Window {
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
         self.apply_preferences_to_terminal(term);
+        term.ensure_shell_spawned_when_ready();
 
         let win = self.clone();
         let uuid = term.uuid();
@@ -1114,6 +1115,45 @@ mod tests {
         );
 
         window.close();
+    }
+
+    #[test]
+    fn initial_terminal_starts_shell_when_window_is_presented() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.initial-terminal-shell-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+
+        let term = {
+            let terminals = window.imp().terminals.borrow();
+            terminals
+                .values()
+                .next()
+                .cloned()
+                .expect("window should create an initial terminal")
+        };
+
+        assert!(
+            !term.shell_spawned_for_test(),
+            "shell startup should wait until the terminal is attached to a realized window"
+        );
+
+        window.set_default_size(900, 600);
+        window.present();
+
+        let spawned = wait_until(1000, || term.shell_spawned_for_test());
+        assert!(spawned, "presenting the window should trigger delayed shell startup");
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
