@@ -511,11 +511,43 @@ impl Window {
             (session.uuid.clone(), session.input_sync)
         };
         imp.session_stack.set_visible_child_name(&uuid);
+        self.focus_session_terminal(&uuid);
         if let Some(action) = self.lookup_action("toggle-input-sync") {
             if let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>() {
                 action.set_state(&input_sync.to_variant());
             }
         }
+    }
+
+    fn focus_session_terminal(&self, session_uuid: &str) {
+        let target = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid) else {
+                return;
+            };
+
+            let preferred_uuid = self
+                .focused_terminal_uuid()
+                .filter(|uuid| session.layout.contains_terminal(uuid))
+                .or_else(|| session.layout.terminal_uuids().into_iter().next());
+
+            let Some(preferred_uuid) = preferred_uuid else {
+                return;
+            };
+
+            self.imp().terminals.borrow().get(&preferred_uuid).cloned()
+        };
+
+        let Some(term) = target else {
+            return;
+        };
+        let win = self.clone();
+        let target_uuid = term.uuid();
+        glib::idle_add_local_once(move || {
+            if term.vte().grab_focus() {
+                win.imp().focused_terminal_uuid.replace(Some(target_uuid));
+            }
+        });
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -1151,6 +1183,51 @@ mod tests {
 
         let spawned = wait_until(1000, || term.shell_spawned_for_test());
         assert!(spawned, "presenting the window should trigger delayed shell startup");
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn switching_sessions_focuses_the_visible_terminal() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.session-focus-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(900, 600);
+        window.present();
+        pump_events(100);
+
+        let first_terminal = {
+            let state = window.imp().state.borrow();
+            let first_uuid = state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap();
+            window.imp().terminals.borrow().get(&first_uuid).cloned().unwrap()
+        };
+        assert!(first_terminal.vte().grab_focus());
+        let first_focused = wait_until(1000, || first_terminal.vte().has_focus());
+        assert!(first_focused, "initial terminal should be focusable");
+
+        window.add_session();
+        let second_terminal = {
+            let state = window.imp().state.borrow();
+            let second_uuid = state.sessions[1].layout.terminal_uuids().into_iter().next().unwrap();
+            window.imp().terminals.borrow().get(&second_uuid).cloned().unwrap()
+        };
+        let second_focused = wait_until(1000, || second_terminal.vte().has_focus());
+        assert!(second_focused, "newly selected session should hand focus to its terminal");
+
+        let first_row = window.imp().sidebar_list.row_at_index(0).unwrap();
+        window.imp().sidebar_list.select_row(Some(&first_row));
+        let restored_focus = wait_until(1000, || first_terminal.vte().has_focus());
+        assert!(restored_focus, "switching back should focus the visible terminal without a click");
 
         window.close();
         std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
