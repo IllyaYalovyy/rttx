@@ -36,6 +36,8 @@ pub struct Preferences {
     pub scroll_on_output: bool,
     #[serde(default = "default_true")]
     pub audible_bell: bool,
+    #[serde(default)]
+    pub smart_clipboard: bool,
     #[serde(default = "default_opacity")]
     pub background_opacity: f64,
 }
@@ -78,6 +80,7 @@ impl Default for Preferences {
             scroll_on_keystroke: true,
             scroll_on_output: false,
             audible_bell: true,
+            smart_clipboard: false,
             background_opacity: default_opacity(),
         }
     }
@@ -122,6 +125,8 @@ struct PreferencesDisk {
     scroll_on_output: bool,
     #[serde(default = "default_true")]
     audible_bell: bool,
+    #[serde(default)]
+    smart_clipboard: bool,
     #[serde(default = "default_opacity")]
     background_opacity: f64,
 }
@@ -151,6 +156,7 @@ impl From<PreferencesDisk> for Preferences {
             scroll_on_keystroke: raw.scroll_on_keystroke,
             scroll_on_output: raw.scroll_on_output,
             audible_bell: raw.audible_bell,
+            smart_clipboard: raw.smart_clipboard,
             background_opacity: raw.background_opacity,
         }
     }
@@ -222,6 +228,7 @@ mod tests {
         assert!(prefs.show_headerbar);
         assert!(prefs.scroll_on_keystroke);
         assert!(!prefs.scroll_on_output);
+        assert!(!prefs.smart_clipboard);
         assert!((prefs.background_opacity - 1.0).abs() < f64::EPSILON);
     }
 

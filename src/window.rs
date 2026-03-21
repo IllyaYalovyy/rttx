@@ -881,6 +881,7 @@ impl Window {
         vte.set_scroll_on_keystroke(prefs.scroll_on_keystroke);
         vte.set_scroll_on_output(prefs.scroll_on_output);
         vte.set_audible_bell(prefs.audible_bell);
+        term.set_smart_clipboard(prefs.smart_clipboard);
 
         term.imp().header.set_visible(prefs.show_headerbar);
 

@@ -16,6 +16,7 @@ mod imp {
         pub custom_title: RefCell<Option<String>>,
         pub initial_cwd: RefCell<Option<String>>,
         pub shell_spawned: Cell<bool>,
+        pub smart_clipboard: Cell<bool>,
         pub vte: vte4::Terminal,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
@@ -118,6 +119,25 @@ mod imp {
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
 
+            let key_controller = gtk4::EventControllerKey::new();
+            key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            let vte = self.vte.clone();
+            let smart_clipboard = self.smart_clipboard.clone();
+            key_controller.connect_key_pressed(move |_, key, _, modifiers| {
+                match smart_clipboard_action(key, modifiers, vte.has_selection(), smart_clipboard.get()) {
+                    SmartClipboardAction::Copy => {
+                        vte.copy_clipboard_format(vte4::Format::Text);
+                        glib::Propagation::Stop
+                    }
+                    SmartClipboardAction::Paste => {
+                        vte.paste_clipboard();
+                        glib::Propagation::Stop
+                    }
+                    SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+                }
+            });
+            self.vte.add_controller(key_controller);
+
             obj.append(&self.header);
             obj.append(&self.search_bar);
             obj.append(&self.vte);
@@ -203,6 +223,10 @@ impl TerminalWidget {
     #[must_use]
     pub fn current_directory(&self) -> Option<String> {
         self.imp().vte.current_directory_uri().and_then(|uri| parse_file_uri(uri.as_str()))
+    }
+
+    pub fn set_smart_clipboard(&self, enabled: bool) {
+        self.imp().smart_clipboard.set(enabled);
     }
 
     pub fn ensure_shell_spawned_when_ready(&self) {
@@ -317,9 +341,39 @@ pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
     glib::filename_from_uri(uri).ok().map(|(path, _hostname)| path.display().to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartClipboardAction {
+    Copy,
+    Paste,
+    PassThrough,
+}
+
+fn smart_clipboard_action(
+    key: gtk4::gdk::Key,
+    modifiers: gtk4::gdk::ModifierType,
+    has_selection: bool,
+    smart_clipboard_enabled: bool,
+) -> SmartClipboardAction {
+    if !smart_clipboard_enabled {
+        return SmartClipboardAction::PassThrough;
+    }
+
+    let ignored_modifiers = gtk4::gdk::ModifierType::LOCK_MASK;
+    let normalized = modifiers & !ignored_modifiers;
+    if normalized != gtk4::gdk::ModifierType::CONTROL_MASK {
+        return SmartClipboardAction::PassThrough;
+    }
+
+    match key {
+        gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => SmartClipboardAction::Copy,
+        gtk4::gdk::Key::v | gtk4::gdk::Key::V => SmartClipboardAction::Paste,
+        _ => SmartClipboardAction::PassThrough,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_file_uri, TerminalWidget};
+    use super::{parse_file_uri, smart_clipboard_action, SmartClipboardAction, TerminalWidget};
     use gtk4::prelude::*;
     use std::sync::Once;
 
@@ -398,6 +452,59 @@ mod tests {
         assert_eq!(old_way, Some("/home/user/my%20dir".into()));
         assert_eq!(new_way, Some("/home/user/my dir".into()));
         assert_ne!(old_way, new_way);
+    }
+
+    #[test]
+    fn smart_clipboard_only_copies_selected_ctrl_c() {
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                true,
+                true,
+            ),
+            SmartClipboardAction::Copy
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+            ),
+            SmartClipboardAction::PassThrough
+        );
+    }
+
+    #[test]
+    fn smart_clipboard_paste_requires_plain_ctrl_v_and_opt_in() {
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+            ),
+            SmartClipboardAction::Paste
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                false,
+                true,
+            ),
+            SmartClipboardAction::PassThrough
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                false,
+            ),
+            SmartClipboardAction::PassThrough
+        );
     }
 
     #[test]

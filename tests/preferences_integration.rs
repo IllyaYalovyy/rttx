@@ -27,6 +27,7 @@ fn preferences_roundtrip_all_fields() {
         scroll_on_keystroke: false,
         scroll_on_output: true,
         audible_bell: false,
+        smart_clipboard: true,
         background_opacity: 0.85,
     };
 
@@ -50,6 +51,7 @@ fn preferences_partial_json_uses_defaults_for_missing() {
     assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
     assert_eq!(loaded.scrollback_lines, 10000);
     assert!(loaded.show_headerbar);
+    assert!(!loaded.smart_clipboard);
 }
 
 #[test]

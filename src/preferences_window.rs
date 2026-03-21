@@ -113,6 +113,12 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     bell_row.set_active(prefs.audible_bell);
     terminal_group.add(&bell_row);
 
+    let smart_clipboard_row = adw::SwitchRow::new();
+    smart_clipboard_row.set_title("Smart Ctrl+C / Ctrl+V");
+    smart_clipboard_row.set_subtitle("Copy selected text with Ctrl+C and paste with Ctrl+V");
+    smart_clipboard_row.set_active(prefs.smart_clipboard);
+    terminal_group.add(&smart_clipboard_row);
+
     let page = adw::PreferencesPage::new();
     page.set_icon_name(Some("preferences-system-symbolic"));
     page.set_title("General");
@@ -150,6 +156,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             scroll_on_keystroke: keystroke_row.is_active(),
             scroll_on_output: output_row.is_active(),
             audible_bell: bell_row.is_active(),
+            smart_clipboard: smart_clipboard_row.is_active(),
             background_opacity: opacity_scale.value(),
         };
         if let Err(e) = preferences::save(&new_prefs) {
