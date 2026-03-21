@@ -318,9 +318,7 @@ impl Window {
             win.close_session(&session_uuid);
         });
 
-        let list_row = gtk4::ListBoxRow::new();
-        list_row.set_child(Some(&row));
-        imp.sidebar_list.append(&list_row);
+        imp.sidebar_list.append(&row);
 
         let win = self.clone();
         let content =
@@ -494,8 +492,8 @@ impl Window {
             loop {
                 match imp.sidebar_list.row_at_index(idx) {
                     Some(r) => {
-                        if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
-                            if sr.uuid() == session_uuid {
+                        if let Ok(session_row) = r.downcast::<SessionRow>() {
+                            if session_row.uuid() == session_uuid {
                                 break idx;
                             }
                         }
@@ -797,7 +795,7 @@ impl Window {
         let imp = self.imp();
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
+            if let Ok(session_row) = row.downcast::<SessionRow>() {
                 if session_row.uuid() == session_uuid {
                     session_row.update_terminal_count(count);
                     return;
@@ -1190,6 +1188,25 @@ mod tests {
             ProcessCompletionNotificationMode::Toast,
             "process exit in a non-visible session should use an in-app toast while the window is active"
         );
+
+        window.close();
+    }
+
+    #[test]
+    fn sidebar_rows_are_session_rows() {
+        require_display!();
+
+        let (_tmp, window) = new_test_window("com.illya.rttx.sidebar-row-tests");
+        let row = window
+            .imp()
+            .sidebar_list
+            .row_at_index(0)
+            .expect("window should create an initial sidebar row");
+        let session_row = row
+            .downcast::<SessionRow>()
+            .expect("sidebar rows should be SessionRow ActionRow subclasses");
+
+        assert!(session_row.is::<adw::ActionRow>());
 
         window.close();
     }
