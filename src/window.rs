@@ -280,12 +280,22 @@ impl Window {
 
         let active_index = imp.sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
         state.active_session_index = active_index;
+        if let Some(focused_terminal_uuid) = self.focused_terminal_uuid() {
+            if let Some(session) = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.layout.contains_terminal(&focused_terminal_uuid))
+            {
+                session.active_terminal_uuid = Some(focused_terminal_uuid);
+            }
+        }
 
         for session in &mut state.sessions {
             if let Some(content) = imp.session_stack.child_by_name(&session.uuid) {
                 session::capture_paned_ratios(&mut session.layout, &content);
             }
             session.prune_recovery();
+            session.normalize_active_terminal();
         }
 
         {
@@ -576,6 +586,12 @@ impl Window {
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
             win.imp().focused_terminal_uuid.replace(Some(uuid.clone()));
+            let mut state = win.imp().state.borrow_mut();
+            if let Some(session) =
+                state.sessions.iter_mut().find(|session| session.layout.contains_terminal(&uuid))
+            {
+                session.active_terminal_uuid = Some(uuid.clone());
+            }
         });
         term.vte().add_controller(focus_controller);
 
@@ -714,6 +730,13 @@ impl Window {
 
             let preferred_uuid = self
                 .focused_terminal_uuid()
+                .filter(|uuid| {
+                    session
+                        .active_terminal_uuid
+                        .as_deref()
+                        .is_none_or(|active_uuid| active_uuid == uuid)
+                })
+                .or_else(|| session.active_terminal_uuid.clone())
                 .filter(|uuid| session.layout.contains_terminal(uuid))
                 .or_else(|| session.layout.terminal_uuids().into_iter().next());
 
@@ -970,6 +993,7 @@ impl Window {
             {
                 state.sessions[idx].layout = new_layout;
                 state.sessions[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
+                state.sessions[idx].normalize_active_terminal();
                 let session_uuid = state.sessions[idx].uuid.clone();
                 let session_state = state.sessions[idx].clone();
                 drop(state);
@@ -1009,6 +1033,7 @@ impl Window {
                 state.sessions[idx].layout.remove_terminal(terminal_uuid)
             {
                 state.sessions[idx].layout = new_layout;
+                state.sessions[idx].normalize_active_terminal();
                 Action::Rebuild {
                     session_uuid: state.sessions[idx].uuid.clone(),
                     session_state: state.sessions[idx].clone(),
@@ -1514,6 +1539,7 @@ mod tests {
                     second: Box::new(LayoutNode::new_terminal_with_uuid("t2")),
                 },
                 terminal_recovery: Default::default(),
+                active_terminal_uuid: None,
                 input_sync: false,
             }],
         };
@@ -1537,6 +1563,7 @@ mod tests {
                     name: "Session 1".into(),
                     layout: LayoutNode::new_terminal_with_uuid("t1"),
                     terminal_recovery: Default::default(),
+                    active_terminal_uuid: None,
                     input_sync: false,
                 },
                 SessionState {
@@ -1549,6 +1576,7 @@ mod tests {
                         second: Box::new(LayoutNode::new_terminal_with_uuid("t3")),
                     },
                     terminal_recovery: Default::default(),
+                    active_terminal_uuid: None,
                     input_sync: false,
                 },
             ],
@@ -1876,6 +1904,81 @@ mod tests {
             restored_term.pending_shell_inputs_for_test(),
             vec![String::from("cargo build\ncargo test")],
             "restored insert-mode command should replay without an added newline"
+        );
+
+        second_window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn save_and_restart_restores_active_terminal_in_active_session() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.restore-active-terminal-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let first_window = Window::new(&app);
+        first_window.set_default_size(1200, 800);
+        first_window.present();
+        pump_events(100);
+
+        let root_uuid = {
+            let state = first_window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        first_window.split_terminal(&root_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let second_uuid = {
+            let state = first_window.imp().state.borrow();
+            state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|uuid| uuid != &root_uuid)
+                .unwrap()
+        };
+        let second_term = first_window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&second_uuid)
+            .cloned()
+            .expect("split terminal should exist");
+        assert!(second_term.vte().grab_focus());
+        let focused = wait_until(1000, || {
+            first_window.focused_terminal_uuid().as_deref() == Some(second_uuid.as_str())
+                && first_window.imp().state.borrow().sessions[0].active_terminal_uuid.as_deref()
+                    == Some(second_uuid.as_str())
+        });
+        assert!(focused, "focusing a pane should record it as the session's active terminal");
+
+        first_window.save_state();
+        first_window.close();
+
+        let saved_state = session::load_window_state();
+        assert_eq!(
+            saved_state.sessions[0].active_terminal_uuid.as_deref(),
+            Some(second_uuid.as_str()),
+            "saved state should remember the last active pane in the session"
+        );
+
+        let second_window = Window::new(&app);
+        second_window.set_default_size(1200, 800);
+        second_window.present();
+
+        let restored = wait_until(1000, || {
+            second_window.focused_terminal_uuid().as_deref() == Some(second_uuid.as_str())
+        });
+        assert!(
+            restored,
+            "restart should restore focus to the previously active pane instead of the first pane"
         );
 
         second_window.close();

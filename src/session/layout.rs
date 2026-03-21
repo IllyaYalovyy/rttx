@@ -321,6 +321,8 @@ pub struct SessionState {
     #[serde(default)]
     pub terminal_recovery: BTreeMap<String, PaneRecovery>,
     #[serde(default)]
+    pub active_terminal_uuid: Option<String>,
+    #[serde(default)]
     pub input_sync: bool,
 }
 
@@ -332,11 +334,13 @@ impl SessionState {
         if let Some(terminal_uuid) = layout.terminal_uuids().into_iter().next() {
             terminal_recovery.insert(terminal_uuid, PaneRecovery::empty_shell());
         }
+        let active_terminal_uuid = layout.terminal_uuids().into_iter().next();
         Self {
             uuid: uuid::Uuid::new_v4().to_string(),
             name,
             layout,
             terminal_recovery,
+            active_terminal_uuid,
             input_sync: false,
         }
     }
@@ -351,6 +355,7 @@ impl SessionState {
             name: "Session 1".to_string(),
             layout: LayoutNode::new_terminal_with_uuid("test-terminal-uuid"),
             terminal_recovery,
+            active_terminal_uuid: Some("test-terminal-uuid".to_string()),
             input_sync: false,
         }
     }
@@ -369,6 +374,17 @@ impl SessionState {
     pub fn prune_recovery(&mut self) {
         let valid_uuids = self.layout.terminal_uuids();
         self.terminal_recovery.retain(|terminal_uuid, _| valid_uuids.contains(terminal_uuid));
+    }
+
+    pub fn normalize_active_terminal(&mut self) {
+        if self
+            .active_terminal_uuid
+            .as_deref()
+            .is_some_and(|terminal_uuid| self.layout.contains_terminal(terminal_uuid))
+        {
+            return;
+        }
+        self.active_terminal_uuid = self.layout.terminal_uuids().into_iter().next();
     }
 }
 
@@ -627,6 +643,7 @@ mod tests {
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
             terminal_recovery,
+            active_terminal_uuid: Some("t2".into()),
             input_sync: true,
         };
         let json = serde_json::to_string(&session).unwrap();
@@ -831,6 +848,7 @@ mod tests {
                     },
                 ),
             ]),
+            active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
         };
 
@@ -840,6 +858,25 @@ mod tests {
         assert!(session.recovery_for("t1").is_some());
         assert!(session.recovery_for("t2").is_none());
         assert!(session.recovery_for("ghost").is_none());
+    }
+
+    #[test]
+    fn normalize_active_terminal_falls_back_to_first_live_terminal() {
+        let mut session = SessionState {
+            uuid: "s1".into(),
+            name: "Work".into(),
+            layout: hsplit(term("t1"), term("t2")),
+            terminal_recovery: Default::default(),
+            active_terminal_uuid: Some("ghost".into()),
+            input_sync: false,
+        };
+
+        session.normalize_active_terminal();
+        assert_eq!(session.active_terminal_uuid.as_deref(), Some("t1"));
+
+        session.layout = session.layout.remove_terminal("t1").unwrap();
+        session.normalize_active_terminal();
+        assert_eq!(session.active_terminal_uuid.as_deref(), Some("t2"));
     }
 }
 

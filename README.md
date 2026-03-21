@@ -20,7 +20,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - **Dual-side workflow layout** — Sessions stay in the left sidebar while bookmarks live in a dedicated right tools sidebar.
 - **Custom session names** — Double-click a session in the sidebar to rename it.
 - **Native GNOME window layout** — Libadwaita `ToolbarView` and `OverlaySplitView` keep the main window consistent with modern GNOME apps.
-- **Context Persistence** — Layout, pane sizes, Current Working Directories, custom titles, and per-pane recovery recipes are saved automatically and restored on launch.
+- **Context Persistence** — Layout, pane sizes, active pane, Current Working Directories, custom titles, and per-pane recovery recipes are saved automatically and restored on launch.
 - **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
 - **Custom titles** — Double-click any terminal header to rename it for your current task.

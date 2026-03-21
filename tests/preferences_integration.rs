@@ -87,6 +87,7 @@ fn preferences_input_sync_persists_in_session_state() {
             name: "Synced".into(),
             layout: LayoutNode::new_terminal(),
             terminal_recovery: Default::default(),
+            active_terminal_uuid: None,
             input_sync: false,
         }],
         active_session_index: 0,
@@ -108,7 +109,7 @@ fn preferences_input_sync_persists_in_session_state() {
 
 #[test]
 fn preferences_backward_compat_missing_input_sync() {
-    // Old session state JSON without input_sync field should default to false
+    // Old session state JSON without input_sync or active_terminal_uuid should default safely.
     let json = r#"{
         "sessions": [{
             "uuid": "s1",
@@ -123,6 +124,7 @@ fn preferences_backward_compat_missing_input_sync() {
 
     let state: rttx::session::layout::WindowState = serde_json::from_str(json).unwrap();
     assert!(!state.sessions[0].input_sync);
+    assert!(state.sessions[0].active_terminal_uuid.is_none());
 }
 
 #[test]
@@ -140,6 +142,7 @@ fn custom_title_persists_in_layout() {
                 custom_title: Some("my editor".into()),
             },
             terminal_recovery: Default::default(),
+            active_terminal_uuid: None,
             input_sync: false,
         }],
         active_session_index: 0,
