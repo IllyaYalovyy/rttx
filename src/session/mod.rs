@@ -45,13 +45,7 @@ pub fn load_window_state() -> WindowState {
 ///
 /// Call this after the widget has been allocated to guarantee ratio-correct initial split positions.
 pub fn apply_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
-    let LayoutNode::Split {
-        orientation,
-        ratio,
-        first,
-        second,
-    } = layout
-    else {
+    let LayoutNode::Split { orientation, ratio, first, second } = layout else {
         return;
     };
 
@@ -80,13 +74,7 @@ pub fn apply_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
 ///
 /// Call this before serialising state so that user-adjusted splits are preserved.
 pub fn capture_paned_ratios(layout: &mut LayoutNode, widget: &gtk4::Widget) {
-    let LayoutNode::Split {
-        orientation,
-        ref mut ratio,
-        first,
-        second,
-    } = layout
-    else {
+    let LayoutNode::Split { orientation, ref mut ratio, first, second } = layout else {
         return;
     };
 
@@ -118,23 +106,10 @@ where
     F: Fn(&str, Option<&str>, Option<&str>, Option<&str>) -> gtk4::Widget,
 {
     match layout {
-        LayoutNode::Terminal {
-            uuid,
-            cwd,
-            profile,
-            custom_title,
-        } => make_terminal(
-            uuid,
-            cwd.as_deref(),
-            profile.as_deref(),
-            custom_title.as_deref(),
-        ),
-        LayoutNode::Split {
-            orientation,
-            ratio,
-            first,
-            second,
-        } => {
+        LayoutNode::Terminal { uuid, cwd, profile, custom_title } => {
+            make_terminal(uuid, cwd.as_deref(), profile.as_deref(), custom_title.as_deref())
+        }
+        LayoutNode::Split { orientation, ratio, first, second } => {
             let gtk_orientation = match orientation {
                 SplitOrientation::Horizontal => gtk4::Orientation::Horizontal,
                 SplitOrientation::Vertical => gtk4::Orientation::Vertical,
@@ -150,11 +125,8 @@ where
             paned.set_end_child(Some(&second_widget));
 
             let ratio_val = *ratio;
-            let prop = if gtk_orientation == gtk4::Orientation::Horizontal {
-                "width"
-            } else {
-                "height"
-            };
+            let prop =
+                if gtk_orientation == gtk4::Orientation::Horizontal { "width" } else { "height" };
             paned.connect_notify_local(Some(prop), move |p, _| {
                 let size = match gtk_orientation {
                     gtk4::Orientation::Horizontal => p.width(),
@@ -260,5 +232,4 @@ mod tests {
             |json| serde_json::from_str(&json).unwrap_or_else(|_| WindowState::default_for_test()),
         )
     }
-
 }

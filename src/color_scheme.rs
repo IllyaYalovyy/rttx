@@ -62,10 +62,7 @@ impl ColorScheme {
 
     #[must_use]
     pub fn palette_rgba(&self) -> Vec<gdk::RGBA> {
-        self.palette
-            .iter()
-            .filter_map(|c| Self::parse_color(c))
-            .collect()
+        self.palette.iter().filter_map(|c| Self::parse_color(c)).collect()
     }
 }
 
@@ -74,11 +71,7 @@ fn scheme_search_dirs() -> Vec<PathBuf> {
     for dir in glib::system_data_dirs() {
         dirs.push(dir.join(config::CONFIG_DIR).join(config::SCHEMES_DIR));
     }
-    dirs.push(
-        glib::user_config_dir()
-            .join(config::CONFIG_DIR)
-            .join(config::SCHEMES_DIR),
-    );
+    dirs.push(glib::user_config_dir().join(config::CONFIG_DIR).join(config::SCHEMES_DIR));
     dirs
 }
 
@@ -154,10 +147,8 @@ pub fn builtin_color_schemes() -> Vec<ColorScheme> {
 
 #[must_use]
 pub fn load_color_schemes() -> Vec<ColorScheme> {
-    let mut schemes: BTreeMap<String, ColorScheme> = builtin_color_schemes()
-        .into_iter()
-        .map(|scheme| (scheme.name.clone(), scheme))
-        .collect();
+    let mut schemes: BTreeMap<String, ColorScheme> =
+        builtin_color_schemes().into_iter().map(|scheme| (scheme.name.clone(), scheme)).collect();
     for dir in scheme_search_dirs() {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -180,9 +171,7 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
 
 #[must_use]
 pub fn load_color_scheme_by_name(name: &str) -> Option<ColorScheme> {
-    load_color_schemes()
-        .into_iter()
-        .find(|scheme| scheme.name == name)
+    load_color_schemes().into_iter().find(|scheme| scheme.name == name)
 }
 
 pub fn load_scheme_file(path: &std::path::Path) -> Result<ColorScheme, Box<dyn std::error::Error>> {
@@ -239,24 +228,9 @@ mod tests {
     #[case("#000000", 0.0, 0.0, 0.0)]
     fn parse_hex_colors(#[case] hex: &str, #[case] r: f32, #[case] g: f32, #[case] b: f32) {
         let rgba = ColorScheme::parse_color(hex).unwrap();
-        assert!(
-            (rgba.red() - r).abs() < 0.02,
-            "red: {} != {}",
-            rgba.red(),
-            r
-        );
-        assert!(
-            (rgba.green() - g).abs() < 0.02,
-            "green: {} != {}",
-            rgba.green(),
-            g
-        );
-        assert!(
-            (rgba.blue() - b).abs() < 0.02,
-            "blue: {} != {}",
-            rgba.blue(),
-            b
-        );
+        assert!((rgba.red() - r).abs() < 0.02, "red: {} != {}", rgba.red(), r);
+        assert!((rgba.green() - g).abs() < 0.02, "green: {} != {}", rgba.green(), g);
+        assert!((rgba.blue() - b).abs() < 0.02, "blue: {} != {}", rgba.blue(), b);
     }
 
     #[rstest]
@@ -265,10 +239,7 @@ mod tests {
     #[case("FFFFFF")]
     #[case("#GG0000")]
     fn parse_invalid_colors_returns_none(#[case] input: &str) {
-        assert!(
-            ColorScheme::parse_color(input).is_none(),
-            "Should fail for '{input}'"
-        );
+        assert!(ColorScheme::parse_color(input).is_none(), "Should fail for '{input}'");
     }
 
     #[test]

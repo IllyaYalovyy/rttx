@@ -52,8 +52,8 @@ mod imp {
             toggle_sidebar.set_active(true);
             header.pack_start(&toggle_sidebar);
 
-            self.add_session_button
-                .set_tooltip_text(Some("New session"));
+            self.add_session_button.set_icon_name("list-add-symbolic");
+            self.add_session_button.set_tooltip_text(Some("New session"));
             header.pack_start(&self.add_session_button);
 
             let menu_button = gtk4::MenuButton::new();
@@ -68,11 +68,9 @@ mod imp {
 
             header.pack_end(&menu_button);
 
-            self.sidebar_list
-                .set_selection_mode(gtk4::SelectionMode::Single);
+            self.sidebar_list.set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");
-            self.sidebar_list
-                .update_property(&[gtk4::accessible::Property::Label("Sessions")]);
+            self.sidebar_list.update_property(&[gtk4::accessible::Property::Label("Sessions")]);
 
             let sidebar_scroll = gtk4::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Never)
@@ -182,11 +180,14 @@ impl Window {
         state.height = height;
         state.is_maximized = self.is_maximized();
 
-        let active_index = imp
-            .sidebar_list
-            .selected_row()
-            .map_or(0, |r| r.index() as usize);
+        let active_index = imp.sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
         state.active_session_index = active_index;
+
+        for session in &mut state.sessions {
+            if let Some(content) = imp.session_stack.child_by_name(&session.uuid) {
+                session::capture_paned_ratios(&mut session.layout, &content);
+            }
+        }
 
         {
             let terminals = imp.terminals.borrow();
@@ -210,26 +211,20 @@ impl Window {
         type ActionCallback = fn(&Window);
         let actions: &[(&str, &[&str], ActionCallback)] = &[
             ("close-terminal", &["<Ctrl><Shift>W"], Self::close_focused_terminal),
-            (
-                "split-horizontal",
-                &["<Ctrl><Shift>E"],
-                |w| w.split_focused(SplitOrientation::Horizontal),
-            ),
-            (
-                "split-vertical",
-                &["<Ctrl><Shift>O"],
-                |w| w.split_focused(SplitOrientation::Vertical),
-            ),
+            ("split-horizontal", &["<Ctrl><Shift>E"], |w| {
+                w.split_focused(SplitOrientation::Horizontal)
+            }),
+            ("split-vertical", &["<Ctrl><Shift>O"], |w| {
+                w.split_focused(SplitOrientation::Vertical)
+            }),
             ("search", &["<Ctrl><Shift>F"], Self::toggle_focused_search),
             ("copy", &["<Ctrl><Shift>C"], Self::clipboard_copy),
             ("paste", &["<Ctrl><Shift>V"], Self::clipboard_paste),
             ("prev-session", &["<Ctrl><Shift>Tab"], |w| w.cycle_session(-1)),
             ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
-            (
-                "toggle-sidebar",
-                &["<Ctrl><Shift>N"],
-                |w| w.imp().split_view.set_show_sidebar(!w.imp().split_view.shows_sidebar()),
-            ),
+            ("toggle-sidebar", &["<Ctrl><Shift>N"], |w| {
+                w.imp().split_view.set_show_sidebar(!w.imp().split_view.shows_sidebar())
+            }),
             ("fullscreen", &["F11"], |w| {
                 if w.is_fullscreen() {
                     w.unfullscreen();
@@ -254,11 +249,8 @@ impl Window {
             app.set_accels_for_action(&format!("win.{name}"), accels);
         }
 
-        let sync_action = gtk4::gio::SimpleAction::new_stateful(
-            "toggle-input-sync",
-            None,
-            &false.to_variant(),
-        );
+        let sync_action =
+            gtk4::gio::SimpleAction::new_stateful("toggle-input-sync", None, &false.to_variant());
         let win = self.clone();
         sync_action.connect_activate(move |action, _| {
             let state = action.state().unwrap();
@@ -321,8 +313,9 @@ impl Window {
         imp.sidebar_list.append(&row);
 
         let win = self.clone();
-        let content =
-            session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
+        let content = session::build_layout_widget(
+            &session_state.layout,
+            &move |uuid, cwd, _, custom_title| {
                 let existing = {
                     let terminals = win.imp().terminals.borrow();
                     terminals.get(uuid).cloned()
@@ -340,12 +333,10 @@ impl Window {
                     term.imp().custom_title.replace(Some(title.to_string()));
                 }
                 win.connect_terminal_signals(&term);
-                win.imp()
-                    .terminals
-                    .borrow_mut()
-                    .insert(uuid.to_string(), term.clone());
+                win.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
                 term.upcast()
-            });
+            },
+        );
 
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
@@ -353,6 +344,7 @@ impl Window {
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
         self.apply_preferences_to_terminal(term);
+        term.ensure_shell_spawned_when_ready();
 
         let win = self.clone();
         let uuid = term.uuid();
@@ -521,9 +513,8 @@ impl Window {
             .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
 
         if let Some(idx) = session_idx {
-            if let Some((new_layout, new_terminal_uuid)) = state.sessions[idx]
-                .layout
-                .split_terminal_with_new_uuid(terminal_uuid, orientation)
+            if let Some((new_layout, new_terminal_uuid)) =
+                state.sessions[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
                 state.sessions[idx].layout = new_layout;
                 let session_uuid = state.sessions[idx].uuid.clone();
@@ -547,10 +538,7 @@ impl Window {
         #[derive(Debug)]
         enum Action {
             CloseSession(String),
-            Rebuild {
-                session_uuid: String,
-                session_state: SessionState,
-            },
+            Rebuild { session_uuid: String, session_state: SessionState },
         }
         let imp = self.imp();
 
@@ -564,7 +552,9 @@ impl Window {
 
             if state.sessions[idx].layout.terminal_count() <= 1 {
                 Action::CloseSession(state.sessions[idx].uuid.clone())
-            } else if let Some(new_layout) = state.sessions[idx].layout.remove_terminal(terminal_uuid) {
+            } else if let Some(new_layout) =
+                state.sessions[idx].layout.remove_terminal(terminal_uuid)
+            {
                 state.sessions[idx].layout = new_layout;
                 Action::Rebuild {
                     session_uuid: state.sessions[idx].uuid.clone(),
@@ -577,10 +567,7 @@ impl Window {
 
         match action {
             Action::CloseSession(uuid) => self.close_session(&uuid),
-            Action::Rebuild {
-                session_uuid,
-                session_state,
-            } => {
+            Action::Rebuild { session_uuid, session_state } => {
                 if let Some(term) = imp.terminals.borrow().get(terminal_uuid) {
                     term.disconnect_child_exited();
                 }
@@ -604,8 +591,9 @@ impl Window {
         drop(old_content);
 
         let win = self.clone();
-        let content =
-            session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
+        let content = session::build_layout_widget(
+            &session_state.layout,
+            &move |uuid, cwd, _, custom_title| {
                 let existing = {
                     let terminals = win.imp().terminals.borrow();
                     terminals.get(uuid).cloned()
@@ -623,12 +611,10 @@ impl Window {
                     term.imp().custom_title.replace(Some(title.to_string()));
                 }
                 win.connect_terminal_signals(&term);
-                win.imp()
-                    .terminals
-                    .borrow_mut()
-                    .insert(uuid.to_string(), term.clone());
+                win.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
                 term.upcast()
-            });
+            },
+        );
 
         imp.session_stack.add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
@@ -706,9 +692,7 @@ impl Window {
 
         let new_term = TerminalWidget::new(new_terminal_uuid, None);
         self.connect_terminal_signals(&new_term);
-        imp.terminals
-            .borrow_mut()
-            .insert(new_terminal_uuid.to_string(), new_term.clone());
+        imp.terminals.borrow_mut().insert(new_terminal_uuid.to_string(), new_term.clone());
 
         let branch_layout = LayoutNode::Split {
             orientation,
@@ -807,11 +791,7 @@ impl Window {
 
     fn set_input_sync(&self, enabled: bool) {
         let mut state = self.imp().state.borrow_mut();
-        let active_idx = self
-            .imp()
-            .sidebar_list
-            .selected_row()
-            .map_or(0, |r| r.index() as usize);
+        let active_idx = self.imp().sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
         if let Some(session) = state.sessions.get_mut(active_idx) {
             session.input_sync = enabled;
         }
@@ -831,14 +811,16 @@ impl Window {
 
         let is_dark = adw::StyleManager::default().is_dark();
         let effective_name = prefs.effective_color_scheme_name(is_dark);
-        if let Some(scheme) = color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
-            let fallback = if is_dark {
-                color_scheme::BUILTIN_DARK_SCHEME_NAME
-            } else {
-                color_scheme::BUILTIN_LIGHT_SCHEME_NAME
-            };
-            color_scheme::load_color_scheme_by_name(fallback)
-        }) {
+        if let Some(scheme) =
+            color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
+                let fallback = if is_dark {
+                    color_scheme::BUILTIN_DARK_SCHEME_NAME
+                } else {
+                    color_scheme::BUILTIN_LIGHT_SCHEME_NAME
+                };
+                color_scheme::load_color_scheme_by_name(fallback)
+            })
+        {
             term.apply_color_scheme(&scheme);
         }
     }
@@ -945,10 +927,12 @@ impl Window {
     }
 
     fn notify_process_completed(&self, terminal_uuid: &str, status: i32) {
-        let title = self.imp().terminals.borrow().get(terminal_uuid).map_or_else(
-            || "Terminal".into(),
-            |t| t.title_label().label().to_string(),
-        );
+        let title = self
+            .imp()
+            .terminals
+            .borrow()
+            .get(terminal_uuid)
+            .map_or_else(|| "Terminal".into(), |t| t.title_label().label().to_string());
 
         let body = if status == 0 {
             format!("\"{title}\" completed successfully")
@@ -1086,9 +1070,7 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app = adw::Application::builder()
-            .application_id(application_id)
-            .build();
+        let app = adw::Application::builder().application_id(application_id).build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
@@ -1103,12 +1085,7 @@ mod tests {
         require_display!();
 
         let (_tmp, window) = new_test_window("com.illya.rttx.toolbar-view-tests");
-        let split_view_ptr = window
-            .imp()
-            .split_view
-            .clone()
-            .upcast::<gtk4::Widget>()
-            .as_ptr();
+        let split_view_ptr = window.imp().split_view.clone().upcast::<gtk4::Widget>().as_ptr();
 
         let settled = wait_until(1000, || {
             let Some(content) = window.content() else {
@@ -1130,9 +1107,7 @@ mod tests {
             overlay_child.as_ptr() == split_view_ptr && toolbar_view.top_bar_height() > 0
         });
 
-        let content = window
-            .content()
-            .expect("application window should always have content");
+        let content = window.content().expect("application window should always have content");
         let toolbar_view = content
             .downcast::<adw::ToolbarView>()
             .expect("window root content should be a ToolbarView");
@@ -1141,9 +1116,8 @@ mod tests {
             .expect("ToolbarView should expose a ToastOverlay as its content")
             .downcast::<adw::ToastOverlay>()
             .expect("ToolbarView content should be a ToastOverlay");
-        let overlay_child = toast_overlay
-            .child()
-            .expect("ToastOverlay should expose the split view as its child");
+        let overlay_child =
+            toast_overlay.child().expect("ToastOverlay should expose the split view as its child");
 
         assert!(
             settled,
@@ -1179,10 +1153,7 @@ mod tests {
         window.imp().session_stack.set_visible_child_name(&visible_session_uuid);
         pump_events(50);
 
-        assert!(
-            window.is_active(),
-            "test window must be active to exercise the toast path"
-        );
+        assert!(window.is_active(), "test window must be active to exercise the toast path");
         assert_eq!(
             window.process_completion_notification_mode(&hidden_terminal_uuid),
             ProcessCompletionNotificationMode::Toast,
@@ -1212,6 +1183,52 @@ mod tests {
     }
 
     #[test]
+    fn add_session_button_has_plus_icon() {
+        require_display!();
+
+        let (_tmp, window) = new_test_window("com.illya.rttx.add-session-button-tests");
+
+        assert_eq!(
+            window.imp().add_session_button.icon_name().as_deref(),
+            Some("list-add-symbolic"),
+            "new session button should expose the plus icon"
+        );
+
+        window.close();
+    }
+
+    #[test]
+    fn initial_terminal_starts_shell_when_window_is_presented() {
+        require_display!();
+
+        let (_tmp, window) = new_test_window("com.illya.rttx.shell-startup-tests");
+        let terminal = {
+            let state = window.imp().state.borrow();
+            let uuid = state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .next()
+                .expect("initial session should contain a terminal");
+            window
+                .imp()
+                .terminals
+                .borrow()
+                .get(&uuid)
+                .expect("initial terminal widget should exist")
+                .clone()
+        };
+
+        let settled = wait_until(1000, || terminal.shell_spawned_for_test());
+        assert!(
+            settled,
+            "window should trigger shell startup once the initial terminal has a real allocation"
+        );
+
+        window.close();
+    }
+
+    #[test]
     fn split_rebuild_starts_new_panes_evenly() {
         require_display!();
 
@@ -1220,10 +1237,7 @@ mod tests {
         let (session_uuid, t1_uuid) = {
             let state = window.imp().state.borrow();
             let session = &state.sessions[0];
-            (
-                session.uuid.clone(),
-                session.layout.terminal_uuids().into_iter().next().unwrap(),
-            )
+            (session.uuid.clone(), session.layout.terminal_uuids().into_iter().next().unwrap())
         };
 
         window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
@@ -1273,9 +1287,7 @@ mod tests {
             .session_stack
             .child_by_name(&session_uuid)
             .expect("session content must exist");
-        let outer = root
-            .downcast::<gtk4::Paned>()
-            .expect("root after split must be a Paned");
+        let outer = root.downcast::<gtk4::Paned>().expect("root after split must be a Paned");
         let inner = outer
             .end_child()
             .expect("second split should produce nested Paned on the right")
@@ -1299,6 +1311,111 @@ mod tests {
     }
 
     #[test]
+    fn save_and_restart_restores_user_resized_pane_ratios() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.restore-ratios-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let first_window = Window::new(&app);
+        first_window.set_default_size(1200, 800);
+        first_window.present();
+        pump_events(100);
+
+        let (session_uuid, t1_uuid) = {
+            let state = first_window.imp().state.borrow();
+            let session = &state.sessions[0];
+            (
+                session.uuid.clone(),
+                session.layout.terminal_uuids().into_iter().next().unwrap(),
+            )
+        };
+
+        first_window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+
+        let settled = wait_until(1000, || {
+            let Some(root) = first_window.imp().session_stack.child_by_name(&session_uuid) else {
+                return false;
+            };
+            let Ok(paned) = root.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            paned.width() > 0
+        });
+        assert!(settled, "split pane did not receive an allocation before save");
+
+        let root = first_window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist before save");
+        let paned = root
+            .downcast::<gtk4::Paned>()
+            .expect("split root should be a Paned");
+        let total = paned.width().max(1);
+        let expected_ratio = 0.3;
+        paned.set_position((f64::from(total) * expected_ratio) as i32);
+        pump_events(50);
+
+        first_window.save_state();
+        first_window.close();
+
+        let saved_state = session::load_window_state();
+        let LayoutNode::Split { ratio: saved_ratio, .. } = &saved_state.sessions[0].layout else {
+            panic!("saved layout should remain split after resize");
+        };
+        assert!(
+            (*saved_ratio - expected_ratio).abs() <= 0.05,
+            "save_state should capture the user-resized split ratio before restart, got {saved_ratio}"
+        );
+
+        let second_window = Window::new(&app);
+        second_window.set_default_size(1200, 800);
+        second_window.present();
+
+        let restored = wait_until(1000, || {
+            let Some(root) = second_window.imp().session_stack.child_by_name(&session_uuid) else {
+                return false;
+            };
+            let Ok(paned) = root.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let total = paned.width();
+            if total <= 0 {
+                return false;
+            }
+            let ratio = paned.position() as f64 / total as f64;
+            (ratio - expected_ratio).abs() <= 0.08
+        });
+
+        let restored_root = second_window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist after restart");
+        let restored_paned = restored_root
+            .downcast::<gtk4::Paned>()
+            .expect("restored root should be a Paned");
+        let restored_ratio =
+            restored_paned.position() as f64 / restored_paned.width().max(1) as f64;
+        assert!(
+            restored,
+            "restart should restore the saved split ratio.\n\
+             saved={saved_ratio:.3} restored={restored_ratio:.3} pos={} total={}",
+            restored_paned.position(),
+            restored_paned.width(),
+        );
+
+        second_window.close();
+    }
+
+    #[test]
     fn nested_split_preserves_root_and_unaffected_terminals() {
         require_display!();
 
@@ -1307,10 +1424,7 @@ mod tests {
         let (session_uuid, t1_uuid) = {
             let state = window.imp().state.borrow();
             let session = &state.sessions[0];
-            (
-                session.uuid.clone(),
-                session.layout.terminal_uuids().into_iter().next().unwrap(),
-            )
+            (session.uuid.clone(), session.layout.terminal_uuids().into_iter().next().unwrap())
         };
 
         window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
@@ -1380,7 +1494,8 @@ mod tests {
             "nested split should preserve the existing session root widget instead of rebuilding it"
         );
         assert_eq!(
-            t1_before_ptr, t1_after.as_ptr(),
+            t1_before_ptr,
+            t1_after.as_ptr(),
             "nested split should preserve unaffected terminal widget identity"
         );
         assert_eq!(

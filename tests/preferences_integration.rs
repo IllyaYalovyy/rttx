@@ -69,11 +69,8 @@ fn preferences_unknown_fields_are_ignored() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("prefs.json");
 
-    std::fs::write(
-        &path,
-        r#"{"font": "Mono 12", "unknown_field": true, "future_setting": 42}"#,
-    )
-    .unwrap();
+    std::fs::write(&path, r#"{"font": "Mono 12", "unknown_field": true, "future_setting": 42}"#)
+        .unwrap();
     let loaded = preferences::load_from(&path);
     assert_eq!(loaded.font, "Mono 12");
 }

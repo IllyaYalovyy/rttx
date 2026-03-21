@@ -10,12 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// Build a terminal node with a deterministic UUID.
 pub fn term(id: &str) -> LayoutNode {
-    LayoutNode::Terminal {
-        uuid: id.to_string(),
-        profile: None,
-        cwd: None,
-        custom_title: None,
-    }
+    LayoutNode::Terminal { uuid: id.to_string(), profile: None, cwd: None, custom_title: None }
 }
 
 /// Build a terminal node with all fields populated.
@@ -55,33 +50,17 @@ pub fn split_ratio(
     first: LayoutNode,
     second: LayoutNode,
 ) -> LayoutNode {
-    LayoutNode::Split {
-        orientation,
-        ratio,
-        first: Box::new(first),
-        second: Box::new(second),
-    }
+    LayoutNode::Split { orientation, ratio, first: Box::new(first), second: Box::new(second) }
 }
 
 /// Build a session with a given layout.
 pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
-    SessionState {
-        uuid: id.to_string(),
-        name: name.to_string(),
-        layout,
-        input_sync: false,
-    }
+    SessionState { uuid: id.to_string(), name: name.to_string(), layout, input_sync: false }
 }
 
 /// Build a window state from sessions.
 pub fn window_state(sessions: Vec<SessionState>) -> WindowState {
-    WindowState {
-        active_session_index: 0,
-        width: 800,
-        height: 600,
-        is_maximized: false,
-        sessions,
-    }
+    WindowState { active_session_index: 0, width: 800, height: 600, is_maximized: false, sessions }
 }
 
 // ── Color scheme builder ─────────────────────────────────────────
@@ -134,9 +113,7 @@ pub fn test_scheme_full() -> ColorScheme {
 
 /// Save a window state to a temp directory (bypasses glib config dir).
 pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
-    let sessions_dir = dir
-        .join(crate::config::CONFIG_DIR)
-        .join("sessions");
+    let sessions_dir = dir.join(crate::config::CONFIG_DIR).join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
     let path = sessions_dir.join("window-state.json");
     let json = serde_json::to_string_pretty(state)?;
@@ -146,10 +123,7 @@ pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std:
 
 /// Load a window state from a temp directory (bypasses glib config dir).
 pub fn load_state_from(dir: &Path) -> WindowState {
-    let path = dir
-        .join(crate::config::CONFIG_DIR)
-        .join("sessions")
-        .join("window-state.json");
+    let path = dir.join(crate::config::CONFIG_DIR).join("sessions").join("window-state.json");
     match std::fs::read_to_string(path) {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => WindowState::default(),

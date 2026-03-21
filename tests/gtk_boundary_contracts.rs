@@ -13,12 +13,7 @@ use pretty_assertions::assert_eq;
 use rttx::session::layout::*;
 
 fn term(id: &str) -> LayoutNode {
-    LayoutNode::Terminal {
-        uuid: id.into(),
-        profile: None,
-        cwd: None,
-        custom_title: None,
-    }
+    LayoutNode::Terminal { uuid: id.into(), profile: None, cwd: None, custom_title: None }
 }
 fn term_full(id: &str, cwd: &str, title: &str) -> LayoutNode {
     LayoutNode::Terminal {
@@ -61,31 +56,19 @@ fn contract_all_uuids_unique_after_any_operation_sequence() {
 
     // Split 5 times
     for _ in 0..5 {
-        layout = layout
-            .split_terminal("t1", SplitOrientation::Horizontal)
-            .unwrap();
+        layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
     }
 
     let uuids = layout.terminal_uuids();
     let unique: std::collections::HashSet<_> = uuids.iter().collect();
-    assert_eq!(
-        uuids.len(),
-        unique.len(),
-        "Duplicate UUIDs after splits: {:?}",
-        uuids
-    );
+    assert_eq!(uuids.len(), unique.len(), "Duplicate UUIDs after splits: {:?}", uuids);
 
     // Remove some, split others
     let to_remove = uuids[1].clone();
     layout = layout.remove_terminal(&to_remove).unwrap();
     let remaining = layout.terminal_uuids();
     let unique2: std::collections::HashSet<_> = remaining.iter().collect();
-    assert_eq!(
-        remaining.len(),
-        unique2.len(),
-        "Duplicate UUIDs after remove: {:?}",
-        remaining
-    );
+    assert_eq!(remaining.len(), unique2.len(), "Duplicate UUIDs after remove: {:?}", remaining);
 }
 
 /// Contract: terminal_count must always equal terminal_uuids().len().
@@ -115,13 +98,8 @@ fn contract_count_equals_uuid_vec_length() {
 fn contract_split_never_loses_original() {
     let layout = hsplit(vsplit(term("a"), term("b")), term("c"));
     for uuid in layout.terminal_uuids() {
-        let result = layout
-            .split_terminal(&uuid, SplitOrientation::Horizontal)
-            .unwrap();
-        assert!(
-            result.contains_terminal(&uuid),
-            "Original terminal '{uuid}' lost after split"
-        );
+        let result = layout.split_terminal(&uuid, SplitOrientation::Horizontal).unwrap();
+        assert!(result.contains_terminal(&uuid), "Original terminal '{uuid}' lost after split");
         // All OTHER terminals must also survive
         for other in layout.terminal_uuids() {
             assert!(
@@ -311,9 +289,7 @@ fn contract_single_terminal_session_close_path() {
 #[test]
 fn contract_split_then_close_new_terminal() {
     let layout = term("t1");
-    let after_split = layout
-        .split_terminal("t1", SplitOrientation::Horizontal)
-        .unwrap();
+    let after_split = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
 
     let new_uuid = after_split
         .terminal_uuids()
@@ -334,14 +310,9 @@ fn contract_rapid_split_close_cycles() {
 
     for _ in 0..10 {
         // Split t1
-        layout = layout
-            .split_terminal("t1", SplitOrientation::Vertical)
-            .unwrap();
-        let new_uuid = layout
-            .terminal_uuids()
-            .into_iter()
-            .find(|u| u != "t1" && u != "t2")
-            .unwrap();
+        layout = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
+        let new_uuid =
+            layout.terminal_uuids().into_iter().find(|u| u != "t1" && u != "t2").unwrap();
         // Close the new one
         layout = layout.remove_terminal(&new_uuid).unwrap();
     }
@@ -438,17 +409,8 @@ fn contract_split_ratios_in_valid_range() {
     let layout = hsplit(vsplit(term("a"), term("b")), hsplit(term("c"), term("d")));
 
     fn check_ratios(node: &LayoutNode) {
-        if let LayoutNode::Split {
-            ratio,
-            first,
-            second,
-            ..
-        } = node
-        {
-            assert!(
-                *ratio > 0.0 && *ratio < 1.0,
-                "Invalid ratio {ratio} — must be in (0, 1)"
-            );
+        if let LayoutNode::Split { ratio, first, second, .. } = node {
+            assert!(*ratio > 0.0 && *ratio < 1.0, "Invalid ratio {ratio} — must be in (0, 1)");
             check_ratios(first);
             check_ratios(second);
         }
@@ -456,9 +418,7 @@ fn contract_split_ratios_in_valid_range() {
     check_ratios(&layout);
 
     // Also check after split operations
-    let after = layout
-        .split_terminal("a", SplitOrientation::Vertical)
-        .unwrap();
+    let after = layout.split_terminal("a", SplitOrientation::Vertical).unwrap();
     check_ratios(&after);
 }
 
@@ -489,9 +449,7 @@ fn contract_single_terminal_split_produces_valid_tree() {
     assert_eq!(layout.terminal_count(), 1);
 
     // This is what window.rs does on split
-    let new_layout = layout
-        .split_terminal("t1", SplitOrientation::Horizontal)
-        .unwrap();
+    let new_layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
     assert_eq!(new_layout.terminal_count(), 2);
     assert!(new_layout.contains_terminal("t1"));
 
@@ -534,9 +492,7 @@ fn contract_split_preserves_all_existing_uuids() {
         let before: std::collections::HashSet<_> = layout.terminal_uuids().into_iter().collect();
 
         for uuid in layout.terminal_uuids() {
-            let after_split = layout
-                .split_terminal(&uuid, SplitOrientation::Horizontal)
-                .unwrap();
+            let after_split = layout.split_terminal(&uuid, SplitOrientation::Horizontal).unwrap();
             let after: std::collections::HashSet<_> =
                 after_split.terminal_uuids().into_iter().collect();
 
@@ -649,13 +605,8 @@ fn contract_active_session_index_out_of_bounds_is_clamped_safely() {
     assert!(loaded.active_session_index >= loaded.sessions.len());
 
     // Prove the correct clamping produces a valid index
-    let safe = loaded
-        .active_session_index
-        .min(loaded.sessions.len().saturating_sub(1));
-    assert!(
-        safe < loaded.sessions.len(),
-        "Clamped index {safe} is still out of bounds"
-    );
+    let safe = loaded.active_session_index.min(loaded.sessions.len().saturating_sub(1));
+    assert!(safe < loaded.sessions.len(), "Clamped index {safe} is still out of bounds");
     // Must be accessible without panic
     let _ = &loaded.sessions[safe];
 }

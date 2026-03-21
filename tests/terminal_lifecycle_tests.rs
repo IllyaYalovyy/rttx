@@ -60,12 +60,8 @@ fn widget_ptr(widget: &gtk4::Widget) -> usize {
 
 fn collect_leaf_widgets(widget: &gtk4::Widget, leaves: &mut Vec<gtk4::Widget>) {
     if let Some(paned) = widget.downcast_ref::<gtk4::Paned>() {
-        let start = paned
-            .start_child()
-            .expect("Paned in rebuilt tree must have a start child");
-        let end = paned
-            .end_child()
-            .expect("Paned in rebuilt tree must have an end child");
+        let start = paned.start_child().expect("Paned in rebuilt tree must have a start child");
+        let end = paned.end_child().expect("Paned in rebuilt tree must have an end child");
         collect_leaf_widgets(&start, leaves);
         collect_leaf_widgets(&end, leaves);
         return;
@@ -149,10 +145,7 @@ fn assert_live_tree_matches_layout(
             widget_chain(&term_widget),
             root.type_().name(),
             leaf_descriptions(&leaves),
-            leaves
-                .iter()
-                .map(|leaf| format!("0x{:x}", widget_ptr(leaf)))
-                .collect::<Vec<_>>(),
+            leaves.iter().map(|leaf| format!("0x{:x}", widget_ptr(leaf))).collect::<Vec<_>>(),
         );
         assert!(
             leaves.iter().any(|leaf| *leaf == term_widget),
@@ -222,4 +215,3 @@ fn test_terminal_rebuild_integrity_simple() {
         );
     }
 }
-

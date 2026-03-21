@@ -16,10 +16,7 @@ fn load_all_tilix_schemes_from_data_dir() {
         .join("tilix/data/schemes");
 
     if !tilix_schemes_dir.exists() {
-        eprintln!(
-            "Skipping: tilix schemes dir not found at {:?}",
-            tilix_schemes_dir
-        );
+        eprintln!("Skipping: tilix schemes dir not found at {:?}", tilix_schemes_dir);
         return;
     }
 
@@ -58,17 +55,8 @@ fn load_all_tilix_schemes_from_data_dir() {
         }
     }
 
-    assert!(
-        failed.is_empty(),
-        "Failed to load {} schemes: {:?}",
-        failed.len(),
-        failed
-    );
-    assert!(
-        loaded > 0,
-        "No schemes were loaded from {:?}",
-        tilix_schemes_dir
-    );
+    assert!(failed.is_empty(), "Failed to load {} schemes: {:?}", failed.len(), failed);
+    assert!(loaded > 0, "No schemes were loaded from {:?}", tilix_schemes_dir);
     eprintln!("Successfully loaded and validated {loaded} Tilix color schemes");
 }
 

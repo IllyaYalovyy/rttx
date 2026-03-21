@@ -64,10 +64,7 @@ fn stack_remove_after_unparent_is_invalid() {
     child.unparent();
     // 2. try to find it by name — it's gone
     let found = stack.child_by_name("page1");
-    assert!(
-        found.is_none(),
-        "child_by_name should return None after unparent"
-    );
+    assert!(found.is_none(), "child_by_name should return None after unparent");
 
     // The fix: remove from stack FIRST, then unparent from detached tree.
 }
@@ -121,10 +118,7 @@ fn widget_reparent_after_unparent() {
     assert!(label.parent().is_none());
 
     box2.append(&label);
-    assert_eq!(
-        label.parent().unwrap(),
-        box2.upcast_ref::<gtk4::Widget>().clone()
-    );
+    assert_eq!(label.parent().unwrap(), box2.upcast_ref::<gtk4::Widget>().clone());
 }
 
 /// Verify that GObject ref-counting keeps widgets alive when held in a
@@ -289,9 +283,7 @@ fn build_layout_widget_sets_position_after_allocation() {
         gtk4::Label::new(Some("terminal")).upcast()
     });
 
-    let outer = widget
-        .downcast_ref::<gtk4::Paned>()
-        .expect("Root must be Paned");
+    let outer = widget.downcast_ref::<gtk4::Paned>().expect("Root must be Paned");
 
     // Trigger allocation — this fires notify::width, which sets position
     outer.set_size_request(800, 600);
@@ -529,10 +521,7 @@ fn build_layout_widget_calls_make_terminal_exactly_once_per_uuid() {
     let counts_clone = call_counts.clone();
 
     build_layout_widget(&layout, &|uuid, _cwd, _profile, _title| {
-        *counts_clone
-            .borrow_mut()
-            .entry(uuid.to_string())
-            .or_insert(0) += 1;
+        *counts_clone.borrow_mut().entry(uuid.to_string()).or_insert(0) += 1;
         gtk4::Label::new(Some(uuid)).upcast()
     });
 
@@ -572,10 +561,7 @@ fn vte_signal_disconnect_before_drop_does_not_crash() {
     drop(vte);
 
     // Handler must not have fired (no child process was ever spawned)
-    assert!(
-        !fired.get(),
-        "child_exited fired after disconnect — signal not properly cleaned up"
-    );
+    assert!(!fired.get(), "child_exited fired after disconnect — signal not properly cleaned up");
 }
 
 /// Verifies that connecting the same signal type twice on a VTE terminal
@@ -626,10 +612,7 @@ fn weak_reference_invalidated_after_last_strong_ref_dropped() {
     let label = gtk4::Label::new(Some("test"));
     let weak = label.downgrade();
 
-    assert!(
-        weak.upgrade().is_some(),
-        "Weak ref must be valid while strong ref exists"
-    );
+    assert!(weak.upgrade().is_some(), "Weak ref must be valid while strong ref exists");
 
     drop(label);
 
@@ -712,13 +695,10 @@ fn paned_extreme_but_valid_ratios_produce_nonzero_positions() {
             }),
         };
 
-        let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
-            gtk4::Label::new(Some(uuid)).upcast()
-        });
+        let widget =
+            build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
 
-        let paned = widget
-            .downcast_ref::<gtk4::Paned>()
-            .expect("Root must be Paned");
+        let paned = widget.downcast_ref::<gtk4::Paned>().expect("Root must be Paned");
 
         paned.set_size_request(800, 600);
         paned.allocate(800, 600, -1, None);

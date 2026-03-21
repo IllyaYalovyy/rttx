@@ -94,9 +94,7 @@ impl SessionRow {
     }
 
     pub fn update_terminal_count(&self, count: usize) {
-        self.imp()
-            .terminal_count_label
-            .set_label(&format!("{count}"));
+        self.imp().terminal_count_label.set_label(&format!("{count}"));
     }
 
     #[must_use]

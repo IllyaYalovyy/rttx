@@ -119,14 +119,9 @@ fn test_rebuild_session_content_reuses_terminals() {
     }
 
     let widget2 = build_widget(&layout2);
-    let root_paned = widget2
-        .downcast_ref::<gtk4::Paned>()
-        .expect("Root should be a Paned");
+    let root_paned = widget2.downcast_ref::<gtk4::Paned>().expect("Root should be a Paned");
     let t1_widget = root_paned.start_child().expect("Should have t1");
-    assert_eq!(
-        t1_widget.downcast_ref::<gtk4::Label>().unwrap().label(),
-        "t1"
-    );
+    assert_eq!(t1_widget.downcast_ref::<gtk4::Label>().unwrap().label(), "t1");
 }
 
 #[test]
@@ -181,9 +176,8 @@ fn test_capture_paned_ratios_reads_position() {
         }),
     };
 
-    let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
-        gtk4::Label::new(Some(uuid)).upcast()
-    });
+    let widget =
+        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
 
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
     paned.set_size_request(800, 600);
@@ -198,10 +192,7 @@ fn test_capture_paned_ratios_reads_position() {
     let LayoutNode::Split { ratio, .. } = updated else {
         panic!("Expected Split layout node");
     };
-    assert!(
-        (ratio - 0.3).abs() < 0.02,
-        "ratio should be ≈0.3 after capture, got {ratio}"
-    );
+    assert!((ratio - 0.3).abs() < 0.02, "ratio should be ≈0.3 after capture, got {ratio}");
 }
 
 /// capture_paned_ratios must recurse into nested splits.
@@ -236,20 +227,15 @@ fn test_capture_paned_ratios_nested() {
         }),
     };
 
-    let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
-        gtk4::Label::new(Some(uuid)).upcast()
-    });
+    let widget =
+        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
 
     let outer = widget.downcast_ref::<gtk4::Paned>().unwrap();
     outer.set_size_request(800, 600);
     outer.allocate(800, 600, -1, None);
     outer.set_position(400); // 0.5
 
-    let inner = outer
-        .start_child()
-        .unwrap()
-        .downcast::<gtk4::Paned>()
-        .unwrap();
+    let inner = outer.start_child().unwrap().downcast::<gtk4::Paned>().unwrap();
     // Force inner to a known position on a known total.
     inner.set_size_request(400, 600);
     inner.allocate(400, 600, -1, None);
@@ -265,14 +251,8 @@ fn test_capture_paned_ratios_nested() {
         panic!("Expected inner Split");
     };
 
-    assert!(
-        (outer_ratio - 0.5).abs() < 0.02,
-        "outer ratio should be ≈0.5, got {outer_ratio}"
-    );
-    assert!(
-        (inner_ratio - 0.25).abs() < 0.02,
-        "inner ratio should be ≈0.25, got {inner_ratio}"
-    );
+    assert!((outer_ratio - 0.5).abs() < 0.02, "outer ratio should be ≈0.5, got {outer_ratio}");
+    assert!((inner_ratio - 0.25).abs() < 0.02, "inner ratio should be ≈0.25, got {inner_ratio}");
 }
 
 /// apply_paned_ratios must set Paned positions from layout ratios and
@@ -300,9 +280,8 @@ fn test_apply_paned_ratios_sets_position() {
         }),
     };
 
-    let widget = build_layout_widget(&layout, &|uuid, _, _, _| {
-        gtk4::Label::new(Some(uuid)).upcast()
-    });
+    let widget =
+        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
 
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
     paned.set_size_request(800, 600);

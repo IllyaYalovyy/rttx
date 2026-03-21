@@ -47,21 +47,16 @@ mod imp {
 
             self.title_label.set_hexpand(true);
             self.title_label.set_xalign(0.0);
-            self.title_label
-                .set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            self.title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
             self.title_label.set_label("Terminal");
 
-            self.split_h_button
-                .set_icon_name("object-flip-horizontal-symbolic");
+            self.split_h_button.set_icon_name("object-flip-horizontal-symbolic");
             self.split_h_button.add_css_class("flat");
-            self.split_h_button
-                .set_tooltip_text(Some("Split horizontally"));
+            self.split_h_button.set_tooltip_text(Some("Split horizontally"));
 
-            self.split_v_button
-                .set_icon_name("object-flip-vertical-symbolic");
+            self.split_v_button.set_icon_name("object-flip-vertical-symbolic");
             self.split_v_button.add_css_class("flat");
-            self.split_v_button
-                .set_tooltip_text(Some("Split vertically"));
+            self.split_v_button.set_tooltip_text(Some("Split vertically"));
 
             self.close_button.set_icon_name("window-close-symbolic");
             self.close_button.add_css_class("flat");
@@ -207,10 +202,7 @@ impl TerminalWidget {
 
     #[must_use]
     pub fn current_directory(&self) -> Option<String> {
-        self.imp()
-            .vte
-            .current_directory_uri()
-            .and_then(|uri| parse_file_uri(uri.as_str()))
+        self.imp().vte.current_directory_uri().and_then(|uri| parse_file_uri(uri.as_str()))
     }
 
     pub fn ensure_shell_spawned_when_ready(&self) {
@@ -322,9 +314,7 @@ impl TerminalWidget {
 }
 
 pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
-    glib::filename_from_uri(uri)
-        .ok()
-        .map(|(path, _hostname)| path.display().to_string())
+    glib::filename_from_uri(uri).ok().map(|(path, _hostname)| path.display().to_string())
 }
 
 #[cfg(test)]
@@ -403,9 +393,7 @@ mod tests {
 
     #[test]
     fn strip_prefix_regression() {
-        let old_way = "file:///home/user/my%20dir"
-            .strip_prefix("file://")
-            .map(|p| p.to_string());
+        let old_way = "file:///home/user/my%20dir".strip_prefix("file://").map(|p| p.to_string());
         let new_way = parse_file_uri("file:///home/user/my%20dir");
         assert_eq!(old_way, Some("/home/user/my%20dir".into()));
         assert_eq!(new_way, Some("/home/user/my dir".into()));

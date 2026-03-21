@@ -21,32 +21,12 @@ impl PartialEq for LayoutNode {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Self::Terminal {
-                    uuid: u1,
-                    profile: p1,
-                    cwd: c1,
-                    custom_title: t1,
-                },
-                Self::Terminal {
-                    uuid: u2,
-                    profile: p2,
-                    cwd: c2,
-                    custom_title: t2,
-                },
+                Self::Terminal { uuid: u1, profile: p1, cwd: c1, custom_title: t1 },
+                Self::Terminal { uuid: u2, profile: p2, cwd: c2, custom_title: t2 },
             ) => u1 == u2 && p1 == p2 && c1 == c2 && t1 == t2,
             (
-                Self::Split {
-                    orientation: o1,
-                    ratio: r1,
-                    first: f1,
-                    second: s1,
-                },
-                Self::Split {
-                    orientation: o2,
-                    ratio: r2,
-                    first: f2,
-                    second: s2,
-                },
+                Self::Split { orientation: o1, ratio: r1, first: f1, second: s1 },
+                Self::Split { orientation: o2, ratio: r2, first: f2, second: s2 },
             ) => o1 == o2 && (r1 - r2).abs() < f64::EPSILON && f1 == f2 && s1 == s2,
             _ => false,
         }
@@ -77,12 +57,7 @@ impl LayoutNode {
     #[cfg(test)]
     #[must_use]
     pub fn new_terminal_with_uuid(uuid: &str) -> Self {
-        Self::Terminal {
-            uuid: uuid.to_string(),
-            profile: None,
-            cwd: None,
-            custom_title: None,
-        }
+        Self::Terminal { uuid: uuid.to_string(), profile: None, cwd: None, custom_title: None }
     }
 
     #[must_use]
@@ -130,31 +105,28 @@ impl LayoutNode {
         match self {
             Self::Terminal { uuid, .. } if uuid == target_uuid => Some(self.split(orientation)),
             Self::Terminal { .. } => None,
-            Self::Split {
-                orientation: o,
-                ratio,
-                first,
-                second,
-            } => first.split_terminal(target_uuid, orientation).map_or_else(
-                || {
-                    second
-                        .split_terminal(target_uuid, orientation)
-                        .map(|new_second| Self::Split {
+            Self::Split { orientation: o, ratio, first, second } => {
+                first.split_terminal(target_uuid, orientation).map_or_else(
+                    || {
+                        second.split_terminal(target_uuid, orientation).map(|new_second| {
+                            Self::Split {
+                                orientation: *o,
+                                ratio: *ratio,
+                                first: first.clone(),
+                                second: Box::new(new_second),
+                            }
+                        })
+                    },
+                    |new_first| {
+                        Some(Self::Split {
                             orientation: *o,
                             ratio: *ratio,
-                            first: first.clone(),
-                            second: Box::new(new_second),
+                            first: Box::new(new_first),
+                            second: second.clone(),
                         })
-                },
-                |new_first| {
-                    Some(Self::Split {
-                        orientation: *o,
-                        ratio: *ratio,
-                        first: Box::new(new_first),
-                        second: second.clone(),
-                    })
-                },
-            ),
+                    },
+                )
+            }
         }
     }
 
@@ -175,18 +147,11 @@ impl LayoutNode {
                 None
             }
             Self::Terminal { .. } => None,
-            Self::Split {
-                orientation: o,
-                ratio,
-                first,
-                second,
-            } => first
-                .split_terminal_with_new_uuid(target_uuid, orientation)
-                .map_or_else(
+            Self::Split { orientation: o, ratio, first, second } => {
+                first.split_terminal_with_new_uuid(target_uuid, orientation).map_or_else(
                     || {
-                        second
-                            .split_terminal_with_new_uuid(target_uuid, orientation)
-                            .map(|(new_second, new_uuid)| {
+                        second.split_terminal_with_new_uuid(target_uuid, orientation).map(
+                            |(new_second, new_uuid)| {
                                 (
                                     Self::Split {
                                         orientation: *o,
@@ -196,7 +161,8 @@ impl LayoutNode {
                                     },
                                     new_uuid,
                                 )
-                            })
+                            },
+                        )
                     },
                     |(new_first, new_uuid)| {
                         Some((
@@ -209,7 +175,8 @@ impl LayoutNode {
                             new_uuid,
                         ))
                     },
-                ),
+                )
+            }
         }
     }
 
@@ -218,12 +185,7 @@ impl LayoutNode {
         match self {
             Self::Terminal { uuid, .. } if uuid == target_uuid => None,
             Self::Terminal { .. } => Some(self.clone()),
-            Self::Split {
-                orientation,
-                ratio,
-                first,
-                second,
-            } => {
+            Self::Split { orientation, ratio, first, second } => {
                 let new_first = first.remove_terminal(target_uuid);
                 let new_second = second.remove_terminal(target_uuid);
 
@@ -375,12 +337,7 @@ mod tests {
     use rstest::rstest;
 
     fn term(uuid: &str) -> LayoutNode {
-        LayoutNode::Terminal {
-            uuid: uuid.into(),
-            profile: None,
-            cwd: None,
-            custom_title: None,
-        }
+        LayoutNode::Terminal { uuid: uuid.into(), profile: None, cwd: None, custom_title: None }
     }
 
     fn term_full(uuid: &str, cwd: &str, title: &str) -> LayoutNode {
@@ -407,12 +364,7 @@ mod tests {
         first: LayoutNode,
         second: LayoutNode,
     ) -> LayoutNode {
-        LayoutNode::Split {
-            orientation,
-            ratio,
-            first: Box::new(first),
-            second: Box::new(second),
-        }
+        LayoutNode::Split { orientation, ratio, first: Box::new(first), second: Box::new(second) }
     }
 
     #[test]
@@ -506,9 +458,7 @@ mod tests {
     #[test]
     fn split_specific_terminal_in_tree() {
         let root = hsplit(term("t1"), term("t2"));
-        let result = root
-            .split_terminal("t2", SplitOrientation::Vertical)
-            .unwrap();
+        let result = root.split_terminal("t2", SplitOrientation::Vertical).unwrap();
         assert_eq!(result.terminal_count(), 3);
         let uuids = result.terminal_uuids();
         assert!(uuids.contains(&"t1".to_string()));
@@ -524,9 +474,7 @@ mod tests {
     #[test]
     fn split_deeply_nested_terminal() {
         let root = hsplit(term("t1"), hsplit(term("t2"), term("t3")));
-        let result = root
-            .split_terminal("t3", SplitOrientation::Vertical)
-            .unwrap();
+        let result = root.split_terminal("t3", SplitOrientation::Vertical).unwrap();
         assert_eq!(result.terminal_count(), 4);
         assert!(result.contains_terminal("t3"));
     }
@@ -534,9 +482,8 @@ mod tests {
     #[test]
     fn split_terminal_with_new_uuid_reports_created_terminal() {
         let root = term("t1");
-        let (new_tree, new_uuid) = root
-            .split_terminal_with_new_uuid("t1", SplitOrientation::Horizontal)
-            .unwrap();
+        let (new_tree, new_uuid) =
+            root.split_terminal_with_new_uuid("t1", SplitOrientation::Horizontal).unwrap();
         assert_eq!(new_tree.terminal_count(), 2);
         assert!(new_tree.contains_terminal(&new_uuid));
         assert_ne!(new_uuid, "t1");
@@ -652,36 +599,22 @@ mod tests {
 
     #[test]
     fn swap_preserves_full_terminal_data() {
-        let mut layout = hsplit(
-            term_full("t1", "/home/alice", "editor"),
-            term_full("t2", "/tmp", "build"),
-        );
+        let mut layout =
+            hsplit(term_full("t1", "/home/alice", "editor"), term_full("t2", "/tmp", "build"));
         layout.swap_terminals("t1", "t2");
 
         let uuids = layout.terminal_uuids();
         assert_eq!(uuids, vec!["t2", "t1"]);
 
         if let LayoutNode::Split { first, second, .. } = &layout {
-            if let LayoutNode::Terminal {
-                uuid,
-                cwd,
-                custom_title,
-                ..
-            } = first.as_ref()
-            {
+            if let LayoutNode::Terminal { uuid, cwd, custom_title, .. } = first.as_ref() {
                 assert_eq!(uuid, "t2");
                 assert_eq!(cwd.as_deref(), Some("/tmp"));
                 assert_eq!(custom_title.as_deref(), Some("build"));
             } else {
                 panic!("Expected Terminal");
             }
-            if let LayoutNode::Terminal {
-                uuid,
-                cwd,
-                custom_title,
-                ..
-            } = second.as_ref()
-            {
+            if let LayoutNode::Terminal { uuid, cwd, custom_title, .. } = second.as_ref() {
                 assert_eq!(uuid, "t1");
                 assert_eq!(cwd.as_deref(), Some("/home/alice"));
                 assert_eq!(custom_title.as_deref(), Some("editor"));
@@ -696,9 +629,7 @@ mod tests {
     #[test]
     fn split_preserves_parent_ratio() {
         let layout = split_ratio(SplitOrientation::Horizontal, 0.7, term("t1"), term("t2"));
-        let result = layout
-            .split_terminal("t1", SplitOrientation::Vertical)
-            .unwrap();
+        let result = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
         if let LayoutNode::Split { ratio, .. } = &result {
             assert!(
                 (*ratio - 0.7).abs() < f64::EPSILON,
@@ -715,10 +646,7 @@ mod tests {
         let layout = split_ratio(SplitOrientation::Vertical, 0.7, inner, term("t3"));
         let result = layout.remove_terminal("t1").unwrap();
         if let LayoutNode::Split { ratio, .. } = &result {
-            assert!(
-                (*ratio - 0.7).abs() < f64::EPSILON,
-                "Outer ratio changed from 0.7 to {ratio}"
-            );
+            assert!((*ratio - 0.7).abs() < f64::EPSILON, "Outer ratio changed from 0.7 to {ratio}");
         } else {
             panic!("Expected Split");
         }
@@ -728,20 +656,14 @@ mod tests {
     fn remove_last_terminal_returns_none_not_empty_tree() {
         let layout = term("only");
         let result = layout.remove_terminal("only");
-        assert!(
-            result.is_none(),
-            "Removing the only terminal must return None"
-        );
+        assert!(result.is_none(), "Removing the only terminal must return None");
     }
 
     #[test]
     fn new_terminal_uuid_is_valid_v4() {
         let node = LayoutNode::new_terminal();
         if let LayoutNode::Terminal { uuid, .. } = &node {
-            assert!(
-                uuid::Uuid::parse_str(uuid).is_ok(),
-                "UUID '{uuid}' is not valid UUID format"
-            );
+            assert!(uuid::Uuid::parse_str(uuid).is_ok(), "UUID '{uuid}' is not valid UUID format");
             assert_eq!(
                 uuid::Uuid::parse_str(uuid).unwrap().get_version(),
                 Some(uuid::Version::Random),
@@ -766,10 +688,7 @@ pub mod proptests {
     use proptest::prelude::*;
 
     fn arb_orientation() -> impl Strategy<Value = SplitOrientation> {
-        prop_oneof![
-            Just(SplitOrientation::Horizontal),
-            Just(SplitOrientation::Vertical),
-        ]
+        prop_oneof![Just(SplitOrientation::Horizontal), Just(SplitOrientation::Vertical),]
     }
 
     fn arb_layout() -> impl Strategy<Value = LayoutNode> {

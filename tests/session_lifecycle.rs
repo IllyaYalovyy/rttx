@@ -10,12 +10,7 @@ use rttx::session::layout::*;
 // ── Helpers (can't use test_helpers from lib, so inline) ─────────
 
 fn term(id: &str) -> LayoutNode {
-    LayoutNode::Terminal {
-        uuid: id.to_string(),
-        profile: None,
-        cwd: None,
-        custom_title: None,
-    }
+    LayoutNode::Terminal { uuid: id.to_string(), profile: None, cwd: None, custom_title: None }
 }
 
 fn hsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
@@ -45,25 +40,13 @@ fn workflow_split_split_close_close() {
     assert_eq!(layout.terminal_count(), 1);
 
     // Split right → t1 | t2
-    layout = layout
-        .split_terminal("t1", SplitOrientation::Horizontal)
-        .unwrap();
-    let t2 = layout
-        .terminal_uuids()
-        .into_iter()
-        .find(|u| u != "t1")
-        .unwrap();
+    layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
+    let t2 = layout.terminal_uuids().into_iter().find(|u| u != "t1").unwrap();
     assert_eq!(layout.terminal_count(), 2);
 
     // Split t1 down → (t1 / t3) | t2
-    layout = layout
-        .split_terminal("t1", SplitOrientation::Vertical)
-        .unwrap();
-    let t3 = layout
-        .terminal_uuids()
-        .into_iter()
-        .find(|u| u != "t1" && u != &t2)
-        .unwrap();
+    layout = layout.split_terminal("t1", SplitOrientation::Vertical).unwrap();
+    let t3 = layout.terminal_uuids().into_iter().find(|u| u != "t1" && u != &t2).unwrap();
     assert_eq!(layout.terminal_count(), 3);
 
     // Close t3 → t1 | t2
@@ -84,10 +67,7 @@ fn workflow_multi_session_state() {
         SessionState {
             uuid: "s1".into(),
             name: "Editor".into(),
-            layout: hsplit(
-                term("editor-main"),
-                vsplit(term("editor-side"), term("editor-term")),
-            ),
+            layout: hsplit(term("editor-main"), vsplit(term("editor-side"), term("editor-term"))),
             input_sync: false,
         },
         SessionState {
@@ -167,25 +147,14 @@ fn workflow_persist_and_restore_with_cwds() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
     // CWDs survived
-    if let LayoutNode::Terminal {
-        cwd: _,
-        custom_title: _,
-        ..
-    } = &loaded.sessions[0].layout
-    {
+    if let LayoutNode::Terminal { cwd: _, custom_title: _, .. } = &loaded.sessions[0].layout {
         panic!("Expected Split at root, got Terminal");
     } else if let LayoutNode::Split { first, second, .. } = &loaded.sessions[0].layout {
-        if let LayoutNode::Terminal {
-            cwd, custom_title, ..
-        } = first.as_ref()
-        {
+        if let LayoutNode::Terminal { cwd, custom_title, .. } = first.as_ref() {
             assert_eq!(cwd.as_deref(), Some("/home/user/project/src"));
             assert_eq!(custom_title.as_deref(), Some("vim"));
         }
-        if let LayoutNode::Terminal {
-            cwd, custom_title, ..
-        } = second.as_ref()
-        {
+        if let LayoutNode::Terminal { cwd, custom_title, .. } = second.as_ref() {
             assert_eq!(cwd.as_deref(), Some("/home/user/project"));
             assert_eq!(custom_title.as_deref(), Some("cargo watch"));
         }
@@ -214,9 +183,7 @@ fn split_same_terminal_multiple_times() {
     let mut layout = term("t1");
 
     for _ in 0..5 {
-        layout = layout
-            .split_terminal("t1", SplitOrientation::Horizontal)
-            .unwrap();
+        layout = layout.split_terminal("t1", SplitOrientation::Horizontal).unwrap();
     }
 
     assert_eq!(layout.terminal_count(), 6);

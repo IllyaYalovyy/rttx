@@ -18,11 +18,8 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     appearance_group.set_title("Appearance");
     let legacy_color_scheme = prefs.color_scheme.clone();
 
-    let font_row = adw::ActionRow::builder()
-        .title("Font")
-        .subtitle(&prefs.font)
-        .activatable(true)
-        .build();
+    let font_row =
+        adw::ActionRow::builder().title("Font").subtitle(&prefs.font).activatable(true).build();
     let font_label = gtk4::Label::new(Some(&prefs.font));
     font_label.add_css_class("dim-label");
     font_row.add_suffix(&font_label);
@@ -50,9 +47,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     });
     appearance_group.add(&font_row);
 
-    let mode_row = adw::ComboRow::builder()
-        .title("Terminal theme mode")
-        .build();
+    let mode_row = adw::ComboRow::builder().title("Terminal theme mode").build();
     let mode_names = ["Follow system", "Always light", "Always dark"];
     let mode_model = gtk4::StringList::new(&mode_names);
     mode_row.set_model(Some(&mode_model));
@@ -69,27 +64,19 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 
     let light_scheme_row = adw::ComboRow::builder().title("Light terminal palette").build();
     light_scheme_row.set_model(Some(&scheme_model));
-    if let Some(pos) = scheme_names
-        .iter()
-        .position(|s| s == &prefs.light_color_scheme)
-    {
+    if let Some(pos) = scheme_names.iter().position(|s| s == &prefs.light_color_scheme) {
         light_scheme_row.set_selected(pos as u32);
     }
     appearance_group.add(&light_scheme_row);
 
     let dark_scheme_row = adw::ComboRow::builder().title("Dark terminal palette").build();
     dark_scheme_row.set_model(Some(&scheme_model));
-    if let Some(pos) = scheme_names
-        .iter()
-        .position(|s| s == &prefs.dark_color_scheme)
-    {
+    if let Some(pos) = scheme_names.iter().position(|s| s == &prefs.dark_color_scheme) {
         dark_scheme_row.set_selected(pos as u32);
     }
     appearance_group.add(&dark_scheme_row);
 
-    let opacity_row = adw::ActionRow::builder()
-        .title("Background opacity")
-        .build();
+    let opacity_row = adw::ActionRow::builder().title("Background opacity").build();
     let opacity_scale = gtk4::Scale::with_range(gtk4::Orientation::Horizontal, 0.0, 1.0, 0.05);
     opacity_scale.set_value(prefs.background_opacity);
     opacity_scale.set_hexpand(true);
@@ -122,7 +109,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     terminal_group.add(&output_row);
 
     let bell_row = adw::SwitchRow::new();
-     bell_row.set_title("Audible bell");
+    bell_row.set_title("Audible bell");
     bell_row.set_active(prefs.audible_bell);
     terminal_group.add(&bell_row);
 
@@ -147,11 +134,17 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             light_color_scheme: light_scheme_row
                 .selected_item()
                 .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
-                .map_or_else(|| color_scheme::BUILTIN_LIGHT_SCHEME_NAME.into(), |s| s.string().to_string()),
+                .map_or_else(
+                    || color_scheme::BUILTIN_LIGHT_SCHEME_NAME.into(),
+                    |s| s.string().to_string(),
+                ),
             dark_color_scheme: dark_scheme_row
                 .selected_item()
                 .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
-                .map_or_else(|| color_scheme::BUILTIN_DARK_SCHEME_NAME.into(), |s| s.string().to_string()),
+                .map_or_else(
+                    || color_scheme::BUILTIN_DARK_SCHEME_NAME.into(),
+                    |s| s.string().to_string(),
+                ),
             scrollback_lines: scrollback_row.value() as i64,
             show_headerbar: headerbar_row.is_active(),
             scroll_on_keystroke: keystroke_row.is_active(),
@@ -172,10 +165,8 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 }
 
 fn load_scheme_names() -> Vec<String> {
-    let mut names: Vec<String> = color_scheme::load_color_schemes()
-        .into_iter()
-        .map(|scheme| scheme.name)
-        .collect();
+    let mut names: Vec<String> =
+        color_scheme::load_color_schemes().into_iter().map(|scheme| scheme.name).collect();
     names.sort();
     names.dedup();
     names

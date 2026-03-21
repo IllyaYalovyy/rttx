@@ -157,9 +157,7 @@ impl From<PreferencesDisk> for Preferences {
 }
 
 fn parse_preferences_json(data: &str) -> Preferences {
-    serde_json::from_str::<PreferencesDisk>(data)
-        .map(Into::into)
-        .unwrap_or_default()
+    serde_json::from_str::<PreferencesDisk>(data).map(Into::into).unwrap_or_default()
 }
 
 fn prefs_path() -> PathBuf {
@@ -174,7 +172,8 @@ use gtk4::glib;
 #[must_use]
 pub fn load() -> Preferences {
     let path = prefs_path();
-    std::fs::read_to_string(path).map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
+    std::fs::read_to_string(path)
+        .map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
 }
 
 pub fn save(prefs: &Preferences) -> Result<(), Box<dyn std::error::Error>> {
@@ -189,7 +188,8 @@ pub fn save(prefs: &Preferences) -> Result<(), Box<dyn std::error::Error>> {
 
 #[must_use]
 pub fn load_from(path: &std::path::Path) -> Preferences {
-    std::fs::read_to_string(path).map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
+    std::fs::read_to_string(path)
+        .map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
 }
 
 pub fn save_to(
@@ -274,10 +274,7 @@ mod tests {
     fn opacity_roundtrip(#[case] opacity: f64) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("prefs.json");
-        let prefs = Preferences {
-            background_opacity: opacity,
-            ..Default::default()
-        };
+        let prefs = Preferences { background_opacity: opacity, ..Default::default() };
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert!((loaded.background_opacity - opacity).abs() < f64::EPSILON);
@@ -287,10 +284,7 @@ mod tests {
     fn negative_scrollback_roundtrips() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("prefs.json");
-        let prefs = Preferences {
-            scrollback_lines: -1,
-            ..Default::default()
-        };
+        let prefs = Preferences { scrollback_lines: -1, ..Default::default() };
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.scrollback_lines, -1);
@@ -300,10 +294,7 @@ mod tests {
     fn empty_font_roundtrips() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("prefs.json");
-        let prefs = Preferences {
-            font: String::new(),
-            ..Default::default()
-        };
+        let prefs = Preferences { font: String::new(), ..Default::default() };
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.font, "");
@@ -356,14 +347,8 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let loaded = load_from(&path);
         assert!(loaded.show_headerbar, "show_headerbar should default true");
-        assert!(
-            loaded.scroll_on_keystroke,
-            "scroll_on_keystroke should default true"
-        );
-        assert!(
-            !loaded.scroll_on_output,
-            "scroll_on_output should default false"
-        );
+        assert!(loaded.scroll_on_keystroke, "scroll_on_keystroke should default true");
+        assert!(!loaded.scroll_on_output, "scroll_on_output should default false");
         assert!(loaded.audible_bell, "audible_bell should default true");
     }
 }
