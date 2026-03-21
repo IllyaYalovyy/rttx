@@ -56,7 +56,6 @@ mod imp {
             obj.set_default_size(900, 600);
             obj.set_title(Some("rttx"));
 
-            // Header bar
             let header = adw::HeaderBar::new();
             let toggle_sidebar = gtk4::ToggleButton::new();
             toggle_sidebar.set_icon_name("sidebar-show-symbolic");
@@ -80,7 +79,6 @@ mod imp {
 
             header.pack_end(&menu_button);
 
-            // Sidebar
             self.sidebar_list
                 .set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");
@@ -94,11 +92,9 @@ mod imp {
                 .child(&self.sidebar_list)
                 .build();
 
-            // Session content area
             self.session_stack.set_hexpand(true);
             self.session_stack.set_vexpand(true);
 
-            // OverlaySplitView: sidebar | content
             self.split_view.set_sidebar(Some(&sidebar_scroll));
             self.split_view.set_content(Some(&self.session_stack));
             self.split_view.set_show_sidebar(true);
@@ -106,14 +102,12 @@ mod imp {
             self.split_view.set_min_sidebar_width(180.0);
             self.split_view.set_max_sidebar_width(300.0);
 
-            // Bind toggle button to split view
             self.split_view
                 .bind_property("show-sidebar", &toggle_sidebar, "active")
                 .bidirectional()
                 .sync_create()
                 .build();
 
-            // Main layout
             let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             main_box.append(&header);
             main_box.append(&self.split_view);
@@ -256,7 +250,6 @@ impl Window {
         self.add_action(&sync_action);
         app.set_accels_for_action("win.toggle-input-sync", &["<Ctrl><Shift>i"]);
 
-        // Preferences action (no accelerator, triggered from menu)
         let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
         let win = self.clone();
         prefs_action.connect_activate(move |_, _| {

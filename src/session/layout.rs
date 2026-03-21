@@ -612,8 +612,6 @@ mod tests {
         assert_eq!(layout, before);
     }
 
-    /// Requirement: swap must move ALL terminal data (cwd, profile, custom_title),
-    /// not just the UUID.
     #[test]
     fn swap_preserves_full_terminal_data() {
         let mut layout = hsplit(
@@ -625,7 +623,6 @@ mod tests {
         let uuids = layout.terminal_uuids();
         assert_eq!(uuids, vec!["t2", "t1"]);
 
-        // The first position should now have t2's ORIGINAL data
         if let LayoutNode::Split { first, second, .. } = &layout {
             if let LayoutNode::Terminal {
                 uuid,
@@ -658,7 +655,6 @@ mod tests {
         }
     }
 
-    /// Requirement: splitting a terminal must not alter sibling ratios.
     #[test]
     fn split_preserves_parent_ratio() {
         let layout = split_ratio(SplitOrientation::Horizontal, 0.7, term("t1"), term("t2"));
@@ -675,14 +671,11 @@ mod tests {
         }
     }
 
-    /// Requirement: removing a terminal must not alter sibling ratios.
     #[test]
     fn remove_preserves_sibling_ratio() {
-        // (t1 | t2) at 0.3 / t3 at 0.7
         let inner = split_ratio(SplitOrientation::Horizontal, 0.3, term("t1"), term("t2"));
         let layout = split_ratio(SplitOrientation::Vertical, 0.7, inner, term("t3"));
         let result = layout.remove_terminal("t1").unwrap();
-        // After removing t1, the outer split should still have ratio 0.7
         if let LayoutNode::Split { ratio, .. } = &result {
             assert!(
                 (*ratio - 0.7).abs() < f64::EPSILON,
@@ -693,8 +686,6 @@ mod tests {
         }
     }
 
-    /// Requirement: remove_terminal on a single terminal must return None,
-    /// not an empty tree or a crash.
     #[test]
     fn remove_last_terminal_returns_none_not_empty_tree() {
         let layout = term("only");
@@ -705,7 +696,6 @@ mod tests {
         );
     }
 
-    /// Requirement: new_terminal UUIDs must be valid UUID v4 format.
     #[test]
     fn new_terminal_uuid_is_valid_v4() {
         let node = LayoutNode::new_terminal();
@@ -722,7 +712,6 @@ mod tests {
         }
     }
 
-    /// Requirement: split ratio must be clamped to (0, 1) exclusive.
     #[test]
     fn split_ratio_is_valid() {
         let node = term("t1");

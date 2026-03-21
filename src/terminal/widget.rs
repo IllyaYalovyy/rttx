@@ -39,7 +39,6 @@ mod imp {
             obj.set_orientation(gtk4::Orientation::Vertical);
             obj.set_spacing(0);
 
-            // Header bar
             self.header.set_orientation(gtk4::Orientation::Horizontal);
             self.header.set_spacing(4);
             self.header.add_css_class("terminal-header");
@@ -71,7 +70,6 @@ mod imp {
             self.header.append(&self.split_v_button);
             self.header.append(&self.close_button);
 
-            // Double-click title label to edit custom title
             let gesture = gtk4::GestureClick::new();
             gesture.set_button(1);
             let header = self.header.clone();
@@ -84,7 +82,6 @@ mod imp {
                         entry.set_text(&label.label());
                         entry.set_hexpand(true);
 
-                        // Replace label with entry
                         label.set_visible(false);
                         header.prepend(&entry);
                         entry.grab_focus();
@@ -115,19 +112,16 @@ mod imp {
             });
             self.title_label.add_controller(gesture);
 
-            // Search bar
             self.search_entry.set_hexpand(true);
             self.search_bar.set_child(Some(&self.search_entry));
             self.search_bar.set_show_close_button(true);
 
-            // VTE terminal
             self.vte.set_hexpand(true);
             self.vte.set_vexpand(true);
             self.vte.set_scroll_on_output(false);
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
 
-            // Assemble
             obj.append(&self.header);
             obj.append(&self.search_bar);
             obj.append(&self.vte);
@@ -203,7 +197,6 @@ impl TerminalWidget {
         }
     }
 
-    /// Get the current working directory from VTE, if available.
     pub fn current_directory(&self) -> Option<String> {
         self.imp()
             .vte
@@ -219,7 +212,6 @@ impl TerminalWidget {
         let title_label = self.imp().title_label.clone();
         let custom_title = self.imp().custom_title.clone();
 
-        // Update title when VTE title changes (only if no custom title set)
         vte.connect_window_title_changed(move |vte| {
             if custom_title.borrow().is_none() {
                 if let Some(title) = vte.window_title() {
@@ -228,7 +220,6 @@ impl TerminalWidget {
             }
         });
 
-        // Spawn the shell
         vte.spawn_async(
             vte4::PtyFlags::DEFAULT,
             cwd_path.as_deref(),

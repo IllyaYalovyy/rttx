@@ -14,12 +14,10 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     window.set_modal(true);
     window.set_title(Some("Preferences"));
 
-    // ── Appearance group ─────────────────────────────────────────
     let appearance_group = adw::PreferencesGroup::new();
     appearance_group.set_title("Appearance");
     let legacy_color_scheme = prefs.color_scheme.clone();
 
-    // Font
     let font_row = adw::ActionRow::builder()
         .title("Font")
         .subtitle(&prefs.font)
@@ -52,7 +50,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     });
     appearance_group.add(&font_row);
 
-    // Terminal theme mode
     let mode_row = adw::ComboRow::builder()
         .title("Terminal theme mode")
         .build();
@@ -90,7 +87,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     }
     appearance_group.add(&dark_scheme_row);
 
-    // Background opacity
     let opacity_row = adw::ActionRow::builder()
         .title("Background opacity")
         .build();
@@ -102,17 +98,14 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     opacity_row.add_suffix(&opacity_scale);
     appearance_group.add(&opacity_row);
 
-    // ── Terminal group ───────────────────────────────────────────
     let terminal_group = adw::PreferencesGroup::new();
     terminal_group.set_title("Terminal");
 
-    // Scrollback
     let scrollback_row = adw::SpinRow::with_range(0.0, 1_000_000.0, 1000.0);
     scrollback_row.set_title("Scrollback lines");
     scrollback_row.set_value(prefs.scrollback_lines as f64);
     terminal_group.add(&scrollback_row);
 
-    // Toggle rows
     let headerbar_row = adw::SwitchRow::new();
     headerbar_row.set_title("Show terminal header");
     headerbar_row.set_active(prefs.show_headerbar);
@@ -133,7 +126,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     bell_row.set_active(prefs.audible_bell);
     terminal_group.add(&bell_row);
 
-    // ── Page ─────────────────────────────────────────────────────
     let page = adw::PreferencesPage::new();
     page.set_icon_name(Some("preferences-system-symbolic"));
     page.set_title("General");
@@ -141,7 +133,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     page.add(&terminal_group);
     window.add(&page);
 
-    // ── Save on close ────────────────────────────────────────────
     let parent_window = parent.as_ref().clone();
     window.connect_close_request(move |_| {
         let terminal_theme_mode = match mode_row.selected() {

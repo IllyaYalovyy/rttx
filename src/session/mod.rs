@@ -127,8 +127,6 @@ pub fn build_layout_widget(
             };
             let paned = gtk4::Paned::new(gtk_orientation);
             paned.set_wide_handle(true);
-            // Set a reasonable default position so nested splits are visible
-            // even before they receive a full allocation.
             paned.set_position(200);
 
             let first_widget = build_layout_widget(first, make_terminal);
@@ -138,13 +136,6 @@ pub fn build_layout_widget(
             paned.set_end_child(Some(&second_widget));
 
             let ratio_val = *ratio;
-            // Keep the handler connected permanently so that every allocation
-            // pass (including the second pass triggered by queue_resize after
-            // the outer Paned's position is corrected) updates inner Paneds to
-            // their ratio-correct positions.  The handler is safe to leave
-            // connected: notify::width fires on container resize, not on user
-            // drag (which only changes notify::position), so user-adjusted
-            // split positions are preserved between resizes.
             let prop = if gtk_orientation == gtk4::Orientation::Horizontal {
                 "width"
             } else {
@@ -160,9 +151,6 @@ pub fn build_layout_widget(
                 }
             });
 
-            // If the Paned already has an allocation at construction time,
-            // set the position immediately rather than waiting for the next
-            // notify::width signal.
             let size = if gtk_orientation == gtk4::Orientation::Horizontal {
                 paned.width()
             } else {
