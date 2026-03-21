@@ -310,6 +310,23 @@ impl LayoutNode {
             }
         }
     }
+
+    pub fn set_terminal_cwd(&mut self, target_uuid: &str, cwd: Option<String>) -> bool {
+        match self {
+            Self::Terminal { uuid, cwd: terminal_cwd, .. } => {
+                if uuid == target_uuid {
+                    *terminal_cwd = cwd;
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Split { first, second, .. } => {
+                first.set_terminal_cwd(target_uuid, cwd.clone())
+                    || second.set_terminal_cwd(target_uuid, cwd)
+            }
+        }
+    }
 }
 
 /// State of a single terminal session.
@@ -786,6 +803,47 @@ mod tests {
         if let LayoutNode::Split { ratio, .. } = &split {
             assert!(*ratio > 0.0 && *ratio < 1.0, "Ratio {ratio} out of (0,1)");
         }
+    }
+
+    #[test]
+    fn set_terminal_cwd_updates_nested_target_terminal_only() {
+        let mut layout = hsplit(
+            term_full("t1", "/old/one", "one"),
+            split_ratio(
+                SplitOrientation::Vertical,
+                0.5,
+                term_full("t2", "/old/two", "two"),
+                term_full("t3", "/old/three", "three"),
+            ),
+        );
+
+        assert!(layout.set_terminal_cwd("t2", Some("/new/two".into())));
+
+        let LayoutNode::Split { first, second, .. } = &layout else {
+            panic!("expected split");
+        };
+        let LayoutNode::Terminal { cwd: first_cwd, .. } = first.as_ref() else {
+            panic!("expected terminal");
+        };
+        assert_eq!(first_cwd.as_deref(), Some("/old/one"));
+
+        let LayoutNode::Split { first: inner_first, second: inner_second, .. } = second.as_ref() else {
+            panic!("expected nested split");
+        };
+        let LayoutNode::Terminal { cwd: second_cwd, .. } = inner_first.as_ref() else {
+            panic!("expected target terminal");
+        };
+        let LayoutNode::Terminal { cwd: third_cwd, .. } = inner_second.as_ref() else {
+            panic!("expected sibling terminal");
+        };
+        assert_eq!(second_cwd.as_deref(), Some("/new/two"));
+        assert_eq!(third_cwd.as_deref(), Some("/old/three"));
+    }
+
+    #[test]
+    fn set_terminal_cwd_returns_false_for_unknown_terminal() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+        assert!(!layout.set_terminal_cwd("missing", Some("/tmp".into())));
     }
 
     #[test]

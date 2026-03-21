@@ -303,9 +303,7 @@ impl Window {
             for session in &mut state.sessions {
                 for node_uuid in session.layout.terminal_uuids() {
                     if let Some(term) = terminals.get(&node_uuid) {
-                        if let LayoutNode::Terminal { ref mut cwd, .. } = session.layout {
-                            *cwd = term.current_directory();
-                        }
+                        session.layout.set_terminal_cwd(&node_uuid, term.current_directory());
                     }
                 }
             }
@@ -459,40 +457,51 @@ impl Window {
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
 
-        let win = self.clone();
-        let content = session::build_layout_widget(
-            &session_state.layout,
-            &move |uuid, cwd, _, custom_title| {
-                let existing = {
-                    let terminals = win.imp().terminals.borrow();
-                    terminals.get(uuid).cloned()
-                };
-                if let Some(existing) = existing {
-                    if existing.parent().is_some() {
-                        existing.unparent();
-                    }
-                    return existing.upcast();
-                }
-
-                let term = TerminalWidget::new(uuid, cwd);
-                if let Some(title) = custom_title {
-                    term.set_title(title);
-                    term.imp().custom_title.replace(Some(title.to_string()));
-                }
-                if let Some(recovery) = session_state.recovery_for(uuid) {
-                    for step in &recovery.startup {
-                        term.queue_input_for_shell(step.terminal_input());
-                    }
-                }
-                win.connect_terminal_signals(&term);
-                win.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
-                term.upcast()
-            },
-        );
+        let content = self.build_session_content(session_state);
 
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
         Self::schedule_apply_paned_ratios(&content, &session_state.layout);
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
+    }
+
+    fn build_session_content(&self, session_state: &SessionState) -> gtk4::Widget {
+        let win = self.clone();
+        session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
+            win.materialize_terminal(session_state, uuid, cwd, custom_title)
+        })
+    }
+
+    fn materialize_terminal(
+        &self,
+        session_state: &SessionState,
+        uuid: &str,
+        cwd: Option<&str>,
+        custom_title: Option<&str>,
+    ) -> gtk4::Widget {
+        let existing = {
+            let terminals = self.imp().terminals.borrow();
+            terminals.get(uuid).cloned()
+        };
+        if let Some(existing) = existing {
+            if existing.parent().is_some() {
+                existing.unparent();
+            }
+            return existing.upcast();
+        }
+
+        let term = TerminalWidget::new(uuid, cwd);
+        if let Some(title) = custom_title {
+            term.set_title(title);
+            term.imp().custom_title.replace(Some(title.to_string()));
+        }
+        if let Some(recovery) = session_state.recovery_for(uuid) {
+            for step in &recovery.startup {
+                term.queue_input_for_shell(step.terminal_input());
+            }
+        }
+        self.connect_terminal_signals(&term);
+        self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
+        term.upcast()
     }
 
     fn show_rename_session_popover(&self, row: &SessionRow, session_uuid: &str) {
@@ -903,7 +912,7 @@ impl Window {
         let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() else {
             return;
         };
-        term.vte().feed_child(input.as_bytes());
+        term.queue_input_for_shell(input.to_string());
         let _ = term.vte().grab_focus();
         self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
     }
@@ -1068,36 +1077,7 @@ impl Window {
         }
         drop(old_content);
 
-        let win = self.clone();
-        let content = session::build_layout_widget(
-            &session_state.layout,
-            &move |uuid, cwd, _, custom_title| {
-                let existing = {
-                    let terminals = win.imp().terminals.borrow();
-                    terminals.get(uuid).cloned()
-                };
-                if let Some(existing) = existing {
-                    if existing.parent().is_some() {
-                        existing.unparent();
-                    }
-                    return existing.upcast();
-                }
-
-                let term = TerminalWidget::new(uuid, cwd);
-                if let Some(title) = custom_title {
-                    term.set_title(title);
-                    term.imp().custom_title.replace(Some(title.to_string()));
-                }
-                if let Some(recovery) = session_state.recovery_for(uuid) {
-                    for step in &recovery.startup {
-                        term.queue_input_for_shell(step.terminal_input());
-                    }
-                }
-                win.connect_terminal_signals(&term);
-                win.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
-                term.upcast()
-            },
-        );
+        let content = self.build_session_content(session_state);
 
         imp.session_stack.add_named(&content, Some(session_uuid));
         imp.session_stack.set_visible_child_name(session_uuid);
@@ -1788,6 +1768,53 @@ mod tests {
     }
 
     #[test]
+    fn new_session_from_bookmark_queues_input_before_shell_starts() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.bookmark-queue-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.tmux_session = Some("web".into());
+        let expected_input = format!("{}\n", bookmark.command().unwrap());
+
+        window.new_session_from_bookmark(&bookmark);
+
+        let terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions.last().unwrap().layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        let term = window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("bookmark session terminal should exist");
+
+        assert!(
+            !term.shell_spawned_for_test(),
+            "shell should not start before the window is presented"
+        );
+        assert_eq!(
+            term.pending_shell_inputs_for_test(),
+            vec![expected_input],
+            "bookmark launcher input should be queued until the shell is ready"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
     fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
         require_display!();
 
@@ -1907,6 +1934,50 @@ mod tests {
         );
 
         second_window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn execute_saved_command_queues_input_before_shell_starts() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.command-queue-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let command = SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
+
+        window.execute_saved_command(&command, CommandRunMode::Insert);
+
+        let terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        let term = window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("initial command target terminal should exist");
+
+        assert!(
+            !term.shell_spawned_for_test(),
+            "shell should not start before the window is presented"
+        );
+        assert_eq!(
+            term.pending_shell_inputs_for_test(),
+            vec![String::from("cargo build\ncargo test")],
+            "command launcher input should be queued until the shell is ready"
+        );
+
+        window.close();
         std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 
@@ -2219,6 +2290,62 @@ mod tests {
         );
 
         second_window.close();
+    }
+
+    #[test]
+    fn save_state_updates_nested_terminal_cwds() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.save-cwd-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let root_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        window.split_terminal(&root_uuid, SplitOrientation::Horizontal);
+
+        let terminal_uuids = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids()
+        };
+        assert_eq!(terminal_uuids.len(), 2, "test setup should create a split session");
+
+        let terminals = window.imp().terminals.borrow();
+        terminals
+            .get(&terminal_uuids[0])
+            .unwrap()
+            .set_current_directory_for_test(Some("/tmp/project-a"));
+        terminals
+            .get(&terminal_uuids[1])
+            .unwrap()
+            .set_current_directory_for_test(Some("/tmp/project-b"));
+        drop(terminals);
+
+        window.save_state();
+        let saved_state = session::load_window_state();
+
+        let LayoutNode::Split { first, second, .. } = &saved_state.sessions[0].layout else {
+            panic!("saved layout should stay split");
+        };
+        let LayoutNode::Terminal { cwd: first_cwd, .. } = first.as_ref() else {
+            panic!("first child should be a terminal");
+        };
+        let LayoutNode::Terminal { cwd: second_cwd, .. } = second.as_ref() else {
+            panic!("second child should be a terminal");
+        };
+        assert_eq!(first_cwd.as_deref(), Some("/tmp/project-a"));
+        assert_eq!(second_cwd.as_deref(), Some("/tmp/project-b"));
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]

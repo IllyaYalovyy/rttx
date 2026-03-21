@@ -18,6 +18,8 @@ mod imp {
         pub shell_spawned: Cell<bool>,
         pub smart_clipboard: Cell<bool>,
         pub pending_shell_inputs: RefCell<Vec<String>>,
+        #[cfg(test)]
+        pub current_directory_override: RefCell<Option<Option<String>>>,
         pub vte: vte4::Terminal,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
@@ -223,6 +225,10 @@ impl TerminalWidget {
 
     #[must_use]
     pub fn current_directory(&self) -> Option<String> {
+        #[cfg(test)]
+        if let Some(cwd) = self.imp().current_directory_override.borrow().clone() {
+            return cwd;
+        }
         self.imp().vte.current_directory_uri().and_then(|uri| parse_file_uri(uri.as_str()))
     }
 
@@ -310,6 +316,13 @@ impl TerminalWidget {
     #[cfg(test)]
     pub(crate) fn pending_shell_inputs_for_test(&self) -> Vec<String> {
         self.imp().pending_shell_inputs.borrow().clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_current_directory_for_test(&self, cwd: Option<&str>) {
+        self.imp()
+            .current_directory_override
+            .replace(Some(cwd.map(str::to_string)));
     }
 
     /// Disconnect the `child_exited` signal handler to prevent re-entrancy
