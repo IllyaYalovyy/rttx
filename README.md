@@ -2,38 +2,42 @@
 
 A tiling terminal emulator for GNOME, built with Rust, GTK4, and Libadwaita.
 
-Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from scratch.
+Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from scratch with a focus on extreme stability, native integration, and practical workflows.
 
-## Motivation
+## Philosophy
 
-There is no shortage of terminal emulators. New ones appear constantly, usually competing on rendering tricks, portability, customization systems, or novelty. `rttx` exists for a different reason.
+`rttx` is built for developers and sysadmins who want a terminal that is:
 
-This project is not trying to be the most feature-packed terminal, the most portable terminal, or the most technically flashy terminal. It is not interested in GPU marketing, gimmicks, or turning the terminal into a media player. It is focused on something much more practical: being an excellent terminal emulator for GNOME on Linux.
-
-The goals are simple:
-
-- tight desktop integration, so the application feels native instead of visually and behaviorally out of place
-- practical features that matter in real work: tiling splits, sessions, persistence, search, synchronization, and workflow-oriented ergonomics
-- simple configuration, without forcing users to learn a new language or adopt a configuration ecosystem just to change basic behavior
-- rock-solid stability for long-running work, with a strong bias toward correctness over cleverness
-
-That last point is central. A terminal is not a toy window. It often stays open for days, weeks, or months and is frequently used during critical work. It should not randomly crash, corrupt state, or slowly leak memory until it becomes unusable. `rttx` is written in Rust for a reason, and the project puts unusual emphasis on test coverage, especially around the Rust/GTK boundary where many subtle bugs tend to hide.
-
-The scope is intentionally narrow: GNOME, Linux, practical features, and reliability first.
+- **Rock-Solid**: No memory leaks, no crashes, no "magic." Every core feature is backed by a comprehensive suite of unit, integration, and property-based tests.
+- **Deeply Integrated**: Designed specifically for GNOME. It uses Libadwaita for a native look and feel, follows system light/dark settings, and integrates with system notifications and GSettings.
+- **Context-Aware**: A "session" should be more than a layout. `rttx` aims to preserve your actual working context, including paths and history.
+- **Strictly Maintained**: The project enforces aggressive linting (Clippy pedantic/nursery) and automated formatting on every build to ensure long-term maintainability.
 
 ## Features
 
-- **Split-screen terminals** — split horizontally (Ctrl+Shift+E) or vertically (Ctrl+Shift+O)
-- **Sidebar session management** — multiple sessions with named tabs, not horizontal tab bar
-- **Session persistence** — layout, CWDs, and custom titles saved on exit, restored on launch
-- **Input synchronization** — type in one terminal, replicate to all others in the session
-- **Terminal swapping by drag and drop** — drag one terminal header onto another to swap them
-- **Custom titles** — double-click terminal header to set a custom name
-- **Preferences** — font, terminal theme mode, light/dark terminal palettes, scrollback, header visibility, bell, and scroll behavior
-- **Built-in terminal themes** — bundled light and dark palettes with optional system light/dark following
-- **Tilix color scheme compatibility** — load Tilix JSON color scheme files
-- **Process exit notifications** — desktop notification when an unfocused terminal process exits
-- **Keyboard-driven** — comprehensive shortcuts for all operations
+- **Split-screen terminals** — High-performance tiling splits (Horizontal: Ctrl+Shift+E, Vertical: Ctrl+Shift+O).
+- **Sidebar session management** — Persistent sessions organized in a native Adwaita sidebar.
+- **Context Persistence** — Layout, Current Working Directories, and custom titles are saved automatically and restored on launch.
+- **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).
+- **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
+- **Custom titles** — Double-click any terminal header to rename it for your current task.
+- **Built-in terminal themes** — Native "Nightfall" and "Daybreak" schemes with full Tilix color scheme compatibility.
+- **Smart Notifications** — Get notified when a background process completes in an unfocused split.
+
+## Distribution
+
+### Fedora (COPR)
+The easiest way to install on Fedora is via the official COPR repository:
+```bash
+sudo dnf copr enable illya/rttx
+sudo dnf install rttx
+```
+
+### Ubuntu/Debian (Coming soon)
+Native `.deb` packages and a PPA are under development.
+
+### Flatpak
+Native Flatpak support via Flathub is under development.
 
 ## Keyboard Shortcuts
 
@@ -53,7 +57,7 @@ The scope is intentionally narrow: GNOME, Linux, practical features, and reliabi
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |
 
-## Building
+## Development & Building
 
 ### Dependencies
 
@@ -62,23 +66,9 @@ The scope is intentionally narrow: GNOME, Linux, practical features, and reliabi
 - Libadwaita 1.5+
 - VTE 0.76+ (GTK4 variant)
 
-**Ubuntu/Debian:**
-```bash
-sudo apt install libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
-```
-
-**Fedora:**
-```bash
-sudo dnf install gtk4-devel libadwaita-devel vte291-gtk4-devel
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S gtk4 libadwaita vte4
-```
-
 ### Build and run
 
+The build process automatically runs `rustfmt` and `clippy` to ensure code quality.
 ```bash
 cargo build --release
 ./target/release/rttx
@@ -86,6 +76,7 @@ cargo build --release
 
 ### Install with Meson
 
+For full system integration (icons, desktop files, etc.):
 ```bash
 meson setup build
 meson install -C build
@@ -93,27 +84,24 @@ meson install -C build
 
 ## Testing
 
-Run the standard test suite:
+Stability is our main feature. We run a massive test suite covering the data model, UI lifecycle, and Rust/GTK boundary.
+
 ```bash
 cargo test
 ```
 
-To run GTK widget tests in a headless environment, start Broadway and point GTK at it:
+For headless widget testing:
 ```bash
 broadwayd :5
 GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 GTK_A11Y=none cargo test
 ```
 
-The repository includes unit, integration, GTK widget, and property-based tests covering layout
-operations, session persistence, preferences, and Rust/GTK boundary behavior.
-
 ## Author
 
 Illya Yalovyy
 
-- LinkedIn: https://www.linkedin.com/in/illyayalovyy/
-- Medium: https://medium.com/@yalovoy
-- GitHub: https://github.com/IllyaYalovyy
+- LinkedIn: [https://www.linkedin.com/in/illyayalovyy/](https://www.linkedin.com/in/illyayalovyy/)
+- GitHub: [https://github.com/IllyaYalovyy](https://github.com/IllyaYalovyy)
 
 ## License
 

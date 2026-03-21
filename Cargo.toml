@@ -6,6 +6,23 @@ license = "GPL-3.0-or-later"
 description = "A tiling terminal emulator for GNOME"
 authors = ["Illya Yalovyy"]
 
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# Selective overrides for nursery/pedantic if they are too noisy
+future_not_send = "allow"
+redundant_pub_crate = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+suboptimal_flops = "warn"
+todo = "warn"
+dbg_macro = "warn"
+
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_14"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }

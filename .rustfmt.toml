@@ -1,0 +1,15 @@
+# rttx formatting configuration
+edition = "2021"
+newline_style = "Unix"
+use_small_heuristics = "Max"
+max_width = 100
+tab_spaces = 4
+use_field_init_shorthand = true
+use_try_shorthand = true
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+combine_control_flow_expr = true
+enum_discrim_align_threshold = 20
+struct_field_align_threshold = 20
+trailing_comma = "Vertical"
+trailing_semicolon_kind = "Always"
