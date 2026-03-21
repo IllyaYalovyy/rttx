@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "A tiling terminal emulator for GNOME"
-authors = ["Yaroslav Yalovyi"]
+authors = ["Illya Yalovyy"]
 
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_14"] }
