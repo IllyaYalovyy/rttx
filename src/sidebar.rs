@@ -7,6 +7,7 @@ mod imp {
     use super::*;
     use std::cell::RefCell;
 
+    #[derive(Debug)]
     pub struct SessionRow {
         pub uuid: RefCell<String>,
         pub name: RefCell<String>,
@@ -72,6 +73,7 @@ glib::wrapper! {
 }
 
 impl SessionRow {
+    #[must_use]
     pub fn new(uuid: &str, name: &str, terminal_count: usize) -> Self {
         let obj: Self = glib::Object::builder().build();
         obj.imp().uuid.replace(uuid.to_string());
@@ -81,10 +83,12 @@ impl SessionRow {
         obj
     }
 
+    #[must_use]
     pub fn uuid(&self) -> String {
         self.imp().uuid.borrow().clone()
     }
 
+    #[must_use]
     pub fn session_name(&self) -> String {
         self.imp().name.borrow().clone()
     }
@@ -97,9 +101,10 @@ impl SessionRow {
     pub fn update_terminal_count(&self, count: usize) {
         self.imp()
             .terminal_count_label
-            .set_label(&format!("{}", count));
+            .set_label(&format!("{count}"));
     }
 
+    #[must_use]
     pub fn close_button(&self) -> &gtk4::Button {
         &self.imp().close_button
     }

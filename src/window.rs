@@ -410,10 +410,9 @@ impl Window {
     }
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
-        // Apply current preferences
         self.apply_preferences_to_terminal(term);
+        term.ensure_shell_spawned_when_ready();
 
-        // Track focus
         let win = self.clone();
         let uuid = term.uuid();
         let focus_controller = gtk4::EventControllerFocus::new();
@@ -422,14 +421,12 @@ impl Window {
         });
         term.vte().add_controller(focus_controller);
 
-        // Input sync: forward commit text to sibling terminals
         let win = self.clone();
         let uuid = term.uuid();
         term.vte().connect_commit(move |_, text, _| {
             win.forward_input(&uuid, text);
         });
 
-        // Drag and drop: drag from header to swap terminals
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let uuid = term.uuid();

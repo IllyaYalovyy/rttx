@@ -11,7 +11,7 @@ pub const BUILTIN_DARK_SCHEME_NAME: &str = "Rttx Nightfall";
 pub const BUILTIN_LIGHT_SCHEME_NAME: &str = "Rttx Daybreak";
 
 /// A color scheme definition, compatible with Tilix JSON format.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ColorScheme {
     pub name: String,
     #[serde(default)]
@@ -42,6 +42,7 @@ pub struct ColorScheme {
 }
 
 impl ColorScheme {
+    #[must_use]
     pub fn parse_color(hex: &str) -> Option<gdk::RGBA> {
         if hex.is_empty() {
             return None;
@@ -49,14 +50,17 @@ impl ColorScheme {
         gdk::RGBA::parse(hex).ok()
     }
 
+    #[must_use]
     pub fn foreground_rgba(&self) -> Option<gdk::RGBA> {
         Self::parse_color(&self.foreground)
     }
 
+    #[must_use]
     pub fn background_rgba(&self) -> Option<gdk::RGBA> {
         Self::parse_color(&self.background)
     }
 
+    #[must_use]
     pub fn palette_rgba(&self) -> Vec<gdk::RGBA> {
         self.palette
             .iter()
@@ -108,6 +112,7 @@ fn builtin_scheme(
     }
 }
 
+#[must_use]
 pub fn builtin_color_schemes() -> Vec<ColorScheme> {
     const NIGHTFALL: [&str; 16] = [
         "#171B24", "#D46A6A", "#86B97A", "#D7B56D", "#7AA2D6", "#B18AD1", "#68B8C1", "#D9DEE7",
@@ -146,6 +151,7 @@ pub fn builtin_color_schemes() -> Vec<ColorScheme> {
     ]
 }
 
+#[must_use]
 pub fn load_color_schemes() -> Vec<ColorScheme> {
     let mut schemes: BTreeMap<String, ColorScheme> = builtin_color_schemes()
         .into_iter()
@@ -161,7 +167,7 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
                             schemes.insert(scheme.name.clone(), scheme);
                         }
                         Err(e) => {
-                            log::warn!("Failed to load color scheme {:?}: {}", path, e);
+                            log::warn!("Failed to load color scheme {path:?}: {e}");
                         }
                     }
                 }
@@ -171,6 +177,7 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
     schemes.into_values().collect()
 }
 
+#[must_use]
 pub fn load_color_scheme_by_name(name: &str) -> Option<ColorScheme> {
     load_color_schemes()
         .into_iter()

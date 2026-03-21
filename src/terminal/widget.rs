@@ -8,12 +8,14 @@ use crate::color_scheme;
 
 mod imp {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
-    #[derive(Default)]
+    #[derive(Default, Debug)]
     pub struct TerminalWidget {
         pub uuid: RefCell<String>,
         pub custom_title: RefCell<Option<String>>,
+        pub initial_cwd: RefCell<Option<String>>,
+        pub shell_spawned: Cell<bool>,
         pub vte: vte4::Terminal,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
@@ -88,12 +90,11 @@ mod imp {
 
                         let header2 = header.clone();
                         let label2 = label.clone();
-                        let obj2 = obj.clone();
                         let commit = move |entry: &gtk4::Entry| {
                             let text = entry.text().to_string();
                             if !text.is_empty() {
                                 label2.set_label(&text);
-                                obj2.imp().custom_title.replace(Some(text));
+                                obj.imp().custom_title.replace(Some(text));
                             }
                             label2.set_visible(true);
                             header2.remove(entry);
@@ -139,43 +140,50 @@ glib::wrapper! {
 }
 
 impl TerminalWidget {
+    #[must_use]
     pub fn new(uuid: &str, cwd: Option<&str>) -> Self {
         let obj: Self = glib::Object::builder().build();
         obj.imp().uuid.replace(uuid.to_string());
-        if std::env::var_os("RTTX_DISABLE_SHELL_SPAWN").is_none() {
-            obj.spawn_shell(cwd);
-        }
+        obj.imp().initial_cwd.replace(cwd.map(str::to_string));
         obj
     }
 
+    #[must_use]
     pub fn uuid(&self) -> String {
         self.imp().uuid.borrow().clone()
     }
 
+    #[must_use]
     pub fn vte(&self) -> &vte4::Terminal {
         &self.imp().vte
     }
 
+    #[must_use]
     pub fn title_label(&self) -> &gtk4::Label {
         &self.imp().title_label
     }
 
+    #[must_use]
     pub fn close_button(&self) -> &gtk4::Button {
         &self.imp().close_button
     }
 
+    #[must_use]
     pub fn split_h_button(&self) -> &gtk4::Button {
         &self.imp().split_h_button
     }
 
+    #[must_use]
     pub fn split_v_button(&self) -> &gtk4::Button {
         &self.imp().split_v_button
     }
 
+    #[must_use]
     pub fn search_bar(&self) -> &gtk4::SearchBar {
         &self.imp().search_bar
     }
 
+    #[must_use]
     pub fn search_entry(&self) -> &gtk4::SearchEntry {
         &self.imp().search_entry
     }
@@ -184,7 +192,7 @@ impl TerminalWidget {
         self.imp().title_label.set_label(title);
     }
 
-    /// Get the custom title, if set by the user.
+    #[must_use]
     pub fn custom_title(&self) -> Option<String> {
         self.imp().custom_title.borrow().clone()
     }
@@ -197,6 +205,7 @@ impl TerminalWidget {
         }
     }
 
+    #[must_use]
     pub fn current_directory(&self) -> Option<String> {
         self.imp()
             .vte
@@ -204,9 +213,28 @@ impl TerminalWidget {
             .and_then(|uri| parse_file_uri(uri.as_str()))
     }
 
+    pub fn ensure_shell_spawned_when_ready(&self) {
+        if self.imp().shell_spawned.get() {
+            return;
+        }
+        if self.vte().width() > 0 && self.vte().height() > 0 {
+            self.spawn_shell_once();
+            return;
+        }
+        let term = self.clone();
+        self.add_tick_callback(move |_, _| {
+            if term.vte().width() > 0 && term.vte().height() > 0 {
+                term.spawn_shell_once();
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
     fn spawn_shell(&self, cwd: Option<&str>) {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-        let cwd_path = cwd.map(|s| s.to_string());
+        let cwd_path = cwd.map(std::string::ToString::to_string);
 
         let vte = self.imp().vte.clone();
         let title_label = self.imp().title_label.clone();
@@ -233,15 +261,29 @@ impl TerminalWidget {
         );
     }
 
-    /// Disconnect the child_exited signal handler to prevent re-entrancy
-    /// panics when the terminal is dropped while a RefCell is borrowed.
+    fn spawn_shell_once(&self) {
+        if self.imp().shell_spawned.replace(true) {
+            return;
+        }
+        if std::env::var_os("RTTX_DISABLE_SHELL_SPAWN").is_none() {
+            let cwd = self.imp().initial_cwd.borrow().clone();
+            self.spawn_shell(cwd.as_deref());
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shell_spawned_for_test(&self) -> bool {
+        self.imp().shell_spawned.get()
+    }
+
+    /// Disconnect the `child_exited` signal handler to prevent re-entrancy
+    /// panics when the terminal is dropped while a `RefCell` is borrowed.
     pub fn disconnect_child_exited(&self) {
         if let Some(id) = self.imp().child_exited_handler.borrow_mut().take() {
             self.imp().vte.disconnect(id);
         }
     }
 
-    /// Apply a color scheme to this terminal.
     pub fn apply_color_scheme(&self, scheme: &color_scheme::ColorScheme) {
         let vte = &self.imp().vte;
 
@@ -279,13 +321,6 @@ impl TerminalWidget {
     }
 }
 
-/// Convert a `file://` URI from VTE into a plain filesystem path.
-///
-/// VTE's `current_directory_uri()` returns a `file://` URI.  Simple
-/// `strip_prefix("file://")` works for the common `file:///path` form but
-/// silently mis-parses percent-encoded characters (%20 in a path becomes a
-/// literal "%20") and the optional host component in `file://hostname/path`.
-/// `glib::filename_from_uri` handles both correctly.
 pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
     glib::filename_from_uri(uri)
         .ok()
@@ -294,11 +329,48 @@ pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_file_uri;
+    use super::{parse_file_uri, TerminalWidget};
+    use gtk4::prelude::*;
+    use std::sync::Once;
+
+    static GTK_INIT: Once = Once::new();
+
+    fn ensure_gtk_init() -> bool {
+        let mut success = false;
+        GTK_INIT.call_once(|| {
+            std::env::set_var("GTK_A11Y", "none");
+            success = gtk4::init().is_ok();
+        });
+        if !success {
+            success = std::panic::catch_unwind(|| {
+                let _ = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            })
+            .is_ok();
+        }
+        success
+    }
+
+    macro_rules! require_display {
+        () => {
+            if !ensure_gtk_init() {
+                eprintln!("SKIPPED: no display available");
+                return;
+            }
+        };
+    }
+
+    fn pump_events(max_ms: u64) {
+        let ctx = gtk4::glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
+        while std::time::Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
 
     #[test]
     fn parse_standard_vte_uri() {
-        // VTE always emits file:///path (empty hostname, triple slash).
         assert_eq!(
             parse_file_uri("file:///home/user/projects"),
             Some("/home/user/projects".into())
@@ -307,7 +379,6 @@ mod tests {
 
     #[test]
     fn parse_uri_with_percent_encoding() {
-        // Directories with spaces are percent-encoded by VTE.
         assert_eq!(
             parse_file_uri("file:///home/user/my%20project"),
             Some("/home/user/my project".into())
@@ -321,7 +392,6 @@ mod tests {
 
     #[test]
     fn parse_non_file_uri_returns_none() {
-        // Non-file URIs must not silently produce a path.
         assert_eq!(parse_file_uri("https://example.com/path"), None);
         assert_eq!(parse_file_uri("ssh://host/path"), None);
     }
@@ -333,17 +403,35 @@ mod tests {
 
     #[test]
     fn strip_prefix_regression() {
-        // The OLD strip_prefix("file://") approach would return "/path" for
-        // "file:///path" (correct by accident) but "/my%20dir" for encoded
-        // paths.  The new implementation must decode percent-encoding.
         let old_way = "file:///home/user/my%20dir"
             .strip_prefix("file://")
             .map(|p| p.to_string());
         let new_way = parse_file_uri("file:///home/user/my%20dir");
-        // Old way: still has raw %20
         assert_eq!(old_way, Some("/home/user/my%20dir".into()));
-        // New way: decoded
         assert_eq!(new_way, Some("/home/user/my dir".into()));
-        assert_ne!(old_way, new_way, "new implementation must differ from the old broken one");
+        assert_ne!(old_way, new_way);
+    }
+
+    #[test]
+    fn shell_spawn_waits_for_real_terminal_size() {
+        require_display!();
+
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let term = TerminalWidget::new("t1", Some("/tmp"));
+        term.ensure_shell_spawned_when_ready();
+        pump_events(50);
+        assert!(!term.shell_spawned_for_test());
+
+        let window = gtk4::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(&term));
+        window.present();
+        pump_events(200);
+
+        assert!(term.shell_spawned_for_test());
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 }
