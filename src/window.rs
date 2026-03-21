@@ -51,6 +51,7 @@ mod imp {
             toggle_sidebar.set_active(true);
             header.pack_start(&toggle_sidebar);
 
+            self.add_session_button.set_icon_name("list-add-symbolic");
             self.add_session_button.set_tooltip_text(Some("New session"));
             header.pack_start(&self.add_session_button);
 
@@ -994,6 +995,29 @@ mod tests {
             }
         }
         condition()
+    }
+
+    #[test]
+    fn add_session_button_has_plus_icon() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.add-session-icon-tests").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+
+        assert_eq!(
+            window.imp().add_session_button.icon_name().as_deref(),
+            Some("list-add-symbolic"),
+            "new session button should expose the plus icon"
+        );
+
+        window.close();
     }
 
     #[test]
