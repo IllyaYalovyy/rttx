@@ -69,6 +69,22 @@ impl Bookmark {
     }
 }
 
+#[must_use]
+pub fn matches_query(bookmark: &Bookmark, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+
+    let query = query.to_ascii_lowercase();
+    bookmark.name.to_ascii_lowercase().contains(&query)
+        || bookmark.summary().to_ascii_lowercase().contains(&query)
+        || bookmark
+            .command()
+            .as_deref()
+            .is_some_and(|command| command.to_ascii_lowercase().contains(&query))
+}
+
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -187,6 +203,27 @@ mod tests {
         let bookmark = Bookmark::new("Empty");
         assert!(!bookmark.is_actionable());
         assert_eq!(bookmark.command(), None);
+    }
+
+    #[test]
+    fn matches_query_checks_title_summary_and_command() {
+        let mut bookmark = Bookmark::new("Prod Web");
+        bookmark.directory = Some("/srv/app".into());
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.tmux_session = Some("web".into());
+
+        assert!(matches_query(&bookmark, "prod"));
+        assert!(matches_query(&bookmark, "srv/app"));
+        assert!(matches_query(&bookmark, "deploy@example.com"));
+        assert!(matches_query(&bookmark, "tmux attach-session"));
+        assert!(!matches_query(&bookmark, "staging"));
+    }
+
+    #[test]
+    fn matches_query_treats_blank_query_as_match_all() {
+        let bookmark = Bookmark::new("Anything");
+        assert!(matches_query(&bookmark, ""));
+        assert!(matches_query(&bookmark, "   "));
     }
 
     #[test]

@@ -17,13 +17,14 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 
 - **Split-screen terminals** — High-performance tiling splits (Horizontal: Ctrl+Shift+E, Vertical: Ctrl+Shift+O).
 - **Sidebar session management** — Persistent sessions organized in native Adwaita session rows.
+- **Dual-side workflow layout** — Sessions stay in the left sidebar while bookmarks live in a dedicated right tools sidebar.
 - **Custom session names** — Double-click a session in the sidebar to rename it.
 - **Native GNOME window layout** — Libadwaita `ToolbarView` and `OverlaySplitView` keep the main window consistent with modern GNOME apps.
 - **Context Persistence** — Layout, Current Working Directories, and custom titles are saved automatically and restored on launch.
 - **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
 - **Custom titles** — Double-click any terminal header to rename it for your current task.
-- **Bookmarks** — Save folder, SSH, tmux, or combined bookmarks and launch them directly into the current terminal.
+- **Bookmarks** — Save folder, SSH, tmux, or combined bookmarks, search them in the right tools sidebar, run them in the current pane, or start a new session from one click.
 - **Optional smart clipboard** — An opt-in mode lets plain `Ctrl+C` copy selected terminal text and `Ctrl+V` paste from the clipboard.
 - **Built-in terminal themes** — Native "Nightfall" and "Daybreak" schemes with full Tilix color scheme compatibility.
 - **Smart Notifications** — Process exit in a hidden session shows an in-app toast while `rttx` is focused, and falls back to a desktop notification when the window is not active.
@@ -48,7 +49,7 @@ Native Flatpak support via Flathub is under development.
 | Action | Shortcut |
 |---|---|
 | New session | Ctrl+Shift+T |
-| Bookmarks | Ctrl+Shift+B |
+| Toggle tools sidebar | Ctrl+Shift+B |
 | Close terminal | Ctrl+Shift+W |
 | Split horizontal | Ctrl+Shift+E |
 | Split vertical | Ctrl+Shift+O |

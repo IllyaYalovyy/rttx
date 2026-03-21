@@ -24,6 +24,9 @@ mod imp {
         pub split_view: adw::OverlaySplitView,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
+        pub utility_sidebar_revealer: gtk4::Revealer,
+        pub bookmark_search_entry: gtk4::SearchEntry,
+        pub bookmark_list: gtk4::ListBox,
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
@@ -56,11 +59,16 @@ mod imp {
             self.add_session_button.set_tooltip_text(Some("New session"));
             header.pack_start(&self.add_session_button);
 
+            let toggle_utility_sidebar = gtk4::ToggleButton::with_label("Tools");
+            toggle_utility_sidebar.set_tooltip_text(Some("Toggle tools sidebar"));
+            toggle_utility_sidebar.set_active(true);
+            header.pack_end(&toggle_utility_sidebar);
+
             let menu_button = gtk4::MenuButton::new();
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
-            menu.append(Some("Bookmarks"), Some("win.bookmarks"));
+            menu.append(Some("Manage Bookmarks"), Some("win.manage-bookmarks"));
             menu.append(Some("Preferences"), Some("win.preferences"));
             menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
             menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
@@ -72,6 +80,10 @@ mod imp {
             self.sidebar_list.set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");
             self.sidebar_list.update_property(&[gtk4::accessible::Property::Label("Sessions")]);
+            self.bookmark_list.set_selection_mode(gtk4::SelectionMode::None);
+            self.bookmark_list.add_css_class("boxed-list");
+            self.bookmark_list
+                .update_property(&[gtk4::accessible::Property::Label("Bookmarks")]);
 
             let sidebar_scroll = gtk4::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Never)
@@ -80,11 +92,78 @@ mod imp {
                 .child(&self.sidebar_list)
                 .build();
 
+            let manage_bookmarks_button = gtk4::Button::with_label("Manage");
+            manage_bookmarks_button.set_action_name(Some("win.manage-bookmarks"));
+            let utility_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+            utility_header.set_margin_start(12);
+            utility_header.set_margin_end(12);
+            utility_header.set_margin_top(12);
+            let utility_title = gtk4::Label::new(Some("Bookmarks"));
+            utility_title.set_xalign(0.0);
+            utility_title.set_hexpand(true);
+            utility_title.add_css_class("title-4");
+            utility_header.append(&utility_title);
+            utility_header.append(&manage_bookmarks_button);
+
+            self.bookmark_search_entry.set_placeholder_text(Some("Search bookmarks"));
+            self.bookmark_search_entry.set_margin_start(12);
+            self.bookmark_search_entry.set_margin_end(12);
+            self.bookmark_search_entry.set_margin_top(12);
+            self.bookmark_search_entry.set_margin_bottom(12);
+
+            let bookmark_scroll = gtk4::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk4::PolicyType::Never)
+                .vexpand(true)
+                .child(&self.bookmark_list)
+                .build();
+
+            let commands_placeholder = gtk4::Label::new(Some("Commands will live here."));
+            commands_placeholder.set_wrap(true);
+            commands_placeholder.set_margin_start(18);
+            commands_placeholder.set_margin_end(18);
+            commands_placeholder.set_margin_top(18);
+            commands_placeholder.set_margin_bottom(18);
+            let templates_placeholder =
+                gtk4::Label::new(Some("Session templates will live here."));
+            templates_placeholder.set_wrap(true);
+            templates_placeholder.set_margin_start(18);
+            templates_placeholder.set_margin_end(18);
+            templates_placeholder.set_margin_top(18);
+            templates_placeholder.set_margin_bottom(18);
+
+            let bookmarks_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            bookmarks_page.append(&utility_header);
+            bookmarks_page.append(&self.bookmark_search_entry);
+            bookmarks_page.append(&bookmark_scroll);
+
+            let utility_stack = gtk4::Stack::new();
+            utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
+            utility_stack.add_titled(&commands_placeholder, Some("commands"), "Commands");
+            utility_stack.add_titled(&templates_placeholder, Some("templates"), "Templates");
+
+            let utility_switcher = gtk4::StackSwitcher::builder().stack(&utility_stack).build();
+            utility_switcher.set_margin_start(12);
+            utility_switcher.set_margin_end(12);
+            utility_switcher.set_margin_top(12);
+
+            let utility_sidebar = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            utility_sidebar.set_width_request(320);
+            utility_sidebar.append(&utility_switcher);
+            utility_sidebar.append(&utility_stack);
+
+            self.utility_sidebar_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideLeft);
+            self.utility_sidebar_revealer.set_reveal_child(true);
+            self.utility_sidebar_revealer.set_child(Some(&utility_sidebar));
+
             self.session_stack.set_hexpand(true);
             self.session_stack.set_vexpand(true);
 
+            let content_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            content_box.append(&self.session_stack);
+            content_box.append(&self.utility_sidebar_revealer);
+
             self.split_view.set_sidebar(Some(&sidebar_scroll));
-            self.split_view.set_content(Some(&self.session_stack));
+            self.split_view.set_content(Some(&content_box));
             self.split_view.set_show_sidebar(true);
             self.split_view.set_collapsed(false);
             self.split_view.set_min_sidebar_width(180.0);
@@ -92,6 +171,11 @@ mod imp {
 
             self.split_view
                 .bind_property("show-sidebar", &toggle_sidebar, "active")
+                .bidirectional()
+                .sync_create()
+                .build();
+            self.utility_sidebar_revealer
+                .bind_property("reveal-child", &toggle_utility_sidebar, "active")
                 .bidirectional()
                 .sync_create()
                 .build();
@@ -216,7 +300,11 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
-            ("bookmarks", &["<Ctrl><Shift>B"], |w| {
+            ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
+                let reveal = w.imp().utility_sidebar_revealer.reveals_child();
+                w.imp().utility_sidebar_revealer.set_reveal_child(!reveal);
+            }),
+            ("manage-bookmarks", &[], |w| {
                 crate::bookmarks_window::show(w);
             }),
         ];
@@ -268,6 +356,11 @@ impl Window {
         });
 
         let win = self.clone();
+        self.imp().bookmark_search_entry.connect_changed(move |_| {
+            win.refresh_bookmark_sidebar();
+        });
+
+        let win = self.clone();
         self.connect_close_request(move |_| {
             win.save_state();
             glib::Propagation::Proceed
@@ -277,6 +370,8 @@ impl Window {
         adw::StyleManager::default().connect_dark_notify(move |_| {
             win.reapply_terminal_preferences();
         });
+
+        self.refresh_bookmark_sidebar();
     }
 
     fn build_session(&self, session_state: &SessionState) {
@@ -506,18 +601,29 @@ impl Window {
         }
     }
 
+    pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
+        let imp = self.imp();
+        let session_state = SessionState::new(bookmark.name.clone());
+        let session_uuid = session_state.uuid.clone();
+        let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
+        imp.state.borrow_mut().sessions.push(session_state.clone());
+        self.build_session(&session_state);
+
+        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = imp.sidebar_list.row_at_index(index) {
+            imp.sidebar_list.select_row(Some(&row));
+        }
+
+        self.execute_bookmark_in_terminal(bookmark, &terminal_uuid);
+        self.imp().session_stack.set_visible_child_name(&session_uuid);
+    }
+
     pub(crate) fn execute_bookmark(&self, bookmark: &Bookmark) {
-        let Some(command) = bookmark.command() else {
-            return;
-        };
         let Some(term) = self.command_target_terminal() else {
             return;
         };
 
-        let command = format!("{command}\n");
-        term.vte().feed_child(command.as_bytes());
-        let _ = term.vte().grab_focus();
-        self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
+        self.execute_bookmark_in_terminal(bookmark, &term.uuid());
     }
 
     fn switch_to_session(&self, index: usize) {
@@ -581,6 +687,65 @@ impl Window {
         }?;
 
         self.imp().terminals.borrow().get(&target_uuid).cloned()
+    }
+
+    pub(crate) fn refresh_bookmark_sidebar(&self) {
+        let imp = self.imp();
+        while let Some(row) = imp.bookmark_list.row_at_index(0) {
+            imp.bookmark_list.remove(&row);
+        }
+
+        let query = imp.bookmark_search_entry.text();
+        for bookmark in crate::bookmarks::load()
+            .into_iter()
+            .filter(|bookmark| crate::bookmarks::matches_query(bookmark, query.as_str()))
+        {
+            let row = gtk4::ListBoxRow::new();
+            let action_row = adw::ActionRow::new();
+            action_row.set_title(&bookmark.name);
+            action_row.set_subtitle(&bookmark.summary());
+
+            let run_button = gtk4::Button::builder()
+                .icon_name("go-next-symbolic")
+                .tooltip_text("Run in current pane")
+                .valign(gtk4::Align::Center)
+                .build();
+            let new_session_button = gtk4::Button::builder()
+                .icon_name("window-new-symbolic")
+                .tooltip_text("New session from bookmark")
+                .valign(gtk4::Align::Center)
+                .build();
+
+            action_row.add_suffix(&run_button);
+            action_row.add_suffix(&new_session_button);
+            row.set_child(Some(&action_row));
+            imp.bookmark_list.append(&row);
+
+            let win = self.clone();
+            let bookmark_for_run = bookmark.clone();
+            run_button.connect_clicked(move |_| {
+                win.execute_bookmark(&bookmark_for_run);
+            });
+
+            let win = self.clone();
+            new_session_button.connect_clicked(move |_| {
+                win.new_session_from_bookmark(&bookmark);
+            });
+        }
+    }
+
+    fn execute_bookmark_in_terminal(&self, bookmark: &Bookmark, terminal_uuid: &str) {
+        let Some(command) = bookmark.command() else {
+            return;
+        };
+        let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() else {
+            return;
+        };
+
+        let command = format!("{command}\n");
+        term.vte().feed_child(command.as_bytes());
+        let _ = term.vte().grab_focus();
+        self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -1297,6 +1462,104 @@ mod tests {
 
         let spawned = wait_until(1000, || term.shell_spawned_for_test());
         assert!(spawned, "presenting the window should trigger delayed shell startup");
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn utility_sidebar_shows_and_filters_bookmarks() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let mut local = crate::bookmarks::Bookmark::new("Local Project");
+        local.directory = Some("/home/user/Projects/rttx".into());
+        let mut remote = crate::bookmarks::Bookmark::new("Prod Web");
+        remote.ssh_target = Some("deploy@example.com".into());
+        crate::bookmarks::save(&[local, remote]).unwrap();
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.utility-sidebar-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.present();
+        pump_events(100);
+
+        assert_eq!(
+            window.imp().bookmark_list.observe_children().n_items(),
+            2,
+            "utility sidebar should show saved bookmarks"
+        );
+
+        window.imp().bookmark_search_entry.set_text("prod");
+        pump_events(50);
+        assert_eq!(
+            window.imp().bookmark_list.observe_children().n_items(),
+            1,
+            "search should filter the utility sidebar bookmark list"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn new_session_from_bookmark_creates_and_focuses_named_session() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.bookmark-session-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(900, 600);
+        window.present();
+        pump_events(100);
+
+        let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.tmux_session = Some("web".into());
+
+        window.new_session_from_bookmark(&bookmark);
+        pump_events(100);
+
+        let (session_name, session_uuid, terminal_uuid) = {
+            let state = window.imp().state.borrow();
+            assert_eq!(state.sessions.len(), 2, "bookmark should create a new session");
+            let session = state.sessions.last().unwrap();
+            (
+                session.name.clone(),
+                session.uuid.clone(),
+                session.layout.terminal_uuids().into_iter().next().unwrap(),
+            )
+        };
+
+        assert_eq!(session_name, "Prod Web");
+        assert_eq!(
+            window.imp().sidebar_list.selected_row().map(|row| row.index()),
+            Some(1),
+            "bookmark session should become the selected session"
+        );
+        assert_eq!(
+            window.imp().session_stack.visible_child_name().as_deref(),
+            Some(session_uuid.as_str()),
+            "bookmark session should become visible"
+        );
+        assert_eq!(
+            window.focused_terminal_uuid().as_deref(),
+            Some(terminal_uuid.as_str()),
+            "bookmark session should focus its initial terminal"
+        );
 
         window.close();
         std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");

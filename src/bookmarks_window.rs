@@ -148,6 +148,7 @@ pub fn show(parent: &Window) {
 
         *selected_for_save.borrow_mut() = Some(bookmark.uuid.clone());
         editor_for_save.status.set_text("");
+        parent_for_save.refresh_bookmark_sidebar();
         rebuild_list(
             &list_for_save,
             &bookmarks_for_save,
@@ -236,6 +237,7 @@ fn rebuild_list(
                 clear_editor(&editor_for_delete, &selected_for_delete);
             }
 
+            parent_for_delete.refresh_bookmark_sidebar();
             rebuild_list(
                 &list_for_delete,
                 &bookmarks_for_delete,
