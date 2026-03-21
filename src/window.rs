@@ -603,15 +603,27 @@ impl Window {
         });
 
         if let Some(idx) = session_idx {
-            if let Some(new_layout) = state.sessions[idx]
+            if let Some((new_layout, new_terminal_uuid)) = state.sessions[idx]
                 .layout
-                .split_terminal(terminal_uuid, orientation)
+                .split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
                 state.sessions[idx].layout = new_layout;
                 let session_uuid = state.sessions[idx].uuid.clone();
                 let session_state = state.sessions[idx].clone();
                 drop(state);
-                self.rebuild_session_content(&session_uuid, &session_state);
+                if !self.split_terminal_in_place(
+                    &session_uuid,
+                    terminal_uuid,
+                    &new_terminal_uuid,
+                    orientation,
+                ) {
+                    self.rebuild_session_content(&session_uuid, &session_state);
+                } else {
+                    self.update_sidebar_count(
+                        &session_uuid,
+                        session_state.layout.terminal_count(),
+                    );
+                }
             }
         }
     }
@@ -800,6 +812,103 @@ impl Window {
                 glib::ControlFlow::Continue
             }
         });
+    }
+
+    fn split_terminal_in_place(
+        &self,
+        session_uuid: &str,
+        target_uuid: &str,
+        new_terminal_uuid: &str,
+        orientation: SplitOrientation,
+    ) -> bool {
+        let imp = self.imp();
+        let target = {
+            let terminals = imp.terminals.borrow();
+            terminals.get(target_uuid).cloned()
+        };
+        let Some(target) = target else {
+            return false;
+        };
+
+        let parent = target.parent();
+        let Some(parent) = parent else {
+            return false;
+        };
+
+        let new_term = TerminalWidget::new(new_terminal_uuid, None);
+        self.connect_terminal_signals(&new_term);
+        imp.terminals
+            .borrow_mut()
+            .insert(new_terminal_uuid.to_string(), new_term.clone());
+
+        let branch_layout = LayoutNode::Split {
+            orientation,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Terminal {
+                uuid: target_uuid.to_string(),
+                profile: None,
+                cwd: None,
+                custom_title: None,
+            }),
+            second: Box::new(LayoutNode::Terminal {
+                uuid: new_terminal_uuid.to_string(),
+                profile: None,
+                cwd: None,
+                custom_title: None,
+            }),
+        };
+
+        let build_branch = || {
+            session::build_layout_widget(&branch_layout, &|uuid, _, _, _| {
+                if uuid == target_uuid {
+                    target.clone().upcast()
+                } else if uuid == new_terminal_uuid {
+                    new_term.clone().upcast()
+                } else {
+                    unreachable!("split branch builder requested unexpected uuid {uuid}");
+                }
+            })
+        };
+
+        if let Ok(stack) = parent.clone().downcast::<gtk4::Stack>() {
+            stack.remove(&target);
+            let branch = build_branch();
+            stack.add_named(&branch, Some(session_uuid));
+            stack.set_visible_child_name(session_uuid);
+            Self::schedule_apply_paned_ratios(&branch, &branch_layout);
+            return true;
+        }
+
+        let Ok(paned) = parent.downcast::<gtk4::Paned>() else {
+            imp.terminals.borrow_mut().remove(new_terminal_uuid);
+            return false;
+        };
+
+        let target_widget = target.clone().upcast::<gtk4::Widget>();
+        let start_child = paned.start_child();
+        let end_child = paned.end_child();
+        let is_start = start_child.as_ref() == Some(&target_widget);
+        let is_end = end_child.as_ref() == Some(&target_widget);
+
+        if !is_start && !is_end {
+            imp.terminals.borrow_mut().remove(new_terminal_uuid);
+            return false;
+        }
+
+        if is_start {
+            paned.set_start_child(None::<&gtk4::Widget>);
+        } else {
+            paned.set_end_child(None::<&gtk4::Widget>);
+        }
+
+        let branch = build_branch();
+        if is_start {
+            paned.set_start_child(Some(&branch));
+        } else {
+            paned.set_end_child(Some(&branch));
+        }
+        Self::schedule_apply_paned_ratios(&branch, &branch_layout);
+        true
     }
 
     fn update_sidebar_count(&self, session_uuid: &str, count: usize) {
@@ -1146,6 +1255,119 @@ mod tests {
             outer.width(),
             inner.position(),
             inner.height(),
+        );
+
+        window.close();
+    }
+
+    #[test]
+    fn nested_split_preserves_root_and_unaffected_terminals() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.window-identity-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
+
+        let (session_uuid, t1_uuid) = {
+            let state = window.imp().state.borrow();
+            let session = &state.sessions[0];
+            (
+                session.uuid.clone(),
+                session.layout.terminal_uuids().into_iter().next().unwrap(),
+            )
+        };
+
+        window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let t2_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|uuid| uuid != &t1_uuid)
+                .unwrap()
+        };
+
+        let root_before = window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist before nested split");
+        let root_before_ptr = root_before.as_ptr();
+        let t1_before_ptr = window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&t1_uuid)
+            .expect("original terminal must exist before nested split")
+            .as_ptr();
+
+        window.split_terminal(&t2_uuid, SplitOrientation::Vertical);
+
+        let settled = wait_until(1000, || {
+            let Some(root) = window.imp().session_stack.child_by_name(&session_uuid) else {
+                return false;
+            };
+            let Ok(root_paned) = root.downcast::<gtk4::Paned>() else {
+                return false;
+            };
+            let Some(end_child) = root_paned.end_child() else {
+                return false;
+            };
+            end_child.is::<gtk4::Paned>()
+        });
+
+        assert!(settled, "nested split did not settle into a nested Paned");
+
+        let root_after = window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("session content must exist after nested split");
+        let root_after_ptr = root_after.as_ptr();
+        let root_after_paned = root_after
+            .clone()
+            .downcast::<gtk4::Paned>()
+            .expect("root should remain a Paned after nested split");
+        let t1_after = window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&t1_uuid)
+            .expect("original terminal must still exist after nested split")
+            .clone();
+
+        assert_eq!(
+            root_before_ptr, root_after_ptr,
+            "nested split should preserve the existing session root widget instead of rebuilding it"
+        );
+        assert_eq!(
+            t1_before_ptr, t1_after.as_ptr(),
+            "nested split should preserve unaffected terminal widget identity"
+        );
+        assert_eq!(
+            root_after_paned.start_child(),
+            Some(t1_after.upcast::<gtk4::Widget>()),
+            "unaffected terminal should stay attached as the unchanged sibling branch"
+        );
+        assert!(
+            root_after_paned
+                .end_child()
+                .expect("nested split should create a new branch")
+                .is::<gtk4::Paned>(),
+            "nested split should replace only the target leaf with a nested Paned"
         );
 
         window.close();

@@ -123,9 +123,31 @@ impl LayoutNode {
         target_uuid: &str,
         orientation: SplitOrientation,
     ) -> Option<LayoutNode> {
+        self.split_terminal_with_new_uuid(target_uuid, orientation)
+            .map(|(layout, _)| layout)
+    }
+
+    pub fn split_terminal_with_new_uuid(
+        &self,
+        target_uuid: &str,
+        orientation: SplitOrientation,
+    ) -> Option<(LayoutNode, String)> {
         match self {
             LayoutNode::Terminal { uuid, .. } if uuid == target_uuid => {
-                Some(self.clone().split(orientation))
+                let new_terminal = LayoutNode::new_terminal();
+                let new_uuid = match &new_terminal {
+                    LayoutNode::Terminal { uuid, .. } => uuid.clone(),
+                    LayoutNode::Split { .. } => unreachable!(),
+                };
+                Some((
+                    LayoutNode::Split {
+                        orientation,
+                        ratio: 0.5,
+                        first: Box::new(self.clone()),
+                        second: Box::new(new_terminal),
+                    },
+                    new_uuid,
+                ))
             }
             LayoutNode::Terminal { .. } => None,
             LayoutNode::Split {
@@ -134,21 +156,31 @@ impl LayoutNode {
                 first,
                 second,
             } => {
-                if let Some(new_first) = first.split_terminal(target_uuid, orientation) {
-                    Some(LayoutNode::Split {
-                        orientation: *ori,
-                        ratio: *ratio,
-                        first: Box::new(new_first),
-                        second: second.clone(),
-                    })
-                } else {
-                    second
-                        .split_terminal(target_uuid, orientation)
-                        .map(|new_second| LayoutNode::Split {
+                if let Some((new_first, new_uuid)) =
+                    first.split_terminal_with_new_uuid(target_uuid, orientation)
+                {
+                    Some((
+                        LayoutNode::Split {
                             orientation: *ori,
                             ratio: *ratio,
-                            first: first.clone(),
-                            second: Box::new(new_second),
+                            first: Box::new(new_first),
+                            second: second.clone(),
+                        },
+                        new_uuid,
+                    ))
+                } else {
+                    second
+                        .split_terminal_with_new_uuid(target_uuid, orientation)
+                        .map(|(new_second, new_uuid)| {
+                            (
+                                LayoutNode::Split {
+                                    orientation: *ori,
+                                    ratio: *ratio,
+                                    first: first.clone(),
+                                    second: Box::new(new_second),
+                                },
+                                new_uuid,
+                            )
                         })
                 }
             }
@@ -387,6 +419,21 @@ mod tests {
         let new_layout = result.unwrap();
         assert_eq!(new_layout.terminal_count(), 5);
         assert!(new_layout.contains_terminal("t1"));
+    }
+
+    #[test]
+    fn split_terminal_with_new_uuid_reports_created_terminal() {
+        let layout = hsplit(term("t1"), term("t2"));
+        let (new_layout, new_uuid) = layout
+            .split_terminal_with_new_uuid("t2", SplitOrientation::Vertical)
+            .expect("split should succeed");
+
+        assert_eq!(new_layout.terminal_count(), 3);
+        assert!(new_layout.contains_terminal("t1"));
+        assert!(new_layout.contains_terminal("t2"));
+        assert!(new_layout.contains_terminal(&new_uuid));
+        assert_ne!(new_uuid, "t1");
+        assert_ne!(new_uuid, "t2");
     }
 
     // ── Remove terminal ──────────────────────────────────────────
