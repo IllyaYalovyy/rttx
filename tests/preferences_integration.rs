@@ -1,5 +1,5 @@
 /// Integration tests for preferences persistence.
-use rttx::preferences::{self, Preferences};
+use rttx::preferences::{self, Preferences, TerminalThemeMode};
 use tempfile::TempDir;
 
 #[test]
@@ -18,7 +18,10 @@ fn preferences_roundtrip_all_fields() {
 
     let prefs = Preferences {
         font: "Fira Code 16".into(),
-        color_scheme: "solarized-dark".into(),
+        color_scheme: "Solarized Dark".into(),
+        terminal_theme_mode: TerminalThemeMode::Dark,
+        light_color_scheme: "Rttx Daybreak".into(),
+        dark_color_scheme: "Solarized Dark".into(),
         scrollback_lines: 50000,
         show_headerbar: false,
         scroll_on_keystroke: false,
@@ -42,9 +45,23 @@ fn preferences_partial_json_uses_defaults_for_missing() {
     let loaded = preferences::load_from(&path);
 
     assert_eq!(loaded.font, "Hack 10");
-    assert_eq!(loaded.color_scheme, "default");
+    assert_eq!(loaded.terminal_theme_mode, TerminalThemeMode::System);
+    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
     assert_eq!(loaded.scrollback_lines, 10000);
     assert!(loaded.show_headerbar);
+}
+
+#[test]
+fn preferences_legacy_color_scheme_migrates_to_light_and_dark() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+
+    std::fs::write(&path, r#"{"color_scheme": "Solarized Dark"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+
+    assert_eq!(loaded.light_color_scheme, "Solarized Dark");
+    assert_eq!(loaded.dark_color_scheme, "Solarized Dark");
 }
 
 #[test]

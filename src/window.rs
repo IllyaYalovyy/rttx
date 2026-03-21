@@ -8,7 +8,6 @@ use libadwaita::subclass::prelude::*;
 use vte4::prelude::*;
 
 use crate::color_scheme;
-use crate::config;
 use crate::preferences;
 use crate::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
 use crate::sidebar::SessionRow;
@@ -285,6 +284,11 @@ impl Window {
         self.connect_close_request(move |_| {
             win.save_state();
             glib::Propagation::Proceed
+        });
+
+        let win = self.clone();
+        adw::StyleManager::default().connect_dark_notify(move |_| {
+            win.reapply_terminal_preferences();
         });
     }
 
@@ -954,19 +958,32 @@ impl Window {
         vte.set_audible_bell(prefs.audible_bell);
 
         // Header visibility
-        if !prefs.show_headerbar {
-            term.imp().header.set_visible(false);
-        }
+        term.imp().header.set_visible(prefs.show_headerbar);
 
-        // Load and apply color scheme
-        if prefs.color_scheme != "default" {
-            let mut scheme_path = glib::user_config_dir();
-            scheme_path.push(config::CONFIG_DIR);
-            scheme_path.push(config::SCHEMES_DIR);
-            scheme_path.push(format!("{}.json", prefs.color_scheme));
-            if let Ok(scheme) = color_scheme::load_scheme_file(&scheme_path) {
-                term.apply_color_scheme(&scheme);
-            }
+        let is_dark = adw::StyleManager::default().is_dark();
+        let effective_name = prefs.effective_color_scheme_name(is_dark);
+        if let Some(scheme) = color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
+            let fallback = if is_dark {
+                color_scheme::BUILTIN_DARK_SCHEME_NAME
+            } else {
+                color_scheme::BUILTIN_LIGHT_SCHEME_NAME
+            };
+            color_scheme::load_color_scheme_by_name(fallback)
+        }) {
+            term.apply_color_scheme(&scheme);
+        }
+    }
+
+    pub(crate) fn reapply_terminal_preferences(&self) {
+        let terminals: Vec<TerminalWidget> = self
+            .imp()
+            .terminals
+            .borrow()
+            .values()
+            .cloned()
+            .collect();
+        for term in terminals {
+            self.apply_preferences_to_terminal(&term);
         }
     }
 

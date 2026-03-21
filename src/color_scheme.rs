@@ -1,10 +1,14 @@
 use gtk4::gdk;
 use gtk4::glib;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::config;
+
+pub const BUILTIN_DARK_SCHEME_NAME: &str = "Rttx Nightfall";
+pub const BUILTIN_LIGHT_SCHEME_NAME: &str = "Rttx Daybreak";
 
 /// A color scheme definition, compatible with Tilix JSON format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -74,15 +78,88 @@ fn scheme_search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+fn builtin_scheme(
+    name: &str,
+    comment: &str,
+    foreground: &str,
+    background: &str,
+    palette: &[&str; 16],
+    cursor_fg: &str,
+    cursor_bg: &str,
+    highlight_fg: &str,
+    highlight_bg: &str,
+    bold_color: &str,
+) -> ColorScheme {
+    ColorScheme {
+        name: name.into(),
+        comment: comment.into(),
+        use_theme_colors: false,
+        foreground: foreground.into(),
+        background: background.into(),
+        palette: palette.iter().map(|c| (*c).to_string()).collect(),
+        use_cursor_color: true,
+        cursor_fg: cursor_fg.into(),
+        cursor_bg: cursor_bg.into(),
+        use_highlight_color: true,
+        highlight_fg: highlight_fg.into(),
+        highlight_bg: highlight_bg.into(),
+        use_bold_color: true,
+        bold_color: bold_color.into(),
+    }
+}
+
+pub fn builtin_color_schemes() -> Vec<ColorScheme> {
+    const NIGHTFALL: [&str; 16] = [
+        "#171B24", "#D46A6A", "#86B97A", "#D7B56D", "#7AA2D6", "#B18AD1", "#68B8C1", "#D9DEE7",
+        "#4B5563", "#FF8F88", "#A7D79B", "#F4D48B", "#9BC3FF", "#D4ACFF", "#86DDE8", "#F5F7FA",
+    ];
+    const DAYBREAK: [&str; 16] = [
+        "#1F2430", "#C74E39", "#4F8A4F", "#B0832F", "#3B74C5", "#8A56BF", "#2C8A8E", "#D9D3C7",
+        "#5C6370", "#E06C50", "#6AA76A", "#C79A3A", "#4F8EE8", "#A06BE0", "#3AA3A8", "#FFFDF8",
+    ];
+
+    vec![
+        builtin_scheme(
+            BUILTIN_DARK_SCHEME_NAME,
+            "A deep graphite terminal with restrained accents and clear ANSI contrast.",
+            "#E6E7EB",
+            "#11141A",
+            &NIGHTFALL,
+            "#11141A",
+            "#FFB454",
+            "#F5F7FA",
+            "#2A3A52",
+            "#FFFFFF",
+        ),
+        builtin_scheme(
+            BUILTIN_LIGHT_SCHEME_NAME,
+            "A warm paper-light terminal designed to sit comfortably inside GNOME light mode.",
+            "#243039",
+            "#F7F4EC",
+            &DAYBREAK,
+            "#F7F4EC",
+            "#B14D32",
+            "#243039",
+            "#D9E7FF",
+            "#111827",
+        ),
+    ]
+}
+
 pub fn load_color_schemes() -> Vec<ColorScheme> {
-    let mut schemes = Vec::new();
+    let mut schemes: BTreeMap<String, ColorScheme> = builtin_color_schemes()
+        .into_iter()
+        .map(|scheme| (scheme.name.clone(), scheme))
+        .collect();
     for dir in scheme_search_dirs() {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "json") {
                     match load_scheme_file(&path) {
-                        Ok(scheme) => schemes.push(scheme),
+                        Ok(scheme) => {
+                            schemes.insert(scheme.name.clone(), scheme);
+                        }
                         Err(e) => {
                             log::warn!("Failed to load color scheme {:?}: {}", path, e);
                         }
@@ -91,8 +168,13 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
             }
         }
     }
-    schemes.sort_by(|a, b| a.name.cmp(&b.name));
-    schemes
+    schemes.into_values().collect()
+}
+
+pub fn load_color_scheme_by_name(name: &str) -> Option<ColorScheme> {
+    load_color_schemes()
+        .into_iter()
+        .find(|scheme| scheme.name == name)
 }
 
 pub fn load_scheme_file(path: &std::path::Path) -> Result<ColorScheme, Box<dyn std::error::Error>> {
@@ -258,6 +340,26 @@ mod tests {
         // Cursor colors should parse since use_cursor_color is true
         assert!(ColorScheme::parse_color(&scheme.cursor_fg).is_some());
         assert!(ColorScheme::parse_color(&scheme.cursor_bg).is_some());
+    }
+
+    #[test]
+    fn builtin_schemes_are_present_and_valid() {
+        let schemes = load_color_schemes();
+        let dark = schemes
+            .iter()
+            .find(|scheme| scheme.name == BUILTIN_DARK_SCHEME_NAME)
+            .expect("dark builtin scheme must be present");
+        let light = schemes
+            .iter()
+            .find(|scheme| scheme.name == BUILTIN_LIGHT_SCHEME_NAME)
+            .expect("light builtin scheme must be present");
+
+        assert_eq!(dark.palette.len(), 16);
+        assert_eq!(light.palette.len(), 16);
+        assert!(dark.foreground_rgba().is_some());
+        assert!(dark.background_rgba().is_some());
+        assert!(light.foreground_rgba().is_some());
+        assert!(light.background_rgba().is_some());
     }
 
     // ── Multiple schemes in directory ────────────────────────────

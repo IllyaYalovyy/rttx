@@ -3,8 +3,8 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-use crate::config;
-use crate::preferences::{self, Preferences};
+use crate::color_scheme;
+use crate::preferences::{self, Preferences, TerminalThemeMode};
 
 /// Build and present the preferences window.
 pub fn show(parent: &impl IsA<gtk4::Window>) {
@@ -17,6 +17,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     // ── Appearance group ─────────────────────────────────────────
     let appearance_group = adw::PreferencesGroup::new();
     appearance_group.set_title("Appearance");
+    let legacy_color_scheme = prefs.color_scheme.clone();
 
     // Font
     let font_row = adw::ActionRow::builder()
@@ -51,15 +52,43 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     });
     appearance_group.add(&font_row);
 
-    // Color scheme
-    let scheme_row = adw::ComboRow::builder().title("Color scheme").build();
-    let schemes = load_scheme_names();
-    let model = gtk4::StringList::new(&schemes.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-    scheme_row.set_model(Some(&model));
-    if let Some(pos) = schemes.iter().position(|s| s == &prefs.color_scheme) {
-        scheme_row.set_selected(pos as u32);
+    // Terminal theme mode
+    let mode_row = adw::ComboRow::builder()
+        .title("Terminal theme mode")
+        .build();
+    let mode_names = ["Follow system", "Always light", "Always dark"];
+    let mode_model = gtk4::StringList::new(&mode_names);
+    mode_row.set_model(Some(&mode_model));
+    mode_row.set_selected(match prefs.terminal_theme_mode {
+        TerminalThemeMode::System => 0,
+        TerminalThemeMode::Light => 1,
+        TerminalThemeMode::Dark => 2,
+    });
+    appearance_group.add(&mode_row);
+
+    let scheme_names = load_scheme_names();
+    let scheme_model =
+        gtk4::StringList::new(&scheme_names.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+
+    let light_scheme_row = adw::ComboRow::builder().title("Light terminal palette").build();
+    light_scheme_row.set_model(Some(&scheme_model));
+    if let Some(pos) = scheme_names
+        .iter()
+        .position(|s| s == &prefs.light_color_scheme)
+    {
+        light_scheme_row.set_selected(pos as u32);
     }
-    appearance_group.add(&scheme_row);
+    appearance_group.add(&light_scheme_row);
+
+    let dark_scheme_row = adw::ComboRow::builder().title("Dark terminal palette").build();
+    dark_scheme_row.set_model(Some(&scheme_model));
+    if let Some(pos) = scheme_names
+        .iter()
+        .position(|s| s == &prefs.dark_color_scheme)
+    {
+        dark_scheme_row.set_selected(pos as u32);
+    }
+    appearance_group.add(&dark_scheme_row);
 
     // Background opacity
     let opacity_row = adw::ActionRow::builder()
@@ -113,14 +142,27 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     window.add(&page);
 
     // ── Save on close ────────────────────────────────────────────
+    let parent_window = parent.as_ref().clone();
     window.connect_close_request(move |_| {
+        let terminal_theme_mode = match mode_row.selected() {
+            1 => TerminalThemeMode::Light,
+            2 => TerminalThemeMode::Dark,
+            _ => TerminalThemeMode::System,
+        };
         let new_prefs = Preferences {
             font: font_label.label().to_string(),
-            color_scheme: scheme_row
+            color_scheme: legacy_color_scheme.clone(),
+            terminal_theme_mode,
+            light_color_scheme: light_scheme_row
                 .selected_item()
                 .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
                 .map(|s| s.string().to_string())
-                .unwrap_or_else(|| "default".into()),
+                .unwrap_or_else(|| color_scheme::BUILTIN_LIGHT_SCHEME_NAME.into()),
+            dark_color_scheme: dark_scheme_row
+                .selected_item()
+                .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
+                .map(|s| s.string().to_string())
+                .unwrap_or_else(|| color_scheme::BUILTIN_DARK_SCHEME_NAME.into()),
             scrollback_lines: scrollback_row.value() as i64,
             show_headerbar: headerbar_row.is_active(),
             scroll_on_keystroke: keystroke_row.is_active(),
@@ -131,6 +173,9 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
         if let Err(e) = preferences::save(&new_prefs) {
             log::error!("Failed to save preferences: {e}");
         }
+        if let Ok(win) = parent_window.clone().downcast::<crate::window::Window>() {
+            win.reapply_terminal_preferences();
+        }
         glib::Propagation::Proceed
     });
 
@@ -138,19 +183,10 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 }
 
 fn load_scheme_names() -> Vec<String> {
-    let mut names = vec!["default".to_string()];
-    let mut dir = glib::user_config_dir();
-    dir.push(config::CONFIG_DIR);
-    dir.push(config::SCHEMES_DIR);
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            if entry.path().extension().is_some_and(|e| e == "json") {
-                if let Some(stem) = entry.path().file_stem() {
-                    names.push(stem.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
+    let mut names: Vec<String> = color_scheme::load_color_schemes()
+        .into_iter()
+        .map(|scheme| scheme.name)
+        .collect();
     names.sort();
     names.dedup();
     names
