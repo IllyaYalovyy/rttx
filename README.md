@@ -17,6 +17,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 
 - **Split-screen terminals** — High-performance tiling splits (Horizontal: Ctrl+Shift+E, Vertical: Ctrl+Shift+O).
 - **Sidebar session management** — Persistent sessions organized in native Adwaita session rows.
+- **Custom session names** — Double-click a session in the sidebar to rename it.
 - **Native GNOME window layout** — Libadwaita `ToolbarView` and `OverlaySplitView` keep the main window consistent with modern GNOME apps.
 - **Context Persistence** — Layout, Current Working Directories, and custom titles are saved automatically and restored on launch.
 - **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).

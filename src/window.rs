@@ -288,6 +288,19 @@ impl Window {
             win.close_session(&session_uuid);
         });
 
+        let win = self.clone();
+        let session_uuid = session_state.uuid.clone();
+        let row_for_rename = row.clone();
+        let rename_gesture = gtk4::GestureClick::new();
+        rename_gesture.set_button(1);
+        rename_gesture.connect_released(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                win.show_rename_session_popover(&row_for_rename, &session_uuid);
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+            }
+        });
+        row.add_controller(rename_gesture);
+
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
@@ -321,6 +334,88 @@ impl Window {
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
         Self::schedule_apply_paned_ratios(&content, &session_state.layout);
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
+    }
+
+    fn show_rename_session_popover(&self, row: &SessionRow, session_uuid: &str) {
+        let current_name = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid) else {
+                return;
+            };
+            session.name.clone()
+        };
+
+        let popover = gtk4::Popover::new();
+        popover.set_has_arrow(true);
+        popover.set_position(gtk4::PositionType::Bottom);
+        popover.set_parent(row);
+
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        let entry = gtk4::Entry::new();
+        entry.set_hexpand(true);
+        entry.set_text(&current_name);
+        content.append(&entry);
+
+        let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        let cancel_button = gtk4::Button::with_label("Cancel");
+        let rename_button = gtk4::Button::with_label("Rename");
+        rename_button.add_css_class("suggested-action");
+        actions.append(&cancel_button);
+        actions.append(&rename_button);
+        content.append(&actions);
+        popover.set_child(Some(&content));
+
+        let win = self.clone();
+        let session_uuid = session_uuid.to_string();
+        let popover_for_commit = popover.clone();
+        let entry_for_commit = entry.clone();
+        let commit = move || {
+            let name = entry_for_commit.text().trim().to_string();
+            if !name.is_empty() {
+                win.rename_session(&session_uuid, &name);
+            }
+            popover_for_commit.popdown();
+        };
+        let commit_for_button = commit.clone();
+        rename_button.connect_clicked(move |_| commit_for_button());
+        entry.connect_activate(move |_| commit());
+
+        let popover_for_cancel = popover.clone();
+        cancel_button.connect_clicked(move |_| {
+            popover_for_cancel.popdown();
+        });
+
+        popover.connect_closed(|popover| {
+            popover.unparent();
+        });
+
+        popover.popup();
+        entry.grab_focus();
+    }
+
+    fn rename_session(&self, session_uuid: &str, new_name: &str) {
+        {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) = state.sessions.iter_mut().find(|session| session.uuid == session_uuid) else {
+                return;
+            };
+            session.name = new_name.to_string();
+        }
+
+        let mut idx = 0;
+        while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
+            if let Some(session_row) = row.child().and_then(|child| child.downcast::<SessionRow>().ok()) {
+                if session_row.uuid() == session_uuid {
+                    session_row.set_session_name(new_name);
+                    return;
+                }
+            }
+            idx += 1;
+        }
     }
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
@@ -1358,6 +1453,51 @@ mod tests {
         );
 
         second_window.close();
+    }
+
+    #[test]
+    fn rename_session_updates_sidebar_and_saved_state() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.rename-session-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].uuid.clone()
+        };
+
+        window.rename_session(&session_uuid, "Renamed Session");
+
+        {
+            let state = window.imp().state.borrow();
+            assert_eq!(state.sessions[0].name, "Renamed Session");
+        }
+
+        let row = window
+            .imp()
+            .sidebar_list
+            .row_at_index(0)
+            .expect("session row should exist");
+        let session_row = row
+            .child()
+            .and_then(|child| child.downcast::<SessionRow>().ok())
+            .expect("session row child should be SessionRow");
+        assert_eq!(session_row.session_name(), "Renamed Session");
+        assert_eq!(session_row.title().as_str(), "Renamed Session");
+
+        window.save_state();
+        let saved_state = session::load_window_state();
+        assert_eq!(saved_state.sessions[0].name, "Renamed Session");
+
+        window.close();
     }
 
     #[test]
