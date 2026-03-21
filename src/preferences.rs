@@ -1,4 +1,4 @@
-/// User preferences, persisted as JSON in XDG_CONFIG_HOME/rttx/preferences.json.
+/// User preferences, persisted as JSON in `XDG_CONFIG_HOME/rttx/preferences.json`.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -46,7 +46,7 @@ fn default_font() -> String {
 fn default_color_scheme() -> String {
     "default".into()
 }
-fn default_terminal_theme_mode() -> TerminalThemeMode {
+const fn default_terminal_theme_mode() -> TerminalThemeMode {
     TerminalThemeMode::System
 }
 fn default_light_color_scheme() -> String {
@@ -55,13 +55,13 @@ fn default_light_color_scheme() -> String {
 fn default_dark_color_scheme() -> String {
     color_scheme::BUILTIN_DARK_SCHEME_NAME.into()
 }
-fn default_scrollback() -> i64 {
+const fn default_scrollback() -> i64 {
     10000
 }
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_opacity() -> f64 {
+const fn default_opacity() -> f64 {
     1.0
 }
 
@@ -84,6 +84,7 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    #[must_use]
     pub fn effective_color_scheme_name(&self, is_dark: bool) -> &str {
         match self.terminal_theme_mode {
             TerminalThemeMode::System => {
@@ -127,10 +128,10 @@ struct PreferencesDisk {
 
 impl From<PreferencesDisk> for Preferences {
     fn from(raw: PreferencesDisk) -> Self {
-        let legacy_override = if raw.color_scheme != default_color_scheme() {
-            Some(raw.color_scheme.clone())
-        } else {
+        let legacy_override = if raw.color_scheme == default_color_scheme() {
             None
+        } else {
+            Some(raw.color_scheme.clone())
         };
 
         Self {
@@ -170,12 +171,10 @@ fn prefs_path() -> PathBuf {
 
 use gtk4::glib;
 
+#[must_use]
 pub fn load() -> Preferences {
     let path = prefs_path();
-    match std::fs::read_to_string(&path) {
-        Ok(data) => parse_preferences_json(&data),
-        Err(_) => Preferences::default(),
-    }
+    std::fs::read_to_string(path).map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
 }
 
 pub fn save(prefs: &Preferences) -> Result<(), Box<dyn std::error::Error>> {
@@ -188,15 +187,11 @@ pub fn save(prefs: &Preferences) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Load from a specific path (for testing without glib).
+#[must_use]
 pub fn load_from(path: &std::path::Path) -> Preferences {
-    match std::fs::read_to_string(path) {
-        Ok(data) => parse_preferences_json(&data),
-        Err(_) => Preferences::default(),
-    }
+    std::fs::read_to_string(path).map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
 }
 
-/// Save to a specific path (for testing without glib).
 pub fn save_to(
     prefs: &Preferences,
     path: &std::path::Path,

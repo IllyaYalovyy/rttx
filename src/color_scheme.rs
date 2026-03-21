@@ -82,6 +82,7 @@ fn scheme_search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn builtin_scheme(
     name: &str,
     comment: &str,
@@ -167,7 +168,7 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
                             schemes.insert(scheme.name.clone(), scheme);
                         }
                         Err(e) => {
-                            log::warn!("Failed to load color scheme {path:?}: {e}");
+                            log::warn!("Failed to load color scheme {}: {e}", path.display());
                         }
                     }
                 }
@@ -214,8 +215,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    // ── Serialization ────────────────────────────────────────────
-
     #[test]
     fn scheme_serialization_roundtrip() {
         let scheme = test_scheme("Roundtrip");
@@ -231,8 +230,6 @@ mod tests {
         let deserialized: ColorScheme = serde_json::from_str(&json).unwrap();
         assert_eq!(scheme, deserialized);
     }
-
-    // ── Color parsing ────────────────────────────────────────────
 
     #[rstest]
     #[case("#FF0000", 1.0, 0.0, 0.0)]
@@ -265,8 +262,8 @@ mod tests {
     #[rstest]
     #[case("")]
     #[case("not-a-color")]
-    #[case("FFFFFF")] // missing #
-    #[case("#GG0000")] // invalid hex
+    #[case("FFFFFF")]
+    #[case("#GG0000")]
     fn parse_invalid_colors_returns_none(#[case] input: &str) {
         assert!(
             ColorScheme::parse_color(input).is_none(),
@@ -281,8 +278,6 @@ mod tests {
         assert_eq!(palette.len(), 16);
     }
 
-    // ── File I/O ─────────────────────────────────────────────────
-
     #[test]
     fn save_and_load_scheme_file() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -296,9 +291,8 @@ mod tests {
     fn load_rejects_wrong_palette_size() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut scheme = test_scheme("BadPalette");
-        scheme.palette.pop(); // 15 colors
+        scheme.palette.pop();
         let path = tmp.path().join("bad.json");
-        // Write raw to bypass our validation
         let json = serde_json::to_string(&scheme).unwrap();
         std::fs::write(&path, json).unwrap();
         let result = load_scheme_file(&path);
@@ -316,8 +310,6 @@ mod tests {
         std::fs::write(&path, "{{not json}}").unwrap();
         assert!(load_scheme_file(&path).is_err());
     }
-
-    // ── Tilix compatibility ──────────────────────────────────────
 
     #[rstest]
     #[case(TILIX_TANGO_JSON, "Tango", false, false, false)]
@@ -344,7 +336,6 @@ mod tests {
         assert!(scheme.foreground_rgba().is_some());
         assert!(scheme.background_rgba().is_some());
         assert_eq!(scheme.palette_rgba().len(), 16);
-        // Cursor colors should parse since use_cursor_color is true
         assert!(ColorScheme::parse_color(&scheme.cursor_fg).is_some());
         assert!(ColorScheme::parse_color(&scheme.cursor_bg).is_some());
     }
@@ -369,8 +360,6 @@ mod tests {
         assert!(light.background_rgba().is_some());
     }
 
-    // ── Multiple schemes in directory ────────────────────────────
-
     #[test]
     fn load_multiple_schemes_from_directory() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -380,7 +369,6 @@ mod tests {
         save_scheme_to(dir, &test_scheme("Alpha"), "alpha.json").unwrap();
         save_scheme_to(dir, &test_scheme("Middle"), "middle.json").unwrap();
 
-        // Write a non-json file that should be ignored
         std::fs::write(dir.join("readme.txt"), "not a scheme").unwrap();
 
         let mut schemes = Vec::new();

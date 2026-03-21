@@ -12,33 +12,21 @@ use crate::preferences;
 use crate::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
 use crate::sidebar::SessionRow;
 use crate::terminal::widget::TerminalWidget;
+use std::collections::HashMap;
 
 mod imp {
     use super::*;
     use std::cell::RefCell;
 
+    #[derive(Default, Debug)]
     pub struct Window {
         pub split_view: adw::OverlaySplitView,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
-        pub terminals: RefCell<std::collections::HashMap<String, TerminalWidget>>,
+        pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
-    }
-
-    impl Default for Window {
-        fn default() -> Self {
-            Self {
-                split_view: adw::OverlaySplitView::new(),
-                sidebar_list: gtk4::ListBox::new(),
-                session_stack: gtk4::Stack::new(),
-                add_session_button: gtk4::Button::from_icon_name("list-add-symbolic"),
-                state: RefCell::new(WindowState::default()),
-                terminals: RefCell::new(std::collections::HashMap::new()),
-                focused_terminal_uuid: RefCell::new(None),
-            }
-        }
     }
 
     #[glib::object_subclass]
@@ -125,125 +113,134 @@ mod imp {
 glib::wrapper! {
     pub struct Window(ObjectSubclass<imp::Window>)
         @extends adw::ApplicationWindow, gtk4::ApplicationWindow, gtk4::Window, gtk4::Widget,
-        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget,
-                    gtk4::Native, gtk4::Root, gtk4::ShortcutManager,
+        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Native, gtk4::Root, gtk4::ShortcutManager,
                     gtk4::gio::ActionGroup, gtk4::gio::ActionMap;
 }
 
 impl Window {
+    #[must_use]
     pub fn new(app: &adw::Application) -> Self {
         let obj: Self = glib::Object::builder().property("application", app).build();
         obj.setup_actions(app);
         obj.setup_signals();
-        // Register the shortcuts overlay so the "Keyboard Shortcuts" menu item works.
-        // set_help_overlay automatically provides the win.show-help-overlay action.
-        obj.set_help_overlay(Some(&Self::build_shortcuts_window()));
-        obj.restore_state();
+        obj.load_state();
         obj
     }
 
-    fn build_shortcuts_window() -> gtk4::ShortcutsWindow {
-        fn sc(title: &str, accel: &str) -> gtk4::ShortcutsShortcut {
-            gtk4::ShortcutsShortcut::builder()
-                .title(title)
-                .accelerator(accel)
-                .build()
+    fn load_state(&self) {
+        let state = session::load_window_state();
+        let active_index = state.active_session_index;
+        let is_maximized = state.is_maximized;
+        let width = state.width;
+        let height = state.height;
+
+        self.imp().state.replace(state.clone());
+
+        for session in &state.sessions {
+            self.build_session(session);
         }
 
-        let sessions = gtk4::ShortcutsGroup::builder().title("Sessions").build();
-        sessions.append(&sc("New Session", "<Ctrl><Shift>t"));
-        sessions.append(&sc("Close Terminal", "<Ctrl><Shift>w"));
-        sessions.append(&sc("Next Session", "<Ctrl>Tab"));
-        sessions.append(&sc("Previous Session", "<Ctrl><Shift>Tab"));
-        sessions.append(&sc("Toggle Sidebar", "<Ctrl><Shift>n"));
+        if is_maximized {
+            self.maximize();
+        } else {
+            self.set_default_size(width, height);
+        }
 
-        let splits = gtk4::ShortcutsGroup::builder().title("Splits").build();
-        splits.append(&sc("Split Right", "<Ctrl><Shift>e"));
-        splits.append(&sc("Split Down", "<Ctrl><Shift>o"));
+        if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
+            self.imp().sidebar_list.select_row(Some(&row));
+        }
+    }
 
-        let terminal = gtk4::ShortcutsGroup::builder().title("Terminal").build();
-        terminal.append(&sc("Copy", "<Ctrl><Shift>c"));
-        terminal.append(&sc("Paste", "<Ctrl><Shift>v"));
-        terminal.append(&sc("Find", "<Ctrl><Shift>f"));
-        terminal.append(&sc("Zoom In", "<Ctrl>plus"));
-        terminal.append(&sc("Zoom Out", "<Ctrl>minus"));
-        terminal.append(&sc("Reset Zoom", "<Ctrl>0"));
+    pub fn save_state(&self) {
+        let imp = self.imp();
+        let mut state = imp.state.borrow().clone();
 
-        let app_group = gtk4::ShortcutsGroup::builder().title("Application").build();
-        app_group.append(&sc("Preferences", "<Ctrl>comma"));
-        app_group.append(&sc("Toggle Input Sync", "<Ctrl><Shift>i"));
-        app_group.append(&sc("Fullscreen", "F11"));
+        let (width, height) = self.default_size();
+        state.width = width;
+        state.height = height;
+        state.is_maximized = self.is_maximized();
 
-        let section = gtk4::ShortcutsSection::builder()
-            .section_name("shortcuts")
-            .build();
-        section.append(&sessions);
-        section.append(&splits);
-        section.append(&terminal);
-        section.append(&app_group);
+        let active_index = imp
+            .sidebar_list
+            .selected_row()
+            .map_or(0, |r| r.index() as usize);
+        state.active_session_index = active_index;
 
-        let win = gtk4::ShortcutsWindow::builder().modal(true).build();
-        win.add_section(&section);
-        win
+        {
+            let terminals = imp.terminals.borrow();
+            for session in &mut state.sessions {
+                for node_uuid in session.layout.terminal_uuids() {
+                    if let Some(term) = terminals.get(&node_uuid) {
+                        if let LayoutNode::Terminal { ref mut cwd, .. } = session.layout {
+                            *cwd = term.current_directory();
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Err(e) = session::save_window_state(&state) {
+            log::error!("Failed to save window state: {e}");
+        }
     }
 
     fn setup_actions(&self, app: &adw::Application) {
-        let actions: &[(&str, &[&str], fn(&Window))] = &[
-            ("new-session", &["<Ctrl><Shift>t"], |w| w.add_session()),
-            ("close-terminal", &["<Ctrl><Shift>w"], |w| {
-                w.close_focused_terminal()
-            }),
-            ("split-h", &["<Ctrl><Shift>e"], |w| {
-                w.split_focused(SplitOrientation::Horizontal)
-            }),
-            ("split-v", &["<Ctrl><Shift>o"], |w| {
-                w.split_focused(SplitOrientation::Vertical)
-            }),
-            ("toggle-search", &["<Ctrl><Shift>f"], |w| {
-                w.toggle_focused_search()
-            }),
-            ("toggle-sidebar", &["<Ctrl><Shift>n"], |w| {
-                let sv = &w.imp().split_view;
-                sv.set_show_sidebar(!sv.shows_sidebar());
-            }),
+        type ActionCallback = fn(&Window);
+        let actions: &[(&str, &[&str], ActionCallback)] = &[
+            ("close-terminal", &["<Ctrl><Shift>W"], Self::close_focused_terminal),
+            (
+                "split-horizontal",
+                &["<Ctrl><Shift>E"],
+                |w| w.split_focused(SplitOrientation::Horizontal),
+            ),
+            (
+                "split-vertical",
+                &["<Ctrl><Shift>O"],
+                |w| w.split_focused(SplitOrientation::Vertical),
+            ),
+            ("search", &["<Ctrl><Shift>F"], Self::toggle_focused_search),
+            ("copy", &["<Ctrl><Shift>C"], Self::clipboard_copy),
+            ("paste", &["<Ctrl><Shift>V"], Self::clipboard_paste),
+            ("prev-session", &["<Ctrl><Shift>Tab"], |w| w.cycle_session(-1)),
+            ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
+            (
+                "toggle-sidebar",
+                &["<Ctrl><Shift>N"],
+                |w| w.imp().split_view.set_show_sidebar(!w.imp().split_view.shows_sidebar()),
+            ),
             ("fullscreen", &["F11"], |w| {
                 if w.is_fullscreen() {
-                    w.unfullscreen()
+                    w.unfullscreen();
                 } else {
-                    w.fullscreen()
+                    w.fullscreen();
                 }
             }),
-            ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
-            ("prev-session", &["<Ctrl><Shift>Tab"], |w| {
-                w.cycle_session(-1)
-            }),
-            ("zoom-in", &["<Ctrl>plus", "<Ctrl>equal"], |w| {
-                w.zoom_focused(1)
-            }),
+            ("zoom-in", &["<Ctrl>plus", "<Ctrl>equal"], |w| w.zoom_focused(1)),
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
-            ("copy", &["<Ctrl><Shift>c"], |w| w.clipboard_copy()),
-            ("paste", &["<Ctrl><Shift>v"], |w| w.clipboard_paste()),
+            ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
         ];
 
-        for &(name, accels, callback) in actions {
+        for (name, accels, callback) in actions {
             let action = gtk4::gio::SimpleAction::new(name, None);
             let win = self.clone();
-            action.connect_activate(move |_, _| callback(&win));
+            let cb = *callback;
+            action.connect_activate(move |_, _| {
+                cb(&win);
+            });
             self.add_action(&action);
             app.set_accels_for_action(&format!("win.{name}"), accels);
         }
 
-        // Input sync toggle (stateful action)
-        let sync_action =
-            gtk4::gio::SimpleAction::new_stateful("toggle-input-sync", None, &false.to_variant());
+        let sync_action = gtk4::gio::SimpleAction::new_stateful(
+            "toggle-input-sync",
+            None,
+            &false.to_variant(),
+        );
         let win = self.clone();
         sync_action.connect_activate(move |action, _| {
-            let current = action
-                .state()
-                .and_then(|v| v.get::<bool>())
-                .unwrap_or(false);
-            let new_val = !current;
+            let state = action.state().unwrap();
+            let new_val = !state.get::<bool>().unwrap();
             action.set_state(&new_val.to_variant());
             win.set_input_sync(new_val);
         });
@@ -285,113 +282,8 @@ impl Window {
         });
     }
 
-    fn restore_state(&self) {
-        let state = session::load_window_state();
-
-        if state.is_maximized {
-            self.maximize();
-        } else {
-            self.set_default_size(state.width, state.height);
-        }
-
-        for session_state in &state.sessions {
-            self.build_session(session_state);
-        }
-
-        *self.imp().state.borrow_mut() = state.clone();
-
-        if let Some(row) = self
-            .imp()
-            .sidebar_list
-            .row_at_index(state.active_session_index as i32)
-        {
-            self.imp().sidebar_list.select_row(Some(&row));
-        }
-    }
-
-    fn save_state(&self) {
-        let state = self.capture_state();
-        if let Err(e) = session::save_window_state(&state) {
-            log::error!("Failed to save window state: {}", e);
-        }
-    }
-
-    fn capture_state(&self) -> WindowState {
-        let imp = self.imp();
-        let mut sessions = Vec::new();
-
-        let state = imp.state.borrow();
-        for session_state in &state.sessions {
-            let mut captured = session_state.clone();
-            self.update_cwds(&mut captured.layout);
-            // Capture current Paned divider positions as ratios so they are
-            // restored correctly on the next launch.
-            if let Some(root) = imp.session_stack.child_by_name(&session_state.uuid) {
-                session::capture_paned_ratios(&mut captured.layout, &root);
-            }
-            sessions.push(captured);
-        }
-
-        let active_index = imp
-            .sidebar_list
-            .selected_row()
-            .map(|r| r.index() as usize)
-            .unwrap_or(0);
-
-        let (width, height) = self.default_size();
-
-        WindowState {
-            sessions,
-            active_session_index: active_index,
-            width: width.max(1),
-            height: height.max(1),
-            is_maximized: self.is_maximized(),
-        }
-    }
-
-    fn update_cwds(&self, layout: &mut LayoutNode) {
-        match layout {
-            LayoutNode::Terminal {
-                uuid,
-                cwd,
-                custom_title,
-                ..
-            } => {
-                if let Some(term) = self.imp().terminals.borrow().get(uuid.as_str()) {
-                    *cwd = term.current_directory();
-                    *custom_title = term.custom_title();
-                }
-            }
-            LayoutNode::Split { first, second, .. } => {
-                self.update_cwds(first);
-                self.update_cwds(second);
-            }
-        }
-    }
-
     fn build_session(&self, session_state: &SessionState) {
         let imp = self.imp();
-
-        let win = self.clone();
-        let content =
-            session::build_layout_widget(&session_state.layout, &|uuid, cwd, _, custom_title| {
-                let term = TerminalWidget::new(uuid, cwd);
-                if let Some(title) = custom_title {
-                    term.set_title(title);
-                    term.imp().custom_title.replace(Some(title.to_string()));
-                }
-                win.connect_terminal_signals(&term);
-                win.imp()
-                    .terminals
-                    .borrow_mut()
-                    .insert(uuid.to_string(), term.clone());
-                term.upcast()
-            });
-
-        imp.session_stack
-            .add_named(&content, Some(&session_state.uuid));
-        Self::schedule_apply_paned_ratios(&content, &session_state.layout);
-
         let row = SessionRow::new(
             &session_state.uuid,
             &session_state.name,
@@ -407,11 +299,40 @@ impl Window {
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
+
+        let win = self.clone();
+        let content =
+            session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
+                let existing = {
+                    let terminals = win.imp().terminals.borrow();
+                    terminals.get(uuid).cloned()
+                };
+                if let Some(existing) = existing {
+                    if existing.parent().is_some() {
+                        existing.unparent();
+                    }
+                    return existing.upcast();
+                }
+
+                let term = TerminalWidget::new(uuid, cwd);
+                if let Some(title) = custom_title {
+                    term.set_title(title);
+                    term.imp().custom_title.replace(Some(title.to_string()));
+                }
+                win.connect_terminal_signals(&term);
+                win.imp()
+                    .terminals
+                    .borrow_mut()
+                    .insert(uuid.to_string(), term.clone());
+                term.upcast()
+            });
+
+        imp.session_stack.add_named(&content, Some(&session_state.uuid));
+        self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
     }
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
         self.apply_preferences_to_terminal(term);
-        term.ensure_shell_spawned_when_ready();
 
         let win = self.clone();
         let uuid = term.uuid();
@@ -470,7 +391,6 @@ impl Window {
         let win = self.clone();
         let uuid = term.uuid();
         let handler_id = term.vte().connect_child_exited(move |_, status| {
-            // Notify if this terminal wasn't focused
             let focused = win.imp().focused_terminal_uuid.borrow().clone();
             if focused.as_deref() != Some(&uuid) {
                 win.notify_process_completed(&uuid, status);
@@ -483,7 +403,7 @@ impl Window {
     pub fn add_session(&self) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
-        let session_state = SessionState::new(format!("Session {}", count));
+        let session_state = SessionState::new(format!("Session {count}"));
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state);
 
@@ -503,9 +423,6 @@ impl Window {
             (session.uuid.clone(), session.input_sync)
         };
         imp.session_stack.set_visible_child_name(&uuid);
-        // Keep the toggle-input-sync menu button in sync with the session we
-        // just switched to.  Without this update the button can show the
-        // previous session's state.
         if let Some(action) = self.lookup_action("toggle-input-sync") {
             if let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>() {
                 action.set_state(&input_sync.to_variant());
@@ -516,7 +433,6 @@ impl Window {
     fn close_session(&self, session_uuid: &str) {
         let imp = self.imp();
 
-        // Step 1: Extract what we need from state, then release the borrow.
         let (terminal_uuids, new_index) = {
             let mut state = imp.state.borrow_mut();
             if state.sessions.len() <= 1 {
@@ -531,10 +447,7 @@ impl Window {
             state.active_session_index = new_index;
             (uuids, new_index)
         };
-        // state borrow is released here — safe to do widget ops.
 
-        // Step 2: Disconnect child_exited handlers BEFORE removing widgets,
-        // so VTE dropping doesn't fire signals back into our borrowed state.
         {
             let terminals = imp.terminals.borrow();
             for uuid in &terminal_uuids {
@@ -544,7 +457,6 @@ impl Window {
             }
         }
 
-        // Step 3: Remove terminals from our map.
         {
             let mut terminals = imp.terminals.borrow_mut();
             for uuid in &terminal_uuids {
@@ -552,32 +464,25 @@ impl Window {
             }
         }
 
-        // Step 4: Remove widgets from the UI.
         if let Some(child) = imp.session_stack.child_by_name(session_uuid) {
             imp.session_stack.remove(&child);
         }
-        if let Some(row) = imp.sidebar_list.row_at_index(
-            // We already removed from state, so find the row by iterating
-            // (the row index may not match pos if rows were reordered).
-            {
-                let mut idx = 0;
-                loop {
-                    match imp.sidebar_list.row_at_index(idx) {
-                        Some(r) => {
-                            if let Some(sr) =
-                                r.child().and_then(|c| c.downcast::<SessionRow>().ok())
-                            {
-                                if sr.uuid() == session_uuid {
-                                    break idx;
-                                }
+        if let Some(row) = imp.sidebar_list.row_at_index({
+            let mut idx = 0;
+            loop {
+                match imp.sidebar_list.row_at_index(idx) {
+                    Some(r) => {
+                        if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
+                            if sr.uuid() == session_uuid {
+                                break idx;
                             }
-                            idx += 1;
                         }
-                        None => break -1,
+                        idx += 1;
                     }
+                    None => break -1,
                 }
-            },
-        ) {
+            }
+        }) {
             imp.sidebar_list.remove(&row);
         }
 
@@ -590,11 +495,10 @@ impl Window {
         let imp = self.imp();
         let mut state = imp.state.borrow_mut();
 
-        let session_idx = state.sessions.iter().position(|s| {
-            s.layout
-                .terminal_uuids()
-                .contains(&terminal_uuid.to_string())
-        });
+        let session_idx = state
+            .sessions
+            .iter()
+            .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
 
         if let Some(idx) = session_idx {
             if let Some((new_layout, new_terminal_uuid)) = state.sessions[idx]
@@ -605,27 +509,22 @@ impl Window {
                 let session_uuid = state.sessions[idx].uuid.clone();
                 let session_state = state.sessions[idx].clone();
                 drop(state);
-                if !self.split_terminal_in_place(
+                if self.split_terminal_in_place(
                     &session_uuid,
                     terminal_uuid,
                     &new_terminal_uuid,
                     orientation,
                 ) {
-                    self.rebuild_session_content(&session_uuid, &session_state);
+                    self.update_sidebar_count(&session_uuid, session_state.layout.terminal_count());
                 } else {
-                    self.update_sidebar_count(
-                        &session_uuid,
-                        session_state.layout.terminal_count(),
-                    );
+                    self.rebuild_session_content(&session_uuid, &session_state);
                 }
             }
         }
     }
 
     fn close_terminal(&self, terminal_uuid: &str) {
-        let imp = self.imp();
-
-        // Step 1: Update state, extract what we need, release borrow.
+        #[derive(Debug)]
         enum Action {
             CloseSession(String),
             Rebuild {
@@ -633,21 +532,19 @@ impl Window {
                 session_state: SessionState,
             },
         }
+        let imp = self.imp();
 
         let action = {
             let mut state = imp.state.borrow_mut();
-            let session_idx = state.sessions.iter().position(|s| {
-                s.layout
-                    .terminal_uuids()
-                    .contains(&terminal_uuid.to_string())
-            });
+            let session_idx = state
+                .sessions
+                .iter()
+                .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
             let Some(idx) = session_idx else { return };
 
             if state.sessions[idx].layout.terminal_count() <= 1 {
                 Action::CloseSession(state.sessions[idx].uuid.clone())
-            } else if let Some(new_layout) =
-                state.sessions[idx].layout.remove_terminal(terminal_uuid)
-            {
+            } else if let Some(new_layout) = state.sessions[idx].layout.remove_terminal(terminal_uuid) {
                 state.sessions[idx].layout = new_layout;
                 Action::Rebuild {
                     session_uuid: state.sessions[idx].uuid.clone(),
@@ -657,7 +554,6 @@ impl Window {
                 return;
             }
         };
-        // state borrow released.
 
         match action {
             Action::CloseSession(uuid) => self.close_session(&uuid),
@@ -665,7 +561,6 @@ impl Window {
                 session_uuid,
                 session_state,
             } => {
-                // Disconnect signal before removing from map
                 if let Some(term) = imp.terminals.borrow().get(terminal_uuid) {
                     term.disconnect_child_exited();
                 }
@@ -675,64 +570,33 @@ impl Window {
         }
     }
 
-    /// Rebuild the widget tree for a session.
-    ///
-    /// Key insight: we must unparent all existing TerminalWidgets from the
-    /// old Paned tree BEFORE building the new tree. GTK4 does not allow a
-    /// widget to be added to a new parent while still attached to an old one.
-    /// We also must NOT reconnect signals on reused terminals — they already
-    /// have their handlers from the initial build_session call.
     fn rebuild_session_content(&self, session_uuid: &str, session_state: &SessionState) {
         let imp = self.imp();
 
-        // Step 1: Remove old container from the stack FIRST.
-        // This detaches the entire widget subtree (Paned + terminals) from
-        // the stack. We must do this before unparenting terminals, because
-        // if the session has a single terminal, that terminal IS the stack's
-        // direct child — unparenting it first would break the stack's
-        // parent-child invariant.
         let old_content = imp.session_stack.child_by_name(session_uuid);
         if let Some(ref old) = old_content {
             imp.session_stack.remove(old);
         }
 
-        // Step 2: Unparent all existing terminals from the now-detached
-        // Paned tree so they can be reparented into the new tree.
-        //
-        // Important: detach via the old container API (`set_*_child(None)`),
-        // not via `child.unparent()`. Calling `unparent()` directly on a
-        // reused leaf leaves stale child pointers behind in the detached old
-        // `GtkPaned`s, and when that old tree is later destroyed it clears the
-        // child's parent pointer out from under the new tree. The result is
-        // exactly the observed bug: after multiple splits only the newest
-        // terminal remains live.
         if let Some(ref old) = old_content {
             Self::detach_terminals_from_detached_tree(old);
         }
-        // Drop the old content reference so the detached Paned tree can be freed.
         drop(old_content);
 
-        // Step 3: Build new widget tree, reusing existing terminals and only
-        // creating + connecting signals for genuinely new ones.
         let win = self.clone();
         let content =
-            session::build_layout_widget(&session_state.layout, &|uuid, cwd, _, custom_title| {
-                // Reuse existing terminal (already has signal handlers)
+            session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
                 let existing = {
                     let terminals = win.imp().terminals.borrow();
                     terminals.get(uuid).cloned()
                 };
                 if let Some(existing) = existing {
-                    // Defensive detach: if a reused terminal is still attached to
-                    // the detached old tree, GTK will refuse to insert it into the
-                    // new Paned hierarchy and the leaf will render blank.
                     if existing.parent().is_some() {
                         existing.unparent();
                     }
                     return existing.upcast();
                 }
 
-                // New terminal — create and connect signals
                 let term = TerminalWidget::new(uuid, cwd);
                 if let Some(title) = custom_title {
                     term.set_title(title);
@@ -768,44 +632,35 @@ impl Window {
     }
 
     fn schedule_apply_paned_ratios(content: &gtk4::Widget, layout: &LayoutNode) {
-        let LayoutNode::Split { orientation, .. } = layout else {
-            return;
-        };
+        if let LayoutNode::Split { orientation, .. } = layout {
+            let idle_layout = layout.clone();
+            glib::idle_add_local_once(glib::clone!(
+                #[weak]
+                content,
+                move || {
+                    session::apply_paned_ratios(&idle_layout, &content);
+                }
+            ));
 
-        // Fast path: one idle turn is often enough once the new tree has been
-        // attached to the stack and GTK has finished the immediate layout work.
-        let idle_layout = layout.clone();
-        glib::idle_add_local_once(glib::clone!(
-            #[weak]
-            content,
-            move || {
-                session::apply_paned_ratios(&idle_layout, &content);
-            }
-        ));
+            let tick_layout = layout.clone();
+            let root_orientation = *orientation;
+            content.add_tick_callback(move |widget, _| {
+                session::apply_paned_ratios(&tick_layout, widget);
 
-        // The idle pass is not sufficient in every live rebuild. In practice
-        // the root Paned can still be sitting at its fallback 200px divider
-        // when the idle runs. Apply again on the first rendered frame whose
-        // root Paned has a real allocation, then stop so user drags are not
-        // overridden on subsequent frames.
-        let tick_layout = layout.clone();
-        let root_orientation = *orientation;
-        content.add_tick_callback(move |widget, _| {
-            session::apply_paned_ratios(&tick_layout, widget);
-
-            let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
-                return glib::ControlFlow::Break;
-            };
-            let total = match root_orientation {
-                SplitOrientation::Horizontal => paned.width(),
-                SplitOrientation::Vertical => paned.height(),
-            };
-            if total > 0 {
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
+                let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
+                    return glib::ControlFlow::Break;
+                };
+                let total = match root_orientation {
+                    SplitOrientation::Horizontal => paned.width(),
+                    SplitOrientation::Vertical => paned.height(),
+                };
+                if total > 0 {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+        }
     }
 
     fn split_terminal_in_place(
@@ -852,16 +707,27 @@ impl Window {
             }),
         };
 
-        let build_branch = || {
-            session::build_layout_widget(&branch_layout, &|uuid, _, _, _| {
-                if uuid == target_uuid {
-                    target.clone().upcast()
-                } else if uuid == new_terminal_uuid {
-                    new_term.clone().upcast()
-                } else {
-                    unreachable!("split branch builder requested unexpected uuid {uuid}");
-                }
-            })
+        let win_weak = self.downgrade();
+        let target_uuid_str = target_uuid.to_string();
+        let new_terminal_uuid_str = new_terminal_uuid.to_string();
+        let target_clone = target.clone();
+        let new_term_clone = new_term;
+        let branch_layout_clone = branch_layout.clone();
+
+        let build_branch = move || {
+            if win_weak.upgrade().is_some() {
+                session::build_layout_widget(&branch_layout_clone, &|uuid, _, _, _| {
+                    if uuid == target_uuid_str {
+                        target_clone.clone().upcast()
+                    } else if uuid == new_terminal_uuid_str {
+                        new_term_clone.clone().upcast()
+                    } else {
+                        unreachable!("split branch builder requested unexpected uuid {uuid}");
+                    }
+                })
+            } else {
+                gtk4::Box::new(gtk4::Orientation::Vertical, 0).upcast()
+            }
         };
 
         if let Ok(stack) = parent.clone().downcast::<gtk4::Stack>() {
@@ -878,7 +744,7 @@ impl Window {
             return false;
         };
 
-        let target_widget = target.clone().upcast::<gtk4::Widget>();
+        let target_widget = target.upcast::<gtk4::Widget>();
         let start_child = paned.start_child();
         let end_child = paned.end_child();
         let is_start = start_child.as_ref() == Some(&target_widget);
@@ -919,24 +785,18 @@ impl Window {
         }
     }
 
-    // ── Keyboard shortcut helpers ────────────────────────────────────
-
     fn set_input_sync(&self, enabled: bool) {
         let mut state = self.imp().state.borrow_mut();
         let active_idx = self
             .imp()
             .sidebar_list
             .selected_row()
-            .map(|r| r.index() as usize)
-            .unwrap_or(0);
+            .map_or(0, |r| r.index() as usize);
         if let Some(session) = state.sessions.get_mut(active_idx) {
             session.input_sync = enabled;
         }
     }
 
-    /// Apply all user preferences (font, colors, scrollback, bell, …) to a
-    /// terminal widget.  Called when a new terminal is created and when
-    /// preferences change.
     fn apply_preferences_to_terminal(&self, term: &TerminalWidget) {
         let prefs = preferences::load();
         let vte = term.vte();
@@ -947,7 +807,6 @@ impl Window {
         vte.set_scroll_on_output(prefs.scroll_on_output);
         vte.set_audible_bell(prefs.audible_bell);
 
-        // Header visibility
         term.imp().header.set_visible(prefs.show_headerbar);
 
         let is_dark = adw::StyleManager::default().is_dark();
@@ -965,20 +824,13 @@ impl Window {
     }
 
     pub(crate) fn reapply_terminal_preferences(&self) {
-        let terminals: Vec<TerminalWidget> = self
-            .imp()
-            .terminals
-            .borrow()
-            .values()
-            .cloned()
-            .collect();
+        let terminals: Vec<TerminalWidget> =
+            self.imp().terminals.borrow().values().cloned().collect();
         for term in terminals {
             self.apply_preferences_to_terminal(&term);
         }
     }
 
-    /// Forward input from one terminal to all siblings in the same session
-    /// when input sync is enabled.
     fn forward_input(&self, source_uuid: &str, text: &str) {
         let state = self.imp().state.borrow();
         let session = state
@@ -1030,11 +882,7 @@ impl Window {
         if len == 0 {
             return;
         }
-        let current = imp
-            .sidebar_list
-            .selected_row()
-            .map(|r| r.index())
-            .unwrap_or(0);
+        let current = imp.sidebar_list.selected_row().map_or(0, |r| r.index());
         let next = (current + delta).rem_euclid(len);
         drop(state);
         if let Some(row) = imp.sidebar_list.row_at_index(next) {
@@ -1077,18 +925,15 @@ impl Window {
     }
 
     fn notify_process_completed(&self, terminal_uuid: &str, status: i32) {
-        let title = self
-            .imp()
-            .terminals
-            .borrow()
-            .get(terminal_uuid)
-            .map(|t| t.title_label().label().to_string())
-            .unwrap_or_else(|| "Terminal".into());
+        let title = self.imp().terminals.borrow().get(terminal_uuid).map_or_else(
+            || "Terminal".into(),
+            |t| t.title_label().label().to_string(),
+        );
 
         let body = if status == 0 {
-            format!("\"{}\" completed successfully", title)
+            format!("\"{title}\" completed successfully")
         } else {
-            format!("\"{}\" exited with status {}", title, status)
+            format!("\"{title}\" exited with status {status}")
         };
 
         let notification = gtk4::gio::Notification::new("Process completed");

@@ -6,6 +6,7 @@ use crate::config;
 use crate::window::Window;
 
 /// Build and run the application.
+#[must_use]
 pub fn run() -> glib::ExitCode {
     pretty_env_logger::init();
 

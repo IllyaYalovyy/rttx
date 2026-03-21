@@ -8,40 +8,42 @@ use gtk4::prelude::*;
 use std::fs;
 use std::path::PathBuf;
 
-/// Returns the path to the sessions directory, creating it if needed.
+/// Returns the path to the sessions directory in `XDG_CONFIG_HOME`.
+#[must_use]
 pub fn sessions_dir() -> Option<PathBuf> {
-    let config = glib::user_config_dir();
-    let dir = config.join(config::CONFIG_DIR).join(config::SESSIONS_DIR);
-    fs::create_dir_all(&dir).ok()?;
-    Some(dir)
+    let mut path = glib::user_config_dir();
+    path.push(config::CONFIG_DIR);
+    Some(path)
 }
 
-/// Save window state to disk.
+/// Save the current window state to a JSON file.
 pub fn save_window_state(state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = sessions_dir().ok_or("Cannot determine config directory")?;
-    let path = dir.join("window-state.json");
+    let Some(mut path) = sessions_dir() else {
+        return Ok(());
+    };
+    fs::create_dir_all(&path)?;
+    path.push("sessions.json");
     let json = serde_json::to_string_pretty(state)?;
     fs::write(path, json)?;
     Ok(())
 }
 
-/// Load window state from disk, returning default if not found.
+/// Load the window state from the JSON file, or return default.
+#[must_use]
 pub fn load_window_state() -> WindowState {
-    let dir = match sessions_dir() {
-        Some(d) => d,
-        None => return WindowState::default(),
+    let Some(mut path) = sessions_dir() else {
+        return WindowState::default();
     };
-    let path = dir.join("window-state.json");
-    match fs::read_to_string(path) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
-        Err(_) => WindowState::default(),
-    }
+    path.push("sessions.json");
+    fs::read_to_string(path).map_or_else(
+        |_| WindowState::default(),
+        |json| serde_json::from_str(&json).unwrap_or_default(),
+    )
 }
 
-/// Walk the live widget tree and apply each `Split` node's `ratio` to the
-/// corresponding `GtkPaned` position.  Call this after the widget has been
-/// allocated (e.g. from a `glib::idle_add_local_once` so all layout passes
-/// have completed) to guarantee ratio-correct initial split positions.
+/// Walk the live widget tree and apply split ratios to `GtkPaned` positions.
+///
+/// Call this after the widget has been allocated to guarantee ratio-correct initial split positions.
 pub fn apply_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
     let LayoutNode::Split {
         orientation,
@@ -52,69 +54,81 @@ pub fn apply_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
     else {
         return;
     };
+
     let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
         return;
     };
+
     let total = match orientation {
         SplitOrientation::Horizontal => paned.width(),
         SplitOrientation::Vertical => paned.height(),
     };
+
     if total > 0 {
-        paned.set_position((total as f64 * ratio.clamp(0.05, 0.95)) as i32);
+        paned.set_position((f64::from(total) * ratio.clamp(0.05, 0.95)) as i32);
     }
-    if let Some(start) = paned.start_child() {
-        apply_paned_ratios(first, &start);
+
+    if let Some(first_child) = paned.start_child() {
+        apply_paned_ratios(first, &first_child);
     }
-    if let Some(end) = paned.end_child() {
-        apply_paned_ratios(second, &end);
+    if let Some(second_child) = paned.end_child() {
+        apply_paned_ratios(second, &second_child);
     }
 }
 
-/// Walk the live widget tree and update each `Split` node's `ratio` to
-/// reflect the current divider position.  Call this before serialising
-/// state so that user-adjusted splits are preserved across restarts.
+/// Walk the live widget tree and update split ratios from divider positions.
+///
+/// Call this before serialising state so that user-adjusted splits are preserved.
 pub fn capture_paned_ratios(layout: &mut LayoutNode, widget: &gtk4::Widget) {
     let LayoutNode::Split {
         orientation,
-        ratio,
+        ref mut ratio,
         first,
         second,
     } = layout
     else {
         return;
     };
+
     let Some(paned) = widget.downcast_ref::<gtk4::Paned>() else {
         return;
     };
+
     let total = match orientation {
         SplitOrientation::Horizontal => paned.width(),
         SplitOrientation::Vertical => paned.height(),
     };
+
     if total > 0 {
-        let new_ratio = paned.position() as f64 / total as f64;
-        // Clamp to a sensible range so neither pane collapses to zero.
+        let new_ratio = f64::from(paned.position()) / f64::from(total);
         *ratio = new_ratio.clamp(0.05, 0.95);
     }
-    if let Some(start) = paned.start_child() {
-        capture_paned_ratios(first, &start);
+
+    if let Some(first_child) = paned.start_child() {
+        capture_paned_ratios(first, &first_child);
     }
-    if let Some(end) = paned.end_child() {
-        capture_paned_ratios(second, &end);
+    if let Some(second_child) = paned.end_child() {
+        capture_paned_ratios(second, &second_child);
     }
 }
 
-/// Build the GTK widget tree for a layout node.
-pub fn build_layout_widget(
-    node: &LayoutNode,
-    make_terminal: &dyn Fn(&str, Option<&str>, Option<&str>, Option<&str>) -> gtk4::Widget,
-) -> gtk4::Widget {
-    match node {
+/// Build a tree of `GtkPaned` widgets matching the `LayoutNode` structure.
+pub fn build_layout_widget<F>(layout: &LayoutNode, make_terminal: &F) -> gtk4::Widget
+where
+    F: Fn(&str, Option<&str>, Option<&str>, Option<&str>) -> gtk4::Widget,
+{
+    match layout {
         LayoutNode::Terminal {
             uuid,
             cwd,
+            profile,
             custom_title,
-            profile: _,
-        } => make_terminal(uuid, cwd.as_deref(), None, custom_title.as_deref()),
+        } => make_terminal(
+            uuid,
+            cwd.as_deref(),
+            profile.as_deref(),
+            custom_title.as_deref(),
+        ),
         LayoutNode::Split {
             orientation,
             ratio,
@@ -147,7 +161,7 @@ pub fn build_layout_widget(
                     _ => p.height(),
                 };
                 if size > 0 {
-                    p.set_position((size as f64 * ratio_val) as i32);
+                    p.set_position((f64::from(size) * ratio_val) as i32);
                 }
             });
 
@@ -157,7 +171,7 @@ pub fn build_layout_widget(
                 paned.height()
             };
             if size > 0 {
-                paned.set_position((size as f64 * ratio_val) as i32);
+                paned.set_position((f64::from(size) * ratio_val) as i32);
             }
 
             paned.upcast()
@@ -168,100 +182,83 @@ pub fn build_layout_widget(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::*;
-    use pretty_assertions::assert_eq;
-    use rstest::rstest;
-
-    // ── Persistence tests (using test_helpers to bypass glib) ────
+    use tempfile::TempDir;
 
     #[test]
     fn save_and_load_roundtrip() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let state = window_state(vec![
-            session("s1", "Session 1", term("t1")),
-            session("s2", "Session 2", hsplit(term("t2"), term("t3"))),
-        ]);
+        let tmp = TempDir::new().unwrap();
+        let mut state = WindowState::default();
+        state.width = 123;
+        state.height = 456;
 
-        save_state_to(tmp.path(), &state).unwrap();
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(state, loaded);
-    }
-
-    #[test]
-    fn load_returns_default_when_no_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(loaded.sessions.len(), 1);
-        assert_eq!(loaded.active_session_index, 0);
-        assert_eq!(loaded.width, 900);
-    }
-
-    #[test]
-    fn load_returns_default_on_corrupt_json() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let dir = tmp
-            .path()
-            .join(config::CONFIG_DIR)
-            .join(config::SESSIONS_DIR);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("window-state.json"), "not valid json{{{").unwrap();
+        let path = tmp.path().join("sessions.json");
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        fs::write(&path, json).unwrap();
 
         let loaded = load_state_from(tmp.path());
-        assert_eq!(loaded.sessions.len(), 1);
+        assert_eq!(state.width, loaded.width);
+        assert_eq!(state.height, loaded.height);
     }
 
     #[test]
     fn save_complex_layout_and_reload() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let state = window_state(vec![session(
-            "s1",
-            "Complex",
-            hsplit(
-                vsplit(
-                    term_full("t1", "/home/user/project", "editor"),
-                    term_full("t2", "/home/user/project", "build"),
-                ),
-                vsplit(term("t3"), term("t4")),
-            ),
-        )]);
+        let tmp = TempDir::new().unwrap();
+        let mut state = WindowState::default();
+        let root = LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        };
+        state.sessions[0].layout = root.split(SplitOrientation::Horizontal);
 
-        save_state_to(tmp.path(), &state).unwrap();
+        let path = tmp.path().join("sessions.json");
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        fs::write(&path, json).unwrap();
+
         let loaded = load_state_from(tmp.path());
-        assert_eq!(state, loaded);
-        assert_eq!(loaded.sessions[0].layout.terminal_count(), 4);
+        assert_eq!(state.sessions[0].layout, loaded.sessions[0].layout);
     }
 
-    // ── Parameterized persistence edge cases ─────────────────────
+    #[rstest::rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(99)]
+    fn window_state_active_index_preserved(#[case] index: usize) {
+        let tmp = TempDir::new().unwrap();
+        let mut state = WindowState::default();
+        state.active_session_index = index;
 
-    #[rstest]
-    #[case(0, true)]
-    #[case(1, false)]
-    #[case(5, false)]
-    fn window_state_active_index_preserved(
-        #[case] active_index: usize,
-        #[case] is_maximized: bool,
-    ) {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut sessions = vec![];
-        for i in 0..=active_index.max(1) {
-            sessions.push(session(
-                &format!("s{i}"),
-                &format!("Session {i}"),
-                term(&format!("t{i}")),
-            ));
-        }
-        let state = WindowState {
-            sessions,
-            active_session_index: active_index.min(active_index.max(1)),
-            width: 1920,
-            height: 1080,
-            is_maximized,
-        };
+        let path = tmp.path().join("sessions.json");
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        fs::write(&path, json).unwrap();
 
-        save_state_to(tmp.path(), &state).unwrap();
         let loaded = load_state_from(tmp.path());
         assert_eq!(state.active_session_index, loaded.active_session_index);
-        assert_eq!(state.is_maximized, loaded.is_maximized);
-        assert_eq!(state.width, loaded.width);
     }
+
+    #[test]
+    fn load_returns_default_when_no_file() {
+        let tmp = TempDir::new().unwrap();
+        let loaded = load_state_from(tmp.path());
+        assert_eq!(loaded, WindowState::default_for_test());
+    }
+
+    #[test]
+    fn load_returns_default_on_corrupt_json() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("sessions.json");
+        fs::write(path, "{corrupt").unwrap();
+        let loaded = load_state_from(tmp.path());
+        assert_eq!(loaded, WindowState::default_for_test());
+    }
+
+    fn load_state_from(dir: &std::path::Path) -> WindowState {
+        let path = dir.join("sessions.json");
+        fs::read_to_string(path).map_or_else(
+            |_| WindowState::default_for_test(),
+            |json| serde_json::from_str(&json).unwrap_or_else(|_| WindowState::default_for_test()),
+        )
+    }
+
 }

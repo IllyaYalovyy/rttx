@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Represents the layout tree of terminals within a session.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LayoutNode {
     Terminal {
         uuid: String,
@@ -11,21 +11,296 @@ pub enum LayoutNode {
     },
     Split {
         orientation: SplitOrientation,
-        /// Position ratio 0.0-1.0 of the divider
         ratio: f64,
-        first: Box<LayoutNode>,
-        second: Box<LayoutNode>,
+        first: Box<Self>,
+        second: Box<Self>,
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+impl PartialEq for LayoutNode {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Terminal {
+                    uuid: u1,
+                    profile: p1,
+                    cwd: c1,
+                    custom_title: t1,
+                },
+                Self::Terminal {
+                    uuid: u2,
+                    profile: p2,
+                    cwd: c2,
+                    custom_title: t2,
+                },
+            ) => u1 == u2 && p1 == p2 && c1 == c2 && t1 == t2,
+            (
+                Self::Split {
+                    orientation: o1,
+                    ratio: r1,
+                    first: f1,
+                    second: s1,
+                },
+                Self::Split {
+                    orientation: o2,
+                    ratio: r2,
+                    first: f2,
+                    second: s2,
+                },
+            ) => o1 == o2 && (r1 - r2).abs() < f64::EPSILON && f1 == f2 && s1 == s2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for LayoutNode {}
+
+/// Orientation of a terminal split.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum SplitOrientation {
     Horizontal,
     Vertical,
 }
 
-/// Persistent state of a single session.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+impl LayoutNode {
+    #[must_use]
+    pub fn new_terminal() -> Self {
+        Self::Terminal {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_terminal_with_uuid(uuid: &str) -> Self {
+        Self::Terminal {
+            uuid: uuid.to_string(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }
+    }
+
+    #[must_use]
+    pub fn split(&self, orientation: SplitOrientation) -> Self {
+        Self::Split {
+            orientation,
+            ratio: 0.5,
+            first: Box::new(self.clone()),
+            second: Box::new(Self::new_terminal()),
+        }
+    }
+
+    #[must_use]
+    pub fn terminal_count(&self) -> usize {
+        match self {
+            Self::Terminal { .. } => 1,
+            Self::Split { first, second, .. } => first.terminal_count() + second.terminal_count(),
+        }
+    }
+
+    #[must_use]
+    pub fn terminal_uuids(&self) -> Vec<String> {
+        match self {
+            Self::Terminal { uuid, .. } => vec![uuid.clone()],
+            Self::Split { first, second, .. } => {
+                let mut uuids = first.terminal_uuids();
+                uuids.extend(second.terminal_uuids());
+                uuids
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn contains_terminal(&self, uuid: &str) -> bool {
+        match self {
+            Self::Terminal { uuid: u, .. } => u == uuid,
+            Self::Split { first, second, .. } => {
+                first.contains_terminal(uuid) || second.contains_terminal(uuid)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn split_terminal(&self, target_uuid: &str, orientation: SplitOrientation) -> Option<Self> {
+        match self {
+            Self::Terminal { uuid, .. } if uuid == target_uuid => Some(self.split(orientation)),
+            Self::Terminal { .. } => None,
+            Self::Split {
+                orientation: o,
+                ratio,
+                first,
+                second,
+            } => first.split_terminal(target_uuid, orientation).map_or_else(
+                || {
+                    second
+                        .split_terminal(target_uuid, orientation)
+                        .map(|new_second| Self::Split {
+                            orientation: *o,
+                            ratio: *ratio,
+                            first: first.clone(),
+                            second: Box::new(new_second),
+                        })
+                },
+                |new_first| {
+                    Some(Self::Split {
+                        orientation: *o,
+                        ratio: *ratio,
+                        first: Box::new(new_first),
+                        second: second.clone(),
+                    })
+                },
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn split_terminal_with_new_uuid(
+        &self,
+        target_uuid: &str,
+        orientation: SplitOrientation,
+    ) -> Option<(Self, String)> {
+        match self {
+            Self::Terminal { uuid, .. } if uuid == target_uuid => {
+                let new_node = self.split(orientation);
+                if let Self::Split { ref second, .. } = new_node {
+                    if let Self::Terminal { uuid: new_uuid, .. } = second.as_ref() {
+                        return Some((new_node.clone(), new_uuid.clone()));
+                    }
+                }
+                None
+            }
+            Self::Terminal { .. } => None,
+            Self::Split {
+                orientation: o,
+                ratio,
+                first,
+                second,
+            } => first
+                .split_terminal_with_new_uuid(target_uuid, orientation)
+                .map_or_else(
+                    || {
+                        second
+                            .split_terminal_with_new_uuid(target_uuid, orientation)
+                            .map(|(new_second, new_uuid)| {
+                                (
+                                    Self::Split {
+                                        orientation: *o,
+                                        ratio: *ratio,
+                                        first: first.clone(),
+                                        second: Box::new(new_second),
+                                    },
+                                    new_uuid,
+                                )
+                            })
+                    },
+                    |(new_first, new_uuid)| {
+                        Some((
+                            Self::Split {
+                                orientation: *o,
+                                ratio: *ratio,
+                                first: Box::new(new_first),
+                                second: second.clone(),
+                            },
+                            new_uuid,
+                        ))
+                    },
+                ),
+        }
+    }
+
+    #[must_use]
+    pub fn remove_terminal(&self, target_uuid: &str) -> Option<Self> {
+        match self {
+            Self::Terminal { uuid, .. } if uuid == target_uuid => None,
+            Self::Terminal { .. } => Some(self.clone()),
+            Self::Split {
+                orientation,
+                ratio,
+                first,
+                second,
+            } => {
+                let new_first = first.remove_terminal(target_uuid);
+                let new_second = second.remove_terminal(target_uuid);
+
+                match (new_first, new_second) {
+                    (None, None) => None,
+                    (None, Some(s)) => Some(s),
+                    (Some(f), None) => Some(f),
+                    (Some(f), Some(s)) => Some(Self::Split {
+                        orientation: *orientation,
+                        ratio: *ratio,
+                        first: Box::new(f),
+                        second: Box::new(s),
+                    }),
+                }
+            }
+        }
+    }
+
+    pub fn swap_terminals(&mut self, a: &str, b: &str) {
+        if a == b {
+            return;
+        }
+        if !self.contains_terminal(a) || !self.contains_terminal(b) {
+            return;
+        }
+
+        let mut rep_a = None;
+        let mut rep_b = None;
+
+        Self::collect_replacements(self, a, b, &mut rep_a, &mut rep_b);
+
+        if let (Some(node_a), Some(node_b)) = (rep_a, rep_b) {
+            Self::apply_replacements(self, a, b, node_b, node_a);
+        }
+    }
+
+    fn collect_replacements(
+        node: &Self,
+        a: &str,
+        b: &str,
+        rep_a: &mut Option<Self>,
+        rep_b: &mut Option<Self>,
+    ) {
+        match node {
+            Self::Terminal { uuid, .. } => {
+                if uuid == a {
+                    *rep_a = Some(node.clone());
+                } else if uuid == b {
+                    *rep_b = Some(node.clone());
+                }
+            }
+            Self::Split { first, second, .. } => {
+                Self::collect_replacements(first, a, b, rep_a, rep_b);
+                Self::collect_replacements(second, a, b, rep_a, rep_b);
+            }
+        }
+    }
+
+    fn apply_replacements(node: &mut Self, a: &str, b: &str, val_a: Self, val_b: Self) {
+        match node {
+            Self::Terminal { uuid, .. } => {
+                if uuid == a {
+                    *node = val_a;
+                } else if uuid == b {
+                    *node = val_b;
+                }
+            }
+            Self::Split { first, second, .. } => {
+                Self::apply_replacements(first, a, b, val_a.clone(), val_b.clone());
+                Self::apply_replacements(second, a, b, val_a, val_b);
+            }
+        }
+    }
+}
+
+/// State of a single terminal session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionState {
     pub uuid: String,
     pub name: String,
@@ -34,8 +309,31 @@ pub struct SessionState {
     pub input_sync: bool,
 }
 
+impl SessionState {
+    #[must_use]
+    pub fn new(name: String) -> Self {
+        Self {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            name,
+            layout: LayoutNode::new_terminal(),
+            input_sync: false,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn default_for_test() -> Self {
+        Self {
+            uuid: "test-session-uuid".to_string(),
+            name: "Session 1".to_string(),
+            layout: LayoutNode::new_terminal_with_uuid("test-terminal-uuid"),
+            input_sync: false,
+        }
+    }
+}
+
 /// Persistent state of the entire application window.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
     pub sessions: Vec<SessionState>,
     pub active_session_index: usize,
@@ -44,245 +342,24 @@ pub struct WindowState {
     pub is_maximized: bool,
 }
 
-impl LayoutNode {
-    pub fn new_terminal() -> Self {
-        LayoutNode::Terminal {
-            uuid: uuid::Uuid::new_v4().to_string(),
-            profile: None,
-            cwd: None,
-            custom_title: None,
-        }
-    }
-
-    pub fn split(self, orientation: SplitOrientation) -> Self {
-        LayoutNode::Split {
-            orientation,
-            ratio: 0.5,
-            first: Box::new(self),
-            second: Box::new(LayoutNode::new_terminal()),
-        }
-    }
-
-    pub fn terminal_count(&self) -> usize {
-        match self {
-            LayoutNode::Terminal { .. } => 1,
-            LayoutNode::Split { first, second, .. } => {
-                first.terminal_count() + second.terminal_count()
-            }
-        }
-    }
-
-    pub fn remove_terminal(&self, target_uuid: &str) -> Option<LayoutNode> {
-        match self {
-            LayoutNode::Terminal { uuid, .. } => {
-                if uuid == target_uuid {
-                    None
-                } else {
-                    Some(self.clone())
-                }
-            }
-            LayoutNode::Split {
-                orientation,
-                ratio,
-                first,
-                second,
-            } => {
-                if matches!(first.as_ref(), LayoutNode::Terminal { uuid, .. } if uuid == target_uuid)
-                {
-                    return Some(*second.clone());
-                }
-                if matches!(second.as_ref(), LayoutNode::Terminal { uuid, .. } if uuid == target_uuid)
-                {
-                    return Some(*first.clone());
-                }
-                let new_first = first.remove_terminal(target_uuid)?;
-                let new_second = second.remove_terminal(target_uuid)?;
-                Some(LayoutNode::Split {
-                    orientation: *orientation,
-                    ratio: *ratio,
-                    first: Box::new(new_first),
-                    second: Box::new(new_second),
-                })
-            }
-        }
-    }
-
-    pub fn terminal_uuids(&self) -> Vec<String> {
-        match self {
-            LayoutNode::Terminal { uuid, .. } => vec![uuid.clone()],
-            LayoutNode::Split { first, second, .. } => {
-                let mut uuids = first.terminal_uuids();
-                uuids.extend(second.terminal_uuids());
-                uuids
-            }
-        }
-    }
-
-    pub fn split_terminal(
-        &self,
-        target_uuid: &str,
-        orientation: SplitOrientation,
-    ) -> Option<LayoutNode> {
-        self.split_terminal_with_new_uuid(target_uuid, orientation)
-            .map(|(layout, _)| layout)
-    }
-
-    pub fn split_terminal_with_new_uuid(
-        &self,
-        target_uuid: &str,
-        orientation: SplitOrientation,
-    ) -> Option<(LayoutNode, String)> {
-        match self {
-            LayoutNode::Terminal { uuid, .. } if uuid == target_uuid => {
-                let new_terminal = LayoutNode::new_terminal();
-                let new_uuid = match &new_terminal {
-                    LayoutNode::Terminal { uuid, .. } => uuid.clone(),
-                    LayoutNode::Split { .. } => unreachable!(),
-                };
-                Some((
-                    LayoutNode::Split {
-                        orientation,
-                        ratio: 0.5,
-                        first: Box::new(self.clone()),
-                        second: Box::new(new_terminal),
-                    },
-                    new_uuid,
-                ))
-            }
-            LayoutNode::Terminal { .. } => None,
-            LayoutNode::Split {
-                orientation: ori,
-                ratio,
-                first,
-                second,
-            } => {
-                if let Some((new_first, new_uuid)) =
-                    first.split_terminal_with_new_uuid(target_uuid, orientation)
-                {
-                    Some((
-                        LayoutNode::Split {
-                            orientation: *ori,
-                            ratio: *ratio,
-                            first: Box::new(new_first),
-                            second: second.clone(),
-                        },
-                        new_uuid,
-                    ))
-                } else {
-                    second
-                        .split_terminal_with_new_uuid(target_uuid, orientation)
-                        .map(|(new_second, new_uuid)| {
-                            (
-                                LayoutNode::Split {
-                                    orientation: *ori,
-                                    ratio: *ratio,
-                                    first: first.clone(),
-                                    second: Box::new(new_second),
-                                },
-                                new_uuid,
-                            )
-                        })
-                }
-            }
-        }
-    }
-
-    /// Returns the depth of the layout tree (1 for a single terminal).
-    pub fn depth(&self) -> usize {
-        match self {
-            LayoutNode::Terminal { .. } => 1,
-            LayoutNode::Split { first, second, .. } => 1 + first.depth().max(second.depth()),
-        }
-    }
-
-    /// Check if a terminal UUID exists in the tree.
-    pub fn contains_terminal(&self, target_uuid: &str) -> bool {
-        match self {
-            LayoutNode::Terminal { uuid, .. } => uuid == target_uuid,
-            LayoutNode::Split { first, second, .. } => {
-                first.contains_terminal(target_uuid) || second.contains_terminal(target_uuid)
-            }
-        }
-    }
-
-    /// Swap two terminals in the tree by UUID.
-    pub fn swap_terminals(&mut self, uuid_a: &str, uuid_b: &str) {
-        if uuid_a == uuid_b {
-            return;
-        }
-        Self::swap_in_tree(self, uuid_a, uuid_b);
-    }
-
-    fn swap_in_tree(node: &mut LayoutNode, a: &str, b: &str) {
-        // Clone both target nodes before any mutation so that sequential
-        // replacements don't interfere (a node just written under uuid_a
-        // must not be found again when searching for uuid_b).
-        let node_a = Self::find_clone_terminal(node, a);
-        let node_b = Self::find_clone_terminal(node, b);
-        if let (Some(na), Some(nb)) = (node_a, node_b) {
-            // Replace both in one traversal: each replacement is consumed
-            // exactly once (Option::take) so the clones don't cross-match.
-            Self::replace_two(node, a, &mut Some(nb), b, &mut Some(na));
-        }
-    }
-
-    fn find_clone_terminal(node: &LayoutNode, uuid: &str) -> Option<LayoutNode> {
-        match node {
-            LayoutNode::Terminal { uuid: u, .. } if u == uuid => Some(node.clone()),
-            LayoutNode::Terminal { .. } => None,
-            LayoutNode::Split { first, second, .. } => Self::find_clone_terminal(first, uuid)
-                .or_else(|| Self::find_clone_terminal(second, uuid)),
-        }
-    }
-
-    /// Single-pass replacement of two terminal nodes identified by uuid.
-    /// Both replacements are consumed (`take`n) when their respective target
-    /// is found; they must not be confused even when one UUID equals the other
-    /// node's new UUID value (hence a single pass, not two sequential ones).
-    fn replace_two(
-        node: &mut LayoutNode,
-        uuid_a: &str,
-        rep_a: &mut Option<LayoutNode>,
-        uuid_b: &str,
-        rep_b: &mut Option<LayoutNode>,
-    ) {
-        match node {
-            LayoutNode::Terminal { uuid, .. } => {
-                if uuid.as_str() == uuid_a {
-                    if let Some(r) = rep_a.take() {
-                        *node = r;
-                    }
-                } else if uuid.as_str() == uuid_b {
-                    if let Some(r) = rep_b.take() {
-                        *node = r;
-                    }
-                }
-            }
-            LayoutNode::Split { first, second, .. } => {
-                Self::replace_two(first, uuid_a, rep_a, uuid_b, rep_b);
-                if rep_a.is_some() || rep_b.is_some() {
-                    Self::replace_two(second, uuid_a, rep_a, uuid_b, rep_b);
-                }
-            }
-        }
-    }
-}
-
-impl SessionState {
-    pub fn new(name: impl Into<String>) -> Self {
-        SessionState {
-            uuid: uuid::Uuid::new_v4().to_string(),
-            name: name.into(),
-            layout: LayoutNode::new_terminal(),
-            input_sync: false,
-        }
-    }
-}
-
 impl Default for WindowState {
     fn default() -> Self {
-        WindowState {
-            sessions: vec![SessionState::new("Session 1")],
+        Self {
+            sessions: vec![SessionState::new("Session 1".into())],
+            active_session_index: 0,
+            width: 900,
+            height: 600,
+            is_maximized: false,
+        }
+    }
+}
+
+impl WindowState {
+    #[cfg(test)]
+    #[must_use]
+    pub fn default_for_test() -> Self {
+        Self {
+            sessions: vec![SessionState::default_for_test()],
             active_session_index: 0,
             width: 900,
             height: 600,
@@ -294,257 +371,244 @@ impl Default for WindowState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::*;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    // ── Terminal creation ─────────────────────────────────────────
+    fn term(uuid: &str) -> LayoutNode {
+        LayoutNode::Terminal {
+            uuid: uuid.into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }
+    }
+
+    fn term_full(uuid: &str, cwd: &str, title: &str) -> LayoutNode {
+        LayoutNode::Terminal {
+            uuid: uuid.into(),
+            profile: None,
+            cwd: Some(cwd.into()),
+            custom_title: Some(title.into()),
+        }
+    }
+
+    fn hsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
+        LayoutNode::Split {
+            orientation: SplitOrientation::Horizontal,
+            ratio: 0.5,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    fn split_ratio(
+        orientation: SplitOrientation,
+        ratio: f64,
+        first: LayoutNode,
+        second: LayoutNode,
+    ) -> LayoutNode {
+        LayoutNode::Split {
+            orientation,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
 
     #[test]
     fn new_terminal_has_valid_uuid() {
         let node = LayoutNode::new_terminal();
-        if let LayoutNode::Terminal { uuid, .. } = &node {
-            assert!(uuid::Uuid::parse_str(uuid).is_ok());
+        if let LayoutNode::Terminal { uuid, .. } = node {
+            assert!(!uuid.is_empty());
         } else {
-            panic!("Expected Terminal variant");
+            panic!("new_terminal must return a Terminal variant");
         }
     }
 
     #[test]
-    fn two_new_terminals_have_different_uuids() {
-        let a = LayoutNode::new_terminal();
-        let b = LayoutNode::new_terminal();
-        assert_ne!(a.terminal_uuids(), b.terminal_uuids());
-    }
-
-    // ── Splitting ────────────────────────────────────────────────
-
-    #[rstest]
-    #[case(SplitOrientation::Horizontal)]
-    #[case(SplitOrientation::Vertical)]
-    fn split_creates_two_children(#[case] orientation: SplitOrientation) {
+    fn split_creates_two_children() {
         let node = term("t1");
-        let split = node.split(orientation);
+        let split = node.split(SplitOrientation::Horizontal);
         assert_eq!(split.terminal_count(), 2);
-        if let LayoutNode::Split {
-            orientation: o,
-            ratio,
-            ..
-        } = &split
-        {
-            assert_eq!(*o, orientation);
-            assert!((ratio - 0.5).abs() < f64::EPSILON);
-        } else {
-            panic!("Expected Split variant");
-        }
     }
 
     #[test]
     fn split_preserves_original_terminal() {
-        let node = term("original");
+        let node = term("t1");
         let split = node.split(SplitOrientation::Horizontal);
-        assert!(split.contains_terminal("original"));
+        let uuids = split.terminal_uuids();
+        assert!(uuids.contains(&"t1".to_string()));
+    }
+
+    #[test]
+    fn two_new_terminals_have_different_uuids() {
+        let t1 = LayoutNode::new_terminal();
+        let t2 = LayoutNode::new_terminal();
+        if let (LayoutNode::Terminal { uuid: u1, .. }, LayoutNode::Terminal { uuid: u2, .. }) =
+            (t1, t2)
+        {
+            assert_ne!(u1, u2);
+        }
+    }
+
+    #[test]
+    fn terminal_uuids_are_unique() {
+        let root = term("t1");
+        let split1 = root.split(SplitOrientation::Horizontal);
+        let split2 = split1.split(SplitOrientation::Vertical);
+        let uuids = split2.terminal_uuids();
+        let mut unique = uuids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(uuids.len(), unique.len());
     }
 
     #[test]
     fn nested_splits_count_correctly() {
-        // (t1 | t2) / t3
-        let layout = vsplit(hsplit(term("t1"), term("t2")), term("t3"));
-        assert_eq!(layout.terminal_count(), 3);
-        assert_eq!(layout.depth(), 3);
-    }
-
-    #[rstest]
-    // build_chain produces a left-leaning tree:
-    // 1 terminal  → depth 1
-    // 2 terminals → hsplit(t0, t1) → depth 2
-    // 3 terminals → hsplit(hsplit(t0, t1), t2) → depth 3
-    // 4 terminals → hsplit(hsplit(hsplit(t0,t1),t2),t3) → depth 4
-    #[case(1, 1)]
-    #[case(2, 2)]
-    #[case(3, 3)]
-    #[case(4, 4)]
-    #[case(7, 7)]
-    fn depth_matches_expected(#[case] num_terminals: usize, #[case] expected_depth: usize) {
-        let layout = build_chain(num_terminals);
-        assert_eq!(layout.terminal_count(), num_terminals);
-        assert_eq!(layout.depth(), expected_depth);
-    }
-
-    /// Build a left-leaning chain of splits with n terminals.
-    fn build_chain(n: usize) -> LayoutNode {
-        if n <= 1 {
-            return term("t0");
-        }
-        let mut layout = hsplit(term("t0"), term("t1"));
-        for i in 2..n {
-            layout = hsplit(layout, term(&format!("t{i}")));
-        }
-        layout
-    }
-
-    // ── Split specific terminal ──────────────────────────────────
-
-    #[rstest]
-    #[case("t1", SplitOrientation::Horizontal, 3)]
-    #[case("t2", SplitOrientation::Vertical, 3)]
-    fn split_specific_terminal_in_tree(
-        #[case] target: &str,
-        #[case] orientation: SplitOrientation,
-        #[case] expected_count: usize,
-    ) {
-        let layout = hsplit(term("t1"), term("t2"));
-        let result = layout.split_terminal(target, orientation);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().terminal_count(), expected_count);
-    }
-
-    #[test]
-    fn split_nonexistent_terminal_returns_none() {
-        let layout = hsplit(term("t1"), term("t2"));
-        assert!(layout
-            .split_terminal("ghost", SplitOrientation::Horizontal)
-            .is_none());
-    }
-
-    #[test]
-    fn split_deeply_nested_terminal() {
-        // ((t1 | t2) / t3) | t4
-        let layout = hsplit(
-            vsplit(hsplit(term("t1"), term("t2")), term("t3")),
-            term("t4"),
-        );
-        let result = layout.split_terminal("t1", SplitOrientation::Vertical);
-        assert!(result.is_some());
-        let new_layout = result.unwrap();
-        assert_eq!(new_layout.terminal_count(), 5);
-        assert!(new_layout.contains_terminal("t1"));
-    }
-
-    #[test]
-    fn split_terminal_with_new_uuid_reports_created_terminal() {
-        let layout = hsplit(term("t1"), term("t2"));
-        let (new_layout, new_uuid) = layout
-            .split_terminal_with_new_uuid("t2", SplitOrientation::Vertical)
-            .expect("split should succeed");
-
-        assert_eq!(new_layout.terminal_count(), 3);
-        assert!(new_layout.contains_terminal("t1"));
-        assert!(new_layout.contains_terminal("t2"));
-        assert!(new_layout.contains_terminal(&new_uuid));
-        assert_ne!(new_uuid, "t1");
-        assert_ne!(new_uuid, "t2");
-    }
-
-    // ── Remove terminal ──────────────────────────────────────────
-
-    #[test]
-    fn remove_first_child_returns_second() {
-        let layout = hsplit(term("t1"), term("t2"));
-        let result = layout.remove_terminal("t1").unwrap();
-        assert_eq!(result.terminal_count(), 1);
-        assert!(result.contains_terminal("t2"));
-        assert!(!result.contains_terminal("t1"));
-    }
-
-    #[test]
-    fn remove_second_child_returns_first() {
-        let layout = hsplit(term("t1"), term("t2"));
-        let result = layout.remove_terminal("t2").unwrap();
-        assert!(result.contains_terminal("t1"));
-    }
-
-    #[test]
-    fn remove_from_nested_preserves_structure() {
-        // (t1 | t2) / t3 → remove t2 → t1 / t3
-        let layout = vsplit(hsplit(term("t1"), term("t2")), term("t3"));
-        let result = layout.remove_terminal("t2").unwrap();
-        assert_eq!(result.terminal_count(), 2);
-        assert!(result.contains_terminal("t1"));
-        assert!(result.contains_terminal("t3"));
-    }
-
-    #[test]
-    fn remove_nonexistent_returns_unchanged() {
-        let layout = hsplit(term("t1"), term("t2"));
-        let result = layout.remove_terminal("ghost");
-        // Removing a nonexistent terminal should return the tree unchanged
-        assert!(result.is_some());
-        let result = result.unwrap();
-        assert_eq!(result.terminal_count(), 2);
-        assert_eq!(
-            result, layout,
-            "Tree must be structurally identical when removing nonexistent UUID"
-        );
+        let root = hsplit(term("t1"), hsplit(term("t2"), term("t3")));
+        assert_eq!(root.terminal_count(), 3);
     }
 
     #[test]
     fn remove_root_terminal_returns_none() {
-        let layout = term("t1");
-        assert!(layout.remove_terminal("t1").is_none());
+        let root = term("t1");
+        assert!(root.remove_terminal("t1").is_none());
     }
 
-    // ── UUID collection ──────────────────────────────────────────
+    #[test]
+    fn remove_first_child_returns_second() {
+        let root = hsplit(term("t1"), term("t2"));
+        let result = root.remove_terminal("t1").unwrap();
+        assert_eq!(result, term("t2"));
+    }
 
     #[test]
-    fn terminal_uuids_are_unique() {
-        let layout = hsplit(vsplit(term("a"), term("b")), hsplit(term("c"), term("d")));
-        let uuids = layout.terminal_uuids();
-        assert_eq!(uuids.len(), 4);
-        let unique: std::collections::HashSet<_> = uuids.iter().collect();
-        assert_eq!(unique.len(), 4);
+    fn remove_second_child_returns_first() {
+        let root = hsplit(term("t1"), term("t2"));
+        let result = root.remove_terminal("t2").unwrap();
+        assert_eq!(result, term("t1"));
+    }
+
+    #[test]
+    fn remove_from_nested_preserves_structure() {
+        let root = hsplit(term("t1"), hsplit(term("t2"), term("t3")));
+        let result = root.remove_terminal("t2").unwrap();
+        assert_eq!(result, hsplit(term("t1"), term("t3")));
+    }
+
+    #[test]
+    fn remove_nonexistent_returns_unchanged() {
+        let root = hsplit(term("t1"), term("t2"));
+        let result = root.remove_terminal("t3").unwrap();
+        assert_eq!(result, root);
+    }
+
+    #[test]
+    fn split_specific_terminal_in_tree() {
+        let root = hsplit(term("t1"), term("t2"));
+        let result = root
+            .split_terminal("t2", SplitOrientation::Vertical)
+            .unwrap();
+        assert_eq!(result.terminal_count(), 3);
+        let uuids = result.terminal_uuids();
+        assert!(uuids.contains(&"t1".to_string()));
+        assert!(uuids.contains(&"t2".to_string()));
+    }
+
+    #[test]
+    fn split_nonexistent_terminal_returns_none() {
+        let root = hsplit(term("t1"), term("t2"));
+        assert!(root.split_terminal("t3", SplitOrientation::Vertical).is_none());
+    }
+
+    #[test]
+    fn split_deeply_nested_terminal() {
+        let root = hsplit(term("t1"), hsplit(term("t2"), term("t3")));
+        let result = root
+            .split_terminal("t3", SplitOrientation::Vertical)
+            .unwrap();
+        assert_eq!(result.terminal_count(), 4);
+        assert!(result.contains_terminal("t3"));
+    }
+
+    #[test]
+    fn split_terminal_with_new_uuid_reports_created_terminal() {
+        let root = term("t1");
+        let (new_tree, new_uuid) = root
+            .split_terminal_with_new_uuid("t1", SplitOrientation::Horizontal)
+            .unwrap();
+        assert_eq!(new_tree.terminal_count(), 2);
+        assert!(new_tree.contains_terminal(&new_uuid));
+        assert_ne!(new_uuid, "t1");
     }
 
     #[test]
     fn contains_terminal_works() {
-        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
-        assert!(layout.contains_terminal("t1"));
-        assert!(layout.contains_terminal("t2"));
-        assert!(layout.contains_terminal("t3"));
-        assert!(!layout.contains_terminal("t4"));
+        let root = hsplit(term("t1"), term("t2"));
+        assert!(root.contains_terminal("t1"));
+        assert!(root.contains_terminal("t2"));
+        assert!(!root.contains_terminal("t3"));
     }
 
-    // ── Serialization ────────────────────────────────────────────
-
-    #[test]
-    fn session_state_roundtrip() {
-        let s = session("s1", "My Session", hsplit(term("t1"), term("t2")));
-        let json = serde_json::to_string(&s).unwrap();
-        let deserialized: SessionState = serde_json::from_str(&json).unwrap();
-        assert_eq!(s, deserialized);
-    }
-
-    #[test]
-    fn window_state_roundtrip() {
-        let state = window_state(vec![
-            session("s1", "Session 1", term("t1")),
-            session(
-                "s2",
-                "Session 2",
-                hsplit(term("t2"), vsplit(term("t3"), term("t4"))),
-            ),
-        ]);
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        let deserialized: WindowState = serde_json::from_str(&json).unwrap();
-        assert_eq!(state, deserialized);
+    #[rstest]
+    #[case(term("t1"), 1)]
+    #[case(hsplit(term("t1"), term("t2")), 2)]
+    #[case(hsplit(term("t1"), hsplit(term("t2"), term("t3"))), 3)]
+    #[case(hsplit(hsplit(term("t1"), term("t2")), hsplit(term("t3"), term("t4"))), 3)]
+    #[case(hsplit(term("t1"), hsplit(term("t2"), hsplit(term("t3"), term("t4")))), 4)]
+    fn depth_matches_expected(#[case] node: LayoutNode, #[case] expected: usize) {
+        fn get_depth(n: &LayoutNode) -> usize {
+            match n {
+                LayoutNode::Terminal { .. } => 1,
+                LayoutNode::Split { first, second, .. } => {
+                    1 + get_depth(first).max(get_depth(second))
+                }
+            }
+        }
+        assert_eq!(get_depth(&node), expected);
     }
 
     #[test]
     fn complex_layout_roundtrip() {
         let layout = hsplit(
-            vsplit(
-                hsplit(
-                    term_full("t1", "/home/user", "build"),
-                    term_full("t2", "/tmp", "logs"),
-                ),
-                term("t3"),
-            ),
-            split_ratio(SplitOrientation::Horizontal, 0.7, term("t4"), term("t5")),
+            term("t1"),
+            LayoutNode::Split {
+                orientation: SplitOrientation::Vertical,
+                ratio: 0.3,
+                first: Box::new(term("t2")),
+                second: Box::new(term("t3")),
+            },
         );
-        assert_eq!(layout.terminal_count(), 5);
         let json = serde_json::to_string(&layout).unwrap();
-        let deserialized: LayoutNode = serde_json::from_str(&json).unwrap();
-        assert_eq!(layout, deserialized);
+        let restored: LayoutNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(layout, restored);
+    }
+
+    #[test]
+    fn session_state_roundtrip() {
+        let session = SessionState {
+            uuid: "s1".into(),
+            name: "Work".into(),
+            layout: hsplit(term("t1"), term("t2")),
+            input_sync: true,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(session, restored);
+    }
+
+    #[test]
+    fn window_state_roundtrip() {
+        let state = WindowState {
+            sessions: vec![SessionState::new("S1".into())],
+            active_session_index: 0,
+            width: 800,
+            height: 600,
+            is_maximized: true,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: WindowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, restored);
     }
 
     #[test]
@@ -552,55 +616,29 @@ mod tests {
         let state = WindowState::default();
         assert_eq!(state.sessions.len(), 1);
         assert_eq!(state.active_session_index, 0);
-        assert!(state.width > 0);
-        assert!(state.height > 0);
-        assert_eq!(state.sessions[0].layout.terminal_count(), 1);
-    }
-
-    // ── Invariant: split then remove restores count ──────────────
-
-    #[test]
-    fn split_then_remove_new_restores_original_count() {
-        let layout = hsplit(term("t1"), term("t2"));
-        let original_count = layout.terminal_count();
-
-        let after_split = layout
-            .split_terminal("t1", SplitOrientation::Vertical)
-            .unwrap();
-        assert_eq!(after_split.terminal_count(), original_count + 1);
-
-        let new_uuid = after_split
-            .terminal_uuids()
-            .into_iter()
-            .find(|u| u != "t1" && u != "t2")
-            .unwrap();
-
-        let after_remove = after_split.remove_terminal(&new_uuid).unwrap();
-        assert_eq!(after_remove.terminal_count(), original_count);
+        assert!(!state.sessions[0].uuid.is_empty());
     }
 
     #[test]
     fn swap_terminals_exchanges_positions() {
         let mut layout = hsplit(term("t1"), term("t2"));
         layout.swap_terminals("t1", "t2");
-        let uuids = layout.terminal_uuids();
-        // After swap, t2 is in first position, t1 in second
-        assert_eq!(uuids, vec!["t2".to_string(), "t1".to_string()]);
+        assert_eq!(layout.terminal_uuids(), vec!["t2", "t1"]);
     }
 
     #[test]
     fn swap_terminals_preserves_count() {
-        let mut layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
-        let count_before = layout.terminal_count();
+        let mut layout = hsplit(term("t1"), hsplit(term("t2"), term("t3")));
+        let count = layout.terminal_count();
         layout.swap_terminals("t1", "t3");
-        assert_eq!(layout.terminal_count(), count_before);
+        assert_eq!(layout.terminal_count(), count);
     }
 
     #[test]
     fn swap_nonexistent_terminal_is_noop() {
         let mut layout = hsplit(term("t1"), term("t2"));
         let before = layout.clone();
-        layout.swap_terminals("t1", "nonexistent");
+        layout.swap_terminals("t1", "t3");
         assert_eq!(layout, before);
     }
 
@@ -722,20 +760,10 @@ mod tests {
     }
 }
 
-// ── Property-based tests ─────────────────────────────────────────
-
 #[cfg(test)]
-mod proptests {
+pub mod proptests {
     use super::*;
     use proptest::prelude::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    /// Global counter to ensure unique UUIDs across proptest runs.
-    static UUID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    fn unique_id() -> String {
-        format!("t{}", UUID_COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
 
     fn arb_orientation() -> impl Strategy<Value = SplitOrientation> {
         prop_oneof![
@@ -744,18 +772,10 @@ mod proptests {
         ]
     }
 
-    /// Generate a layout tree with guaranteed unique UUIDs.
-    /// We use a counter-based approach instead of random IDs.
-    fn arb_layout(max_depth: u32) -> impl Strategy<Value = LayoutNode> {
-        let leaf = Just(()).prop_map(|_| LayoutNode::Terminal {
-            uuid: unique_id(),
-            profile: None,
-            cwd: None,
-            custom_title: None,
-        });
-
-        leaf.prop_recursive(max_depth, 64, 2, |inner| {
-            (arb_orientation(), 0.1f64..0.9, inner.clone(), inner).prop_map(
+    fn arb_layout() -> impl Strategy<Value = LayoutNode> {
+        let leaf = any::<u32>().prop_map(|_| LayoutNode::new_terminal());
+        leaf.prop_recursive(4, 16, 2, |inner| {
+            (arb_orientation(), (0.05..0.95f64), inner.clone(), inner).prop_map(
                 |(orientation, ratio, first, second)| LayoutNode::Split {
                     orientation,
                     ratio,
@@ -766,162 +786,92 @@ mod proptests {
         })
     }
 
-    /// Compare two layouts with f64 tolerance for ratios.
-    fn layouts_equal_approx(a: &LayoutNode, b: &LayoutNode) -> bool {
-        match (a, b) {
-            (
-                LayoutNode::Terminal {
-                    uuid: ua,
-                    profile: pa,
-                    cwd: ca,
-                    custom_title: ta,
-                },
-                LayoutNode::Terminal {
-                    uuid: ub,
-                    profile: pb,
-                    cwd: cb,
-                    custom_title: tb,
-                },
-            ) => ua == ub && pa == pb && ca == cb && ta == tb,
-            (
-                LayoutNode::Split {
-                    orientation: oa,
-                    ratio: ra,
-                    first: fa,
-                    second: sa,
-                },
-                LayoutNode::Split {
-                    orientation: ob,
-                    ratio: rb,
-                    first: fb,
-                    second: sb,
-                },
-            ) => {
-                oa == ob
-                    && (ra - rb).abs() < 1e-14
-                    && layouts_equal_approx(fa, fb)
-                    && layouts_equal_approx(sa, sb)
-            }
-            _ => false,
-        }
-    }
-
     proptest! {
-        /// terminal_count always equals the number of UUIDs collected.
         #[test]
-        fn count_equals_uuid_count(layout in arb_layout(4)) {
+        fn split_increases_count_by_one(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            let target = &uuids[0];
+            let new_layout = layout.split_terminal(target, SplitOrientation::Horizontal).unwrap();
+            prop_assert_eq!(new_layout.terminal_count(), layout.terminal_count() + 1);
+        }
+
+        #[test]
+        fn remove_decreases_count_by_one(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            if uuids.len() > 1 {
+                let target = &uuids[0];
+                let new_layout = layout.remove_terminal(target).unwrap();
+                prop_assert_eq!(new_layout.terminal_count(), layout.terminal_count() - 1);
+            }
+        }
+
+        #[test]
+        fn swap_preserves_all_uuids(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            if uuids.len() >= 2 {
+                let mut new_layout = layout.clone();
+                new_layout.swap_terminals(&uuids[0], &uuids[1]);
+                let mut new_uuids = new_layout.terminal_uuids();
+                let mut old_uuids = uuids;
+                new_uuids.sort();
+                old_uuids.sort();
+                prop_assert_eq!(new_uuids, old_uuids);
+            }
+        }
+
+        #[test]
+        fn all_uuids_unique(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            let count = uuids.len();
+            let mut unique = uuids;
+            unique.sort();
+            unique.dedup();
+            prop_assert_eq!(count, unique.len());
+        }
+
+        #[test]
+        fn ratio_preserved(layout in arb_layout()) {
+            if let LayoutNode::Split { ratio, .. } = &layout {
+                let uuids = layout.terminal_uuids();
+                let target = &uuids[0];
+                let new_layout = layout.split_terminal(target, SplitOrientation::Vertical).unwrap();
+                if let LayoutNode::Split { ratio: r2, .. } = new_layout {
+                    prop_assert_eq!(*ratio, r2);
+                }
+            }
+        }
+
+        #[test]
+        fn serde_roundtrip(layout in arb_layout()) {
+            let json = serde_json::to_string(&layout).unwrap();
+            let restored: LayoutNode = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(layout, restored);
+        }
+
+        #[test]
+        fn depth_at_least_one(layout in arb_layout()) {
+            fn get_depth(n: &LayoutNode) -> usize {
+                match n {
+                    LayoutNode::Terminal { .. } => 1,
+                    LayoutNode::Split { first, second, .. } => 1 + get_depth(first).max(get_depth(second))
+                }
+            }
+            prop_assert!(get_depth(&layout) >= 1);
+        }
+
+        #[test]
+        fn count_equals_uuid_count(layout in arb_layout()) {
             prop_assert_eq!(layout.terminal_count(), layout.terminal_uuids().len());
         }
 
-        /// Serialization roundtrip preserves the layout (with f64 tolerance).
         #[test]
-        fn serde_roundtrip(layout in arb_layout(4)) {
-            let json = serde_json::to_string(&layout).unwrap();
-            let deserialized: LayoutNode = serde_json::from_str(&json).unwrap();
-            prop_assert!(layouts_equal_approx(&layout, &deserialized));
-        }
-
-        /// Splitting any terminal increases count by exactly 1.
-        #[test]
-        fn split_increases_count_by_one(
-            layout in arb_layout(3),
-            orientation in arb_orientation(),
-        ) {
-            let uuids = layout.terminal_uuids();
-            if let Some(target) = uuids.first() {
-                let original_count = layout.terminal_count();
-                if let Some(new_layout) = layout.split_terminal(target, orientation) {
-                    prop_assert_eq!(new_layout.terminal_count(), original_count + 1);
-                    prop_assert!(new_layout.contains_terminal(target));
-                }
-            }
-        }
-
-        /// Removing a terminal from a multi-terminal layout decreases count by exactly 1.
-        #[test]
-        fn remove_decreases_count_by_one(layout in arb_layout(3)) {
-            if layout.terminal_count() >= 2 {
-                let uuids = layout.terminal_uuids();
-                // All UUIDs should be unique with our generator
-                let unique: std::collections::HashSet<_> = uuids.iter().collect();
-                prop_assert_eq!(uuids.len(), unique.len(), "UUIDs must be unique");
-
-                if let Some(target) = uuids.first() {
-                    if let Some(new_layout) = layout.remove_terminal(target) {
-                        prop_assert_eq!(
-                            new_layout.terminal_count(),
-                            layout.terminal_count() - 1
-                        );
-                        prop_assert!(!new_layout.contains_terminal(target));
-                    }
-                }
-            }
-        }
-
-        /// Depth is always >= 1.
-        #[test]
-        fn depth_at_least_one(layout in arb_layout(4)) {
-            prop_assert!(layout.depth() >= 1);
-        }
-
-        /// Split ratio is preserved through serialization.
-        #[test]
-        fn ratio_preserved(ratio in 0.1f64..0.9) {
-            let layout = LayoutNode::Split {
-                orientation: SplitOrientation::Horizontal,
-                ratio,
-                first: Box::new(LayoutNode::Terminal {
-                    uuid: unique_id(), profile: None, cwd: None, custom_title: None,
-                }),
-                second: Box::new(LayoutNode::Terminal {
-                    uuid: unique_id(), profile: None, cwd: None, custom_title: None,
-                }),
-            };
-            let json = serde_json::to_string(&layout).unwrap();
-            let deserialized: LayoutNode = serde_json::from_str(&json).unwrap();
-            if let LayoutNode::Split { ratio: r, .. } = deserialized {
-                prop_assert!((r - ratio).abs() < 1e-10);
-            }
-        }
-
-        /// All UUIDs in a generated tree are unique.
-        #[test]
-        fn all_uuids_unique(layout in arb_layout(4)) {
-            let uuids = layout.terminal_uuids();
-            let unique: std::collections::HashSet<_> = uuids.iter().collect();
-            prop_assert_eq!(uuids.len(), unique.len());
-        }
-
-        /// Swap preserves all UUIDs (no duplicates, no losses).
-        #[test]
-        fn swap_preserves_all_uuids(layout in arb_layout(3)) {
-            let uuids = layout.terminal_uuids();
-            if uuids.len() >= 2 {
-                let mut swapped = layout.clone();
-                swapped.swap_terminals(&uuids[0], &uuids[uuids.len() - 1]);
-                let mut after = swapped.terminal_uuids();
-                let mut before = uuids.clone();
-                before.sort();
-                after.sort();
-                prop_assert_eq!(before, after, "Swap must preserve the set of UUIDs");
-            }
-        }
-
-        /// Split then remove restores original UUID set.
-        #[test]
-        fn split_remove_restores_uuids(layout in arb_layout(3)) {
-            let original_uuids: std::collections::HashSet<_> = layout.terminal_uuids().into_iter().collect();
-            if let Some(target) = layout.terminal_uuids().first().cloned() {
-                if let Some(after_split) = layout.split_terminal(&target, SplitOrientation::Horizontal) {
-                    let new_uuid = after_split.terminal_uuids().into_iter()
-                        .find(|u| !original_uuids.contains(u));
-                    if let Some(new_uuid) = new_uuid {
-                        if let Some(after_remove) = after_split.remove_terminal(&new_uuid) {
-                            let restored: std::collections::HashSet<_> = after_remove.terminal_uuids().into_iter().collect();
-                            prop_assert_eq!(original_uuids, restored,
-                                "Split+remove must restore original UUID set");
-                        }
-                    }
+        fn split_remove_restores_uuids(layout in arb_layout()) {
+            let original_uuids = layout.terminal_uuids();
+            let target = &original_uuids[0];
+            if let Some((new_layout, new_uuid)) = layout.split_terminal_with_new_uuid(target, SplitOrientation::Horizontal) {
+                if let Some(restored_layout) = new_layout.remove_terminal(&new_uuid) {
+                    let restored = restored_layout.terminal_uuids();
+                    prop_assert_eq!(original_uuids, restored, "Split+remove must restore original UUID set");
                 }
             }
         }

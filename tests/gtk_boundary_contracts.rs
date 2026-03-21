@@ -250,7 +250,8 @@ fn contract_forward_compat_missing_fields() {
         "sessions": [{
             "uuid": "s1", "name": "Old",
             "layout": {"Split": {
-                "orientation": "Horizontal", "ratio": 0.5,
+                "orientation": "horizontal",
+ "ratio": 0.5,
                 "first": {"Terminal": {"uuid": "t1", "profile": null, "cwd": "/home", "custom_title": null}},
                 "second": {"Terminal": {"uuid": "t2", "profile": null, "cwd": null, "custom_title": null}}
             }}

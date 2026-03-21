@@ -65,7 +65,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 
     let scheme_names = load_scheme_names();
     let scheme_model =
-        gtk4::StringList::new(&scheme_names.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        gtk4::StringList::new(&scheme_names.iter().map(AsRef::as_ref).collect::<Vec<_>>());
 
     let light_scheme_row = adw::ComboRow::builder().title("Light terminal palette").build();
     light_scheme_row.set_model(Some(&scheme_model));
@@ -122,7 +122,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     terminal_group.add(&output_row);
 
     let bell_row = adw::SwitchRow::new();
-    bell_row.set_title("Audible bell");
+     bell_row.set_title("Audible bell");
     bell_row.set_active(prefs.audible_bell);
     terminal_group.add(&bell_row);
 
@@ -147,13 +147,11 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             light_color_scheme: light_scheme_row
                 .selected_item()
                 .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
-                .map(|s| s.string().to_string())
-                .unwrap_or_else(|| color_scheme::BUILTIN_LIGHT_SCHEME_NAME.into()),
+                .map_or_else(|| color_scheme::BUILTIN_LIGHT_SCHEME_NAME.into(), |s| s.string().to_string()),
             dark_color_scheme: dark_scheme_row
                 .selected_item()
                 .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
-                .map(|s| s.string().to_string())
-                .unwrap_or_else(|| color_scheme::BUILTIN_DARK_SCHEME_NAME.into()),
+                .map_or_else(|| color_scheme::BUILTIN_DARK_SCHEME_NAME.into(), |s| s.string().to_string()),
             scrollback_lines: scrollback_row.value() as i64,
             show_headerbar: headerbar_row.is_active(),
             scroll_on_keystroke: keystroke_row.is_active(),

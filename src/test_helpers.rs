@@ -136,7 +136,7 @@ pub fn test_scheme_full() -> ColorScheme {
 pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
     let sessions_dir = dir
         .join(crate::config::CONFIG_DIR)
-        .join(crate::config::SESSIONS_DIR);
+        .join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
     let path = sessions_dir.join("window-state.json");
     let json = serde_json::to_string_pretty(state)?;
@@ -148,7 +148,7 @@ pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std:
 pub fn load_state_from(dir: &Path) -> WindowState {
     let path = dir
         .join(crate::config::CONFIG_DIR)
-        .join(crate::config::SESSIONS_DIR)
+        .join("sessions")
         .join("window-state.json");
     match std::fs::read_to_string(path) {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),

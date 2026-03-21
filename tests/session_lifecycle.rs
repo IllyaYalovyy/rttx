@@ -168,7 +168,9 @@ fn workflow_persist_and_restore_with_cwds() {
 
     // CWDs survived
     if let LayoutNode::Terminal {
-        cwd, custom_title, ..
+        cwd: _,
+        custom_title: _,
+        ..
     } = &loaded.sessions[0].layout
     {
         panic!("Expected Split at root, got Terminal");

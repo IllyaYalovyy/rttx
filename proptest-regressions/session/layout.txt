@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 04252a344f22b7ae8c203affa72489a9f453ff448761515b9d703143a1eefa9a # shrinks to layout = Split { orientation: Horizontal, ratio: 0.05, first: Split { orientation: Horizontal, ratio: 0.05, first: Split { orientation: Horizontal, ratio: 0.18090276227033658, first: Terminal { uuid: "8a77223c-1c67-4769-a58b-47030d1e0d77", profile: None, cwd: None, custom_title: None }, second: Terminal { uuid: "198e77e1-9512-4f07-87b5-8aaf72287089", profile: None, cwd: None, custom_title: None } }, second: Terminal { uuid: "353f7cd9-4afc-44e9-853b-59563e224980", profile: None, cwd: None, custom_title: None } }, second: Terminal { uuid: "aa155b40-5e5b-41e2-97da-fd13eb54c730", profile: None, cwd: None, custom_title: None } }
