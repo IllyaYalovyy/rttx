@@ -23,7 +23,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
 - **Custom titles** — Double-click any terminal header to rename it for your current task.
 - **Built-in terminal themes** — Native "Nightfall" and "Daybreak" schemes with full Tilix color scheme compatibility.
-- **Smart Notifications** — Get notified when a background process completes in an unfocused split.
+- **Smart Notifications** — Process exit in a hidden session shows an in-app toast while `rttx` is focused, and falls back to a desktop notification when the window is not active.
 
 ## Distribution
 

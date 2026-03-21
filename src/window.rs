@@ -21,6 +21,7 @@ mod imp {
     #[derive(Default, Debug)]
     pub struct Window {
         pub split_view: adw::OverlaySplitView,
+        pub toast_overlay: adw::ToastOverlay,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
         pub add_session_button: gtk4::Button,
@@ -98,7 +99,8 @@ mod imp {
 
             let toolbar_view = adw::ToolbarView::new();
             toolbar_view.add_top_bar(&header);
-            toolbar_view.set_content(Some(&self.split_view));
+            self.toast_overlay.set_child(Some(&self.split_view));
+            toolbar_view.set_content(Some(&self.toast_overlay));
 
             obj.set_content(Some(&toolbar_view));
         }
@@ -115,6 +117,26 @@ glib::wrapper! {
         @extends adw::ApplicationWindow, gtk4::ApplicationWindow, gtk4::Window, gtk4::Widget,
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Native, gtk4::Root, gtk4::ShortcutManager,
                     gtk4::gio::ActionGroup, gtk4::gio::ActionMap;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessCompletionNotificationMode {
+    None,
+    Toast,
+    Desktop,
+}
+
+fn process_completion_notification_mode(
+    window_is_active: bool,
+    terminal_is_in_visible_session: bool,
+) -> ProcessCompletionNotificationMode {
+    if !window_is_active {
+        ProcessCompletionNotificationMode::Desktop
+    } else if terminal_is_in_visible_session {
+        ProcessCompletionNotificationMode::None
+    } else {
+        ProcessCompletionNotificationMode::Toast
+    }
 }
 
 impl Window {
@@ -936,11 +958,39 @@ impl Window {
             format!("\"{title}\" exited with status {status}")
         };
 
-        let notification = gtk4::gio::Notification::new("Process completed");
-        notification.set_body(Some(&body));
-        if let Some(app) = self.application() {
-            app.send_notification(None, &notification);
+        match self.process_completion_notification_mode(terminal_uuid) {
+            ProcessCompletionNotificationMode::None => {}
+            ProcessCompletionNotificationMode::Toast => {
+                let toast = adw::Toast::new(&body);
+                toast.set_timeout(4);
+                self.imp().toast_overlay.add_toast(toast);
+            }
+            ProcessCompletionNotificationMode::Desktop => {
+                let notification = gtk4::gio::Notification::new("Process completed");
+                notification.set_body(Some(&body));
+                if let Some(app) = self.application() {
+                    app.send_notification(None, &notification);
+                }
+            }
         }
+    }
+
+    fn process_completion_notification_mode(
+        &self,
+        terminal_uuid: &str,
+    ) -> ProcessCompletionNotificationMode {
+        process_completion_notification_mode(
+            self.is_active(),
+            self.terminal_is_in_visible_session(terminal_uuid),
+        )
+    }
+
+    fn terminal_is_in_visible_session(&self, terminal_uuid: &str) -> bool {
+        let visible_name = self.imp().session_stack.visible_child_name();
+        self.imp().state.borrow().sessions.iter().any(|session| {
+            Some(session.uuid.as_str()) == visible_name.as_deref()
+                && session.layout.contains_terminal(terminal_uuid)
+        })
     }
 
     fn clipboard_copy(&self) {
@@ -1014,21 +1064,47 @@ mod tests {
     }
 
     #[test]
-    fn window_uses_toolbar_view_root_layout() {
-        require_display!();
+    fn process_completion_notification_mode_matches_visibility_policy() {
+        assert_eq!(
+            process_completion_notification_mode(false, false),
+            ProcessCompletionNotificationMode::Desktop
+        );
+        assert_eq!(
+            process_completion_notification_mode(false, true),
+            ProcessCompletionNotificationMode::Desktop
+        );
+        assert_eq!(
+            process_completion_notification_mode(true, false),
+            ProcessCompletionNotificationMode::Toast
+        );
+        assert_eq!(
+            process_completion_notification_mode(true, true),
+            ProcessCompletionNotificationMode::None
+        );
+    }
 
+    fn new_test_window(application_id: &str) -> (tempfile::TempDir, Window) {
         let tmp = tempfile::TempDir::new().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
-            .application_id("com.illya.rttx.toolbar-view-tests")
+            .application_id(application_id)
             .build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
         window.set_default_size(1200, 800);
         window.present();
+        pump_events(100);
+        (tmp, window)
+    }
+
+    #[test]
+    fn window_uses_toolbar_view_root_layout() {
+        require_display!();
+
+        let (_tmp, window) = new_test_window("com.illya.rttx.toolbar-view-tests");
         let split_view_ptr = window
             .imp()
             .split_view
@@ -1046,8 +1122,14 @@ mod tests {
             let Some(toolbar_content) = toolbar_view.content() else {
                 return false;
             };
+            let Ok(toast_overlay) = toolbar_content.downcast::<adw::ToastOverlay>() else {
+                return false;
+            };
+            let Some(overlay_child) = toast_overlay.child() else {
+                return false;
+            };
 
-            toolbar_content.as_ptr() == split_view_ptr && toolbar_view.top_bar_height() > 0
+            overlay_child.as_ptr() == split_view_ptr && toolbar_view.top_bar_height() > 0
         });
 
         let content = window
@@ -1056,18 +1138,57 @@ mod tests {
         let toolbar_view = content
             .downcast::<adw::ToolbarView>()
             .expect("window root content should be a ToolbarView");
-        let toolbar_content = toolbar_view
+        let toast_overlay = toolbar_view
             .content()
-            .expect("ToolbarView should expose the split view as its content");
+            .expect("ToolbarView should expose a ToastOverlay as its content")
+            .downcast::<adw::ToastOverlay>()
+            .expect("ToolbarView content should be a ToastOverlay");
+        let overlay_child = toast_overlay
+            .child()
+            .expect("ToastOverlay should expose the split view as its child");
 
         assert!(
             settled,
-            "window should present a ToolbarView root with a visible top bar and the live split view as content"
+            "window should present a ToolbarView root with a visible top bar, a ToastOverlay, and the live split view as overlay content"
         );
         assert_eq!(
-            toolbar_content.as_ptr(),
+            overlay_child.as_ptr(),
             split_view_ptr,
-            "ToolbarView content should be the window's live split view"
+            "ToastOverlay child should be the window's live split view"
+        );
+
+        window.close();
+    }
+
+    #[test]
+    fn hidden_session_exit_uses_toast_when_window_is_active() {
+        require_display!();
+
+        let (_tmp, window) = new_test_window("com.illya.rttx.toast-policy-tests");
+        window.add_session();
+        pump_events(100);
+
+        let (visible_session_uuid, hidden_terminal_uuid) = {
+            let state = window.imp().state.borrow();
+            let visible_session = &state.sessions[0];
+            let hidden_session = &state.sessions[1];
+            (
+                visible_session.uuid.clone(),
+                hidden_session.layout.terminal_uuids().into_iter().next().unwrap(),
+            )
+        };
+
+        window.imp().session_stack.set_visible_child_name(&visible_session_uuid);
+        pump_events(50);
+
+        assert!(
+            window.is_active(),
+            "test window must be active to exercise the toast path"
+        );
+        assert_eq!(
+            window.process_completion_notification_mode(&hidden_terminal_uuid),
+            ProcessCompletionNotificationMode::Toast,
+            "process exit in a non-visible session should use an in-app toast while the window is active"
         );
 
         window.close();
@@ -1077,19 +1198,7 @@ mod tests {
     fn split_rebuild_starts_new_panes_evenly() {
         require_display!();
 
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.window-tests")
-            .build();
-        app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-        let window = Window::new(&app);
-        window.set_default_size(1200, 800);
-        window.present();
-        pump_events(100);
+        let (_tmp, window) = new_test_window("com.illya.rttx.window-tests");
 
         let (session_uuid, t1_uuid) = {
             let state = window.imp().state.borrow();
@@ -1176,19 +1285,7 @@ mod tests {
     fn nested_split_preserves_root_and_unaffected_terminals() {
         require_display!();
 
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.window-identity-tests")
-            .build();
-        app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-        let window = Window::new(&app);
-        window.set_default_size(1200, 800);
-        window.present();
-        pump_events(100);
+        let (_tmp, window) = new_test_window("com.illya.rttx.window-identity-tests");
 
         let (session_uuid, t1_uuid) = {
             let state = window.imp().state.borrow();
