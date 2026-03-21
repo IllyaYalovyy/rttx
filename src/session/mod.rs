@@ -1,6 +1,9 @@
 pub mod layout;
 
-pub use layout::{LayoutNode, SessionState, SplitOrientation, WindowState};
+pub use layout::{
+    LayoutNode, PaneRecovery, PaneSource, SessionState, SplitOrientation, StartupStep,
+    WindowState,
+};
 
 use crate::config;
 use gtk4::glib;

@@ -151,6 +151,7 @@ fn contract_any_constructible_state_roundtrips() {
                 uuid: "s".into(),
                 name: "".into(),
                 layout: term("t"),
+                terminal_recovery: Default::default(),
                 input_sync: false,
             }],
             active_session_index: 0,
@@ -164,6 +165,7 @@ fn contract_any_constructible_state_roundtrips() {
                 uuid: "s".into(),
                 name: "日本語セッション".into(),
                 layout: term_full("t", "/home/用户", "编辑器"),
+                terminal_recovery: Default::default(),
                 input_sync: true,
             }],
             active_session_index: 0,
@@ -182,6 +184,7 @@ fn contract_any_constructible_state_roundtrips() {
                     uuid: "s".into(),
                     name: "Deep".into(),
                     layout: l,
+                    terminal_recovery: Default::default(),
                     input_sync: false,
                 }],
                 active_session_index: 0,
@@ -197,6 +200,7 @@ fn contract_any_constructible_state_roundtrips() {
                     uuid: format!("s{i}"),
                     name: format!("Session {i}"),
                     layout: term(&format!("t{i}")),
+                    terminal_recovery: Default::default(),
                     input_sync: i % 2 == 0,
                 })
                 .collect();

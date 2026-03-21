@@ -11,7 +11,10 @@ use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::preferences;
-use crate::session::{self, LayoutNode, SessionState, SplitOrientation, WindowState};
+use crate::session::{
+    self, LayoutNode, PaneRecovery, PaneSource, SessionState, SplitOrientation, StartupStep,
+    WindowState,
+};
 use crate::sidebar::SessionRow;
 use crate::terminal::widget::TerminalWidget;
 use std::collections::HashMap;
@@ -282,6 +285,7 @@ impl Window {
             if let Some(content) = imp.session_stack.child_by_name(&session.uuid) {
                 session::capture_paned_ratios(&mut session.layout, &content);
             }
+            session.prune_recovery();
         }
 
         {
@@ -464,6 +468,11 @@ impl Window {
                 if let Some(title) = custom_title {
                     term.set_title(title);
                     term.imp().custom_title.replace(Some(title.to_string()));
+                }
+                if let Some(recovery) = session_state.recovery_for(uuid) {
+                    for step in &recovery.startup {
+                        term.queue_input_for_shell(step.terminal_input());
+                    }
                 }
                 win.connect_terminal_signals(&term);
                 win.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
@@ -666,6 +675,15 @@ impl Window {
         let Some(command) = bookmark.command() else {
             return;
         };
+        self.set_terminal_recovery(
+            &term.uuid(),
+            PaneRecovery {
+                source: PaneSource::Bookmark {
+                    name: bookmark.name.clone(),
+                },
+                startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
+            },
+        );
         self.send_input_to_terminal(&term.uuid(), &format!("{command}\n"));
     }
 
@@ -827,6 +845,18 @@ impl Window {
             return;
         };
 
+        self.set_terminal_recovery(
+            &term.uuid(),
+            PaneRecovery {
+                source: PaneSource::Command {
+                    title: command.title.clone(),
+                },
+                startup: vec![StartupStep::SendText {
+                    text: command.body.clone(),
+                    execute: run_mode == CommandRunMode::Run,
+                }],
+            },
+        );
         self.send_input_to_terminal(&term.uuid(), &command.input_for(run_mode));
     }
 
@@ -834,6 +864,15 @@ impl Window {
         let Some(command) = bookmark.command() else {
             return;
         };
+        self.set_terminal_recovery(
+            terminal_uuid,
+            PaneRecovery {
+                source: PaneSource::Bookmark {
+                    name: bookmark.name.clone(),
+                },
+                startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
+            },
+        );
         self.send_input_to_terminal(terminal_uuid, &format!("{command}\n"));
     }
 
@@ -844,6 +883,15 @@ impl Window {
         term.vte().feed_child(input.as_bytes());
         let _ = term.vte().grab_focus();
         self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
+    }
+
+    fn set_terminal_recovery(&self, terminal_uuid: &str, recovery: PaneRecovery) {
+        let mut state = self.imp().state.borrow_mut();
+        if let Some(session) =
+            state.sessions.iter_mut().find(|session| session.layout.contains_terminal(terminal_uuid))
+        {
+            session.set_recovery(terminal_uuid, recovery);
+        }
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -921,6 +969,7 @@ impl Window {
                 state.sessions[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
                 state.sessions[idx].layout = new_layout;
+                state.sessions[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
                 let session_uuid = state.sessions[idx].uuid.clone();
                 let session_state = state.sessions[idx].clone();
                 drop(state);
@@ -1013,6 +1062,11 @@ impl Window {
                 if let Some(title) = custom_title {
                     term.set_title(title);
                     term.imp().custom_title.replace(Some(title.to_string()));
+                }
+                if let Some(recovery) = session_state.recovery_for(uuid) {
+                    for step in &recovery.startup {
+                        term.queue_input_for_shell(step.terminal_input());
+                    }
                 }
                 win.connect_terminal_signals(&term);
                 win.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
@@ -1459,6 +1513,7 @@ mod tests {
                     first: Box::new(LayoutNode::new_terminal_with_uuid("t1")),
                     second: Box::new(LayoutNode::new_terminal_with_uuid("t2")),
                 },
+                terminal_recovery: Default::default(),
                 input_sync: false,
             }],
         };
@@ -1481,6 +1536,7 @@ mod tests {
                     uuid: "s1".into(),
                     name: "Session 1".into(),
                     layout: LayoutNode::new_terminal_with_uuid("t1"),
+                    terminal_recovery: Default::default(),
                     input_sync: false,
                 },
                 SessionState {
@@ -1492,6 +1548,7 @@ mod tests {
                         first: Box::new(LayoutNode::new_terminal_with_uuid("t2")),
                         second: Box::new(LayoutNode::new_terminal_with_uuid("t3")),
                     },
+                    terminal_recovery: Default::default(),
                     input_sync: false,
                 },
             ],
@@ -1699,6 +1756,129 @@ mod tests {
         );
 
         window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.bookmark-recovery-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let first_window = Window::new(&app);
+        let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.tmux_session = Some("web".into());
+        let expected_input = format!("{}\n", bookmark.command().unwrap());
+
+        first_window.new_session_from_bookmark(&bookmark);
+
+        let (terminal_uuid, saved_recovery) = {
+            let state = first_window.imp().state.borrow();
+            let session = state.sessions.last().expect("bookmark should create a session");
+            let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
+            (terminal_uuid.clone(), session.recovery_for(&terminal_uuid).cloned())
+        };
+
+        assert_eq!(
+            saved_recovery,
+            Some(PaneRecovery {
+                source: PaneSource::Bookmark {
+                    name: "Prod Web".into(),
+                },
+                startup: vec![StartupStep::SendText {
+                    text: bookmark.command().unwrap(),
+                    execute: true,
+                }],
+            })
+        );
+
+        first_window.save_state();
+        first_window.close();
+
+        let second_window = Window::new(&app);
+        let restored_term = second_window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("restored bookmark terminal should exist");
+
+        assert_eq!(
+            restored_term.pending_shell_inputs_for_test(),
+            vec![expected_input],
+            "restored bookmark session should queue its recovery command before shell startup"
+        );
+
+        second_window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn inserted_commands_persist_nonexecuting_recovery_recipe_on_restart() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.command-recovery-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let first_window = Window::new(&app);
+        let command = SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
+
+        first_window.execute_saved_command(&command, CommandRunMode::Insert);
+
+        let (terminal_uuid, saved_recovery) = {
+            let state = first_window.imp().state.borrow();
+            let session = &state.sessions[0];
+            let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
+            (terminal_uuid.clone(), session.recovery_for(&terminal_uuid).cloned())
+        };
+
+        assert_eq!(
+            saved_recovery,
+            Some(PaneRecovery {
+                source: PaneSource::Command {
+                    title: "Deploy checklist".into(),
+                },
+                startup: vec![StartupStep::SendText {
+                    text: "cargo build\ncargo test".into(),
+                    execute: false,
+                }],
+            })
+        );
+
+        first_window.save_state();
+        first_window.close();
+
+        let second_window = Window::new(&app);
+        let restored_term = second_window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("restored command terminal should exist");
+
+        assert_eq!(
+            restored_term.pending_shell_inputs_for_test(),
+            vec![String::from("cargo build\ncargo test")],
+            "restored insert-mode command should replay without an added newline"
+        );
+
+        second_window.close();
         std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 

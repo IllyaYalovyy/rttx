@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Represents the layout tree of terminals within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +44,51 @@ pub enum SplitOrientation {
     Vertical,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PaneSource {
+    EmptyShell,
+    Bookmark { name: String },
+    Command { title: String },
+    SessionTemplate { name: String },
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StartupStep {
+    SendText { text: String, execute: bool },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaneRecovery {
+    pub source: PaneSource,
+    #[serde(default)]
+    pub startup: Vec<StartupStep>,
+}
+
+impl PaneRecovery {
+    #[must_use]
+    pub fn empty_shell() -> Self {
+        Self { source: PaneSource::EmptyShell, startup: Vec::new() }
+    }
+}
+
+impl StartupStep {
+    #[must_use]
+    pub fn terminal_input(&self) -> String {
+        match self {
+            Self::SendText { text, execute } => {
+                if *execute {
+                    format!("{text}\n")
+                } else {
+                    text.clone()
+                }
+            }
+        }
+    }
+}
+
 impl LayoutNode {
     #[must_use]
     pub fn new_terminal() -> Self {
@@ -57,7 +103,12 @@ impl LayoutNode {
     #[cfg(test)]
     #[must_use]
     pub fn new_terminal_with_uuid(uuid: &str) -> Self {
-        Self::Terminal { uuid: uuid.to_string(), profile: None, cwd: None, custom_title: None }
+        Self::Terminal {
+            uuid: uuid.to_string(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }
     }
 
     #[must_use]
@@ -268,16 +319,24 @@ pub struct SessionState {
     pub name: String,
     pub layout: LayoutNode,
     #[serde(default)]
+    pub terminal_recovery: BTreeMap<String, PaneRecovery>,
+    #[serde(default)]
     pub input_sync: bool,
 }
 
 impl SessionState {
     #[must_use]
     pub fn new(name: String) -> Self {
+        let layout = LayoutNode::new_terminal();
+        let mut terminal_recovery = BTreeMap::new();
+        if let Some(terminal_uuid) = layout.terminal_uuids().into_iter().next() {
+            terminal_recovery.insert(terminal_uuid, PaneRecovery::empty_shell());
+        }
         Self {
             uuid: uuid::Uuid::new_v4().to_string(),
             name,
-            layout: LayoutNode::new_terminal(),
+            layout,
+            terminal_recovery,
             input_sync: false,
         }
     }
@@ -285,12 +344,31 @@ impl SessionState {
     #[cfg(test)]
     #[must_use]
     pub fn default_for_test() -> Self {
+        let mut terminal_recovery = BTreeMap::new();
+        terminal_recovery.insert("test-terminal-uuid".to_string(), PaneRecovery::empty_shell());
         Self {
             uuid: "test-session-uuid".to_string(),
             name: "Session 1".to_string(),
             layout: LayoutNode::new_terminal_with_uuid("test-terminal-uuid"),
+            terminal_recovery,
             input_sync: false,
         }
+    }
+}
+
+impl SessionState {
+    pub fn set_recovery(&mut self, terminal_uuid: &str, recovery: PaneRecovery) {
+        self.terminal_recovery.insert(terminal_uuid.to_string(), recovery);
+    }
+
+    #[must_use]
+    pub fn recovery_for(&self, terminal_uuid: &str) -> Option<&PaneRecovery> {
+        self.terminal_recovery.get(terminal_uuid)
+    }
+
+    pub fn prune_recovery(&mut self) {
+        let valid_uuids = self.layout.terminal_uuids();
+        self.terminal_recovery.retain(|terminal_uuid, _| valid_uuids.contains(terminal_uuid));
     }
 }
 
@@ -533,10 +611,22 @@ mod tests {
 
     #[test]
     fn session_state_roundtrip() {
+        let mut terminal_recovery = BTreeMap::new();
+        terminal_recovery.insert(
+            "t2".into(),
+            PaneRecovery {
+                source: PaneSource::Bookmark { name: "Prod".into() },
+                startup: vec![StartupStep::SendText {
+                    text: "ssh prod && tmux attach -t web".into(),
+                    execute: true,
+                }],
+            },
+        );
         let session = SessionState {
             uuid: "s1".into(),
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
+            terminal_recovery,
             input_sync: true,
         };
         let json = serde_json::to_string(&session).unwrap();
@@ -679,6 +769,77 @@ mod tests {
         if let LayoutNode::Split { ratio, .. } = &split {
             assert!(*ratio > 0.0 && *ratio < 1.0, "Ratio {ratio} out of (0,1)");
         }
+    }
+
+    #[test]
+    fn startup_step_terminal_input_respects_execute_flag() {
+        assert_eq!(
+            StartupStep::SendText { text: "echo hi".into(), execute: true }.terminal_input(),
+            "echo hi\n"
+        );
+        assert_eq!(
+            StartupStep::SendText { text: "echo hi".into(), execute: false }.terminal_input(),
+            "echo hi"
+        );
+    }
+
+    #[test]
+    fn new_session_starts_with_empty_shell_recovery_for_initial_terminal() {
+        let session = SessionState::new("Work".into());
+        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
+
+        assert_eq!(session.recovery_for(&terminal_uuid), Some(&PaneRecovery::empty_shell()));
+    }
+
+    #[test]
+    fn prune_recovery_removes_closed_terminal_entries() {
+        let mut session = SessionState {
+            uuid: "s1".into(),
+            name: "Work".into(),
+            layout: hsplit(term("t1"), term("t2")),
+            terminal_recovery: BTreeMap::from([
+                (
+                    "t1".into(),
+                    PaneRecovery {
+                        source: PaneSource::Manual,
+                        startup: vec![StartupStep::SendText {
+                            text: "echo one".into(),
+                            execute: true,
+                        }],
+                    },
+                ),
+                (
+                    "t2".into(),
+                    PaneRecovery {
+                        source: PaneSource::Bookmark { name: "Prod".into() },
+                        startup: vec![StartupStep::SendText {
+                            text: "ssh prod".into(),
+                            execute: true,
+                        }],
+                    },
+                ),
+                (
+                    "ghost".into(),
+                    PaneRecovery {
+                        source: PaneSource::Command {
+                            title: "Detached".into(),
+                        },
+                        startup: vec![StartupStep::SendText {
+                            text: "echo stale".into(),
+                            execute: false,
+                        }],
+                    },
+                ),
+            ]),
+            input_sync: false,
+        };
+
+        session.layout = session.layout.remove_terminal("t2").unwrap();
+        session.prune_recovery();
+
+        assert!(session.recovery_for("t1").is_some());
+        assert!(session.recovery_for("t2").is_none());
+        assert!(session.recovery_for("ghost").is_none());
     }
 }
 

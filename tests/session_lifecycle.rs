@@ -68,18 +68,21 @@ fn workflow_multi_session_state() {
             uuid: "s1".into(),
             name: "Editor".into(),
             layout: hsplit(term("editor-main"), vsplit(term("editor-side"), term("editor-term"))),
+            terminal_recovery: Default::default(),
             input_sync: false,
         },
         SessionState {
             uuid: "s2".into(),
             name: "Build".into(),
             layout: vsplit(term("build-output"), term("build-logs")),
+            terminal_recovery: Default::default(),
             input_sync: false,
         },
         SessionState {
             uuid: "s3".into(),
             name: "Monitoring".into(),
             layout: term("htop"),
+            terminal_recovery: Default::default(),
             input_sync: false,
         },
     ];
@@ -131,6 +134,7 @@ fn workflow_persist_and_restore_with_cwds() {
                     custom_title: Some("cargo watch".into()),
                 },
             ),
+            terminal_recovery: Default::default(),
             input_sync: false,
         }],
         active_session_index: 0,
@@ -211,6 +215,7 @@ fn empty_session_name_is_valid() {
         uuid: "s1".into(),
         name: String::new(),
         layout: term("t1"),
+        terminal_recovery: Default::default(),
         input_sync: false,
     };
     let json = serde_json::to_string(&session).unwrap();

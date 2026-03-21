@@ -17,6 +17,7 @@ mod imp {
         pub initial_cwd: RefCell<Option<String>>,
         pub shell_spawned: Cell<bool>,
         pub smart_clipboard: Cell<bool>,
+        pub pending_shell_inputs: RefCell<Vec<String>>,
         pub vte: vte4::Terminal,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
@@ -229,6 +230,16 @@ impl TerminalWidget {
         self.imp().smart_clipboard.set(enabled);
     }
 
+    pub fn queue_input_for_shell(&self, input: impl Into<String>) {
+        let input = input.into();
+        if self.imp().shell_spawned.get() {
+            self.imp().vte.feed_child(input.as_bytes());
+            return;
+        }
+        self.imp().pending_shell_inputs.borrow_mut().push(input);
+        self.ensure_shell_spawned_when_ready();
+    }
+
     pub fn ensure_shell_spawned_when_ready(&self) {
         if self.imp().shell_spawned.get() {
             return;
@@ -285,11 +296,20 @@ impl TerminalWidget {
             let cwd = self.imp().initial_cwd.borrow().clone();
             self.spawn_shell(cwd.as_deref());
         }
+        let pending_inputs: Vec<String> = self.imp().pending_shell_inputs.borrow_mut().drain(..).collect();
+        for input in pending_inputs {
+            self.imp().vte.feed_child(input.as_bytes());
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn shell_spawned_for_test(&self) -> bool {
         self.imp().shell_spawned.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_shell_inputs_for_test(&self) -> Vec<String> {
+        self.imp().pending_shell_inputs.borrow().clone()
     }
 
     /// Disconnect the `child_exited` signal handler to prevent re-entrancy

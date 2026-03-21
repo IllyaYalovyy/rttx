@@ -55,7 +55,13 @@ pub fn split_ratio(
 
 /// Build a session with a given layout.
 pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
-    SessionState { uuid: id.to_string(), name: name.to_string(), layout, input_sync: false }
+    SessionState {
+        uuid: id.to_string(),
+        name: name.to_string(),
+        layout,
+        terminal_recovery: Default::default(),
+        input_sync: false,
+    }
 }
 
 /// Build a window state from sessions.
