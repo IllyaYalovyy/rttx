@@ -96,11 +96,11 @@ mod imp {
                 .sync_create()
                 .build();
 
-            let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            main_box.append(&header);
-            main_box.append(&self.split_view);
+            let toolbar_view = adw::ToolbarView::new();
+            toolbar_view.add_top_bar(&header);
+            toolbar_view.set_content(Some(&self.split_view));
 
-            obj.set_content(Some(&main_box));
+            obj.set_content(Some(&toolbar_view));
         }
     }
 
@@ -1011,6 +1011,66 @@ mod tests {
             }
         }
         condition()
+    }
+
+    #[test]
+    fn window_uses_toolbar_view_root_layout() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.toolbar-view-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        let split_view_ptr = window
+            .imp()
+            .split_view
+            .clone()
+            .upcast::<gtk4::Widget>()
+            .as_ptr();
+
+        let settled = wait_until(1000, || {
+            let Some(content) = window.content() else {
+                return false;
+            };
+            let Ok(toolbar_view) = content.downcast::<adw::ToolbarView>() else {
+                return false;
+            };
+            let Some(toolbar_content) = toolbar_view.content() else {
+                return false;
+            };
+
+            toolbar_content.as_ptr() == split_view_ptr && toolbar_view.top_bar_height() > 0
+        });
+
+        let content = window
+            .content()
+            .expect("application window should always have content");
+        let toolbar_view = content
+            .downcast::<adw::ToolbarView>()
+            .expect("window root content should be a ToolbarView");
+        let toolbar_content = toolbar_view
+            .content()
+            .expect("ToolbarView should expose the split view as its content");
+
+        assert!(
+            settled,
+            "window should present a ToolbarView root with a visible top bar and the live split view as content"
+        );
+        assert_eq!(
+            toolbar_content.as_ptr(),
+            split_view_ptr,
+            "ToolbarView content should be the window's live split view"
+        );
+
+        window.close();
     }
 
     #[test]

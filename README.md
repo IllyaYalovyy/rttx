@@ -9,7 +9,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 `rttx` is built for developers and sysadmins who want a terminal that is:
 
 - **Rock-Solid**: No memory leaks, no crashes, no "magic." Every core feature is backed by a comprehensive suite of unit, integration, and property-based tests.
-- **Deeply Integrated**: Designed specifically for GNOME. It uses Libadwaita for a native look and feel, follows system light/dark settings, and integrates with system notifications and GSettings.
+- **Deeply Integrated**: Designed specifically for GNOME. It uses Libadwaita native window chrome and widgets, follows system light/dark settings, and integrates with system notifications.
 - **Context-Aware**: A "session" should be more than a layout. `rttx` aims to preserve your actual working context, including paths and history.
 - **Strictly Maintained**: The project enforces aggressive linting (Clippy pedantic/nursery) and automated formatting on every build to ensure long-term maintainability.
 
@@ -17,6 +17,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 
 - **Split-screen terminals** — High-performance tiling splits (Horizontal: Ctrl+Shift+E, Vertical: Ctrl+Shift+O).
 - **Sidebar session management** — Persistent sessions organized in a native Adwaita sidebar.
+- **Native GNOME window layout** — Libadwaita `ToolbarView` and `OverlaySplitView` keep the main window consistent with modern GNOME apps.
 - **Context Persistence** — Layout, Current Working Directories, and custom titles are saved automatically and restored on launch.
 - **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
