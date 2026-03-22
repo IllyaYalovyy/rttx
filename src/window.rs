@@ -217,9 +217,10 @@ mod imp {
             utility_switcher.set_margin_end(12);
             utility_switcher.set_margin_top(12);
 
+            self.utility_sidebar_box.set_orientation(gtk4::Orientation::Vertical);
             self.utility_sidebar_box.append(&utility_switcher);
             self.utility_sidebar_box.append(&utility_stack);
-            self.utility_sidebar_box.set_width_request(240);
+            self.utility_sidebar_box.set_width_request(320);
 
             self.session_stack.set_hexpand(true);
             self.session_stack.set_vexpand(true);
