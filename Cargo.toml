@@ -36,7 +36,7 @@ dbg_macro = "warn"
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_14"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
-vte4 = "0.8"
+vte4 = { version = "0.8", features = ["v0_78"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }

@@ -31,6 +31,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - **Attach-only tmux recovery** — tmux-backed panes reattach to the named session; `rttx` never silently creates a new clean tmux session during recovery.
 - **In-pane retry for failed recovery** — if a recoverable SSH/tmux pane fails to reconnect, the pane stays open and offers a non-modal retry action inside the terminal.
 - **Optional smart clipboard** — An opt-in mode lets plain `Ctrl+C` copy selected terminal text and `Ctrl+V` paste from the clipboard.
+- **Clickable links and paths** — `http(s)` URLs, OSC 8 hyperlinks, and detected file paths in terminal output highlight and open with a click.
 - **Built-in terminal themes** — Native "Nightfall" and "Daybreak" schemes with full Tilix color scheme compatibility.
 - **Smart Notifications** — Process exit in a hidden session shows an in-app toast while `rttx` is focused, and falls back to a desktop notification when the window is not active.
 

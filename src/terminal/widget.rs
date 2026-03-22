@@ -2,6 +2,7 @@ use gtk4::glib;
 use gtk4::glib::subclass::prelude::*;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
+use std::path::{Path, PathBuf};
 use vte4::prelude::*;
 
 use crate::color_scheme;
@@ -143,6 +144,42 @@ mod imp {
             self.vte.set_scroll_on_output(false);
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
+            configure_openable_matches(&self.vte);
+
+            let click_target = obj.downgrade();
+            let open_match_click = gtk4::GestureClick::new();
+            open_match_click.set_button(1);
+            open_match_click.connect_released(move |gesture, n_press, x, y| {
+                if n_press != 1 {
+                    return;
+                }
+                let Some(widget) = gesture.widget() else { return };
+                let Ok(vte) = widget.downcast::<vte4::Terminal>() else { return };
+                let Some(term) = click_target.upgrade() else { return };
+                if term.try_open_match_at(x, y, &vte) {
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                }
+            });
+            self.vte.add_controller(open_match_click);
+
+            let hover_target = obj.downgrade();
+            let hover_controller = gtk4::EventControllerMotion::new();
+            hover_controller.connect_motion(move |controller, x, y| {
+                let Some(widget) = controller.widget() else { return };
+                let Ok(vte) = widget.downcast::<vte4::Terminal>() else { return };
+                let Some(term) = hover_target.upgrade() else { return };
+                let cursor_name =
+                    if term.openable_uri_at(x, y, &vte).is_some() { Some("pointer") } else { None };
+                vte.set_cursor_from_name(cursor_name);
+            });
+            let leave_target = obj.downgrade();
+            hover_controller.connect_leave(move |controller| {
+                let Some(_term) = leave_target.upgrade() else { return };
+                let Some(widget) = controller.widget() else { return };
+                let Ok(vte) = widget.downcast::<vte4::Terminal>() else { return };
+                vte.set_cursor_from_name(None);
+            });
+            self.vte.add_controller(hover_controller);
 
             let vte = self.vte.clone();
             let smart_clipboard_controller = gtk4::ShortcutController::new();
@@ -462,9 +499,132 @@ impl TerminalWidget {
             }
         }
     }
+
+    fn try_open_match_at(&self, x: f64, y: f64, vte: &vte4::Terminal) -> bool {
+        let Some(uri) = self.openable_uri_at(x, y, vte) else {
+            return false;
+        };
+        self.open_uri(&uri)
+    }
+
+    fn openable_uri_at(&self, x: f64, y: f64, vte: &vte4::Terminal) -> Option<String> {
+        if let Some(uri) = vte.check_hyperlink_at(x, y) {
+            return Some(uri.to_string());
+        }
+
+        let (matched, _tag) = vte.check_match_at(x, y);
+        let cwd = self.current_directory();
+        matched.as_deref().and_then(|text| openable_uri_from_match_text(text, cwd.as_deref()))
+    }
+
+    fn open_uri(&self, uri: &str) -> bool {
+        match gtk4::gio::AppInfo::launch_default_for_uri(uri, gtk4::gio::AppLaunchContext::NONE) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("Failed to open terminal match '{uri}': {error}");
+                false
+            }
+        }
+    }
 }
+
 pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
     glib::filename_from_uri(uri).ok().map(|(path, _hostname)| path.display().to_string())
+}
+
+const OPENABLE_URI_PREFIXES: &[&str] = &["http://", "https://", "mailto:", "file://"];
+const URI_MATCH_REGEX: &str = r#"(?:https?://|mailto:|file://)[^\s<>'"`)\]\}]+"#;
+const PATH_MATCH_REGEX: &str = r#"(?:~/|\.\.?/|/|[A-Za-z0-9._-]+/)[^\s<>'"`]+"#;
+
+fn configure_openable_matches(vte: &vte4::Terminal) {
+    vte.set_allow_hyperlink(true);
+    register_openable_match(vte, URI_MATCH_REGEX);
+    register_openable_match(vte, PATH_MATCH_REGEX);
+}
+
+fn register_openable_match(vte: &vte4::Terminal, pattern: &str) {
+    match vte4::Regex::for_match(pattern, 0) {
+        Ok(regex) => {
+            let tag = vte.match_add_regex(&regex, 0);
+            vte.match_set_cursor_name(tag, "pointer");
+        }
+        Err(error) => {
+            log::error!("Failed to register terminal match regex '{pattern}': {error}");
+        }
+    }
+}
+
+fn openable_uri_from_match_text(
+    match_text: &str,
+    current_directory: Option<&str>,
+) -> Option<String> {
+    let trimmed = trim_openable_match(match_text);
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if OPENABLE_URI_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix)) {
+        return Some(trimmed.to_string());
+    }
+
+    let path_text = strip_editor_position_suffix(trimmed);
+    if !looks_like_path(path_text) {
+        return None;
+    }
+
+    let path = resolve_openable_path(path_text, current_directory)?;
+    Some(gtk4::gio::File::for_path(path).uri().to_string())
+}
+
+fn trim_openable_match(match_text: &str) -> &str {
+    match_text.trim_end_matches(['.', ',', ';', '!', '?', ')', ']', '}', '>'])
+}
+
+fn strip_editor_position_suffix(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    let mut end = path.len();
+    let mut stripped_any = false;
+
+    loop {
+        let mut start = end;
+        while start > 0 && bytes[start - 1].is_ascii_digit() {
+            start -= 1;
+        }
+
+        if start == end || start == 0 || bytes[start - 1] != b':' {
+            break;
+        }
+
+        stripped_any = true;
+        end = start - 1;
+    }
+
+    if stripped_any {
+        &path[..end]
+    } else {
+        path
+    }
+}
+
+fn looks_like_path(path: &str) -> bool {
+    path.starts_with('/')
+        || path.starts_with("~/")
+        || path.starts_with("./")
+        || path.starts_with("../")
+        || path.contains('/')
+}
+
+fn resolve_openable_path(path: &str, current_directory: Option<&str>) -> Option<PathBuf> {
+    if let Some(home_relative) = path.strip_prefix("~/") {
+        return Some(glib::home_dir().join(home_relative));
+    }
+
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Some(path.to_path_buf());
+    }
+
+    current_directory.map(|cwd| Path::new(cwd).join(path))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,7 +659,11 @@ fn smart_clipboard_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_file_uri, smart_clipboard_action, SmartClipboardAction};
+    use super::{
+        openable_uri_from_match_text, parse_file_uri, smart_clipboard_action, SmartClipboardAction,
+    };
+    use gtk4::gio;
+    use gtk4::prelude::*;
 
     #[test]
     fn parse_standard_vte_uri() {
@@ -540,6 +704,51 @@ mod tests {
         assert_eq!(old_way, Some("/home/user/my%20dir".into()));
         assert_eq!(new_way, Some("/home/user/my dir".into()));
         assert_ne!(old_way, new_way);
+    }
+
+    #[test]
+    fn http_match_opens_as_uri() {
+        assert_eq!(
+            openable_uri_from_match_text("https://example.com/docs?q=rust#intro", None),
+            Some("https://example.com/docs?q=rust#intro".into())
+        );
+    }
+
+    #[test]
+    fn trailing_punctuation_is_trimmed_from_uri_match() {
+        assert_eq!(
+            openable_uri_from_match_text("https://example.com/docs).", None),
+            Some("https://example.com/docs".into())
+        );
+    }
+
+    #[test]
+    fn absolute_path_match_becomes_file_uri() {
+        let expected = gio::File::for_path("/tmp/rttx.log").uri().to_string();
+        assert_eq!(openable_uri_from_match_text("/tmp/rttx.log", None), Some(expected));
+    }
+
+    #[test]
+    fn relative_path_match_uses_terminal_cwd() {
+        let expected = gio::File::for_path("/workspace/rttx/src/main.rs").uri().to_string();
+        assert_eq!(
+            openable_uri_from_match_text("src/main.rs", Some("/workspace/rttx")),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn line_and_column_suffix_do_not_block_path_opening() {
+        let expected = gio::File::for_path("/workspace/rttx/src/main.rs").uri().to_string();
+        assert_eq!(
+            openable_uri_from_match_text("src/main.rs:42:7", Some("/workspace/rttx")),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn bare_word_is_not_treated_as_openable_path() {
+        assert_eq!(openable_uri_from_match_text("Cargo.toml", Some("/workspace/rttx")), None);
     }
 
     #[test]
