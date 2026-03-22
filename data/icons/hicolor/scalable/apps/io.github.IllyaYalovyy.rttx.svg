@@ -1,31 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="gnome_blue" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#62a0ea"/>
-      <stop offset="100%" stop-color="#3584e4"/>
+    <linearGradient id="shell-top" x1="64" y1="10" x2="64" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#78aeed"/>
+      <stop offset="1" stop-color="#3584e4"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-      <feOffset dx="0" dy="1" result="offsetblur"/>
-      <feComponentTransfer>
-        <feFuncA type="linear" slope="0.3"/>
-      </feComponentTransfer>
-      <feMerge>
-        <feMergeNode/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
+    <linearGradient id="shell-front" x1="64" y1="92" x2="64" y2="118" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2d6ec3"/>
+      <stop offset="1" stop-color="#1c4f95"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="64" y1="22" x2="64" y2="86" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#252b3a"/>
+      <stop offset="1" stop-color="#141925"/>
+    </linearGradient>
+    <linearGradient id="active-pane" x1="28" y1="26" x2="58" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#27354f"/>
+      <stop offset="1" stop-color="#1b2536"/>
+    </linearGradient>
   </defs>
-  <rect x="8" y="12" width="112" height="104" rx="14" ry="14" fill="url(#gnome_blue)" filter="url(#shadow)"/>
-  <rect x="16" y="24" width="96" height="80" rx="4" ry="4" fill="#1e1e1e"/>
-  <g stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.9">
-    <path d="M28,48 L44,64 L28,80"/>
-    <line x1="50" y1="80" x2="66" y2="80"/>
-    <line x1="84" y1="36" x2="84" y2="92" stroke-width="4" opacity="0.6"/>
-    <line x1="74" y1="64" x2="102" y2="64" stroke-width="4" opacity="0.6"/>
-  </g>
-  <circle cx="28" cy="18" r="3" fill="#ffffff" opacity="0.3"/>
-  <circle cx="40" cy="18" r="3" fill="#ffffff" opacity="0.3"/>
-  <circle cx="52" cy="18" r="3" fill="#ffffff" opacity="0.3"/>
+
+  <path d="M24 10h80c9.9 0 18 8.1 18 18v54c0 9.9-8.1 18-18 18H24c-9.9 0-18-8.1-18-18V28c0-9.9 8.1-18 18-18z" fill="url(#shell-top)"/>
+  <path d="M6 82h116v16c0 11-9 20-20 20H26c-11 0-20-9-20-20V82z" fill="url(#shell-front)"/>
+  <path d="M24 10h80c9.9 0 18 8.1 18 18v4c0-9.9-8.1-18-18-18H24C14.1 14 6 22.1 6 32v-4c0-9.9 8.1-18 18-18z" fill="#ffffff" opacity="0.14"/>
+
+  <rect x="18" y="20" width="92" height="66" rx="11" fill="url(#screen)"/>
+  <path d="M28 28h30c5.5 0 10 4.5 10 10v30c0 5.5-4.5 10-10 10H28c-5.5 0-10-4.5-10-10V38c0-5.5 4.5-10 10-10z" fill="url(#active-pane)"/>
+  <path d="M74 28h24c6.6 0 12 5.4 12 12v8H74z" fill="#1d2230"/>
+  <path d="M74 54h36v14c0 6.6-5.4 12-12 12H74z" fill="#191f2c"/>
+
+  <rect x="69" y="28" width="3" height="50" rx="1.5" fill="#8ec5ff" opacity="0.9"/>
+  <rect x="74" y="50" width="36" height="3" rx="1.5" fill="#8ec5ff" opacity="0.75"/>
+
+  <path d="M30 38l12 12-12 12" fill="none" stroke="#f8f9fb" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"/>
+  <path d="M48 62h14" fill="none" stroke="#ff8f5a" stroke-linecap="round" stroke-width="5"/>
+
+  <path d="M82 38h14" fill="none" stroke="#67d17f" stroke-linecap="round" stroke-width="4"/>
+  <path d="M82 45h10" fill="none" stroke="#c0e9c8" stroke-linecap="round" stroke-width="4" opacity="0.75"/>
+  <path d="M82 62h11" fill="none" stroke="#67d17f" stroke-linecap="round" stroke-width="4"/>
+
+  <path d="M24 102h80" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-opacity="0.12" stroke-width="4"/>
 </svg>
