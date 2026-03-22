@@ -14,6 +14,12 @@ metainfodir = datadir / 'metainfo'
 
 app_id = 'io.github.IllyaYalovyy.rttx'
 
+# Register tracked git hooks so they apply in every fresh clone automatically
+git = find_program('git', required: false)
+if git.found()
+  run_command(git, 'config', 'core.hooksPath', '.githooks', check: false)
+endif
+
 # Dependencies (checked early for better user feedback)
 dependency('gtk4', version: '>= 4.14')
 dependency('libadwaita-1', version: '>= 1.5')
