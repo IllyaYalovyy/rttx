@@ -62,6 +62,7 @@ Native Flatpak support via Flathub is under development.
 | Paste | Ctrl+Shift+V |
 | Input sync toggle | Ctrl+Shift+I |
 | Next/prev session | Ctrl+Tab / Ctrl+Shift+Tab |
+| Session 1-9 | Alt+1 through Alt+9 |
 | Zoom in/out/reset | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |

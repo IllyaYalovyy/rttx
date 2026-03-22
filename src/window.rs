@@ -393,6 +393,19 @@ impl Window {
             win.show_about_window();
         });
         self.add_action(&about_action);
+
+        for number in 1_u8..=9 {
+            let action_name = format!("switch-to-session-{number}");
+            let win = self.clone();
+            let action = gtk4::gio::SimpleAction::new(&action_name, None);
+            action.connect_activate(move |_, _| {
+                win.switch_to_session_number(number as usize);
+            });
+            self.add_action(&action);
+
+            let accel = format!("<Alt>{number}");
+            app.set_accels_for_action(&format!("win.{action_name}"), &[accel.as_str()]);
+        }
     }
 
     fn setup_signals(&self) {
@@ -1345,6 +1358,16 @@ impl Window {
         drop(state);
         if let Some(row) = imp.sidebar_list.row_at_index(next) {
             imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
+    fn switch_to_session_number(&self, number: usize) {
+        let Some(index) = number.checked_sub(1) else {
+            return;
+        };
+
+        if let Some(row) = self.imp().sidebar_list.row_at_index(index as i32) {
+            self.imp().sidebar_list.select_row(Some(&row));
         }
     }
 
@@ -2557,6 +2580,52 @@ mod tests {
         assert_eq!(about.issue_url().as_str(), config::ISSUE_TRACKER);
 
         about.close();
+        window.close();
+    }
+
+    #[test]
+    fn switch_to_session_number_selects_expected_session() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.alt-number-session-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        window.add_session();
+        pump_events(50);
+
+        window.switch_to_session_number(2);
+        pump_events(50);
+
+        assert_eq!(window.imp().sidebar_list.selected_row().map(|row| row.index()), Some(1));
+
+        let visible_session = window
+            .imp()
+            .session_stack
+            .visible_child_name()
+            .expect("switching by number should select a visible session");
+        let expected_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[1].uuid.clone()
+        };
+        assert_eq!(visible_session.as_str(), expected_uuid);
+
+        window.switch_to_session_number(9);
+        pump_events(50);
+
+        assert_eq!(
+            window.imp().sidebar_list.selected_row().map(|row| row.index()),
+            Some(1),
+            "out-of-range session numbers should leave the current selection unchanged"
+        );
+
         window.close();
     }
 
