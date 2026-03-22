@@ -717,7 +717,11 @@ impl Window {
 
     pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
         let imp = self.imp();
-        let session_state = SessionState::new(bookmark.name.clone());
+        let initial_cwd = bookmark.session_initial_cwd().map(str::to_string);
+        let startup_command = bookmark.session_startup_command();
+
+        let session_state =
+            SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd);
         let session_uuid = session_state.uuid.clone();
         let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
         imp.state.borrow_mut().sessions.push(session_state.clone());
@@ -728,7 +732,7 @@ impl Window {
             imp.sidebar_list.select_row(Some(&row));
         }
 
-        self.execute_bookmark_in_terminal(bookmark, &terminal_uuid);
+        self.setup_bookmark_terminal(&terminal_uuid, bookmark.name.clone(), startup_command);
         self.imp().session_stack.set_visible_child_name(&session_uuid);
     }
 
@@ -930,18 +934,23 @@ impl Window {
         self.send_input_to_terminal(&term.uuid(), &command.input_for(run_mode));
     }
 
-    fn execute_bookmark_in_terminal(&self, bookmark: &Bookmark, terminal_uuid: &str) {
-        let Some(command) = bookmark.command() else {
-            return;
-        };
+    fn setup_bookmark_terminal(
+        &self,
+        terminal_uuid: &str,
+        bookmark_name: String,
+        startup_command: Option<String>,
+    ) {
+        let startup = startup_command
+            .as_deref()
+            .map(|cmd| vec![StartupStep::SendText { text: cmd.to_string(), execute: true }])
+            .unwrap_or_default();
         self.set_terminal_recovery(
             terminal_uuid,
-            PaneRecovery {
-                source: PaneSource::Bookmark { name: bookmark.name.clone() },
-                startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
-            },
+            PaneRecovery { source: PaneSource::Bookmark { name: bookmark_name }, startup },
         );
-        self.send_input_to_terminal(terminal_uuid, &format!("{command}\n"));
+        if let Some(command) = startup_command {
+            self.send_input_to_terminal(terminal_uuid, &format!("{command}\n"));
+        }
     }
 
     fn send_input_to_terminal(&self, terminal_uuid: &str, input: &str) {
@@ -1884,6 +1893,133 @@ mod tests {
         );
 
         second_window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn new_session_from_folder_bookmark_uses_initial_cwd_not_cd_command() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.folder-bookmark-cwd-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let mut bookmark = crate::bookmarks::Bookmark::new("Work");
+        bookmark.directory = Some("/home/user/work".into());
+
+        window.new_session_from_bookmark(&bookmark);
+
+        let (layout_cwd, pending_inputs) = {
+            let state = window.imp().state.borrow();
+            let session = state.sessions.last().unwrap();
+            let terminal_uuid =
+                session.layout.terminal_uuids().into_iter().next().unwrap();
+            let layout_cwd = match &session.layout {
+                LayoutNode::Terminal { cwd, .. } => cwd.clone(),
+                _ => None,
+            };
+            let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
+            (layout_cwd, term.pending_shell_inputs_for_test())
+        };
+
+        assert_eq!(
+            layout_cwd.as_deref(),
+            Some("/home/user/work"),
+            "folder bookmark should set cwd in the layout node, not send a cd command"
+        );
+        assert!(
+            pending_inputs.is_empty(),
+            "folder-only bookmark should not queue any shell input; got: {pending_inputs:?}"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn new_session_from_ssh_bookmark_queues_ssh_command() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.ssh-bookmark-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let mut bookmark = crate::bookmarks::Bookmark::new("Prod");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+
+        window.new_session_from_bookmark(&bookmark);
+
+        let pending_inputs = {
+            let state = window.imp().state.borrow();
+            let session = state.sessions.last().unwrap();
+            let terminal_uuid =
+                session.layout.terminal_uuids().into_iter().next().unwrap();
+            let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
+            term.pending_shell_inputs_for_test()
+        };
+
+        assert_eq!(
+            pending_inputs,
+            vec!["ssh deploy@example.com\n"],
+            "SSH bookmark should queue the ssh command"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn new_session_from_local_dir_and_tmux_bookmark_uses_initial_cwd_and_queues_tmux() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.local-tmux-bookmark-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let mut bookmark = crate::bookmarks::Bookmark::new("Local Dev");
+        bookmark.directory = Some("/home/user/work".into());
+        bookmark.tmux_session = Some("dev".into());
+
+        window.new_session_from_bookmark(&bookmark);
+
+        let (layout_cwd, pending_inputs) = {
+            let state = window.imp().state.borrow();
+            let session = state.sessions.last().unwrap();
+            let terminal_uuid =
+                session.layout.terminal_uuids().into_iter().next().unwrap();
+            let layout_cwd = match &session.layout {
+                LayoutNode::Terminal { cwd, .. } => cwd.clone(),
+                _ => None,
+            };
+            let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
+            (layout_cwd, term.pending_shell_inputs_for_test())
+        };
+
+        assert_eq!(layout_cwd.as_deref(), Some("/home/user/work"));
+        assert_eq!(
+            pending_inputs,
+            vec!["tmux attach-session -t 'dev' || tmux new-session -s 'dev'\n"]
+        );
+
+        window.close();
         std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 

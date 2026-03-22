@@ -69,6 +69,38 @@ impl Bookmark {
     pub fn is_actionable(&self) -> bool {
         self.command().is_some()
     }
+
+    /// Initial working directory for the terminal when opening as a new session.
+    /// Only set for local bookmarks (no SSH host); SSH bookmarks must always start in home.
+    #[must_use]
+    pub fn session_initial_cwd(&self) -> Option<&str> {
+        if self.ssh_target.is_none() {
+            non_empty(self.directory.as_deref())
+        } else {
+            None
+        }
+    }
+
+    /// Startup command to send to the shell when opening as a new session.
+    /// None for local directory-only bookmarks — `session_initial_cwd` handles the directory.
+    #[must_use]
+    pub fn session_startup_command(&self) -> Option<String> {
+        let directory = non_empty(self.directory.as_deref());
+        let ssh_target = non_empty(self.ssh_target.as_deref());
+        let tmux_session = non_empty(self.tmux_session.as_deref());
+
+        match (ssh_target, tmux_session) {
+            (Some(target), _) => {
+                let remote_cmd = local_command(directory, tmux_session);
+                match remote_cmd {
+                    Some(cmd) => Some(format!("ssh -t {target} {}", shell_quote(&cmd))),
+                    None => Some(format!("ssh {target}")),
+                }
+            }
+            (None, Some(session)) => Some(tmux_command(session)),
+            (None, None) => None,
+        }
+    }
 }
 
 #[must_use]
@@ -231,6 +263,68 @@ mod tests {
 
         save_to(&[bookmark.clone()], &path).unwrap();
         assert_eq!(load_from(&path), vec![bookmark]);
+    }
+
+    #[test]
+    fn folder_bookmark_session_initial_cwd_is_the_directory() {
+        let mut bookmark = Bookmark::new("Work");
+        bookmark.directory = Some("/home/user/work".into());
+
+        assert_eq!(bookmark.session_initial_cwd(), Some("/home/user/work"));
+    }
+
+    #[test]
+    fn folder_bookmark_session_startup_command_is_none() {
+        let mut bookmark = Bookmark::new("Work");
+        bookmark.directory = Some("/home/user/work".into());
+
+        assert_eq!(bookmark.session_startup_command(), None);
+    }
+
+    #[test]
+    fn ssh_bookmark_session_initial_cwd_is_none() {
+        let mut bookmark = Bookmark::new("Prod");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.directory = Some("/srv/app".into());
+
+        assert_eq!(bookmark.session_initial_cwd(), None);
+    }
+
+    #[test]
+    fn ssh_bookmark_session_startup_command_is_ssh() {
+        let mut bookmark = Bookmark::new("Prod");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+
+        assert_eq!(bookmark.session_startup_command().as_deref(), Some("ssh deploy@example.com"));
+    }
+
+    #[test]
+    fn local_dir_and_tmux_session_initial_cwd_is_dir_and_startup_command_is_tmux_only() {
+        let mut bookmark = Bookmark::new("Local Dev");
+        bookmark.directory = Some("/home/user/work".into());
+        bookmark.tmux_session = Some("dev".into());
+
+        assert_eq!(bookmark.session_initial_cwd(), Some("/home/user/work"));
+        assert_eq!(
+            bookmark.session_startup_command().as_deref(),
+            Some("tmux attach-session -t 'dev' || tmux new-session -s 'dev'")
+        );
+    }
+
+    #[test]
+    fn ssh_with_dir_and_tmux_session_startup_command_includes_full_chain() {
+        let mut bookmark = Bookmark::new("Remote Dev");
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.directory = Some("/srv/app".into());
+        bookmark.tmux_session = Some("web".into());
+
+        assert_eq!(bookmark.session_initial_cwd(), None);
+        assert_eq!(
+            bookmark.session_startup_command().as_deref(),
+            Some(
+                "ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"' && (tmux attach-session -t '\"'\"'web'\"'\"' || tmux new-session -s '\"'\"'web'\"'\"')'"
+            )
+        );
     }
 
     #[test]

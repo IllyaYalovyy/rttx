@@ -341,7 +341,17 @@ pub struct SessionState {
 impl SessionState {
     #[must_use]
     pub fn new(name: String) -> Self {
-        let layout = LayoutNode::new_terminal();
+        Self::new_with_initial_cwd(name, None)
+    }
+
+    #[must_use]
+    pub fn new_with_initial_cwd(name: String, initial_cwd: Option<String>) -> Self {
+        let layout = LayoutNode::Terminal {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            profile: None,
+            cwd: initial_cwd,
+            custom_title: None,
+        };
         let mut terminal_recovery = BTreeMap::new();
         if let Some(terminal_uuid) = layout.terminal_uuids().into_iter().next() {
             terminal_recovery.insert(terminal_uuid, PaneRecovery::empty_shell());
