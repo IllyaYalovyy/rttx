@@ -92,10 +92,10 @@ impl Bookmark {
         match (ssh_target, tmux_session) {
             (Some(target), _) => {
                 let remote_cmd = local_command(directory, tmux_session);
-                match remote_cmd {
-                    Some(cmd) => Some(format!("ssh -t {target} {}", shell_quote(&cmd))),
-                    None => Some(format!("ssh {target}")),
-                }
+                Some(remote_cmd.map_or_else(
+                    || format!("ssh {target}"),
+                    |cmd| format!("ssh -t {target} {}", shell_quote(&cmd)),
+                ))
             }
             (None, Some(session)) => Some(tmux_command(session)),
             (None, None) => None,

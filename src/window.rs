@@ -683,11 +683,8 @@ impl Window {
         let handler_id = term.vte().connect_child_exited(move |_, status| {
             let visible_session = win.imp().session_stack.visible_child_name();
             let state = win.imp().state.borrow();
-            let in_background = terminal_is_in_background_session(
-                &uuid,
-                visible_session.as_deref(),
-                &state,
-            );
+            let in_background =
+                terminal_is_in_background_session(&uuid, visible_session.as_deref(), &state);
             drop(state);
             if in_background {
                 win.notify_process_completed(&uuid, status);
@@ -729,8 +726,7 @@ impl Window {
         let initial_cwd = bookmark.session_initial_cwd().map(str::to_string);
         let startup_command = bookmark.session_startup_command();
 
-        let session_state =
-            SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd);
+        let session_state = SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd);
         let session_uuid = session_state.uuid.clone();
         let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
         imp.state.borrow_mut().sessions.push(session_state.clone());
@@ -1451,12 +1447,8 @@ impl Window {
         let session_name = session.name.clone();
         drop(state);
 
-        let cwd = self
-            .imp()
-            .terminals
-            .borrow()
-            .get(&uuid)
-            .and_then(|t| t.current_directory());
+        let cwd =
+            self.imp().terminals.borrow().get(&uuid).and_then(TerminalWidget::current_directory);
 
         let mut bookmark = Bookmark::new(session_name);
         bookmark.directory = cwd;
@@ -1502,17 +1494,13 @@ fn terminal_is_in_background_session(
     visible_session_uuid: Option<&str>,
     state: &WindowState,
 ) -> bool {
-    match visible_session_uuid {
-        Some(visible) => {
-            let in_visible = state
-                .sessions
-                .iter()
-                .find(|s| s.uuid == visible)
-                .is_some_and(|s| s.layout.contains_terminal(terminal_uuid));
-            !in_visible
-        }
-        None => true,
-    }
+    visible_session_uuid.is_none_or(|visible| {
+        !state
+            .sessions
+            .iter()
+            .find(|s| s.uuid == visible)
+            .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
+    })
 }
 
 fn preferred_command_target_uuid(
@@ -2062,8 +2050,7 @@ mod tests {
         let (layout_cwd, pending_inputs) = {
             let state = window.imp().state.borrow();
             let session = state.sessions.last().unwrap();
-            let terminal_uuid =
-                session.layout.terminal_uuids().into_iter().next().unwrap();
+            let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
             let layout_cwd = match &session.layout {
                 LayoutNode::Terminal { cwd, .. } => cwd.clone(),
                 _ => None,
@@ -2094,9 +2081,8 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.ssh-bookmark-tests")
-            .build();
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.ssh-bookmark-tests").build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
@@ -2108,8 +2094,7 @@ mod tests {
         let pending_inputs = {
             let state = window.imp().state.borrow();
             let session = state.sessions.last().unwrap();
-            let terminal_uuid =
-                session.layout.terminal_uuids().into_iter().next().unwrap();
+            let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
             let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
             term.pending_shell_inputs_for_test()
         };
@@ -2147,8 +2132,7 @@ mod tests {
         let (layout_cwd, pending_inputs) = {
             let state = window.imp().state.borrow();
             let session = state.sessions.last().unwrap();
-            let terminal_uuid =
-                session.layout.terminal_uuids().into_iter().next().unwrap();
+            let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
             let layout_cwd = match &session.layout {
                 LayoutNode::Terminal { cwd, .. } => cwd.clone(),
                 _ => None,
@@ -2902,19 +2886,15 @@ mod tests {
 
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.about-window-tests")
-            .build();
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.about-window-tests").build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
         window.present();
         pump_events(50);
 
-        assert!(
-            window.lookup_action("about").is_some(),
-            "window should expose an about action"
-        );
+        assert!(window.lookup_action("about").is_some(), "window should expose an about action");
 
         gtk4::prelude::WidgetExt::activate_action(&window, "win.about", None)
             .expect("about action should activate");

@@ -13,7 +13,7 @@ pub enum TerminalThemeMode {
     Dark,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Preferences {
     #[serde(default = "default_font")]
     pub font: String,
