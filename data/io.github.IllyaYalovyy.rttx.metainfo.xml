@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.rttx</id>
+  <id>io.github.IllyaYalovyy.rttx</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>rttx</name>
@@ -12,9 +12,9 @@
       session persistence, input synchronization, and drag-and-drop rearrangement.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.rttx.desktop</launchable>
-  <url type="homepage">https://github.com/rttx/rttx</url>
-  <url type="bugtracker">https://github.com/rttx/rttx/issues</url>
+  <launchable type="desktop-id">io.github.IllyaYalovyy.rttx.desktop</launchable>
+  <url type="homepage">https://github.com/IllyaYalovyy/rttx</url>
+  <url type="bugtracker">https://github.com/IllyaYalovyy/rttx/issues</url>
   <content_rating type="oars-1.1"/>
   <provides>
     <binary>rttx</binary>

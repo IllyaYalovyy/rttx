@@ -20,6 +20,10 @@ pub fn run() -> glib::ExitCode {
         0
     });
 
+    app.connect_startup(|_| {
+        gtk4::Window::set_default_icon_name(config::APP_ID);
+    });
+
     app.connect_activate(|app| {
         if let Some(win) = app.active_window() {
             win.present();

@@ -1,10 +1,10 @@
 /// Global configuration and constants for rttx.
 pub const APP_NAME: &str = "rttx";
-pub const APP_ID: &str = "io.github.rttx";
+pub const APP_ID: &str = "io.github.IllyaYalovyy.rttx";
 
 /// `GSettings` schema IDs
-pub const SETTINGS_ID: &str = "io.github.rttx";
-pub const SETTINGS_PATH: &str = "/io/github/rttx/";
+pub const SETTINGS_ID: &str = "io.github.IllyaYalovyy.rttx";
+pub const SETTINGS_PATH: &str = "/io/github/IllyaYalovyy/rttx/";
 
 /// Config directory name under `XDG_CONFIG_HOME`
 pub const CONFIG_DIR: &str = "rttx";
@@ -18,6 +18,7 @@ mod tests {
     fn app_id_is_valid_reverse_dns() {
         assert!(APP_ID.contains('.'));
         assert!(APP_ID.starts_with("io.github"));
+        assert!(APP_ID.contains(".rttx"));
     }
 
     #[test]

@@ -12,7 +12,7 @@ iconsdir = datadir / 'icons'
 desktopdir = datadir / 'applications'
 metainfodir = datadir / 'metainfo'
 
-app_id = 'io.github.rttx'
+app_id = 'io.github.IllyaYalovyy.rttx'
 
 # Dependencies (checked early for better user feedback)
 dependency('gtk4', version: '>= 4.14')

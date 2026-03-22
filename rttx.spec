@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        A tiling terminal emulator for GNOME
 
 License:        GPL-3.0-or-later
-URL:            https://github.com/rttx/rttx
+URL:            https://github.com/IllyaYalovyy/rttx
 Source0:        %{url}/archive/v%{version}.tar.gz
 
 BuildRequires:  meson
@@ -32,16 +32,16 @@ Focuses on practicality, stability, and deep integration with the GNOME desktop.
 
 %check
 %meson_test
-desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.rttx.desktop
-appstream-util validate-relax --nonet %{buildroot}%{_datadir}/metainfo/io.github.rttx.metainfo.xml
+desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.IllyaYalovyy.rttx.desktop
+appstream-util validate-relax --nonet %{buildroot}%{_datadir}/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/rttx
-%{_datadir}/applications/io.github.rttx.desktop
-%{_datadir}/metainfo/io.github.rttx.metainfo.xml
-%{_datadir}/icons/hicolor/scalable/apps/io.github.rttx.svg
+%{_datadir}/applications/io.github.IllyaYalovyy.rttx.desktop
+%{_datadir}/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.svg
 
 %changelog
 * Fri Mar 20 2026 Yaroslav Yalovyi <yalovoy@gmail.com> - 0.1.0-1
