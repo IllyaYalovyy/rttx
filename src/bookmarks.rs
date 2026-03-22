@@ -59,11 +59,7 @@ impl Bookmark {
             parts.push(format!("tmux {session}"));
         }
 
-        if parts.is_empty() {
-            "Empty bookmark".into()
-        } else {
-            parts.join(" | ")
-        }
+        if parts.is_empty() { "Empty bookmark".into() } else { parts.join(" | ") }
     }
 
     #[must_use]
@@ -75,11 +71,7 @@ impl Bookmark {
     /// Only set for local bookmarks (no SSH host); SSH bookmarks must always start in home.
     #[must_use]
     pub fn session_initial_cwd(&self) -> Option<&str> {
-        if self.ssh_target.is_none() {
-            non_empty(self.directory.as_deref())
-        } else {
-            None
-        }
+        if self.ssh_target.is_none() { non_empty(self.directory.as_deref()) } else { None }
     }
 
     /// Startup command to send to the shell when opening as a new session.

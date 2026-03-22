@@ -113,7 +113,7 @@ mod tests {
     fn ensure_gtk_init() -> bool {
         let mut success = false;
         GTK_INIT.call_once(|| {
-            std::env::set_var("GTK_A11Y", "none");
+            crate::test_helpers::set_env("GTK_A11Y", "none");
             success = gtk4::init().is_ok();
         });
         if !success {

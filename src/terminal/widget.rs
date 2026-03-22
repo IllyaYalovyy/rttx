@@ -394,10 +394,10 @@ impl TerminalWidget {
         let custom_title = self.imp().custom_title.clone();
 
         vte.connect_window_title_changed(move |vte| {
-            if custom_title.borrow().is_none() {
-                if let Some(title) = vte.window_title() {
-                    title_label.set_label(&title);
-                }
+            if custom_title.borrow().is_none()
+                && let Some(title) = vte.window_title()
+            {
+                title_label.set_label(&title);
             }
         });
 
@@ -467,12 +467,12 @@ impl TerminalWidget {
     pub fn apply_color_scheme(&self, scheme: &color_scheme::ColorScheme) {
         let vte = &self.imp().vte;
 
-        if let Some(fg) = scheme.foreground_rgba() {
-            if let Some(bg) = scheme.background_rgba() {
-                let palette = scheme.palette_rgba();
-                let palette_refs: Vec<&gtk4::gdk::RGBA> = palette.iter().collect();
-                vte.set_colors(Some(&fg), Some(&bg), &palette_refs);
-            }
+        if let Some(fg) = scheme.foreground_rgba()
+            && let Some(bg) = scheme.background_rgba()
+        {
+            let palette = scheme.palette_rgba();
+            let palette_refs: Vec<&gtk4::gdk::RGBA> = palette.iter().collect();
+            vte.set_colors(Some(&fg), Some(&bg), &palette_refs);
         }
 
         if scheme.use_cursor_color {
@@ -493,10 +493,10 @@ impl TerminalWidget {
             }
         }
 
-        if scheme.use_bold_color {
-            if let Some(bold) = color_scheme::ColorScheme::parse_color(&scheme.bold_color) {
-                vte.set_color_bold(Some(&bold));
-            }
+        if scheme.use_bold_color
+            && let Some(bold) = color_scheme::ColorScheme::parse_color(&scheme.bold_color)
+        {
+            vte.set_color_bold(Some(&bold));
         }
     }
 
@@ -599,11 +599,7 @@ fn strip_editor_position_suffix(path: &str) -> &str {
         end = start - 1;
     }
 
-    if stripped_any {
-        &path[..end]
-    } else {
-        path
-    }
+    if stripped_any { &path[..end] } else { path }
 }
 
 fn looks_like_path(path: &str) -> bool {
@@ -660,7 +656,7 @@ fn smart_clipboard_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        openable_uri_from_match_text, parse_file_uri, smart_clipboard_action, SmartClipboardAction,
+        SmartClipboardAction, openable_uri_from_match_text, parse_file_uri, smart_clipboard_action,
     };
     use gtk4::gio;
     use gtk4::prelude::*;

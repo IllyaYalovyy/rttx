@@ -8,7 +8,11 @@ static GTK_INIT: Once = Once::new();
 fn ensure_gtk_init() -> bool {
     let mut success = false;
     GTK_INIT.call_once(|| {
-        std::env::set_var("GTK_A11Y", "none");
+        // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("GTK_A11Y", "none")
+        };
         success = gtk4::init().is_ok();
     });
     if !success {

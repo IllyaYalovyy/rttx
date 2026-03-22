@@ -118,9 +118,5 @@ fn build_bookmark(
 fn entry_value(row: &adw::EntryRow) -> Option<String> {
     let text = row.text();
     let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }

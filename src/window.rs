@@ -13,8 +13,8 @@ use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::preferences;
 use crate::session::{
-    self, LayoutNode, PaneRecovery, PaneSource, PaneTarget, SessionState, SplitOrientation,
-    StartupStep, WindowState, MAX_SPLIT_DEPTH,
+    self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
+    SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::widget::TerminalWidget;
@@ -335,14 +335,13 @@ impl Window {
 
         let active_index = imp.sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
         state.active_session_index = active_index;
-        if let Some(focused_terminal_uuid) = self.focused_terminal_uuid() {
-            if let Some(session) = state
+        if let Some(focused_terminal_uuid) = self.focused_terminal_uuid()
+            && let Some(session) = state
                 .sessions
                 .iter_mut()
                 .find(|session| session.layout.contains_terminal(&focused_terminal_uuid))
-            {
-                session.active_terminal_uuid = Some(focused_terminal_uuid);
-            }
+        {
+            session.active_terminal_uuid = Some(focused_terminal_uuid);
         }
 
         for session in &mut state.sessions {
@@ -717,11 +716,10 @@ impl Window {
         while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
             if let Some(session_row) =
                 row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                && session_row.uuid() == session_uuid
             {
-                if session_row.uuid() == session_uuid {
-                    session_row.set_session_name(new_name);
-                    return;
-                }
+                session_row.set_session_name(new_name);
+                return;
             }
             idx += 1;
         }
@@ -762,11 +760,11 @@ impl Window {
         let win = self.clone();
         let target_uuid = term.uuid();
         drop_target.connect_drop(move |_, value, _, _| {
-            if let Ok(source_uuid) = value.get::<String>() {
-                if source_uuid != target_uuid {
-                    win.swap_terminals(&source_uuid, &target_uuid);
-                    return true;
-                }
+            if let Ok(source_uuid) = value.get::<String>()
+                && source_uuid != target_uuid
+            {
+                win.swap_terminals(&source_uuid, &target_uuid);
+                return true;
             }
             false
         });
@@ -897,10 +895,10 @@ impl Window {
         };
         imp.session_stack.set_visible_child_name(&uuid);
         self.focus_session_terminal(&uuid);
-        if let Some(action) = self.lookup_action("toggle-input-sync") {
-            if let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>() {
-                action.set_state(&input_sync.to_variant());
-            }
+        if let Some(action) = self.lookup_action("toggle-input-sync")
+            && let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>()
+        {
+            action.set_state(&input_sync.to_variant());
         }
     }
 
@@ -1169,11 +1167,11 @@ impl Window {
     fn attempt_recovery_for_terminal(&self, term: &TerminalWidget, recovery: &PaneRecovery) {
         term.hide_recovery_message();
 
-        if let Some(target) = &recovery.target {
-            if let Some(startup_input) = target.managed_startup_input() {
-                term.queue_input_for_shell(startup_input);
-                return;
-            }
+        if let Some(target) = &recovery.target
+            && let Some(startup_input) = target.managed_startup_input()
+        {
+            term.queue_input_for_shell(startup_input);
+            return;
         }
 
         if recovery.startup.is_empty() {
@@ -1303,10 +1301,10 @@ impl Window {
             loop {
                 match imp.sidebar_list.row_at_index(idx) {
                     Some(r) => {
-                        if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
-                            if sr.uuid() == session_uuid {
-                                break idx;
-                            }
+                        if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok())
+                            && sr.uuid() == session_uuid
+                        {
+                            break idx;
                         }
                         idx += 1;
                     }
@@ -1555,11 +1553,11 @@ impl Window {
         let imp = self.imp();
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
-                if session_row.uuid() == session_uuid {
-                    session_row.update_terminal_count(count);
-                    return;
-                }
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+                && session_row.uuid() == session_uuid
+            {
+                session_row.update_terminal_count(count);
+                return;
             }
             idx += 1;
         }
@@ -1622,10 +1620,10 @@ impl Window {
 
         let terminals = self.imp().terminals.borrow();
         for uuid in &uuids {
-            if uuid != source_uuid {
-                if let Some(term) = terminals.get(uuid) {
-                    term.vte().feed_child(text.as_bytes());
-                }
+            if uuid != source_uuid
+                && let Some(term) = terminals.get(uuid)
+            {
+                term.vte().feed_child(text.as_bytes());
             }
         }
     }
@@ -1651,10 +1649,10 @@ impl Window {
     }
 
     fn toggle_focused_search(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.toggle_search();
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+        {
+            term.toggle_search();
         }
     }
 
@@ -1699,20 +1697,20 @@ impl Window {
     }
 
     fn zoom_focused(&self, direction: i32) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                let vte = term.vte();
-                match direction {
-                    1 => {
-                        let s = vte.font_scale();
-                        vte.set_font_scale(s * 1.1);
-                    }
-                    -1 => {
-                        let s = vte.font_scale();
-                        vte.set_font_scale(s / 1.1);
-                    }
-                    _ => vte.set_font_scale(1.0),
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+        {
+            let vte = term.vte();
+            match direction {
+                1 => {
+                    let s = vte.font_scale();
+                    vte.set_font_scale(s * 1.1);
                 }
+                -1 => {
+                    let s = vte.font_scale();
+                    vte.set_font_scale(s / 1.1);
+                }
+                _ => vte.set_font_scale(1.0),
             }
         }
     }
@@ -1771,18 +1769,18 @@ impl Window {
     }
 
     fn clipboard_copy(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.vte().copy_clipboard_format(vte4::Format::Text);
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+        {
+            term.vte().copy_clipboard_format(vte4::Format::Text);
         }
     }
 
     fn clipboard_paste(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.vte().paste_clipboard();
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+        {
+            term.vte().paste_clipboard();
         }
     }
 }
@@ -1810,12 +1808,11 @@ fn preferred_command_target_uuid(
         return Some(focused_terminal_uuid.to_string());
     }
 
-    if let Some(visible_session_uuid) = visible_session_uuid {
-        if let Some(session) =
+    if let Some(visible_session_uuid) = visible_session_uuid
+        && let Some(session) =
             state.sessions.iter().find(|session| session.uuid == visible_session_uuid)
-        {
-            return session.layout.terminal_uuids().into_iter().next();
-        }
+    {
+        return session.layout.terminal_uuids().into_iter().next();
     }
 
     state
@@ -1835,7 +1832,7 @@ mod tests {
     fn ensure_gtk_init() -> bool {
         let mut success = false;
         GTK_INIT.call_once(|| {
-            std::env::set_var("GTK_A11Y", "none");
+            crate::test_helpers::set_env("GTK_A11Y", "none");
             success = gtk4::init().is_ok();
         });
         if !success {
@@ -2019,8 +2016,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.add-session-icon-tests")
@@ -2043,8 +2040,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.initial-terminal-shell-tests")
@@ -2070,7 +2067,7 @@ mod tests {
         assert!(spawned, "presenting the window should trigger delayed shell startup");
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2078,8 +2075,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let mut local = crate::bookmarks::Bookmark::new("Local Project");
         local.directory = Some("/home/user/Projects/rttx".into());
@@ -2111,7 +2108,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2119,8 +2116,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let run = crate::commands::SavedCommand::new("Restart app", "systemctl restart app");
         let insert =
@@ -2151,7 +2148,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2159,8 +2156,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.bookmark-session-tests")
@@ -2208,7 +2205,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2216,8 +2213,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.bookmark-queue-tests")
@@ -2260,7 +2257,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2268,8 +2265,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.bookmark-recovery-tests")
@@ -2327,7 +2324,7 @@ mod tests {
         );
 
         second_window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2335,8 +2332,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.folder-bookmark-cwd-tests")
@@ -2372,7 +2369,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2380,8 +2377,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app =
             adw::Application::builder().application_id("com.illya.rttx.ssh-bookmark-tests").build();
@@ -2419,7 +2416,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2427,8 +2424,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.local-tmux-bookmark-tests")
@@ -2470,7 +2467,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2478,8 +2475,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.bookmark-active-session-tests")
@@ -2516,7 +2513,7 @@ mod tests {
         assert_eq!(bookmark.tmux_session, None);
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2524,8 +2521,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.bookmark-no-focus-tests")
@@ -2541,7 +2538,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2549,7 +2546,7 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
 
         let terminal_uuid = "t1".to_string();
         let session_uuid = "s1".to_string();
@@ -2605,7 +2602,10 @@ mod tests {
 
         term.recovery_retry_button().emit_clicked();
         let retried = wait_until(3000, || term.recovery_message_visible_for_test());
-        assert!(retried, "retry should re-attempt recovery and return to failed state if the target is still unavailable");
+        assert!(
+            retried,
+            "retry should re-attempt recovery and return to failed state if the target is still unavailable"
+        );
 
         window.close();
     }
@@ -2615,8 +2615,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.command-recovery-tests")
@@ -2666,7 +2666,7 @@ mod tests {
         );
 
         second_window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2674,8 +2674,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.command-queue-tests")
@@ -2710,7 +2710,7 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2718,8 +2718,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.restore-active-terminal-tests")
@@ -2785,7 +2785,7 @@ mod tests {
         );
 
         second_window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2793,8 +2793,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.session-focus-tests")
@@ -2830,7 +2830,7 @@ mod tests {
         assert!(restored_focus, "switching back should focus the visible terminal without a click");
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -2838,8 +2838,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder().application_id("com.illya.rttx.window-tests").build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
@@ -2930,8 +2930,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.restore-ratios-tests")
@@ -3029,8 +3029,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app =
             adw::Application::builder().application_id("com.illya.rttx.save-cwd-tests").build();
@@ -3076,7 +3076,7 @@ mod tests {
         assert_eq!(second_cwd.as_deref(), Some("/tmp/project-b"));
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
@@ -3084,8 +3084,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.restore-nested-ratios-tests")
@@ -3233,8 +3233,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.rename-session-tests")
@@ -3273,9 +3273,9 @@ mod tests {
     fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
         require_display!();
 
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
 
         let app =
             adw::Application::builder().application_id("com.illya.rttx.sidebar-mgmt-tests").build();
@@ -3316,16 +3316,16 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
     fn bookmark_sidebar_shows_empty_state_when_no_bookmarks() {
         require_display!();
 
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.bookmark-empty-state-tests")
@@ -3345,16 +3345,16 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
     fn command_sidebar_shows_empty_state_when_no_commands() {
         require_display!();
 
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.command-empty-state-tests")
@@ -3374,14 +3374,14 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]
     fn about_action_is_registered() {
         require_display!();
 
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app =
             adw::Application::builder().application_id("com.illya.rttx.about-window-tests").build();
@@ -3400,8 +3400,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let mut prefs = preferences::Preferences::default();
         prefs.smart_clipboard = true;
@@ -3436,8 +3436,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.alt-number-session-tests")
@@ -3482,8 +3482,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.window-identity-tests")
@@ -3593,8 +3593,8 @@ mod tests {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
             .application_id("com.illya.rttx.split-depth-limit-tests")
@@ -3647,6 +3647,6 @@ mod tests {
         );
 
         window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 }

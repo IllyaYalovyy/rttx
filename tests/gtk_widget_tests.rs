@@ -24,7 +24,11 @@ fn ensure_gtk_init() -> bool {
     let mut success = false;
     GTK_INIT.call_once(|| {
         // Suppress accessibility warnings in test environment
-        std::env::set_var("GTK_A11Y", "none");
+        // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("GTK_A11Y", "none")
+        };
         success = gtk4::init().is_ok();
     });
     // After call_once, we can't re-check, so try a widget allocation

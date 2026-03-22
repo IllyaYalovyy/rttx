@@ -286,10 +286,10 @@ impl LayoutNode {
         match self {
             Self::Terminal { uuid, .. } if uuid == target_uuid => {
                 let new_node = self.split(orientation);
-                if let Self::Split { ref second, .. } = new_node {
-                    if let Self::Terminal { uuid: new_uuid, .. } = second.as_ref() {
-                        return Some((new_node.clone(), new_uuid.clone()));
-                    }
+                if let Self::Split { ref second, .. } = new_node
+                    && let Self::Terminal { uuid: new_uuid, .. } = second.as_ref()
+                {
+                    return Some((new_node.clone(), new_uuid.clone()));
                 }
                 None
             }
@@ -747,18 +747,18 @@ mod tests {
             hsplit(term("t2"), hsplit(term("t3"), hsplit(term("t4"), term("t5")))),
         );
         assert_eq!(five_deep.depth_of_terminal("t5"), Some(MAX_SPLIT_DEPTH));
-        assert!(five_deep
-            .split_terminal_with_new_uuid("t5", SplitOrientation::Horizontal)
-            .is_none());
+        assert!(
+            five_deep.split_terminal_with_new_uuid("t5", SplitOrientation::Horizontal).is_none()
+        );
     }
 
     #[test]
     fn split_allowed_at_one_below_max_depth() {
         let four_deep = hsplit(term("t1"), hsplit(term("t2"), hsplit(term("t3"), term("t4"))));
         assert_eq!(four_deep.depth_of_terminal("t4"), Some(MAX_SPLIT_DEPTH - 1));
-        assert!(four_deep
-            .split_terminal_with_new_uuid("t4", SplitOrientation::Horizontal)
-            .is_some());
+        assert!(
+            four_deep.split_terminal_with_new_uuid("t4", SplitOrientation::Horizontal).is_some()
+        );
     }
 
     #[test]

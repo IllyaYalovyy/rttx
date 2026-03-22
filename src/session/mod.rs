@@ -1,8 +1,8 @@
 pub mod layout;
 
 pub use layout::{
-    LayoutNode, PaneRecovery, PaneSource, PaneTarget, SessionState, SplitOrientation, StartupStep,
-    WindowState, MAX_SPLIT_DEPTH,
+    LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
+    SplitOrientation, StartupStep, WindowState,
 };
 
 use crate::config;
@@ -75,7 +75,7 @@ pub fn apply_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
 ///
 /// Call this before serialising state so that user-adjusted splits are preserved.
 pub fn capture_paned_ratios(layout: &mut LayoutNode, widget: &gtk4::Widget) {
-    let LayoutNode::Split { orientation, ref mut ratio, first, second } = layout else {
+    let LayoutNode::Split { orientation, ratio, first, second } = layout else {
         return;
     };
 

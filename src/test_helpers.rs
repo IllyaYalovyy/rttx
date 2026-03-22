@@ -116,6 +116,26 @@ pub fn test_scheme_full() -> ColorScheme {
     }
 }
 
+// ── Environment helpers ──────────────────────────────────────────
+
+/// Sets an environment variable in tests.
+///
+/// # Safety
+/// GTK requires all calls to originate from the main thread, so tests that
+/// reach this function are single-threaded. No other thread reads the env
+/// concurrently during test setup.
+#[allow(unsafe_code)]
+pub fn set_env(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    unsafe { std::env::set_var(key, value) }
+}
+
+/// Removes an environment variable in tests. Same threading guarantee as
+/// [`set_env`].
+#[allow(unsafe_code)]
+pub fn remove_env(key: &str) {
+    unsafe { std::env::remove_var(key) }
+}
+
 // ── Persistence helpers ──────────────────────────────────────────
 
 /// Save a window state to a temp directory (bypasses glib config dir).
