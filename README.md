@@ -88,6 +88,8 @@ For full system integration (icons, desktop files, etc.):
 ```bash
 meson setup build --prefix="$HOME/.local"
 meson install -C build
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor"
+update-desktop-database "$HOME/.local/share/applications"
 ```
 
 For a system-wide install, use a system prefix and run the install step with elevated privileges:
@@ -95,6 +97,8 @@ For a system-wide install, use a system prefix and run the install step with ele
 meson setup build --prefix=/usr/local
 sudo meson install -C build
 ```
+
+If GNOME Shell still shows a generic icon after a user-local install, log out and back in so the shell refreshes its app grid cache.
 
 ## Testing
 
