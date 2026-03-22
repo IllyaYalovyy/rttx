@@ -31,10 +31,8 @@ pub fn show(parent: &Window) {
     let selected_uuid = Rc::new(RefCell::new(None::<String>));
 
     let header = adw::HeaderBar::new();
-    let new_button = gtk4::Button::builder()
-        .icon_name("list-add-symbolic")
-        .tooltip_text("New command")
-        .build();
+    let new_button =
+        gtk4::Button::builder().icon_name("list-add-symbolic").tooltip_text("New command").build();
     header.pack_start(&new_button);
 
     let list = gtk4::ListBox::new();
@@ -52,10 +50,8 @@ pub fn show(parent: &Window) {
     let body_view = gtk4::TextView::with_buffer(&body_buffer);
     body_view.set_wrap_mode(gtk4::WrapMode::WordChar);
     body_view.set_monospace(true);
-    let body_scroll = gtk4::ScrolledWindow::builder()
-        .min_content_height(180)
-        .child(&body_view)
-        .build();
+    let body_scroll =
+        gtk4::ScrolledWindow::builder().min_content_height(180).child(&body_view).build();
 
     let run_mode = gtk4::DropDown::from_strings(&["Run", "Insert"]);
     let run_mode_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
@@ -136,17 +132,19 @@ pub fn show(parent: &Window) {
     let parent_for_save = parent.clone();
     let dialog_for_save = dialog.clone();
     save_button.connect_clicked(move |_| {
-        let command = match command_from_editor(&editor_for_save, selected_for_save.borrow().clone()) {
-            Ok(command) => command,
-            Err(message) => {
-                editor_for_save.status.set_text(&message);
-                return;
-            }
-        };
+        let command =
+            match command_from_editor(&editor_for_save, selected_for_save.borrow().clone()) {
+                Ok(command) => command,
+                Err(message) => {
+                    editor_for_save.status.set_text(&message);
+                    return;
+                }
+            };
 
         {
             let mut items = commands_for_save.borrow_mut();
-            if let Some(existing) = items.iter_mut().find(|existing| existing.uuid == command.uuid) {
+            if let Some(existing) = items.iter_mut().find(|existing| existing.uuid == command.uuid)
+            {
                 *existing = command.clone();
             } else {
                 items.push(command.clone());
@@ -157,7 +155,7 @@ pub fn show(parent: &Window) {
             }
         }
 
-        *selected_for_save.borrow_mut() = Some(command.uuid.clone());
+        *selected_for_save.borrow_mut() = Some(command.uuid);
         editor_for_save.status.set_text("");
         parent_for_save.refresh_command_sidebar();
         rebuild_list(
@@ -304,14 +302,14 @@ fn command_from_editor(
     Ok(command)
 }
 
-fn run_mode_from_index(index: u32) -> CommandRunMode {
+const fn run_mode_from_index(index: u32) -> CommandRunMode {
     match index {
         1 => CommandRunMode::Insert,
         _ => CommandRunMode::Run,
     }
 }
 
-fn run_mode_index(run_mode: CommandRunMode) -> u32 {
+const fn run_mode_index(run_mode: CommandRunMode) -> u32 {
     match run_mode {
         CommandRunMode::Run => 0,
         CommandRunMode::Insert => 1,

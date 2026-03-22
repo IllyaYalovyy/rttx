@@ -86,8 +86,14 @@ cargo build --release
 
 For full system integration (icons, desktop files, etc.):
 ```bash
-meson setup build
+meson setup build --prefix="$HOME/.local"
 meson install -C build
+```
+
+For a system-wide install, use a system prefix and run the install step with elevated privileges:
+```bash
+meson setup build --prefix=/usr/local
+sudo meson install -C build
 ```
 
 ## Testing

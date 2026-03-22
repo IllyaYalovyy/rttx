@@ -69,7 +69,7 @@ pub struct PaneRecovery {
 
 impl PaneRecovery {
     #[must_use]
-    pub fn empty_shell() -> Self {
+    pub const fn empty_shell() -> Self {
         Self { source: PaneSource::EmptyShell, startup: Vec::new() }
     }
 }
@@ -103,12 +103,7 @@ impl LayoutNode {
     #[cfg(test)]
     #[must_use]
     pub fn new_terminal_with_uuid(uuid: &str) -> Self {
-        Self::Terminal {
-            uuid: uuid.to_string(),
-            profile: None,
-            cwd: None,
-            custom_title: None,
-        }
+        Self::Terminal { uuid: uuid.to_string(), profile: None, cwd: None, custom_title: None }
     }
 
     #[must_use]
@@ -827,7 +822,8 @@ mod tests {
         };
         assert_eq!(first_cwd.as_deref(), Some("/old/one"));
 
-        let LayoutNode::Split { first: inner_first, second: inner_second, .. } = second.as_ref() else {
+        let LayoutNode::Split { first: inner_first, second: inner_second, .. } = second.as_ref()
+        else {
             panic!("expected nested split");
         };
         let LayoutNode::Terminal { cwd: second_cwd, .. } = inner_first.as_ref() else {
@@ -896,9 +892,7 @@ mod tests {
                 (
                     "ghost".into(),
                     PaneRecovery {
-                        source: PaneSource::Command {
-                            title: "Detached".into(),
-                        },
+                        source: PaneSource::Command { title: "Detached".into() },
                         startup: vec![StartupStep::SendText {
                             text: "echo stale".into(),
                             execute: false,

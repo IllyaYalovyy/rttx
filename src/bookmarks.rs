@@ -36,7 +36,9 @@ impl Bookmark {
         let local_command = local_command(directory, tmux_session);
 
         match (ssh_target, local_command) {
-            (Some(target), Some(command)) => Some(format!("ssh -t {target} {}", shell_quote(&command))),
+            (Some(target), Some(command)) => {
+                Some(format!("ssh -t {target} {}", shell_quote(&command)))
+            }
             (Some(target), None) => Some(format!("ssh {target}")),
             (None, Some(command)) => Some(command),
             (None, None) => None,
@@ -91,11 +93,9 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 
 fn local_command(directory: Option<&str>, tmux_session: Option<&str>) -> Option<String> {
     match (directory, tmux_session) {
-        (Some(directory), Some(session)) => Some(format!(
-            "cd {} && ({})",
-            shell_quote(directory),
-            tmux_command(session)
-        )),
+        (Some(directory), Some(session)) => {
+            Some(format!("cd {} && ({})", shell_quote(directory), tmux_command(session)))
+        }
         (Some(directory), None) => Some(format!("cd {}", shell_quote(directory))),
         (None, Some(session)) => Some(tmux_command(session)),
         (None, None) => None,
@@ -135,10 +135,7 @@ pub fn load_from(path: &Path) -> Vec<Bookmark> {
         .unwrap_or_default()
 }
 
-pub fn save_to(
-    bookmarks: &[Bookmark],
-    path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn save_to(bookmarks: &[Bookmark], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -158,10 +155,7 @@ mod tests {
         let mut bookmark = Bookmark::new("Code");
         bookmark.directory = Some("/home/user/Projects/rttx".into());
 
-        assert_eq!(
-            bookmark.command().as_deref(),
-            Some("cd '/home/user/Projects/rttx'")
-        );
+        assert_eq!(bookmark.command().as_deref(), Some("cd '/home/user/Projects/rttx'"));
     }
 
     #[test]

@@ -32,10 +32,8 @@ pub fn show(parent: &Window) {
     let selected_uuid = Rc::new(RefCell::new(None::<String>));
 
     let header = adw::HeaderBar::new();
-    let new_button = gtk4::Button::builder()
-        .icon_name("list-add-symbolic")
-        .tooltip_text("New bookmark")
-        .build();
+    let new_button =
+        gtk4::Button::builder().icon_name("list-add-symbolic").tooltip_text("New bookmark").build();
     header.pack_start(&new_button);
 
     let list = gtk4::ListBox::new();
@@ -125,17 +123,19 @@ pub fn show(parent: &Window) {
     let parent_for_save = parent.clone();
     let dialog_for_save = dialog.clone();
     save_button.connect_clicked(move |_| {
-        let bookmark = match bookmark_from_editor(&editor_for_save, selected_for_save.borrow().clone()) {
-            Ok(bookmark) => bookmark,
-            Err(message) => {
-                editor_for_save.status.set_text(&message);
-                return;
-            }
-        };
+        let bookmark =
+            match bookmark_from_editor(&editor_for_save, selected_for_save.borrow().clone()) {
+                Ok(bookmark) => bookmark,
+                Err(message) => {
+                    editor_for_save.status.set_text(&message);
+                    return;
+                }
+            };
 
         {
             let mut items = bookmarks_for_save.borrow_mut();
-            if let Some(existing) = items.iter_mut().find(|existing| existing.uuid == bookmark.uuid) {
+            if let Some(existing) = items.iter_mut().find(|existing| existing.uuid == bookmark.uuid)
+            {
                 *existing = bookmark.clone();
             } else {
                 items.push(bookmark.clone());
@@ -146,7 +146,7 @@ pub fn show(parent: &Window) {
             }
         }
 
-        *selected_for_save.borrow_mut() = Some(bookmark.uuid.clone());
+        *selected_for_save.borrow_mut() = Some(bookmark.uuid);
         editor_for_save.status.set_text("");
         parent_for_save.refresh_bookmark_sidebar();
         rebuild_list(
@@ -228,7 +228,9 @@ fn rebuild_list(
                 let mut items = bookmarks_for_delete.borrow_mut();
                 items.retain(|bookmark| bookmark.uuid != bookmark_uuid);
                 if let Err(error) = bookmarks::save(&items) {
-                    editor_for_delete.status.set_text(&format!("Failed to save bookmarks: {error}"));
+                    editor_for_delete
+                        .status
+                        .set_text(&format!("Failed to save bookmarks: {error}"));
                     return;
                 }
             }

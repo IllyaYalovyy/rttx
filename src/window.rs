@@ -89,8 +89,7 @@ mod imp {
             self.sidebar_list.update_property(&[gtk4::accessible::Property::Label("Sessions")]);
             self.bookmark_list.set_selection_mode(gtk4::SelectionMode::None);
             self.bookmark_list.add_css_class("boxed-list");
-            self.bookmark_list
-                .update_property(&[gtk4::accessible::Property::Label("Bookmarks")]);
+            self.bookmark_list.update_property(&[gtk4::accessible::Property::Label("Bookmarks")]);
             self.command_list.set_selection_mode(gtk4::SelectionMode::None);
             self.command_list.add_css_class("boxed-list");
             self.command_list.update_property(&[gtk4::accessible::Property::Label("Commands")]);
@@ -152,8 +151,7 @@ mod imp {
                 .child(&self.command_list)
                 .build();
 
-            let templates_placeholder =
-                gtk4::Label::new(Some("Session templates will live here."));
+            let templates_placeholder = gtk4::Label::new(Some("Session templates will live here."));
             templates_placeholder.set_wrap(true);
             templates_placeholder.set_margin_start(18);
             templates_placeholder.set_margin_end(18);
@@ -185,7 +183,8 @@ mod imp {
             utility_sidebar.append(&utility_switcher);
             utility_sidebar.append(&utility_stack);
 
-            self.utility_sidebar_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideLeft);
+            self.utility_sidebar_revealer
+                .set_transition_type(gtk4::RevealerTransitionType::SlideLeft);
             self.utility_sidebar_revealer.set_reveal_child(true);
             self.utility_sidebar_revealer.set_child(Some(&utility_sidebar));
 
@@ -507,7 +506,8 @@ impl Window {
     fn show_rename_session_popover(&self, row: &SessionRow, session_uuid: &str) {
         let current_name = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid) else {
+            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid)
+            else {
                 return;
             };
             session.name.clone()
@@ -568,7 +568,9 @@ impl Window {
     fn rename_session(&self, session_uuid: &str, new_name: &str) {
         {
             let mut state = self.imp().state.borrow_mut();
-            let Some(session) = state.sessions.iter_mut().find(|session| session.uuid == session_uuid) else {
+            let Some(session) =
+                state.sessions.iter_mut().find(|session| session.uuid == session_uuid)
+            else {
                 return;
             };
             session.name = new_name.to_string();
@@ -576,7 +578,9 @@ impl Window {
 
         let mut idx = 0;
         while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
-            if let Some(session_row) = row.child().and_then(|child| child.downcast::<SessionRow>().ok()) {
+            if let Some(session_row) =
+                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+            {
                 if session_row.uuid() == session_uuid {
                     session_row.set_session_name(new_name);
                     return;
@@ -703,9 +707,7 @@ impl Window {
         self.set_terminal_recovery(
             &term.uuid(),
             PaneRecovery {
-                source: PaneSource::Bookmark {
-                    name: bookmark.name.clone(),
-                },
+                source: PaneSource::Bookmark { name: bookmark.name.clone() },
                 startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
             },
         );
@@ -733,7 +735,8 @@ impl Window {
     fn focus_session_terminal(&self, session_uuid: &str) {
         let target = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid) else {
+            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid)
+            else {
                 return;
             };
 
@@ -769,7 +772,8 @@ impl Window {
     }
 
     fn command_target_terminal(&self) -> Option<TerminalWidget> {
-        let visible_session_uuid = self.imp().session_stack.visible_child_name().map(|name| name.to_string());
+        let visible_session_uuid =
+            self.imp().session_stack.visible_child_name().map(|name| name.to_string());
         let target_uuid = {
             let state = self.imp().state.borrow();
             preferred_command_target_uuid(
@@ -880,9 +884,7 @@ impl Window {
         self.set_terminal_recovery(
             &term.uuid(),
             PaneRecovery {
-                source: PaneSource::Command {
-                    title: command.title.clone(),
-                },
+                source: PaneSource::Command { title: command.title.clone() },
                 startup: vec![StartupStep::SendText {
                     text: command.body.clone(),
                     execute: run_mode == CommandRunMode::Run,
@@ -899,9 +901,7 @@ impl Window {
         self.set_terminal_recovery(
             terminal_uuid,
             PaneRecovery {
-                source: PaneSource::Bookmark {
-                    name: bookmark.name.clone(),
-                },
+                source: PaneSource::Bookmark { name: bookmark.name.clone() },
                 startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
             },
         );
@@ -919,8 +919,10 @@ impl Window {
 
     fn set_terminal_recovery(&self, terminal_uuid: &str, recovery: PaneRecovery) {
         let mut state = self.imp().state.borrow_mut();
-        if let Some(session) =
-            state.sessions.iter_mut().find(|session| session.layout.contains_terminal(terminal_uuid))
+        if let Some(session) = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.layout.contains_terminal(terminal_uuid))
         {
             session.set_recovery(terminal_uuid, recovery);
         }
@@ -1405,7 +1407,9 @@ fn preferred_command_target_uuid(
     }
 
     if let Some(visible_session_uuid) = visible_session_uuid {
-        if let Some(session) = state.sessions.iter().find(|session| session.uuid == visible_session_uuid) {
+        if let Some(session) =
+            state.sessions.iter().find(|session| session.uuid == visible_session_uuid)
+        {
             return session.layout.terminal_uuids().into_iter().next();
         }
     }
@@ -1529,10 +1533,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(
-            preferred_command_target_uuid(None, Some("s2"), &state).as_deref(),
-            Some("t2")
-        );
+        assert_eq!(preferred_command_target_uuid(None, Some("s2"), &state).as_deref(), Some("t2"));
     }
 
     #[test]
@@ -1543,8 +1544,9 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app =
-            adw::Application::builder().application_id("com.illya.rttx.add-session-icon-tests").build();
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.add-session-icon-tests")
+            .build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
@@ -1575,11 +1577,7 @@ mod tests {
 
         let term = {
             let terminals = window.imp().terminals.borrow();
-            terminals
-                .values()
-                .next()
-                .cloned()
-                .expect("window should create an initial terminal")
+            terminals.values().next().cloned().expect("window should create an initial terminal")
         };
 
         assert!(
@@ -1647,7 +1645,8 @@ mod tests {
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let run = crate::commands::SavedCommand::new("Restart app", "systemctl restart app");
-        let insert = crate::commands::SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
+        let insert =
+            crate::commands::SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
         crate::commands::save(&[run, insert]).unwrap();
 
         let app = adw::Application::builder()
@@ -1812,9 +1811,7 @@ mod tests {
         assert_eq!(
             saved_recovery,
             Some(PaneRecovery {
-                source: PaneSource::Bookmark {
-                    name: "Prod Web".into(),
-                },
+                source: PaneSource::Bookmark { name: "Prod Web".into() },
                 startup: vec![StartupStep::SendText {
                     text: bookmark.command().unwrap(),
                     execute: true,
@@ -1872,9 +1869,7 @@ mod tests {
         assert_eq!(
             saved_recovery,
             Some(PaneRecovery {
-                source: PaneSource::Command {
-                    title: "Deploy checklist".into(),
-                },
+                source: PaneSource::Command { title: "Deploy checklist".into() },
                 startup: vec![StartupStep::SendText {
                     text: "cargo build\ncargo test".into(),
                     execute: false,
@@ -2267,9 +2262,8 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.save-cwd-tests")
-            .build();
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.save-cwd-tests").build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
@@ -2490,11 +2484,7 @@ mod tests {
             assert_eq!(state.sessions[0].name, "Renamed Session");
         }
 
-        let row = window
-            .imp()
-            .sidebar_list
-            .row_at_index(0)
-            .expect("session row should exist");
+        let row = window.imp().sidebar_list.row_at_index(0).expect("session row should exist");
         let session_row = row
             .child()
             .and_then(|child| child.downcast::<SessionRow>().ok())

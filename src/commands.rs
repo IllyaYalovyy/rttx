@@ -85,10 +85,7 @@ pub fn load_from(path: &Path) -> Vec<SavedCommand> {
         .unwrap_or_default()
 }
 
-pub fn save_to(
-    commands: &[SavedCommand],
-    path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn save_to(commands: &[SavedCommand], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -107,7 +104,8 @@ mod tests {
     fn multiline_command_roundtrips_without_loss() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("commands.json");
-        let mut command = SavedCommand::new("Deploy", "cd /srv/app\ncargo build\nsystemctl restart app");
+        let mut command =
+            SavedCommand::new("Deploy", "cd /srv/app\ncargo build\nsystemctl restart app");
         command.default_run_mode = CommandRunMode::Insert;
 
         save_to(&[command.clone()], &path).unwrap();

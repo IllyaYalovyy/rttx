@@ -127,7 +127,12 @@ mod imp {
             let vte = self.vte.clone();
             let smart_clipboard = self.smart_clipboard.clone();
             key_controller.connect_key_pressed(move |_, key, _, modifiers| {
-                match smart_clipboard_action(key, modifiers, vte.has_selection(), smart_clipboard.get()) {
+                match smart_clipboard_action(
+                    key,
+                    modifiers,
+                    vte.has_selection(),
+                    smart_clipboard.get(),
+                ) {
                     SmartClipboardAction::Copy => {
                         vte.copy_clipboard_format(vte4::Format::Text);
                         glib::Propagation::Stop
@@ -302,7 +307,8 @@ impl TerminalWidget {
             let cwd = self.imp().initial_cwd.borrow().clone();
             self.spawn_shell(cwd.as_deref());
         }
-        let pending_inputs: Vec<String> = self.imp().pending_shell_inputs.borrow_mut().drain(..).collect();
+        let pending_inputs: Vec<String> =
+            self.imp().pending_shell_inputs.borrow_mut().drain(..).collect();
         for input in pending_inputs {
             self.imp().vte.feed_child(input.as_bytes());
         }
@@ -320,9 +326,7 @@ impl TerminalWidget {
 
     #[cfg(test)]
     pub(crate) fn set_current_directory_for_test(&self, cwd: Option<&str>) {
-        self.imp()
-            .current_directory_override
-            .replace(Some(cwd.map(str::to_string)));
+        self.imp().current_directory_override.replace(Some(cwd.map(str::to_string)));
     }
 
     /// Disconnect the `child_exited` signal handler to prevent re-entrancy
