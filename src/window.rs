@@ -32,8 +32,12 @@ mod imp {
         pub utility_sidebar_revealer: gtk4::Revealer,
         pub bookmark_search_entry: gtk4::SearchEntry,
         pub bookmark_list: gtk4::ListBox,
+        pub bookmark_scroll: gtk4::ScrolledWindow,
+        pub bookmark_empty: adw::StatusPage,
         pub command_search_entry: gtk4::SearchEntry,
         pub command_list: gtk4::ListBox,
+        pub command_scroll: gtk4::ScrolledWindow,
+        pub command_empty: adw::StatusPage,
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
@@ -77,8 +81,6 @@ mod imp {
             let menu = gtk4::gio::Menu::new();
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Session"), Some("win.bookmark-session"));
-            menu.append(Some("Manage Bookmarks"), Some("win.manage-bookmarks"));
-            menu.append(Some("Manage Commands"), Some("win.manage-commands"));
             menu.append(Some("Preferences"), Some("win.preferences"));
             menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
             menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
@@ -104,8 +106,11 @@ mod imp {
                 .child(&self.sidebar_list)
                 .build();
 
-            let manage_bookmarks_button = gtk4::Button::with_label("Manage");
-            manage_bookmarks_button.set_action_name(Some("win.manage-bookmarks"));
+            let add_bookmark_button = gtk4::Button::builder()
+                .icon_name("list-add-symbolic")
+                .tooltip_text("New bookmark")
+                .action_name("win.add-bookmark")
+                .build();
             let utility_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
             utility_header.set_margin_start(12);
             utility_header.set_margin_end(12);
@@ -115,7 +120,7 @@ mod imp {
             utility_title.set_hexpand(true);
             utility_title.add_css_class("title-4");
             utility_header.append(&utility_title);
-            utility_header.append(&manage_bookmarks_button);
+            utility_header.append(&add_bookmark_button);
 
             self.bookmark_search_entry.set_placeholder_text(Some("Search bookmarks"));
             self.bookmark_search_entry.set_margin_start(12);
@@ -123,14 +128,23 @@ mod imp {
             self.bookmark_search_entry.set_margin_top(12);
             self.bookmark_search_entry.set_margin_bottom(12);
 
-            let bookmark_scroll = gtk4::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk4::PolicyType::Never)
-                .vexpand(true)
-                .child(&self.bookmark_list)
-                .build();
+            self.bookmark_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
+            self.bookmark_scroll.set_vexpand(true);
+            self.bookmark_scroll.set_child(Some(&self.bookmark_list));
+            self.bookmark_scroll.set_visible(false);
 
-            let manage_commands_button = gtk4::Button::with_label("Manage");
-            manage_commands_button.set_action_name(Some("win.manage-commands"));
+            self.bookmark_empty.set_icon_name(Some("bookmarks-symbolic"));
+            self.bookmark_empty.set_title("No Bookmarks");
+            self.bookmark_empty.set_description(Some(
+                "Add a bookmark to quickly open folders, connect to SSH hosts, or attach to tmux sessions",
+            ));
+            self.bookmark_empty.set_vexpand(true);
+
+            let add_command_button = gtk4::Button::builder()
+                .icon_name("list-add-symbolic")
+                .tooltip_text("New command")
+                .action_name("win.add-command")
+                .build();
             let commands_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
             commands_header.set_margin_start(12);
             commands_header.set_margin_end(12);
@@ -140,7 +154,7 @@ mod imp {
             commands_title.set_hexpand(true);
             commands_title.add_css_class("title-4");
             commands_header.append(&commands_title);
-            commands_header.append(&manage_commands_button);
+            commands_header.append(&add_command_button);
 
             self.command_search_entry.set_placeholder_text(Some("Search commands"));
             self.command_search_entry.set_margin_start(12);
@@ -148,11 +162,17 @@ mod imp {
             self.command_search_entry.set_margin_top(12);
             self.command_search_entry.set_margin_bottom(12);
 
-            let command_scroll = gtk4::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk4::PolicyType::Never)
-                .vexpand(true)
-                .child(&self.command_list)
-                .build();
+            self.command_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
+            self.command_scroll.set_vexpand(true);
+            self.command_scroll.set_child(Some(&self.command_list));
+            self.command_scroll.set_visible(false);
+
+            self.command_empty.set_icon_name(Some("system-run-symbolic"));
+            self.command_empty.set_title("No Commands");
+            self.command_empty.set_description(Some(
+                "Save frequently used commands to run or insert from the sidebar",
+            ));
+            self.command_empty.set_vexpand(true);
 
             let templates_placeholder = gtk4::Label::new(Some("Session templates will live here."));
             templates_placeholder.set_wrap(true);
@@ -164,12 +184,14 @@ mod imp {
             let bookmarks_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             bookmarks_page.append(&utility_header);
             bookmarks_page.append(&self.bookmark_search_entry);
-            bookmarks_page.append(&bookmark_scroll);
+            bookmarks_page.append(&self.bookmark_scroll);
+            bookmarks_page.append(&self.bookmark_empty);
 
             let commands_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             commands_page.append(&commands_header);
             commands_page.append(&self.command_search_entry);
-            commands_page.append(&command_scroll);
+            commands_page.append(&self.command_scroll);
+            commands_page.append(&self.command_empty);
 
             let utility_stack = gtk4::Stack::new();
             utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
@@ -350,11 +372,11 @@ impl Window {
                 w.imp().utility_sidebar_revealer.set_reveal_child(!reveal);
             }),
             ("bookmark-session", &[], Self::do_bookmark_active_session),
-            ("manage-bookmarks", &[], |w| {
-                crate::bookmarks_window::show(w);
+            ("add-bookmark", &[], |w| {
+                crate::bookmarks_window::show_form(w, None);
             }),
-            ("manage-commands", &[], |w| {
-                crate::commands_window::show(w);
+            ("add-command", &[], |w| {
+                crate::commands_window::show_form(w, None);
             }),
         ];
 
@@ -388,6 +410,52 @@ impl Window {
         });
         self.add_action(&prefs_action);
         app.set_accels_for_action("win.preferences", &["<Ctrl>comma"]);
+
+        let edit_bookmark_action =
+            gtk4::gio::SimpleAction::new("edit-bookmark", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        edit_bookmark_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            let bookmarks = crate::bookmarks::load();
+            if let Some(bookmark) = bookmarks.iter().find(|b| b.uuid == uuid) {
+                crate::bookmarks_window::show_form(&win, Some(bookmark));
+            }
+        });
+        self.add_action(&edit_bookmark_action);
+
+        let delete_bookmark_action =
+            gtk4::gio::SimpleAction::new("delete-bookmark", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        delete_bookmark_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            if !uuid.is_empty() {
+                win.confirm_delete_bookmark(uuid);
+            }
+        });
+        self.add_action(&delete_bookmark_action);
+
+        let edit_command_action =
+            gtk4::gio::SimpleAction::new("edit-command", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        edit_command_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            let all_commands = commands::load();
+            if let Some(command) = all_commands.iter().find(|c| c.uuid == uuid) {
+                crate::commands_window::show_form(&win, Some(command));
+            }
+        });
+        self.add_action(&edit_command_action);
+
+        let delete_command_action =
+            gtk4::gio::SimpleAction::new("delete-command", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        delete_command_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            if !uuid.is_empty() {
+                win.confirm_delete_command(uuid);
+            }
+        });
+        self.add_action(&delete_command_action);
 
         let about_action = gtk4::gio::SimpleAction::new("about", None);
         let win = self.clone();
@@ -885,8 +953,27 @@ impl Window {
                 .valign(gtk4::Align::Center)
                 .build();
 
+            let uuid = bookmark.uuid.clone();
+            let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
+            edit_item
+                .set_action_and_target_value(Some("win.edit-bookmark"), Some(&uuid.to_variant()));
+            let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
+            delete_item
+                .set_action_and_target_value(Some("win.delete-bookmark"), Some(&uuid.to_variant()));
+            let menu = gtk4::gio::Menu::new();
+            menu.append_item(&edit_item);
+            menu.append_item(&delete_item);
+            let more_button = gtk4::MenuButton::builder()
+                .icon_name("view-more-symbolic")
+                .tooltip_text("More options")
+                .valign(gtk4::Align::Center)
+                .menu_model(&menu)
+                .build();
+            more_button.add_css_class("flat");
+
             action_row.add_suffix(&run_button);
             action_row.add_suffix(&new_session_button);
+            action_row.add_suffix(&more_button);
             row.set_child(Some(&action_row));
             imp.bookmark_list.append(&row);
 
@@ -901,6 +988,10 @@ impl Window {
                 win.new_session_from_bookmark(&bookmark);
             });
         }
+
+        let is_empty = imp.bookmark_list.row_at_index(0).is_none();
+        imp.bookmark_scroll.set_visible(!is_empty);
+        imp.bookmark_empty.set_visible(is_empty);
     }
 
     pub(crate) fn refresh_command_sidebar(&self) {
@@ -930,8 +1021,27 @@ impl Window {
                 .valign(gtk4::Align::Center)
                 .build();
 
+            let uuid = command.uuid.clone();
+            let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
+            edit_item
+                .set_action_and_target_value(Some("win.edit-command"), Some(&uuid.to_variant()));
+            let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
+            delete_item
+                .set_action_and_target_value(Some("win.delete-command"), Some(&uuid.to_variant()));
+            let menu = gtk4::gio::Menu::new();
+            menu.append_item(&edit_item);
+            menu.append_item(&delete_item);
+            let more_button = gtk4::MenuButton::builder()
+                .icon_name("view-more-symbolic")
+                .tooltip_text("More options")
+                .valign(gtk4::Align::Center)
+                .menu_model(&menu)
+                .build();
+            more_button.add_css_class("flat");
+
             action_row.add_suffix(&run_button);
             action_row.add_suffix(&insert_button);
+            action_row.add_suffix(&more_button);
             row.set_child(Some(&action_row));
             imp.command_list.append(&row);
 
@@ -946,6 +1056,10 @@ impl Window {
                 win.execute_saved_command(&command, CommandRunMode::Insert);
             });
         }
+
+        let is_empty = imp.command_list.row_at_index(0).is_none();
+        imp.command_scroll.set_visible(!is_empty);
+        imp.command_empty.set_visible(is_empty);
     }
 
     pub(crate) fn execute_saved_command(&self, command: &SavedCommand, run_mode: CommandRunMode) {
@@ -1066,6 +1180,54 @@ impl Window {
         term.reset_launch_state_for_retry();
         term.show_recovery_message(&target.failure_message(status));
         true
+    }
+
+    fn confirm_delete_bookmark(&self, uuid: String) {
+        let alert = adw::AlertDialog::new(
+            Some("Delete Bookmark?"),
+            Some("The bookmark will be permanently removed."),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+        let win = self.clone();
+        alert.connect_response(None, move |_, response| {
+            if response == "delete" {
+                let mut items = crate::bookmarks::load();
+                items.retain(|b| b.uuid != uuid);
+                if let Err(e) = crate::bookmarks::save(&items) {
+                    log::error!("Failed to delete bookmark: {e}");
+                }
+                win.refresh_bookmark_sidebar();
+            }
+        });
+        alert.present(Some(self));
+    }
+
+    fn confirm_delete_command(&self, uuid: String) {
+        let alert = adw::AlertDialog::new(
+            Some("Delete Command?"),
+            Some("The command will be permanently removed."),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+        let win = self.clone();
+        alert.connect_response(None, move |_, response| {
+            if response == "delete" {
+                let mut items = commands::load();
+                items.retain(|c| c.uuid != uuid);
+                if let Err(e) = commands::save(&items) {
+                    log::error!("Failed to delete command: {e}");
+                }
+                win.refresh_command_sidebar();
+            }
+        });
+        alert.present(Some(self));
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -3069,6 +3231,114 @@ mod tests {
         assert_eq!(saved_state.sessions[0].name, "Renamed Session");
 
         window.close();
+    }
+
+    #[test]
+    fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
+        require_display!();
+
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.sidebar-mgmt-tests").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+        let window = Window::new(&app);
+
+        assert!(
+            window.lookup_action("manage-bookmarks").is_none(),
+            "manage-bookmarks action should be removed"
+        );
+        assert!(
+            window.lookup_action("manage-commands").is_none(),
+            "manage-commands action should be removed"
+        );
+        assert!(
+            window.lookup_action("add-bookmark").is_some(),
+            "add-bookmark action should be registered"
+        );
+        assert!(
+            window.lookup_action("add-command").is_some(),
+            "add-command action should be registered"
+        );
+        assert!(
+            window.lookup_action("edit-bookmark").is_some(),
+            "edit-bookmark action should be registered"
+        );
+        assert!(
+            window.lookup_action("delete-bookmark").is_some(),
+            "delete-bookmark action should be registered"
+        );
+        assert!(
+            window.lookup_action("edit-command").is_some(),
+            "edit-command action should be registered"
+        );
+        assert!(
+            window.lookup_action("delete-command").is_some(),
+            "delete-command action should be registered"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn bookmark_sidebar_shows_empty_state_when_no_bookmarks() {
+        require_display!();
+
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.bookmark-empty-state-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+        let window = Window::new(&app);
+        window.present();
+        pump_events(50);
+
+        assert!(
+            window.imp().bookmark_empty.is_visible(),
+            "empty state should be visible when no bookmarks"
+        );
+        assert!(
+            !window.imp().bookmark_scroll.is_visible(),
+            "list scroll should be hidden when no bookmarks"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn command_sidebar_shows_empty_state_when_no_commands() {
+        require_display!();
+
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.command-empty-state-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+        let window = Window::new(&app);
+        window.present();
+        pump_events(50);
+
+        assert!(
+            window.imp().command_empty.is_visible(),
+            "empty state should be visible when no commands"
+        );
+        assert!(
+            !window.imp().command_scroll.is_visible(),
+            "list scroll should be hidden when no commands"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 
     #[test]

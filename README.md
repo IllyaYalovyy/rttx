@@ -25,7 +25,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
 - **Custom titles** — Double-click any terminal header to rename it for your current task.
-- **Bookmarks** — Save folder, SSH, tmux, or combined bookmarks, search them in the right tools sidebar, run them in the current pane, or start a new session from one click.
+- **Bookmarks** — Save folder, SSH, tmux, or combined bookmarks; add, edit, and delete them directly from the sidebar; search, run in the current pane, or open as a new session in one click.
 - **Commands launcher** — Save searchable single-line or multiline commands in the right tools sidebar and either run them immediately or insert them into the active terminal.
 - **Structured session recovery** — Bookmark-driven panes restore as explicit targets such as local folders, local tmux, remote SSH shells, or remote SSH+tmux sessions.
 - **Attach-only tmux recovery** — tmux-backed panes reattach to the named session; `rttx` never silently creates a new clean tmux session during recovery.
