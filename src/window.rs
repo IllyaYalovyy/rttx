@@ -76,6 +76,7 @@ mod imp {
 
             let menu = gtk4::gio::Menu::new();
             menu.append(Some("About rttx"), Some("win.about"));
+            menu.append(Some("Bookmark This Session"), Some("win.bookmark-session"));
             menu.append(Some("Manage Bookmarks"), Some("win.manage-bookmarks"));
             menu.append(Some("Manage Commands"), Some("win.manage-commands"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -348,6 +349,7 @@ impl Window {
                 let reveal = w.imp().utility_sidebar_revealer.reveals_child();
                 w.imp().utility_sidebar_revealer.set_reveal_child(!reveal);
             }),
+            ("bookmark-session", &[], Self::do_bookmark_active_session),
             ("manage-bookmarks", &[], |w| {
                 crate::bookmarks_window::show(w);
             }),
@@ -1435,6 +1437,42 @@ impl Window {
         }
     }
 
+    pub(crate) fn create_bookmark_from_active_session(&self) -> Option<Bookmark> {
+        let uuid = self.focused_terminal_uuid()?;
+        let state = self.imp().state.borrow();
+        let session = state.sessions.iter().find(|s| s.layout.contains_terminal(&uuid))?;
+        let session_name = session.name.clone();
+        drop(state);
+
+        let cwd = self
+            .imp()
+            .terminals
+            .borrow()
+            .get(&uuid)
+            .and_then(|t| t.current_directory());
+
+        let mut bookmark = Bookmark::new(session_name);
+        bookmark.directory = cwd;
+        Some(bookmark)
+    }
+
+    fn do_bookmark_active_session(&self) {
+        let Some(bookmark) = self.create_bookmark_from_active_session() else {
+            return;
+        };
+        let name = bookmark.name.clone();
+        let mut bookmarks = crate::bookmarks::load();
+        bookmarks.push(bookmark);
+        let _ = crate::bookmarks::save(&bookmarks);
+        self.refresh_bookmark_sidebar();
+
+        let notification = gtk4::gio::Notification::new("Bookmark saved");
+        notification.set_body(Some(&format!("Session \"{name}\" was added to bookmarks")));
+        if let Some(app) = self.application() {
+            app.send_notification(None, &notification);
+        }
+    }
+
     fn clipboard_copy(&self) {
         if let Some(uuid) = self.focused_terminal_uuid() {
             if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
@@ -2017,6 +2055,77 @@ mod tests {
         assert_eq!(
             pending_inputs,
             vec!["tmux attach-session -t 'dev' || tmux new-session -s 'dev'\n"]
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn bookmark_active_session_captures_session_name_and_cwd() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.bookmark-active-session-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+
+        // Rename the default session and set the terminal's CWD.
+        {
+            let mut state = window.imp().state.borrow_mut();
+            state.sessions[0].name = "My Work".to_string();
+        }
+        let terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        if let Some(term) = window.imp().terminals.borrow().get(&terminal_uuid) {
+            term.set_current_directory_for_test(Some("/home/user/projects"));
+        }
+        window.imp().focused_terminal_uuid.replace(Some(terminal_uuid));
+
+        let bookmark = window
+            .create_bookmark_from_active_session()
+            .expect("should produce a bookmark when a terminal is focused");
+
+        assert_eq!(bookmark.name, "My Work", "bookmark name should match the session name");
+        assert_eq!(
+            bookmark.directory.as_deref(),
+            Some("/home/user/projects"),
+            "bookmark directory should match the focused terminal's CWD"
+        );
+        assert_eq!(bookmark.ssh_target, None);
+        assert_eq!(bookmark.tmux_session, None);
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn bookmark_active_session_returns_none_without_focused_terminal() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.bookmark-no-focus-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.imp().focused_terminal_uuid.replace(None);
+
+        assert!(
+            window.create_bookmark_from_active_session().is_none(),
+            "should return None when no terminal is focused"
         );
 
         window.close();
