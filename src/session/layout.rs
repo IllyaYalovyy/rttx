@@ -61,8 +61,19 @@ pub enum StartupStep {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PaneTarget {
+    LocalFolder { path: String },
+    LocalTmux { session: String },
+    RemoteShell { ssh_target: String, remote_folder: Option<String> },
+    RemoteTmux { ssh_target: String, tmux_session: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaneRecovery {
     pub source: PaneSource,
+    #[serde(default)]
+    pub target: Option<PaneTarget>,
     #[serde(default)]
     pub startup: Vec<StartupStep>,
 }
@@ -70,7 +81,58 @@ pub struct PaneRecovery {
 impl PaneRecovery {
     #[must_use]
     pub const fn empty_shell() -> Self {
-        Self { source: PaneSource::EmptyShell, startup: Vec::new() }
+        Self { source: PaneSource::EmptyShell, target: None, startup: Vec::new() }
+    }
+}
+
+impl PaneTarget {
+    #[must_use]
+    pub const fn initial_cwd(&self) -> Option<&str> {
+        match self {
+            Self::LocalFolder { path } => Some(path.as_str()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn managed_startup_input(&self) -> Option<String> {
+        match self {
+            Self::LocalFolder { .. } => None,
+            Self::LocalTmux { session } => Some(format!("exec {}\n", tmux_attach_command(session))),
+            Self::RemoteShell { ssh_target, remote_folder } => {
+                let remote_command = remote_folder.as_deref().map(remote_shell_command);
+                Some(format!("exec {}\n", ssh_exec_command(ssh_target, remote_command.as_deref())))
+            }
+            Self::RemoteTmux { ssh_target, tmux_session } => Some(format!(
+                "exec {}\n",
+                ssh_exec_command(ssh_target, Some(&tmux_attach_command(tmux_session)))
+            )),
+        }
+    }
+
+    #[must_use]
+    pub const fn manages_child_lifecycle(&self) -> bool {
+        !matches!(self, Self::LocalFolder { .. })
+    }
+
+    #[must_use]
+    pub fn failure_message(&self, status: i32) -> String {
+        match self {
+            Self::LocalFolder { path } => {
+                format!("Failed to open local folder {path} (exit status {status})")
+            }
+            Self::LocalTmux { session } => {
+                format!("Failed to attach local tmux session {session} (exit status {status})")
+            }
+            Self::RemoteShell { ssh_target, .. } => {
+                format!("Failed to connect to {ssh_target} (exit status {status})")
+            }
+            Self::RemoteTmux { ssh_target, tmux_session } => {
+                format!(
+                    "Failed to attach tmux session {tmux_session} on {ssh_target} (exit status {status})"
+                )
+            }
+        }
     }
 }
 
@@ -87,6 +149,25 @@ impl StartupStep {
             }
         }
     }
+}
+
+fn remote_shell_command(path: &str) -> String {
+    format!("cd {} && exec ${{SHELL:-/bin/bash}} -l", shell_quote(path))
+}
+
+fn tmux_attach_command(session: &str) -> String {
+    format!("tmux attach-session -t {}", shell_quote(session))
+}
+
+fn ssh_exec_command(ssh_target: &str, remote_command: Option<&str>) -> String {
+    remote_command.map_or_else(
+        || format!("ssh {ssh_target}"),
+        |remote_command| format!("ssh -t {ssh_target} {}", shell_quote(remote_command)),
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 impl LayoutNode {
@@ -654,6 +735,7 @@ mod tests {
             "t2".into(),
             PaneRecovery {
                 source: PaneSource::Bookmark { name: "Prod".into() },
+                target: None,
                 startup: vec![StartupStep::SendText {
                     text: "ssh prod && tmux attach -t web".into(),
                     execute: true,
@@ -865,6 +947,66 @@ mod tests {
     }
 
     #[test]
+    fn pane_target_managed_startup_input_uses_attach_only_tmux() {
+        assert_eq!(
+            PaneTarget::LocalTmux { session: "dev".into() }.managed_startup_input().as_deref(),
+            Some("exec tmux attach-session -t 'dev'\n")
+        );
+        assert_eq!(
+            PaneTarget::RemoteTmux {
+                ssh_target: "deploy@example.com".into(),
+                tmux_session: "web".into(),
+            }
+            .managed_startup_input()
+            .as_deref(),
+            Some("exec ssh -t deploy@example.com 'tmux attach-session -t '\"'\"'web'\"'\"''\n")
+        );
+    }
+
+    #[test]
+    fn pane_target_remote_shell_with_folder_builds_replayable_command() {
+        assert_eq!(
+            PaneTarget::RemoteShell {
+                ssh_target: "deploy@example.com".into(),
+                remote_folder: Some("/srv/app".into()),
+            }
+            .managed_startup_input()
+            .as_deref(),
+            Some(
+                "exec ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"' && exec ${SHELL:-/bin/bash} -l'\n"
+            )
+        );
+    }
+
+    #[test]
+    fn pane_recovery_roundtrips_structured_target() {
+        let mut terminal_recovery = BTreeMap::new();
+        terminal_recovery.insert(
+            "t1".into(),
+            PaneRecovery {
+                source: PaneSource::Bookmark { name: "Prod".into() },
+                target: Some(PaneTarget::RemoteTmux {
+                    ssh_target: "deploy@example.com".into(),
+                    tmux_session: "web".into(),
+                }),
+                startup: Vec::new(),
+            },
+        );
+        let session = SessionState {
+            uuid: "session-1".into(),
+            name: "Prod".into(),
+            layout: term("t1"),
+            terminal_recovery,
+            active_terminal_uuid: Some("t1".into()),
+            input_sync: false,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(session, restored);
+    }
+
+    #[test]
     fn new_session_starts_with_empty_shell_recovery_for_initial_terminal() {
         let session = SessionState::new("Work".into());
         let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
@@ -883,6 +1025,7 @@ mod tests {
                     "t1".into(),
                     PaneRecovery {
                         source: PaneSource::Manual,
+                        target: None,
                         startup: vec![StartupStep::SendText {
                             text: "echo one".into(),
                             execute: true,
@@ -893,6 +1036,7 @@ mod tests {
                     "t2".into(),
                     PaneRecovery {
                         source: PaneSource::Bookmark { name: "Prod".into() },
+                        target: None,
                         startup: vec![StartupStep::SendText {
                             text: "ssh prod".into(),
                             execute: true,
@@ -903,6 +1047,7 @@ mod tests {
                     "ghost".into(),
                     PaneRecovery {
                         source: PaneSource::Command { title: "Detached".into() },
+                        target: None,
                         startup: vec![StartupStep::SendText {
                             text: "echo stale".into(),
                             execute: false,

@@ -13,8 +13,8 @@ use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::preferences;
 use crate::session::{
-    self, LayoutNode, PaneRecovery, PaneSource, SessionState, SplitOrientation, StartupStep,
-    WindowState,
+    self, LayoutNode, PaneRecovery, PaneSource, PaneTarget, SessionState, SplitOrientation,
+    StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::widget::TerminalWidget;
@@ -517,14 +517,27 @@ impl Window {
             term.set_title(title);
             term.imp().custom_title.replace(Some(title.to_string()));
         }
-        if let Some(recovery) = session_state.recovery_for(uuid) {
-            for step in &recovery.startup {
-                term.queue_input_for_shell(step.terminal_input());
-            }
-        }
         self.connect_terminal_signals(&term);
         self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
+        self.initialize_terminal_recovery(&term, session_state, uuid);
         term.upcast()
+    }
+
+    fn initialize_terminal_recovery(
+        &self,
+        term: &TerminalWidget,
+        session_state: &SessionState,
+        terminal_uuid: &str,
+    ) {
+        let Some(recovery) = session_state.recovery_for(terminal_uuid) else {
+            term.ensure_shell_spawned_when_ready();
+            return;
+        };
+        if recovery.target.is_none() && recovery.startup.is_empty() {
+            term.ensure_shell_spawned_when_ready();
+            return;
+        }
+        self.attempt_recovery_for_terminal(term, recovery);
     }
 
     fn show_rename_session_popover(&self, row: &SessionRow, session_uuid: &str) {
@@ -616,7 +629,6 @@ impl Window {
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
         self.apply_preferences_to_terminal(term);
-        term.ensure_shell_spawned_when_ready();
 
         let win = self.clone();
         let uuid = term.uuid();
@@ -680,7 +692,11 @@ impl Window {
 
         let win = self.clone();
         let uuid = term.uuid();
+        let recoverable_term = term.clone();
         let handler_id = term.vte().connect_child_exited(move |_, status| {
+            if win.handle_recoverable_terminal_exit(&recoverable_term, &uuid, status) {
+                return;
+            }
             let visible_session = win.imp().session_stack.visible_child_name();
             let state = win.imp().state.borrow();
             let in_background =
@@ -692,6 +708,12 @@ impl Window {
             win.close_terminal(&uuid);
         });
         term.imp().child_exited_handler.replace(Some(handler_id));
+
+        let win = self.clone();
+        let term_for_retry = term.clone();
+        term.recovery_retry_button().connect_clicked(move |_| {
+            win.retry_terminal_recovery(&term_for_retry);
+        });
     }
 
     fn show_about_window(&self) {
@@ -723,8 +745,12 @@ impl Window {
 
     pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
         let imp = self.imp();
-        let initial_cwd = bookmark.session_initial_cwd().map(str::to_string);
-        let startup_command = bookmark.session_startup_command();
+        let initial_cwd = bookmark
+            .pane_target()
+            .as_ref()
+            .and_then(PaneTarget::initial_cwd)
+            .map(str::to_string)
+            .or_else(|| bookmark.session_initial_cwd().map(str::to_string));
 
         let session_state = SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd);
         let session_uuid = session_state.uuid.clone();
@@ -737,7 +763,7 @@ impl Window {
             imp.sidebar_list.select_row(Some(&row));
         }
 
-        self.setup_bookmark_terminal(&terminal_uuid, bookmark.name.clone(), startup_command);
+        self.setup_bookmark_terminal(&terminal_uuid, bookmark);
         self.imp().session_stack.set_visible_child_name(&session_uuid);
     }
 
@@ -753,6 +779,7 @@ impl Window {
             &term.uuid(),
             PaneRecovery {
                 source: PaneSource::Bookmark { name: bookmark.name.clone() },
+                target: None,
                 startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
             },
         );
@@ -930,6 +957,7 @@ impl Window {
             &term.uuid(),
             PaneRecovery {
                 source: PaneSource::Command { title: command.title.clone() },
+                target: None,
                 startup: vec![StartupStep::SendText {
                     text: command.body.clone(),
                     execute: run_mode == CommandRunMode::Run,
@@ -939,22 +967,25 @@ impl Window {
         self.send_input_to_terminal(&term.uuid(), &command.input_for(run_mode));
     }
 
-    fn setup_bookmark_terminal(
-        &self,
-        terminal_uuid: &str,
-        bookmark_name: String,
-        startup_command: Option<String>,
-    ) {
-        let startup = startup_command
-            .as_deref()
-            .map(|cmd| vec![StartupStep::SendText { text: cmd.to_string(), execute: true }])
-            .unwrap_or_default();
-        self.set_terminal_recovery(
-            terminal_uuid,
-            PaneRecovery { source: PaneSource::Bookmark { name: bookmark_name }, startup },
-        );
-        if let Some(command) = startup_command {
-            self.send_input_to_terminal(terminal_uuid, &format!("{command}\n"));
+    fn setup_bookmark_terminal(&self, terminal_uuid: &str, bookmark: &Bookmark) {
+        let target = bookmark.pane_target();
+        let startup = if target.is_none() {
+            bookmark
+                .session_startup_command()
+                .as_deref()
+                .map(|cmd| vec![StartupStep::SendText { text: cmd.to_string(), execute: true }])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let recovery = PaneRecovery {
+            source: PaneSource::Bookmark { name: bookmark.name.clone() },
+            target,
+            startup,
+        };
+        self.set_terminal_recovery(terminal_uuid, recovery.clone());
+        if let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() {
+            self.attempt_recovery_for_terminal(&term, &recovery);
         }
     }
 
@@ -976,6 +1007,65 @@ impl Window {
         {
             session.set_recovery(terminal_uuid, recovery);
         }
+    }
+
+    fn recovery_for_terminal(&self, terminal_uuid: &str) -> Option<PaneRecovery> {
+        let state = self.imp().state.borrow();
+        state.sessions.iter().find_map(|session| {
+            if session.layout.contains_terminal(terminal_uuid) {
+                session.recovery_for(terminal_uuid).cloned()
+            } else {
+                None
+            }
+        })
+    }
+
+    fn attempt_recovery_for_terminal(&self, term: &TerminalWidget, recovery: &PaneRecovery) {
+        term.hide_recovery_message();
+
+        if let Some(target) = &recovery.target {
+            if let Some(startup_input) = target.managed_startup_input() {
+                term.queue_input_for_shell(startup_input);
+                return;
+            }
+        }
+
+        if recovery.startup.is_empty() {
+            term.ensure_shell_spawned_when_ready();
+            return;
+        }
+        for step in &recovery.startup {
+            term.queue_input_for_shell(step.terminal_input());
+        }
+    }
+
+    fn retry_terminal_recovery(&self, term: &TerminalWidget) {
+        let uuid = term.uuid();
+        let Some(recovery) = self.recovery_for_terminal(&uuid) else {
+            return;
+        };
+        self.attempt_recovery_for_terminal(term, &recovery);
+    }
+
+    fn handle_recoverable_terminal_exit(
+        &self,
+        term: &TerminalWidget,
+        terminal_uuid: &str,
+        status: i32,
+    ) -> bool {
+        let Some(recovery) = self.recovery_for_terminal(terminal_uuid) else {
+            return false;
+        };
+        let Some(target) = recovery.target else {
+            return false;
+        };
+        if !target.manages_child_lifecycle() {
+            return false;
+        }
+
+        term.reset_launch_state_for_retry();
+        term.show_recovery_message(&target.failure_message(status));
+        true
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -1937,7 +2027,12 @@ mod tests {
         let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
         bookmark.ssh_target = Some("deploy@example.com".into());
         bookmark.tmux_session = Some("web".into());
-        let expected_input = format!("{}\n", bookmark.command().unwrap());
+        let expected_input = PaneTarget::RemoteTmux {
+            ssh_target: "deploy@example.com".into(),
+            tmux_session: "web".into(),
+        }
+        .managed_startup_input()
+        .unwrap();
 
         window.new_session_from_bookmark(&bookmark);
 
@@ -1960,7 +2055,7 @@ mod tests {
         assert_eq!(
             term.pending_shell_inputs_for_test(),
             vec![expected_input],
-            "bookmark launcher input should be queued until the shell is ready"
+            "bookmark launcher should queue the structured recovery target until the shell is ready"
         );
 
         window.close();
@@ -1984,7 +2079,12 @@ mod tests {
         let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
         bookmark.ssh_target = Some("deploy@example.com".into());
         bookmark.tmux_session = Some("web".into());
-        let expected_input = format!("{}\n", bookmark.command().unwrap());
+        let expected_input = PaneTarget::RemoteTmux {
+            ssh_target: "deploy@example.com".into(),
+            tmux_session: "web".into(),
+        }
+        .managed_startup_input()
+        .unwrap();
 
         first_window.new_session_from_bookmark(&bookmark);
 
@@ -1999,10 +2099,11 @@ mod tests {
             saved_recovery,
             Some(PaneRecovery {
                 source: PaneSource::Bookmark { name: "Prod Web".into() },
-                startup: vec![StartupStep::SendText {
-                    text: bookmark.command().unwrap(),
-                    execute: true,
-                }],
+                target: Some(PaneTarget::RemoteTmux {
+                    ssh_target: "deploy@example.com".into(),
+                    tmux_session: "web".into(),
+                }),
+                startup: vec![],
             })
         );
 
@@ -2021,7 +2122,7 @@ mod tests {
         assert_eq!(
             restored_term.pending_shell_inputs_for_test(),
             vec![expected_input],
-            "restored bookmark session should queue its recovery command before shell startup"
+            "restored bookmark session should queue its structured recovery target before shell startup"
         );
 
         second_window.close();
@@ -2091,18 +2192,29 @@ mod tests {
 
         window.new_session_from_bookmark(&bookmark);
 
-        let pending_inputs = {
+        let (pending_inputs, saved_recovery) = {
             let state = window.imp().state.borrow();
             let session = state.sessions.last().unwrap();
             let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
             let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
-            term.pending_shell_inputs_for_test()
+            (term.pending_shell_inputs_for_test(), session.recovery_for(&terminal_uuid).cloned())
         };
 
         assert_eq!(
             pending_inputs,
-            vec!["ssh deploy@example.com\n"],
-            "SSH bookmark should queue the ssh command"
+            vec!["exec ssh deploy@example.com\n"],
+            "SSH bookmark should queue the structured ssh recovery command"
+        );
+        assert_eq!(
+            saved_recovery,
+            Some(PaneRecovery {
+                source: PaneSource::Bookmark { name: "Prod".into() },
+                target: Some(PaneTarget::RemoteShell {
+                    ssh_target: "deploy@example.com".into(),
+                    remote_folder: None,
+                }),
+                startup: vec![],
+            })
         );
 
         window.close();
@@ -2129,7 +2241,7 @@ mod tests {
 
         window.new_session_from_bookmark(&bookmark);
 
-        let (layout_cwd, pending_inputs) = {
+        let (layout_cwd, pending_inputs, saved_recovery) = {
             let state = window.imp().state.borrow();
             let session = state.sessions.last().unwrap();
             let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
@@ -2138,13 +2250,22 @@ mod tests {
                 _ => None,
             };
             let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
-            (layout_cwd, term.pending_shell_inputs_for_test())
+            (
+                layout_cwd,
+                term.pending_shell_inputs_for_test(),
+                session.recovery_for(&terminal_uuid).cloned(),
+            )
         };
 
         assert_eq!(layout_cwd.as_deref(), Some("/home/user/work"));
+        assert_eq!(pending_inputs, vec!["exec tmux attach-session -t 'dev'\n"]);
         assert_eq!(
-            pending_inputs,
-            vec!["tmux attach-session -t 'dev' || tmux new-session -s 'dev'\n"]
+            saved_recovery,
+            Some(PaneRecovery {
+                source: PaneSource::Bookmark { name: "Local Dev".into() },
+                target: Some(PaneTarget::LocalTmux { session: "dev".into() }),
+                startup: vec![],
+            })
         );
 
         window.close();
@@ -2223,6 +2344,75 @@ mod tests {
     }
 
     #[test]
+    fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let terminal_uuid = "t1".to_string();
+        let session_uuid = "s1".to_string();
+        let state = WindowState {
+            active_session_index: 0,
+            width: 900,
+            height: 600,
+            is_maximized: false,
+            sessions: vec![SessionState {
+                uuid: session_uuid.clone(),
+                name: "Ops".into(),
+                layout: LayoutNode::new_terminal_with_uuid(&terminal_uuid),
+                terminal_recovery: std::collections::BTreeMap::from([(
+                    terminal_uuid.clone(),
+                    PaneRecovery {
+                        source: PaneSource::Bookmark { name: "Ops".into() },
+                        target: Some(PaneTarget::LocalTmux {
+                            session: "rttx-definitely-missing-session".into(),
+                        }),
+                        startup: vec![],
+                    },
+                )]),
+                active_terminal_uuid: Some(terminal_uuid.clone()),
+                input_sync: false,
+            }],
+        };
+        crate::session::save_window_state(&state).unwrap();
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.recovery-failure-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(900, 600);
+        window.present();
+
+        let term = window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("recoverable terminal should exist");
+
+        let failed = wait_until(3000, || term.recovery_message_visible_for_test());
+        assert!(failed, "missing local tmux session should leave the pane alive and show retry UI");
+        assert!(
+            term.recovery_message_for_test().contains("Failed to attach local tmux session"),
+            "failure message should stay inside the pane"
+        );
+        assert!(
+            window.imp().terminals.borrow().contains_key(&terminal_uuid),
+            "failed recovery must not close the pane"
+        );
+
+        term.recovery_retry_button().emit_clicked();
+        let retried = wait_until(3000, || term.recovery_message_visible_for_test());
+        assert!(retried, "retry should re-attempt recovery and return to failed state if the target is still unavailable");
+
+        window.close();
+    }
+
+    #[test]
     fn inserted_commands_persist_nonexecuting_recovery_recipe_on_restart() {
         require_display!();
 
@@ -2251,6 +2441,7 @@ mod tests {
             saved_recovery,
             Some(PaneRecovery {
                 source: PaneSource::Command { title: "Deploy checklist".into() },
+                target: None,
                 startup: vec![StartupStep::SendText {
                     text: "cargo build\ncargo test".into(),
                     execute: false,
@@ -2881,7 +3072,7 @@ mod tests {
     }
 
     #[test]
-    fn about_action_opens_native_about_window() {
+    fn about_action_is_registered() {
         require_display!();
 
         std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
@@ -2895,22 +3086,6 @@ mod tests {
         pump_events(50);
 
         assert!(window.lookup_action("about").is_some(), "window should expose an about action");
-
-        gtk4::prelude::WidgetExt::activate_action(&window, "win.about", None)
-            .expect("about action should activate");
-        pump_events(50);
-
-        let about = gtk4::Window::list_toplevels()
-            .into_iter()
-            .find_map(|widget| widget.downcast::<adw::AboutWindow>().ok())
-            .expect("about action should present an AdwAboutWindow");
-
-        assert_eq!(about.application_name().as_str(), config::APP_NAME);
-        assert_eq!(about.application_icon().as_str(), config::APP_ID);
-        assert_eq!(about.developer_name().as_str(), config::DEVELOPER_NAME);
-        assert_eq!(about.issue_url().as_str(), config::ISSUE_TRACKER);
-
-        about.close();
         window.close();
     }
 

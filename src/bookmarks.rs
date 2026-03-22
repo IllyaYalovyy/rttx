@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::config;
+use crate::session::PaneTarget;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bookmark {
@@ -99,6 +100,29 @@ impl Bookmark {
             }
             (None, Some(session)) => Some(tmux_command(session)),
             (None, None) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn pane_target(&self) -> Option<PaneTarget> {
+        let directory = non_empty(self.directory.as_deref()).map(str::to_string);
+        let ssh_target = non_empty(self.ssh_target.as_deref()).map(str::to_string);
+        let tmux_session = non_empty(self.tmux_session.as_deref()).map(str::to_string);
+
+        match (directory, ssh_target, tmux_session) {
+            (Some(path), None, None) => Some(PaneTarget::LocalFolder { path }),
+            (None, None, Some(session)) => Some(PaneTarget::LocalTmux { session }),
+            (Some(_path), None, Some(session)) => Some(PaneTarget::LocalTmux { session }),
+            (None, Some(ssh_target), None) => {
+                Some(PaneTarget::RemoteShell { ssh_target, remote_folder: None })
+            }
+            (Some(path), Some(ssh_target), None) => {
+                Some(PaneTarget::RemoteShell { ssh_target, remote_folder: Some(path) })
+            }
+            (None | Some(_), Some(ssh_target), Some(tmux_session)) => {
+                Some(PaneTarget::RemoteTmux { ssh_target, tmux_session })
+            }
+            (None, None, None) => None,
         }
     }
 }
@@ -221,6 +245,37 @@ mod tests {
             Some(
                 "ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"' && (tmux attach-session -t '\"'\"'deploy'\"'\"' || tmux new-session -s '\"'\"'deploy'\"'\"')'"
             )
+        );
+    }
+
+    #[test]
+    fn pane_target_prefers_remote_tmux_for_ssh_tmux_bookmarks() {
+        let mut bookmark = Bookmark::new("Remote Ops");
+        bookmark.directory = Some("/srv/app".into());
+        bookmark.ssh_target = Some("deploy@example.com".into());
+        bookmark.tmux_session = Some("deploy".into());
+
+        assert_eq!(
+            bookmark.pane_target(),
+            Some(PaneTarget::RemoteTmux {
+                ssh_target: "deploy@example.com".into(),
+                tmux_session: "deploy".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn pane_target_preserves_remote_folder_for_plain_ssh_bookmarks() {
+        let mut bookmark = Bookmark::new("Remote Shell");
+        bookmark.directory = Some("/srv/app".into());
+        bookmark.ssh_target = Some("deploy@example.com".into());
+
+        assert_eq!(
+            bookmark.pane_target(),
+            Some(PaneTarget::RemoteShell {
+                ssh_target: "deploy@example.com".into(),
+                remote_folder: Some("/srv/app".into()),
+            })
         );
     }
 

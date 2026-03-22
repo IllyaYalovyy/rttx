@@ -21,13 +21,15 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 - **Custom session names** — Double-click a session in the sidebar to rename it.
 - **Native GNOME window layout** — Libadwaita `ToolbarView` and `OverlaySplitView` keep the main window consistent with modern GNOME apps.
 - **GNOME-native app metadata** — The app menu includes a native Libadwaita About window alongside preferences and shortcuts.
-- **Context Persistence** — Layout, pane sizes, active pane, Current Working Directories, custom titles, and per-pane recovery recipes are saved automatically and restored on launch.
+- **Context Persistence** — Layout, pane sizes, active pane, Current Working Directories, custom titles, and per-pane recovery metadata are saved automatically and restored on launch.
 - **Input synchronization** — Broadcast keystrokes to all terminals in a session simultaneously (Ctrl+Shift+I).
 - **Terminal swapping** — Drag and drop terminal headers to reorder your layout.
 - **Custom titles** — Double-click any terminal header to rename it for your current task.
 - **Bookmarks** — Save folder, SSH, tmux, or combined bookmarks, search them in the right tools sidebar, run them in the current pane, or start a new session from one click.
 - **Commands launcher** — Save searchable single-line or multiline commands in the right tools sidebar and either run them immediately or insert them into the active terminal.
-- **Recovery replay for launched panes** — Panes created or driven through bookmarks and saved commands remember that startup input and queue it again after restart.
+- **Structured session recovery** — Bookmark-driven panes restore as explicit targets such as local folders, local tmux, remote SSH shells, or remote SSH+tmux sessions.
+- **Attach-only tmux recovery** — tmux-backed panes reattach to the named session; `rttx` never silently creates a new clean tmux session during recovery.
+- **In-pane retry for failed recovery** — if a recoverable SSH/tmux pane fails to reconnect, the pane stays open and offers a non-modal retry action inside the terminal.
 - **Optional smart clipboard** — An opt-in mode lets plain `Ctrl+C` copy selected terminal text and `Ctrl+V` paste from the clipboard.
 - **Built-in terminal themes** — Native "Nightfall" and "Daybreak" schemes with full Tilix color scheme compatibility.
 - **Smart Notifications** — Process exit in a hidden session shows an in-app toast while `rttx` is focused, and falls back to a desktop notification when the window is not active.

@@ -1,7 +1,8 @@
 pub mod layout;
 
 pub use layout::{
-    LayoutNode, PaneRecovery, PaneSource, SessionState, SplitOrientation, StartupStep, WindowState,
+    LayoutNode, PaneRecovery, PaneSource, PaneTarget, SessionState, SplitOrientation, StartupStep,
+    WindowState,
 };
 
 use crate::config;

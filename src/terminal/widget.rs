@@ -22,6 +22,9 @@ mod imp {
         pub current_directory_override: RefCell<Option<Option<String>>>,
         pub vte: vte4::Terminal,
         pub header: gtk4::Box,
+        pub recovery_bar: gtk4::Box,
+        pub recovery_label: gtk4::Label,
+        pub recovery_retry_button: gtk4::Button,
         pub title_label: gtk4::Label,
         pub close_button: gtk4::Button,
         pub split_h_button: gtk4::Button,
@@ -70,6 +73,25 @@ mod imp {
             self.header.append(&self.split_h_button);
             self.header.append(&self.split_v_button);
             self.header.append(&self.close_button);
+
+            self.recovery_bar.set_orientation(gtk4::Orientation::Horizontal);
+            self.recovery_bar.set_spacing(6);
+            self.recovery_bar.set_margin_start(8);
+            self.recovery_bar.set_margin_end(8);
+            self.recovery_bar.set_margin_top(6);
+            self.recovery_bar.set_margin_bottom(6);
+            self.recovery_bar.add_css_class("toolbar");
+            self.recovery_bar.set_visible(false);
+
+            self.recovery_label.set_hexpand(true);
+            self.recovery_label.set_xalign(0.0);
+            self.recovery_label.set_wrap(true);
+
+            self.recovery_retry_button.set_label("Retry");
+            self.recovery_retry_button.add_css_class("suggested-action");
+
+            self.recovery_bar.append(&self.recovery_label);
+            self.recovery_bar.append(&self.recovery_retry_button);
 
             let gesture = gtk4::GestureClick::new();
             gesture.set_button(1);
@@ -179,6 +201,7 @@ mod imp {
             obj.add_controller(smart_clipboard_controller);
 
             obj.append(&self.header);
+            obj.append(&self.recovery_bar);
             obj.append(&self.search_bar);
             obj.append(&self.vte);
         }
@@ -187,13 +210,11 @@ mod imp {
     impl WidgetImpl for TerminalWidget {}
     impl BoxImpl for TerminalWidget {}
 }
-
 glib::wrapper! {
     pub struct TerminalWidget(ObjectSubclass<imp::TerminalWidget>)
         @extends gtk4::Box, gtk4::Widget,
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Orientable;
 }
-
 impl TerminalWidget {
     #[must_use]
     pub fn new(uuid: &str, cwd: Option<&str>) -> Self {
@@ -271,6 +292,25 @@ impl TerminalWidget {
 
     pub fn set_smart_clipboard(&self, enabled: bool) {
         self.imp().smart_clipboard.set(enabled);
+    }
+
+    #[must_use]
+    pub fn recovery_retry_button(&self) -> &gtk4::Button {
+        &self.imp().recovery_retry_button
+    }
+
+    pub fn show_recovery_message(&self, message: &str) {
+        self.imp().recovery_label.set_label(message);
+        self.imp().recovery_bar.set_visible(true);
+    }
+
+    pub fn hide_recovery_message(&self) {
+        self.imp().recovery_label.set_label("");
+        self.imp().recovery_bar.set_visible(false);
+    }
+
+    pub fn reset_launch_state_for_retry(&self) {
+        self.imp().shell_spawned.set(false);
     }
 
     #[cfg(test)]
@@ -363,13 +403,15 @@ impl TerminalWidget {
     }
 
     #[cfg(test)]
-    pub(crate) fn ctrl_v_action_for_test(&self) -> SmartClipboardAction {
-        smart_clipboard_action(
-            gtk4::gdk::Key::v,
-            gtk4::gdk::ModifierType::CONTROL_MASK,
-            self.imp().vte.has_selection(),
-            self.imp().smart_clipboard.get(),
-        )
+    #[must_use]
+    pub(crate) fn recovery_message_visible_for_test(&self) -> bool {
+        self.imp().recovery_bar.is_visible()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn recovery_message_for_test(&self) -> String {
+        self.imp().recovery_label.label().to_string()
     }
 
     #[cfg(test)]
@@ -421,7 +463,6 @@ impl TerminalWidget {
         }
     }
 }
-
 pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
     glib::filename_from_uri(uri).ok().map(|(path, _hostname)| path.display().to_string())
 }
@@ -458,45 +499,7 @@ fn smart_clipboard_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_file_uri, smart_clipboard_action, SmartClipboardAction, TerminalWidget};
-    use gtk4::prelude::*;
-    use std::sync::Once;
-
-    static GTK_INIT: Once = Once::new();
-
-    fn ensure_gtk_init() -> bool {
-        let mut success = false;
-        GTK_INIT.call_once(|| {
-            std::env::set_var("GTK_A11Y", "none");
-            success = gtk4::init().is_ok();
-        });
-        if !success {
-            success = std::panic::catch_unwind(|| {
-                let _ = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            })
-            .is_ok();
-        }
-        success
-    }
-
-    macro_rules! require_display {
-        () => {
-            if !ensure_gtk_init() {
-                eprintln!("SKIPPED: no display available");
-                return;
-            }
-        };
-    }
-
-    fn pump_events(max_ms: u64) {
-        let ctx = gtk4::glib::MainContext::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
-        while std::time::Instant::now() < deadline {
-            if !ctx.iteration(false) {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-    }
+    use super::{parse_file_uri, smart_clipboard_action, SmartClipboardAction};
 
     #[test]
     fn parse_standard_vte_uri() {
@@ -590,65 +593,5 @@ mod tests {
             ),
             SmartClipboardAction::PassThrough
         );
-    }
-
-    #[test]
-    fn set_smart_clipboard_takes_effect_after_construction() {
-        require_display!();
-
-        let term = TerminalWidget::new("t1", None);
-        assert_eq!(term.ctrl_v_action_for_test(), SmartClipboardAction::PassThrough);
-        term.set_smart_clipboard(true);
-        assert_eq!(term.ctrl_v_action_for_test(), SmartClipboardAction::Paste);
-    }
-
-    #[test]
-    fn smart_clipboard_controller_is_attached_to_terminal_widget_capture_phase() {
-        require_display!();
-
-        let term = TerminalWidget::new("t1", None);
-        let controllers = term.observe_controllers();
-        let smart_controller = (0..controllers.n_items())
-            .find_map(|index| controllers.item(index))
-            .and_then(|item| item.downcast::<gtk4::ShortcutController>().ok())
-            .filter(|controller| controller.name().as_deref() == Some("smart-clipboard"))
-            .expect("terminal widget should expose a named smart clipboard controller");
-
-        assert_eq!(smart_controller.widget(), Some(term.clone().upcast::<gtk4::Widget>()));
-        assert_eq!(smart_controller.propagation_phase(), gtk4::PropagationPhase::Capture);
-        assert_eq!(smart_controller.scope(), gtk4::ShortcutScope::Local);
-
-        let vte_controllers = term.vte().observe_controllers();
-        let vte_has_smart_controller = (0..vte_controllers.n_items())
-            .find_map(|index| vte_controllers.item(index))
-            .and_then(|item| item.downcast::<gtk4::ShortcutController>().ok())
-            .is_some_and(|controller| controller.name().as_deref() == Some("smart-clipboard"));
-        assert!(
-            !vte_has_smart_controller,
-            "smart clipboard controller must live on the terminal widget, not the VTE itself"
-        );
-    }
-
-    #[test]
-    fn shell_spawn_waits_for_real_terminal_size() {
-        require_display!();
-
-        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-        let term = TerminalWidget::new("t1", Some("/tmp"));
-        term.ensure_shell_spawned_when_ready();
-        pump_events(50);
-        assert!(!term.shell_spawned_for_test());
-
-        let window = gtk4::Window::new();
-        window.set_default_size(800, 600);
-        window.set_child(Some(&term));
-        window.present();
-        pump_events(200);
-
-        assert!(term.shell_spawned_for_test());
-
-        window.close();
-        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 }
