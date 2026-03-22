@@ -155,10 +155,9 @@ fn contract_any_constructible_state_roundtrips() {
                 active_terminal_uuid: None,
                 input_sync: false,
             }],
-            active_session_index: 0,
             width: 1,
             height: 1,
-            is_maximized: false,
+            ..WindowState::default()
         },
         // Unicode in names
         WindowState {
@@ -170,10 +169,7 @@ fn contract_any_constructible_state_roundtrips() {
                 active_terminal_uuid: None,
                 input_sync: true,
             }],
-            active_session_index: 0,
-            width: 800,
-            height: 600,
-            is_maximized: false,
+            ..WindowState::default()
         },
         // Deep nesting
         {
@@ -190,10 +186,7 @@ fn contract_any_constructible_state_roundtrips() {
                     active_terminal_uuid: None,
                     input_sync: false,
                 }],
-                active_session_index: 0,
-                width: 800,
-                height: 600,
-                is_maximized: false,
+                ..WindowState::default()
             }
         },
         // Many sessions
@@ -214,6 +207,7 @@ fn contract_any_constructible_state_roundtrips() {
                 width: 1920,
                 height: 1080,
                 is_maximized: true,
+                ..WindowState::default()
             }
         },
     ];

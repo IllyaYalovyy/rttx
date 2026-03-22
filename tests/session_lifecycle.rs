@@ -96,6 +96,7 @@ fn workflow_multi_session_state() {
         width: 1920,
         height: 1080,
         is_maximized: true,
+        ..WindowState::default()
     };
 
     // Verify structure
@@ -145,6 +146,7 @@ fn workflow_persist_and_restore_with_cwds() {
         width: 1200,
         height: 800,
         is_maximized: false,
+        ..WindowState::default()
     };
 
     let path = sessions_dir.join("window-state.json");

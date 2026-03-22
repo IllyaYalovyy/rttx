@@ -26,11 +26,12 @@ mod imp {
 
     #[derive(Default, Debug)]
     pub struct Window {
-        pub split_view: adw::OverlaySplitView,
+        pub left_paned: gtk4::Paned,
+        pub right_paned: gtk4::Paned,
         pub devel_badge: gtk4::Label,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
-        pub utility_sidebar_revealer: gtk4::Revealer,
+        pub utility_sidebar_box: gtk4::Box,
         pub bookmark_search_entry: gtk4::SearchEntry,
         pub bookmark_list: gtk4::ListBox,
         pub bookmark_scroll: gtk4::ScrolledWindow,
@@ -216,46 +217,43 @@ mod imp {
             utility_switcher.set_margin_end(12);
             utility_switcher.set_margin_top(12);
 
-            let utility_sidebar = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            utility_sidebar.set_width_request(320);
-            utility_sidebar.append(&utility_switcher);
-            utility_sidebar.append(&utility_stack);
-
-            self.utility_sidebar_revealer
-                .set_transition_type(gtk4::RevealerTransitionType::SlideLeft);
-            self.utility_sidebar_revealer.set_reveal_child(true);
-            self.utility_sidebar_revealer.set_child(Some(&utility_sidebar));
+            self.utility_sidebar_box.append(&utility_switcher);
+            self.utility_sidebar_box.append(&utility_stack);
+            self.utility_sidebar_box.set_width_request(240);
 
             self.session_stack.set_hexpand(true);
             self.session_stack.set_vexpand(true);
 
-            let content_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-            content_box.append(&self.session_stack);
-            content_box.append(&self.utility_sidebar_revealer);
+            self.right_paned.set_orientation(gtk4::Orientation::Horizontal);
+            self.right_paned.set_start_child(Some(&self.session_stack));
+            self.right_paned.set_end_child(Some(&self.utility_sidebar_box));
+            self.right_paned.set_resize_start_child(true);
+            self.right_paned.set_resize_end_child(false);
+            self.right_paned.set_shrink_start_child(false);
+            self.right_paned.set_shrink_end_child(false);
 
-            self.toast_overlay.set_child(Some(&content_box));
+            self.toast_overlay.set_child(Some(&self.right_paned));
 
-            self.split_view.set_sidebar(Some(&sidebar_scroll));
-            self.split_view.set_content(Some(&self.toast_overlay));
-            self.split_view.set_show_sidebar(true);
-            self.split_view.set_collapsed(false);
-            self.split_view.set_min_sidebar_width(180.0);
-            self.split_view.set_max_sidebar_width(300.0);
+            self.left_paned.set_orientation(gtk4::Orientation::Horizontal);
+            self.left_paned.set_start_child(Some(&sidebar_scroll));
+            self.left_paned.set_end_child(Some(&self.toast_overlay));
+            self.left_paned.set_resize_start_child(false);
+            self.left_paned.set_resize_end_child(true);
+            self.left_paned.set_shrink_start_child(false);
+            self.left_paned.set_shrink_end_child(false);
+            self.left_paned.set_position(220);
 
-            self.split_view
-                .bind_property("show-sidebar", &toggle_sidebar, "active")
-                .bidirectional()
-                .sync_create()
-                .build();
-            self.utility_sidebar_revealer
-                .bind_property("reveal-child", &toggle_utility_sidebar, "active")
-                .bidirectional()
-                .sync_create()
-                .build();
+            let utility_panel = self.utility_sidebar_box.clone();
+            toggle_sidebar.connect_toggled(move |btn| {
+                sidebar_scroll.set_visible(btn.is_active());
+            });
+            toggle_utility_sidebar.connect_toggled(move |btn| {
+                utility_panel.set_visible(btn.is_active());
+            });
 
             let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             main_box.append(&header);
-            main_box.append(&self.split_view);
+            main_box.append(&self.left_paned);
 
             obj.set_content(Some(&main_box));
         }
@@ -290,6 +288,8 @@ impl Window {
         let is_maximized = state.is_maximized;
         let width = state.width;
         let height = state.height;
+        let left_sidebar_width = state.left_sidebar_width;
+        let right_sidebar_width = state.right_sidebar_width;
 
         self.imp().state.replace(state.clone());
 
@@ -302,6 +302,16 @@ impl Window {
         } else {
             self.set_default_size(width, height);
         }
+
+        self.imp().left_paned.set_position(left_sidebar_width);
+
+        let right_paned = self.imp().right_paned.clone();
+        right_paned.connect_realize(move |paned| {
+            let total = paned.width();
+            if total > 0 {
+                paned.set_position((total - right_sidebar_width).max(0));
+            }
+        });
 
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
@@ -316,6 +326,12 @@ impl Window {
         state.width = width;
         state.height = height;
         state.is_maximized = self.is_maximized();
+        state.left_sidebar_width = imp.left_paned.position();
+        let right_total = imp.right_paned.width();
+        let right_pos = imp.right_paned.position();
+        if right_total > 0 && imp.utility_sidebar_box.is_visible() {
+            state.right_sidebar_width = (right_total - right_pos).max(0);
+        }
 
         let active_index = imp.sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
         state.active_session_index = active_index;
@@ -369,7 +385,8 @@ impl Window {
             ("prev-session", &["<Ctrl><Shift>Tab"], |w| w.cycle_session(-1)),
             ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
             ("toggle-sidebar", &["<Ctrl><Shift>N"], |w| {
-                w.imp().split_view.set_show_sidebar(!w.imp().split_view.shows_sidebar());
+                let panel = w.imp().left_paned.start_child().expect("left sidebar panel");
+                panel.set_visible(!panel.is_visible());
             }),
             ("fullscreen", &["F11"], |w| {
                 if w.is_fullscreen() {
@@ -383,8 +400,8 @@ impl Window {
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
-                let reveal = w.imp().utility_sidebar_revealer.reveals_child();
-                w.imp().utility_sidebar_revealer.set_reveal_child(!reveal);
+                let sidebar = &w.imp().utility_sidebar_box;
+                sidebar.set_visible(!sidebar.is_visible());
             }),
             ("bookmark-session", &[], Self::do_bookmark_active_session),
             ("add-bookmark", &[], |w| {
@@ -1885,6 +1902,7 @@ mod tests {
                     input_sync: false,
                 },
             ],
+            ..WindowState::default()
         }
     }
 
@@ -1909,10 +1927,6 @@ mod tests {
     #[test]
     fn terminal_in_visible_session_with_split_suppresses_notification() {
         let state = WindowState {
-            active_session_index: 0,
-            width: 800,
-            height: 600,
-            is_maximized: false,
             sessions: vec![SessionState {
                 uuid: "s1".into(),
                 name: "Session 1".into(),
@@ -1926,6 +1940,7 @@ mod tests {
                 active_terminal_uuid: None,
                 input_sync: false,
             }],
+            ..WindowState::default()
         };
         assert!(
             !terminal_is_in_background_session("t2", Some("s1"), &state),
@@ -1945,10 +1960,6 @@ mod tests {
     #[test]
     fn preferred_command_target_uuid_uses_focused_terminal_first() {
         let state = WindowState {
-            active_session_index: 0,
-            width: 800,
-            height: 600,
-            is_maximized: false,
             sessions: vec![SessionState {
                 uuid: "s1".into(),
                 name: "Session 1".into(),
@@ -1962,6 +1973,7 @@ mod tests {
                 active_terminal_uuid: None,
                 input_sync: false,
             }],
+            ..WindowState::default()
         };
 
         assert_eq!(
@@ -1974,9 +1986,6 @@ mod tests {
     fn preferred_command_target_uuid_falls_back_to_visible_session() {
         let state = WindowState {
             active_session_index: 1,
-            width: 800,
-            height: 600,
-            is_maximized: false,
             sessions: vec![
                 SessionState {
                     uuid: "s1".into(),
@@ -2000,6 +2009,7 @@ mod tests {
                     input_sync: false,
                 },
             ],
+            ..WindowState::default()
         };
 
         assert_eq!(preferred_command_target_uuid(None, Some("s2"), &state).as_deref(), Some("t2"));
@@ -2545,10 +2555,6 @@ mod tests {
         let terminal_uuid = "t1".to_string();
         let session_uuid = "s1".to_string();
         let state = WindowState {
-            active_session_index: 0,
-            width: 900,
-            height: 600,
-            is_maximized: false,
             sessions: vec![SessionState {
                 uuid: session_uuid.clone(),
                 name: "Ops".into(),
@@ -2566,6 +2572,7 @@ mod tests {
                 active_terminal_uuid: Some(terminal_uuid.clone()),
                 input_sync: false,
             }],
+            ..WindowState::default()
         };
         crate::session::save_window_state(&state).unwrap();
 

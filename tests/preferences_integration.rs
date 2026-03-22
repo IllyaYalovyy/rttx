@@ -87,10 +87,7 @@ fn preferences_input_sync_persists_in_session_state() {
             active_terminal_uuid: None,
             input_sync: false,
         }],
-        active_session_index: 0,
-        width: 800,
-        height: 600,
-        is_maximized: false,
+        ..WindowState::default()
     };
 
     let json = serde_json::to_string(&state).unwrap();
@@ -142,10 +139,7 @@ fn custom_title_persists_in_layout() {
             active_terminal_uuid: None,
             input_sync: false,
         }],
-        active_session_index: 0,
-        width: 800,
-        height: 600,
-        is_maximized: false,
+        ..WindowState::default()
     };
 
     let json = serde_json::to_string(&state).unwrap();

@@ -513,6 +513,14 @@ impl SessionState {
     }
 }
 
+const fn default_left_sidebar_width() -> i32 {
+    220
+}
+
+const fn default_right_sidebar_width() -> i32 {
+    320
+}
+
 /// Persistent state of the entire application window.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
@@ -521,6 +529,10 @@ pub struct WindowState {
     pub width: i32,
     pub height: i32,
     pub is_maximized: bool,
+    #[serde(default = "default_left_sidebar_width")]
+    pub left_sidebar_width: i32,
+    #[serde(default = "default_right_sidebar_width")]
+    pub right_sidebar_width: i32,
 }
 
 impl Default for WindowState {
@@ -531,6 +543,8 @@ impl Default for WindowState {
             width: 900,
             height: 600,
             is_maximized: false,
+            left_sidebar_width: default_left_sidebar_width(),
+            right_sidebar_width: default_right_sidebar_width(),
         }
     }
 }
@@ -545,6 +559,7 @@ impl WindowState {
             width: 900,
             height: 600,
             is_maximized: false,
+            ..Self::default()
         }
     }
 }
@@ -820,6 +835,7 @@ mod tests {
             width: 800,
             height: 600,
             is_maximized: true,
+            ..WindowState::default()
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: WindowState = serde_json::from_str(&json).unwrap();

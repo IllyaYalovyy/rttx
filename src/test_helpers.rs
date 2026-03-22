@@ -67,7 +67,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
 
 /// Build a window state from sessions.
 pub fn window_state(sessions: Vec<SessionState>) -> WindowState {
-    WindowState { active_session_index: 0, width: 800, height: 600, is_maximized: false, sessions }
+    WindowState { active_session_index: 0, sessions, ..WindowState::default() }
 }
 
 // ── Color scheme builder ─────────────────────────────────────────
