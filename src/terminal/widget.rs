@@ -123,6 +123,7 @@ mod imp {
             self.vte.set_scrollback_lines(10000);
 
             let key_controller = gtk4::EventControllerKey::new();
+            key_controller.set_name(Some("smart-clipboard"));
             key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
             let vte = self.vte.clone();
             let smart_clipboard = self.smart_clipboard.clone();
@@ -144,7 +145,7 @@ mod imp {
                     SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
                 }
             });
-            self.vte.add_controller(key_controller);
+            obj.add_controller(key_controller);
 
             obj.append(&self.header);
             obj.append(&self.search_bar);
@@ -239,6 +240,12 @@ impl TerminalWidget {
 
     pub fn set_smart_clipboard(&self, enabled: bool) {
         self.imp().smart_clipboard.set(enabled);
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn smart_clipboard_enabled_for_test(&self) -> bool {
+        self.imp().smart_clipboard.get()
     }
 
     pub fn queue_input_for_shell(&self, input: impl Into<String>) {
@@ -541,6 +548,32 @@ mod tests {
                 false,
             ),
             SmartClipboardAction::PassThrough
+        );
+    }
+
+    #[test]
+    fn smart_clipboard_controller_is_attached_to_terminal_widget_capture_phase() {
+        require_display!();
+
+        let term = TerminalWidget::new("t1", None);
+        let controllers = term.observe_controllers();
+        let smart_controller = (0..controllers.n_items())
+            .find_map(|index| controllers.item(index))
+            .and_then(|item| item.downcast::<gtk4::EventControllerKey>().ok())
+            .filter(|controller| controller.name().as_deref() == Some("smart-clipboard"))
+            .expect("terminal widget should expose a named smart clipboard controller");
+
+        assert_eq!(smart_controller.widget(), Some(term.clone().upcast::<gtk4::Widget>()));
+        assert_eq!(smart_controller.propagation_phase(), gtk4::PropagationPhase::Capture);
+
+        let vte_controllers = term.vte().observe_controllers();
+        let vte_has_smart_controller = (0..vte_controllers.n_items())
+            .find_map(|index| vte_controllers.item(index))
+            .and_then(|item| item.downcast::<gtk4::EventControllerKey>().ok())
+            .is_some_and(|controller| controller.name().as_deref() == Some("smart-clipboard"));
+        assert!(
+            !vte_has_smart_controller,
+            "smart clipboard controller must live on the terminal widget, not the VTE itself"
         );
     }
 

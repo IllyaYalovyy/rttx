@@ -2584,6 +2584,42 @@ mod tests {
     }
 
     #[test]
+    fn smart_clipboard_preference_reaches_live_terminals() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let mut prefs = preferences::Preferences::default();
+        prefs.smart_clipboard = true;
+        preferences::save(&prefs).unwrap();
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.smart-clipboard-preferences-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let terminal = window
+            .imp()
+            .terminals
+            .borrow()
+            .values()
+            .next()
+            .cloned()
+            .expect("window should create an initial terminal");
+        assert!(terminal.smart_clipboard_enabled_for_test());
+
+        prefs.smart_clipboard = false;
+        preferences::save(&prefs).unwrap();
+        window.reapply_terminal_preferences();
+        assert!(!terminal.smart_clipboard_enabled_for_test());
+
+        window.close();
+    }
+
+    #[test]
     fn switch_to_session_number_selects_expected_session() {
         require_display!();
 
