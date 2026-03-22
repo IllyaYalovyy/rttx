@@ -681,8 +681,15 @@ impl Window {
         let win = self.clone();
         let uuid = term.uuid();
         let handler_id = term.vte().connect_child_exited(move |_, status| {
-            let focused = win.imp().focused_terminal_uuid.borrow().clone();
-            if focused.as_deref() != Some(&uuid) {
+            let visible_session = win.imp().session_stack.visible_child_name();
+            let state = win.imp().state.borrow();
+            let in_background = terminal_is_in_background_session(
+                &uuid,
+                visible_session.as_deref(),
+                &state,
+            );
+            drop(state);
+            if in_background {
                 win.notify_process_completed(&uuid, status);
             }
             win.close_terminal(&uuid);
@@ -1490,6 +1497,24 @@ impl Window {
     }
 }
 
+fn terminal_is_in_background_session(
+    terminal_uuid: &str,
+    visible_session_uuid: Option<&str>,
+    state: &WindowState,
+) -> bool {
+    match visible_session_uuid {
+        Some(visible) => {
+            let in_visible = state
+                .sessions
+                .iter()
+                .find(|s| s.uuid == visible)
+                .is_some_and(|s| s.layout.contains_terminal(terminal_uuid));
+            !in_visible
+        }
+        None => true,
+    }
+}
+
 fn preferred_command_target_uuid(
     focused_terminal_uuid: Option<&str>,
     visible_session_uuid: Option<&str>,
@@ -1564,6 +1589,87 @@ mod tests {
             }
         }
         condition()
+    }
+
+    fn make_state_two_sessions() -> WindowState {
+        WindowState {
+            active_session_index: 0,
+            width: 800,
+            height: 600,
+            is_maximized: false,
+            sessions: vec![
+                SessionState {
+                    uuid: "s1".into(),
+                    name: "Session 1".into(),
+                    layout: LayoutNode::new_terminal_with_uuid("t1"),
+                    terminal_recovery: Default::default(),
+                    active_terminal_uuid: None,
+                    input_sync: false,
+                },
+                SessionState {
+                    uuid: "s2".into(),
+                    name: "Session 2".into(),
+                    layout: LayoutNode::new_terminal_with_uuid("t2"),
+                    terminal_recovery: Default::default(),
+                    active_terminal_uuid: None,
+                    input_sync: false,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn terminal_in_background_session_triggers_notification() {
+        let state = make_state_two_sessions();
+        assert!(
+            terminal_is_in_background_session("t1", Some("s2"), &state),
+            "t1 is in s1 which is not visible (s2 is) — should notify"
+        );
+    }
+
+    #[test]
+    fn terminal_in_visible_session_suppresses_notification() {
+        let state = make_state_two_sessions();
+        assert!(
+            !terminal_is_in_background_session("t1", Some("s1"), &state),
+            "t1 is in s1 which IS visible — should not notify"
+        );
+    }
+
+    #[test]
+    fn terminal_in_visible_session_with_split_suppresses_notification() {
+        let state = WindowState {
+            active_session_index: 0,
+            width: 800,
+            height: 600,
+            is_maximized: false,
+            sessions: vec![SessionState {
+                uuid: "s1".into(),
+                name: "Session 1".into(),
+                layout: LayoutNode::Split {
+                    orientation: SplitOrientation::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::new_terminal_with_uuid("t1")),
+                    second: Box::new(LayoutNode::new_terminal_with_uuid("t2")),
+                },
+                terminal_recovery: Default::default(),
+                active_terminal_uuid: None,
+                input_sync: false,
+            }],
+        };
+        assert!(
+            !terminal_is_in_background_session("t2", Some("s1"), &state),
+            "t2 is in the visible session s1 even though it is not focused — should not notify"
+        );
+    }
+
+    #[test]
+    fn terminal_is_background_when_no_visible_session() {
+        let state = make_state_two_sessions();
+        assert!(
+            terminal_is_in_background_session("t1", None, &state),
+            "when no session is visible, treat terminal as background"
+        );
     }
 
     #[test]
