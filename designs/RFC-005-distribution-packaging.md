@@ -1,0 +1,153 @@
+# RFC-005: Distribution & Packaging Strategy
+
+| Field         | Value                   |
+|---------------|-------------------------|
+| Status        | Accepted                |
+| Author(s)     | Illya Yalovyy           |
+| Supersedes    | —                       |
+| Superseded by | —                       |
+
+---
+
+## Summary
+
+rttx targets Linux distributions via multiple packaging formats, prioritized by GNOME user reach.
+Fedora/COPR is the first distribution channel (already live). Flatpak/Flathub, DEB/PPA, and
+AppImage follow. A CI/CD release pipeline automates artifact generation on each tagged release.
+
+---
+
+## Goals
+
+- **G1** — Users on Fedora can install rttx with `dnf` from a native RPM repository
+- **G2** — Users on Ubuntu/Debian can install rttx without building from source
+- **G3** — Users on any Linux distro can run rttx without system-level installation (AppImage)
+- **G4** — Release artifacts are generated automatically; no manual packaging steps per release
+
+## Non-Goals
+
+- **NG1** — No Windows or macOS packages; rttx is Linux/GNOME-only
+- **NG2** — Not targeting inclusion in official Fedora/Debian repositories in the near term
+- **NG3** — Snap is out of scope; it adds complexity without meaningful additional reach vs Flatpak
+
+---
+
+## Background & Motivation
+
+rttx has a Meson build system that handles binary, icons, `.desktop` file, and AppStream metainfo
+installation. This makes packaging straightforward — Meson's `DESTDIR` install works directly
+with Flatpak builder, `cargo-deb`, and `cargo-generate-rpm`. The Fedora COPR repository is
+already live (`dnf copr enable illya/rttx`), providing a reference for all other formats.
+
+---
+
+## User Impact
+
+| Audience | Impact |
+| --- | --- |
+| End users | Native package management on Fedora/Ubuntu; zero-install AppImage on any distro |
+| Contributors | Release process is documented and automated; no manual fiddling per release |
+| Packagers | Each format has a dedicated config file in `packaging/`; maintainable independently |
+
+---
+
+## Considered Options
+
+### Option A — Flatpak only *(reconstructed)*
+
+**Pros**: One format, one build configuration; Flathub provides a single distribution channel.
+**Cons**: Flatpak sandboxing constrains PTY access, filesystem visibility, and SSH agent integration
+in ways that require portal workarounds. Native packages (RPM/DEB) avoid these issues entirely and
+are the preference for power users who run rttx in production terminal workflows.
+
+### Option B — Native packages only (RPM + DEB) *(reconstructed)*
+
+**Pros**: Full system access; no sandbox; integrates with system SSH agents and GPG correctly.
+**Cons**: Distro-specific maintenance; no single install path for non-Fedora/Debian users.
+
+### Option C — All formats, prioritized by effort
+
+Implement formats in priority order: COPR (lowest effort, highest GNOME/Fedora alignment) → DEB
+→ Flatpak → AppImage. Each format is independently maintainable. CI automates all of them.
+
+**Pros**: Maximum reach; native experience where possible, sandboxed where convenient.
+**Cons**: More configuration to maintain.
+
+---
+
+## Decision
+
+Chosen option: C
+
+COPR was the natural first step (Fedora is the primary development platform). The other formats
+follow from the Meson build system with minimal additional configuration. CI automation ensures
+that adding a format does not add per-release manual work.
+
+---
+
+## Design
+
+### Format priority
+
+| Format | Tool | Channel | Status |
+| --- | --- | --- | --- |
+| RPM | `cargo-generate-rpm` + COPR | `dnf copr enable illya/rttx` | Live |
+| DEB | `cargo-deb` | GitHub Releases / PPA | Pending |
+| Flatpak | `flatpak-builder` | Flathub | Pending |
+| AppImage | `linuxdeploy` + GTK plugin | GitHub Releases | Pending |
+
+### COPR build flow
+
+Two options for triggering builds:
+
+- **Webhook (lazy)**: GitHub push webhook → COPR build servers. Zero GitHub Actions involvement.
+  Use `rpkg` as the build method with a `.spec` file in `packaging/fedora/`.
+- **GitHub Actions (gated)**: Tests pass → `copr-cli` submits SRPM. Ensures only tested code
+  reaches users.
+
+The gated approach is preferred for alignment with the stability goal.
+
+### Release pipeline (GitHub Actions)
+
+On a version tag (`v*`):
+
+1. Run `cargo test`
+2. `flatpak-builder` → bundle
+3. `cargo-deb` → `.deb`
+4. `cargo-generate-rpm` → `.rpm` → submit to COPR via `copr-cli`
+5. `linuxdeploy` → `.AppImage`
+6. Upload all artifacts to the GitHub Release
+
+### RPM spec generation
+
+`rust2rpm` generates a Fedora-compliant `.spec` from `Cargo.toml`. The spec requires
+`BuildRequires: libadwaita-devel gtk4-devel vte291-gtk4-devel`.
+
+---
+
+## Goals Alignment
+
+| Goal | How addressed |
+| --- | --- |
+| G1 — Fedora native install | COPR repository live at `dnf copr enable illya/rttx` |
+| G2 — Ubuntu/Debian install | `cargo-deb` → DEB + PPA (pending) |
+| G3 — Distro-agnostic AppImage | `linuxdeploy` with GTK plugin bundles all shared libs (pending) |
+| G4 — Automated releases | GitHub Actions release workflow generates all formats on tag |
+
+---
+
+## Development Plan
+
+- [x] COPR RPM repository live
+- [ ] **DEB packaging** — Add `[package.metadata.deb]` to `Cargo.toml`; configure `cargo-deb` — *tracked in todo.md — Distribution*
+- [ ] **Flatpak manifest** — `io.github.illya.rttx.json`; offline Cargo dependencies via `rust-bundle` extension
+- [ ] **AppImage** — `linuxdeploy` with GTK + Rust plugins
+- [ ] **GitHub Actions release workflow** — `.github/workflows/release.yml`; all formats on version tag — *tracked in todo.md — Stability, Testing & Maintenance*
+
+---
+
+## Open Questions
+
+- [ ] **Q1** — Flatpak sandbox and PTY access: verify that `org.freedesktop.Flatpak` portal or the `pty` device plug provides sufficient access for VTE to spawn shells in the Flatpak sandbox
+
+---
