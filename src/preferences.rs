@@ -38,8 +38,6 @@ pub struct Preferences {
     pub audible_bell: bool,
     #[serde(default)]
     pub smart_clipboard: bool,
-    #[serde(default = "default_opacity")]
-    pub background_opacity: f64,
 }
 
 fn default_font() -> String {
@@ -63,10 +61,6 @@ const fn default_scrollback() -> i64 {
 const fn default_true() -> bool {
     true
 }
-const fn default_opacity() -> f64 {
-    1.0
-}
-
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -81,7 +75,6 @@ impl Default for Preferences {
             scroll_on_output: false,
             audible_bell: true,
             smart_clipboard: false,
-            background_opacity: default_opacity(),
         }
     }
 }
@@ -127,8 +120,6 @@ struct PreferencesDisk {
     audible_bell: bool,
     #[serde(default)]
     smart_clipboard: bool,
-    #[serde(default = "default_opacity")]
-    background_opacity: f64,
 }
 
 impl From<PreferencesDisk> for Preferences {
@@ -157,7 +148,6 @@ impl From<PreferencesDisk> for Preferences {
             scroll_on_output: raw.scroll_on_output,
             audible_bell: raw.audible_bell,
             smart_clipboard: raw.smart_clipboard,
-            background_opacity: raw.background_opacity,
         }
     }
 }
@@ -214,7 +204,7 @@ pub fn save_to(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use rstest::rstest;
+
     use tempfile::TempDir;
 
     #[test]
@@ -229,7 +219,6 @@ mod tests {
         assert!(prefs.scroll_on_keystroke);
         assert!(!prefs.scroll_on_output);
         assert!(!prefs.smart_clipboard);
-        assert!((prefs.background_opacity - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -274,19 +263,6 @@ mod tests {
         assert!(loaded.show_headerbar);
     }
 
-    #[rstest]
-    #[case(0.0)]
-    #[case(0.5)]
-    #[case(1.0)]
-    fn opacity_roundtrip(#[case] opacity: f64) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        let prefs = Preferences { background_opacity: opacity, ..Default::default() };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
-        assert!((loaded.background_opacity - opacity).abs() < f64::EPSILON);
-    }
-
     #[test]
     fn negative_scrollback_roundtrips() {
         let dir = TempDir::new().unwrap();
@@ -305,15 +281,6 @@ mod tests {
         save_to(&prefs, &path).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.font, "");
-    }
-
-    #[test]
-    fn out_of_range_opacity_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, r#"{"background_opacity": 1.5}"#).unwrap();
-        let loaded = load_from(&path);
-        assert!((loaded.background_opacity - 1.5).abs() < f64::EPSILON);
     }
 
     #[test]

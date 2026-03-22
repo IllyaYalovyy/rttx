@@ -76,15 +76,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     }
     appearance_group.add(&dark_scheme_row);
 
-    let opacity_row = adw::ActionRow::builder().title("Background opacity").build();
-    let opacity_scale = gtk4::Scale::with_range(gtk4::Orientation::Horizontal, 0.0, 1.0, 0.05);
-    opacity_scale.set_value(prefs.background_opacity);
-    opacity_scale.set_hexpand(true);
-    opacity_scale.set_valign(gtk4::Align::Center);
-    opacity_scale.set_size_request(200, -1);
-    opacity_row.add_suffix(&opacity_scale);
-    appearance_group.add(&opacity_row);
-
     let terminal_group = adw::PreferencesGroup::new();
     terminal_group.set_title("Terminal");
 
@@ -157,7 +148,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             scroll_on_output: output_row.is_active(),
             audible_bell: bell_row.is_active(),
             smart_clipboard: smart_clipboard_row.is_active(),
-            background_opacity: opacity_scale.value(),
         };
         if let Err(e) = preferences::save(&new_prefs) {
             log::error!("Failed to save preferences: {e}");

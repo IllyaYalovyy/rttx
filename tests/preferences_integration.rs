@@ -7,8 +7,6 @@ fn preferences_default_values_are_reasonable() {
     let prefs = Preferences::default();
     assert!(prefs.font.contains("12") || prefs.font.contains("Mono"));
     assert!(prefs.scrollback_lines >= 1000);
-    assert!(prefs.background_opacity > 0.0);
-    assert!(prefs.background_opacity <= 1.0);
 }
 
 #[test]
@@ -28,7 +26,6 @@ fn preferences_roundtrip_all_fields() {
         scroll_on_output: true,
         audible_bell: false,
         smart_clipboard: true,
-        background_opacity: 0.85,
     };
 
     preferences::save_to(&prefs, &path).unwrap();
