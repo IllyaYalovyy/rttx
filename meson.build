@@ -62,3 +62,8 @@ install_data(
   'data' / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.svg',
   install_dir: iconsdir / 'hicolor' / 'scalable' / 'apps',
 )
+
+install_data(
+  'data' / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.Devel.svg',
+  install_dir: iconsdir / 'hicolor' / 'scalable' / 'apps',
+)

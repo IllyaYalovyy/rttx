@@ -27,6 +27,7 @@ mod imp {
     #[derive(Default, Debug)]
     pub struct Window {
         pub split_view: adw::OverlaySplitView,
+        pub devel_badge: gtk4::Label,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
         pub utility_sidebar_revealer: gtk4::Revealer,
@@ -58,7 +59,8 @@ mod imp {
             let obj = self.obj();
 
             obj.set_default_size(900, 600);
-            obj.set_title(Some("rttx"));
+            obj.set_title(Some(config::display_name()));
+            obj.set_icon_name(Some(config::icon_name()));
 
             let header = adw::HeaderBar::new();
             let toggle_sidebar = gtk4::ToggleButton::new();
@@ -70,6 +72,16 @@ mod imp {
             self.add_session_button.set_icon_name("list-add-symbolic");
             self.add_session_button.set_tooltip_text(Some("New session"));
             header.pack_start(&self.add_session_button);
+
+            if let Some(label) = config::badge_label() {
+                self.devel_badge.set_label(label);
+                self.devel_badge.add_css_class("caption");
+                self.devel_badge.add_css_class("accent");
+                self.devel_badge.add_css_class("pill");
+                self.devel_badge
+                    .set_tooltip_text(Some("Development mode uses a separate app profile"));
+                header.pack_start(&self.devel_badge);
+            }
 
             let toggle_utility_sidebar = gtk4::ToggleButton::with_label("Tools");
             toggle_utility_sidebar.set_tooltip_text(Some("Toggle tools sidebar"));
@@ -790,8 +802,8 @@ impl Window {
     fn show_about_window(&self) {
         let about = adw::AboutWindow::new();
         about.set_transient_for(Some(self));
-        about.set_application_name(config::APP_NAME);
-        about.set_application_icon(config::APP_ID);
+        about.set_application_name(config::display_name());
+        about.set_application_icon(config::icon_name());
         about.set_version(env!("CARGO_PKG_VERSION"));
         about.set_developer_name(config::DEVELOPER_NAME);
         about.set_developers(&[config::DEVELOPER_NAME]);

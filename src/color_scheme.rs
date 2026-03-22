@@ -69,9 +69,9 @@ impl ColorScheme {
 fn scheme_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for dir in glib::system_data_dirs() {
-        dirs.push(dir.join(config::CONFIG_DIR).join(config::SCHEMES_DIR));
+        dirs.push(dir.join(config::config_dir_name()).join(config::SCHEMES_DIR));
     }
-    dirs.push(glib::user_config_dir().join(config::CONFIG_DIR).join(config::SCHEMES_DIR));
+    dirs.push(config::config_dir_path().join(config::SCHEMES_DIR));
     dirs
 }
 

@@ -14,9 +14,7 @@ use std::path::PathBuf;
 /// Returns the path to the sessions directory in `XDG_CONFIG_HOME`.
 #[must_use]
 pub fn sessions_dir() -> Option<PathBuf> {
-    let mut path = glib::user_config_dir();
-    path.push(config::CONFIG_DIR);
-    Some(path)
+    Some(config::config_dir_path())
 }
 
 /// Save the current window state to a JSON file.

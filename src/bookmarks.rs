@@ -1,4 +1,3 @@
-use gtk4::glib;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -168,8 +167,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn bookmarks_path() -> PathBuf {
-    let mut path = glib::user_config_dir();
-    path.push(config::CONFIG_DIR);
+    let mut path = config::config_dir_path();
     path.push("bookmarks.json");
     path
 }

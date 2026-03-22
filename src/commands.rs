@@ -1,4 +1,3 @@
-use gtk4::glib;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -62,8 +61,7 @@ pub fn matches_query(command: &SavedCommand, query: &str) -> bool {
 }
 
 fn commands_path() -> PathBuf {
-    let mut path = glib::user_config_dir();
-    path.push(config::CONFIG_DIR);
+    let mut path = config::config_dir_path();
     path.push("commands.json");
     path
 }

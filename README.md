@@ -87,6 +87,14 @@ cargo build --release
 ./target/release/rttx
 ```
 
+To run a local development build alongside the installed app without sharing state:
+```bash
+RTTX_DEV_MODE=1 cargo run
+```
+
+Development mode uses a separate app ID, a separate config root, a distinct icon, and visible
+`Devel` labeling in the window chrome.
+
 ### Install with Meson
 
 For full system integration (icons, desktop files, etc.):

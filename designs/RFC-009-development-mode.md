@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted                |
+| Status        | Implemented             |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -275,13 +275,13 @@ identity selection.
 
 ## Development Plan
 
-- [ ] **Profile abstraction** — add a runtime `AppProfile` and centralize profile selection
-- [ ] **Application identity** — use the active profile's application ID in app startup
-- [ ] **Config path plumbing** — route all XDG config path builders through the active profile
-- [ ] **Visual dev labeling** — add `rttx (Devel)` title and a visible header badge
-- [ ] **Distinct dev icon** — use a development-only icon name/asset so the shell chrome also distinguishes the profile
-- [ ] **Tests** — add unit/integration coverage for profile selection and path isolation
-- [ ] **Docs** — document the contributor workflow in `README.md`
+- [x] **Profile abstraction** — add a runtime `AppProfile` and centralize profile selection
+- [x] **Application identity** — use the active profile's application ID in app startup
+- [x] **Config path plumbing** — route all XDG config path builders through the active profile
+- [x] **Visual dev labeling** — add `rttx (Devel)` title and a visible header badge
+- [x] **Distinct dev icon** — use a development-only icon name/asset so the shell chrome also distinguishes the profile
+- [x] **Tests** — add unit coverage for profile selection, path isolation, and dev icon asset presence
+- [x] **Docs** — document the contributor workflow in `README.md`
 
 ---
 

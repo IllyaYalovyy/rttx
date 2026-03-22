@@ -11,9 +11,25 @@ pub fn run() -> glib::ExitCode {
     pretty_env_logger::init();
 
     let app = adw::Application::builder()
-        .application_id(config::APP_ID)
+        .application_id(config::app_id())
         .flags(gtk4::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
+
+    app.connect_startup(|_| {
+        if !config::is_development() {
+            return;
+        }
+
+        let Some(display) = gtk4::gdk::Display::default() else {
+            return;
+        };
+        let icon_search_path = config::dev_icon_search_path();
+        if !icon_search_path.exists() {
+            return;
+        }
+
+        gtk4::IconTheme::for_display(&display).add_search_path(&icon_search_path);
+    });
 
     app.connect_command_line(|app, _cmdline| {
         app.activate();
@@ -26,7 +42,7 @@ pub fn run() -> glib::ExitCode {
             return;
         }
         let window = Window::new(app);
-        window.set_icon_name(Some(config::APP_ID));
+        window.set_icon_name(Some(config::icon_name()));
         window.present();
     });
 

@@ -157,13 +157,10 @@ fn parse_preferences_json(data: &str) -> Preferences {
 }
 
 fn prefs_path() -> PathBuf {
-    let mut path = glib::user_config_dir();
-    path.push(config::CONFIG_DIR);
+    let mut path = config::config_dir_path();
     path.push("preferences.json");
     path
 }
-
-use gtk4::glib;
 
 #[must_use]
 pub fn load() -> Preferences {
