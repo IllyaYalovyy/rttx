@@ -1,6 +1,9 @@
 /// Global configuration and constants for rttx.
 pub const APP_NAME: &str = "rttx";
 pub const APP_ID: &str = "io.github.IllyaYalovyy.rttx";
+pub const DEVELOPER_NAME: &str = "Illya Yalovyy";
+pub const PROJECT_WEBSITE: &str = "https://github.com/IllyaYalovyy/rttx";
+pub const ISSUE_TRACKER: &str = "https://github.com/IllyaYalovyy/rttx/issues";
 
 /// `GSettings` schema IDs
 pub const SETTINGS_ID: &str = "io.github.IllyaYalovyy.rttx";
@@ -40,5 +43,11 @@ mod tests {
     #[test]
     fn gettext_domain_matches_app_name() {
         assert_eq!(APP_NAME, "rttx");
+    }
+
+    #[test]
+    fn project_urls_target_repository() {
+        assert!(PROJECT_WEBSITE.starts_with("https://github.com/"));
+        assert!(ISSUE_TRACKER.starts_with(PROJECT_WEBSITE));
     }
 }

@@ -10,6 +10,7 @@ use vte4::prelude::*;
 use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
+use crate::config;
 use crate::preferences;
 use crate::session::{
     self, LayoutNode, PaneRecovery, PaneSource, SessionState, SplitOrientation, StartupStep,
@@ -74,6 +75,7 @@ mod imp {
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
+            menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Manage Bookmarks"), Some("win.manage-bookmarks"));
             menu.append(Some("Manage Commands"), Some("win.manage-commands"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -384,6 +386,13 @@ impl Window {
         });
         self.add_action(&prefs_action);
         app.set_accels_for_action("win.preferences", &["<Ctrl>comma"]);
+
+        let about_action = gtk4::gio::SimpleAction::new("about", None);
+        let win = self.clone();
+        about_action.connect_activate(move |_, _| {
+            win.show_about_window();
+        });
+        self.add_action(&about_action);
     }
 
     fn setup_signals(&self) {
@@ -664,6 +673,20 @@ impl Window {
             win.close_terminal(&uuid);
         });
         term.imp().child_exited_handler.replace(Some(handler_id));
+    }
+
+    fn show_about_window(&self) {
+        let about = adw::AboutWindow::new();
+        about.set_transient_for(Some(self));
+        about.set_application_name(config::APP_NAME);
+        about.set_application_icon(config::APP_ID);
+        about.set_version(env!("CARGO_PKG_VERSION"));
+        about.set_developer_name(config::DEVELOPER_NAME);
+        about.set_developers(&[config::DEVELOPER_NAME]);
+        about.set_website(config::PROJECT_WEBSITE);
+        about.set_issue_url(config::ISSUE_TRACKER);
+        about.set_license_type(gtk4::License::Gpl30);
+        about.present();
     }
 
     pub fn add_session(&self) {
@@ -2496,6 +2519,44 @@ mod tests {
         let saved_state = session::load_window_state();
         assert_eq!(saved_state.sessions[0].name, "Renamed Session");
 
+        window.close();
+    }
+
+    #[test]
+    fn about_action_opens_native_about_window() {
+        require_display!();
+
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.about-window-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.present();
+        pump_events(50);
+
+        assert!(
+            window.lookup_action("about").is_some(),
+            "window should expose an about action"
+        );
+
+        gtk4::prelude::WidgetExt::activate_action(&window, "win.about", None)
+            .expect("about action should activate");
+        pump_events(50);
+
+        let about = gtk4::Window::list_toplevels()
+            .into_iter()
+            .find_map(|widget| widget.downcast::<adw::AboutWindow>().ok())
+            .expect("about action should present an AdwAboutWindow");
+
+        assert_eq!(about.application_name().as_str(), config::APP_NAME);
+        assert_eq!(about.application_icon().as_str(), config::APP_ID);
+        assert_eq!(about.developer_name().as_str(), config::DEVELOPER_NAME);
+        assert_eq!(about.issue_url().as_str(), config::ISSUE_TRACKER);
+
+        about.close();
         window.close();
     }
 
