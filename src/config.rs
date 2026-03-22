@@ -95,7 +95,7 @@ pub fn dev_icon_search_path() -> PathBuf {
 }
 
 #[must_use]
-pub fn app_profile_from_dev_mode(is_dev: bool) -> AppProfile {
+pub const fn app_profile_from_dev_mode(is_dev: bool) -> AppProfile {
     if is_dev {
         AppProfile {
             app_id: DEV_APP_ID,
