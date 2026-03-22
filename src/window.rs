@@ -1214,52 +1214,51 @@ impl Window {
         true
     }
 
-    fn confirm_delete_bookmark(&self, uuid: String) {
-        let alert = adw::AlertDialog::new(
-            Some("Delete Bookmark?"),
-            Some("The bookmark will be permanently removed."),
-        );
+    fn confirm_delete(&self, title: &str, body: &str, on_delete: impl Fn() + 'static) {
+        let alert = adw::AlertDialog::new(Some(title), Some(body));
         alert.add_response("cancel", "Cancel");
         alert.add_response("delete", "Delete");
         alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         alert.set_default_response(Some("cancel"));
         alert.set_close_response("cancel");
-        let win = self.clone();
         alert.connect_response(None, move |_, response| {
             if response == "delete" {
+                on_delete();
+            }
+        });
+        alert.present(Some(self));
+    }
+
+    fn confirm_delete_bookmark(&self, uuid: String) {
+        let win = self.clone();
+        self.confirm_delete(
+            "Delete Bookmark?",
+            "The bookmark will be permanently removed.",
+            move || {
                 let mut items = crate::bookmarks::load();
                 items.retain(|b| b.uuid != uuid);
                 if let Err(e) = crate::bookmarks::save(&items) {
                     log::error!("Failed to delete bookmark: {e}");
                 }
                 win.refresh_bookmark_sidebar();
-            }
-        });
-        alert.present(Some(self));
+            },
+        );
     }
 
     fn confirm_delete_command(&self, uuid: String) {
-        let alert = adw::AlertDialog::new(
-            Some("Delete Command?"),
-            Some("The command will be permanently removed."),
-        );
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("delete", "Delete");
-        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        alert.set_default_response(Some("cancel"));
-        alert.set_close_response("cancel");
         let win = self.clone();
-        alert.connect_response(None, move |_, response| {
-            if response == "delete" {
+        self.confirm_delete(
+            "Delete Command?",
+            "The command will be permanently removed.",
+            move || {
                 let mut items = commands::load();
                 items.retain(|c| c.uuid != uuid);
                 if let Err(e) = commands::save(&items) {
                     log::error!("Failed to delete command: {e}");
                 }
                 win.refresh_command_sidebar();
-            }
-        });
-        alert.present(Some(self));
+            },
+        );
     }
 
     fn close_session(&self, session_uuid: &str) {

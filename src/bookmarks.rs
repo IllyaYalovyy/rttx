@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::session::PaneTarget;
+use crate::shell_quote;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bookmark {
@@ -160,10 +161,6 @@ fn local_command(directory: Option<&str>, tmux_session: Option<&str>) -> Option<
 fn tmux_command(session: &str) -> String {
     let session = shell_quote(session);
     format!("tmux attach-session -t {session} || tmux new-session -s {session}")
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn bookmarks_path() -> PathBuf {

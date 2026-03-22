@@ -15,3 +15,7 @@ pub mod window;
 
 #[cfg(test)]
 pub mod test_helpers;
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}

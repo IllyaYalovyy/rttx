@@ -168,9 +168,7 @@ fn ssh_exec_command(ssh_target: &str, remote_command: Option<&str>) -> String {
     )
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
+use crate::shell_quote;
 
 impl LayoutNode {
     #[must_use]
@@ -567,12 +565,9 @@ impl WindowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::{hsplit, split_ratio, term};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
-
-    fn term(uuid: &str) -> LayoutNode {
-        LayoutNode::Terminal { uuid: uuid.into(), profile: None, cwd: None, custom_title: None }
-    }
 
     fn term_full(uuid: &str, cwd: &str, title: &str) -> LayoutNode {
         LayoutNode::Terminal {
@@ -581,24 +576,6 @@ mod tests {
             cwd: Some(cwd.into()),
             custom_title: Some(title.into()),
         }
-    }
-
-    fn hsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
-        LayoutNode::Split {
-            orientation: SplitOrientation::Horizontal,
-            ratio: 0.5,
-            first: Box::new(first),
-            second: Box::new(second),
-        }
-    }
-
-    fn split_ratio(
-        orientation: SplitOrientation,
-        ratio: f64,
-        first: LayoutNode,
-        second: LayoutNode,
-    ) -> LayoutNode {
-        LayoutNode::Split { orientation, ratio, first: Box::new(first), second: Box::new(second) }
     }
 
     #[test]
