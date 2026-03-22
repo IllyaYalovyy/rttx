@@ -14,7 +14,7 @@ use crate::config;
 use crate::preferences;
 use crate::session::{
     self, LayoutNode, PaneRecovery, PaneSource, PaneTarget, SessionState, SplitOrientation,
-    StartupStep, WindowState,
+    StartupStep, WindowState, MAX_SPLIT_DEPTH,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::widget::TerminalWidget;
@@ -38,6 +38,7 @@ mod imp {
         pub command_list: gtk4::ListBox,
         pub command_scroll: gtk4::ScrolledWindow,
         pub command_empty: adw::StatusPage,
+        pub toast_overlay: adw::ToastOverlay,
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
@@ -220,8 +221,10 @@ mod imp {
             content_box.append(&self.session_stack);
             content_box.append(&self.utility_sidebar_revealer);
 
+            self.toast_overlay.set_child(Some(&content_box));
+
             self.split_view.set_sidebar(Some(&sidebar_scroll));
-            self.split_view.set_content(Some(&content_box));
+            self.split_view.set_content(Some(&self.toast_overlay));
             self.split_view.set_show_sidebar(true);
             self.split_view.set_collapsed(false);
             self.split_view.set_min_sidebar_width(180.0);
@@ -1301,6 +1304,17 @@ impl Window {
             .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
 
         if let Some(idx) = session_idx {
+            let at_limit = state.sessions[idx]
+                .layout
+                .depth_of_terminal(terminal_uuid)
+                .is_some_and(|d| d >= MAX_SPLIT_DEPTH);
+
+            if at_limit {
+                drop(state);
+                self.show_toast("Maximum split depth reached");
+                return;
+            }
+
             if let Some((new_layout, new_terminal_uuid)) =
                 state.sessions[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
@@ -1602,6 +1616,10 @@ impl Window {
         if let Some(uuid) = self.focused_terminal_uuid() {
             self.split_terminal(&uuid, orientation);
         }
+    }
+
+    fn show_toast(&self, message: &str) {
+        self.imp().toast_overlay.add_toast(adw::Toast::new(message));
     }
 
     fn toggle_focused_search(&self) {
@@ -3550,5 +3568,67 @@ mod tests {
         );
 
         window.close();
+    }
+
+    #[test]
+    fn split_blocked_at_max_depth_does_not_increase_terminal_count() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.split-depth-limit-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
+
+        let first_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+
+        let mut leaf_uuid = first_uuid;
+        for _ in 1..MAX_SPLIT_DEPTH {
+            window.split_terminal(&leaf_uuid, SplitOrientation::Horizontal);
+            pump_events(50);
+            leaf_uuid = {
+                let state = window.imp().state.borrow();
+                state.sessions[0]
+                    .layout
+                    .terminal_uuids()
+                    .into_iter()
+                    .max_by_key(|uuid| {
+                        state.sessions[0].layout.depth_of_terminal(uuid).unwrap_or(0)
+                    })
+                    .unwrap()
+            };
+        }
+
+        let count_before = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_count()
+        };
+
+        window.split_terminal(&leaf_uuid, SplitOrientation::Horizontal);
+        pump_events(50);
+
+        let count_after = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_count()
+        };
+
+        assert_eq!(
+            count_before, count_after,
+            "split at max depth should be blocked and not add a terminal"
+        );
+
+        window.close();
+        std::env::remove_var("RTTX_DISABLE_SHELL_SPAWN");
     }
 }

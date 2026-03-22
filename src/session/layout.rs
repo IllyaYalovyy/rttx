@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub const MAX_SPLIT_DEPTH: usize = 5;
+
 /// Represents the layout tree of terminals within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LayoutNode {
@@ -258,11 +260,31 @@ impl LayoutNode {
     }
 
     #[must_use]
+    pub fn depth_of_terminal(&self, target_uuid: &str) -> Option<usize> {
+        match self {
+            Self::Terminal { uuid, .. } => {
+                if uuid == target_uuid {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+            Self::Split { first, second, .. } => first
+                .depth_of_terminal(target_uuid)
+                .or_else(|| second.depth_of_terminal(target_uuid))
+                .map(|d| d + 1),
+        }
+    }
+
+    #[must_use]
     pub fn split_terminal_with_new_uuid(
         &self,
         target_uuid: &str,
         orientation: SplitOrientation,
     ) -> Option<(Self, String)> {
+        if self.depth_of_terminal(target_uuid)? >= MAX_SPLIT_DEPTH {
+            return None;
+        }
         match self {
             Self::Terminal { uuid, .. } if uuid == target_uuid => {
                 let new_node = self.split(orientation);
@@ -710,6 +732,41 @@ mod tests {
             }
         }
         assert_eq!(get_depth(&node), expected);
+    }
+
+    #[test]
+    fn depth_of_terminal_returns_path_length_from_root() {
+        let root = hsplit(term("t1"), hsplit(term("t2"), term("t3")));
+        assert_eq!(root.depth_of_terminal("t1"), Some(2));
+        assert_eq!(root.depth_of_terminal("t2"), Some(3));
+        assert_eq!(root.depth_of_terminal("t3"), Some(3));
+        assert_eq!(root.depth_of_terminal("missing"), None);
+    }
+
+    #[test]
+    fn depth_of_terminal_at_root_is_one() {
+        assert_eq!(term("t1").depth_of_terminal("t1"), Some(1));
+    }
+
+    #[test]
+    fn split_blocked_beyond_max_depth() {
+        let five_deep = hsplit(
+            term("t1"),
+            hsplit(term("t2"), hsplit(term("t3"), hsplit(term("t4"), term("t5")))),
+        );
+        assert_eq!(five_deep.depth_of_terminal("t5"), Some(MAX_SPLIT_DEPTH));
+        assert!(five_deep
+            .split_terminal_with_new_uuid("t5", SplitOrientation::Horizontal)
+            .is_none());
+    }
+
+    #[test]
+    fn split_allowed_at_one_below_max_depth() {
+        let four_deep = hsplit(term("t1"), hsplit(term("t2"), hsplit(term("t3"), term("t4"))));
+        assert_eq!(four_deep.depth_of_terminal("t4"), Some(MAX_SPLIT_DEPTH - 1));
+        assert!(four_deep
+            .split_terminal_with_new_uuid("t4", SplitOrientation::Horizontal)
+            .is_some());
     }
 
     #[test]

@@ -15,7 +15,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 
 ## Features
 
-- **Split-screen terminals** — High-performance tiling splits (Horizontal: Ctrl+Shift+E, Vertical: Ctrl+Shift+O).
+- **Split-screen terminals** — High-performance tiling splits up to 5 levels deep (Horizontal: Ctrl+Shift+E, Vertical: Ctrl+Shift+O).
 - **Sidebar session management** — Persistent sessions organized in native Adwaita session rows.
 - **Dual-side workflow layout** — Sessions stay in the left sidebar while bookmarks live in a dedicated right tools sidebar.
 - **Custom session names** — Double-click a session in the sidebar to rename it.
