@@ -122,30 +122,61 @@ mod imp {
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
 
-            let key_controller = gtk4::EventControllerKey::new();
-            key_controller.set_name(Some("smart-clipboard"));
-            key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
             let vte = self.vte.clone();
-            let smart_clipboard = self.smart_clipboard.clone();
-            key_controller.connect_key_pressed(move |_, key, _, modifiers| {
-                match smart_clipboard_action(
-                    key,
-                    modifiers,
-                    vte.has_selection(),
-                    smart_clipboard.get(),
-                ) {
-                    SmartClipboardAction::Copy => {
-                        vte.copy_clipboard_format(vte4::Format::Text);
-                        glib::Propagation::Stop
+            let smart_clipboard_controller = gtk4::ShortcutController::new();
+            smart_clipboard_controller.set_name(Some("smart-clipboard"));
+            smart_clipboard_controller.set_scope(gtk4::ShortcutScope::Local);
+            smart_clipboard_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+            let copy_vte = vte.clone();
+            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
+                Some(gtk4::KeyvalTrigger::new(
+                    gtk4::gdk::Key::c,
+                    gtk4::gdk::ModifierType::CONTROL_MASK,
+                )),
+                Some(gtk4::CallbackAction::new(move |widget, _| {
+                    let term = widget.downcast_ref::<super::TerminalWidget>().unwrap();
+                    match smart_clipboard_action(
+                        gtk4::gdk::Key::c,
+                        gtk4::gdk::ModifierType::CONTROL_MASK,
+                        copy_vte.has_selection(),
+                        term.imp().smart_clipboard.get(),
+                    ) {
+                        SmartClipboardAction::Copy => {
+                            copy_vte.copy_clipboard_format(vte4::Format::Text);
+                            copy_vte.unselect_all();
+                            glib::Propagation::Stop
+                        }
+                        SmartClipboardAction::Paste => unreachable!(),
+                        SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
                     }
-                    SmartClipboardAction::Paste => {
-                        vte.paste_clipboard();
-                        glib::Propagation::Stop
+                })),
+            ));
+
+            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
+                Some(gtk4::KeyvalTrigger::new(
+                    gtk4::gdk::Key::v,
+                    gtk4::gdk::ModifierType::CONTROL_MASK,
+                )),
+                Some(gtk4::CallbackAction::new(move |widget, _| {
+                    let term = widget.downcast_ref::<super::TerminalWidget>().unwrap();
+                    match smart_clipboard_action(
+                        gtk4::gdk::Key::v,
+                        gtk4::gdk::ModifierType::CONTROL_MASK,
+                        vte.has_selection(),
+                        term.imp().smart_clipboard.get(),
+                    ) {
+                        SmartClipboardAction::Paste => {
+                            vte.paste_clipboard();
+                            glib::Propagation::Stop
+                        }
+                        SmartClipboardAction::Copy => unreachable!(),
+                        SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
                     }
-                    SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
-                }
-            });
-            obj.add_controller(key_controller);
+                })),
+            ));
+
+            obj.add_controller(smart_clipboard_controller);
 
             obj.append(&self.header);
             obj.append(&self.search_bar);
@@ -332,6 +363,16 @@ impl TerminalWidget {
     }
 
     #[cfg(test)]
+    pub(crate) fn ctrl_v_action_for_test(&self) -> SmartClipboardAction {
+        smart_clipboard_action(
+            gtk4::gdk::Key::v,
+            gtk4::gdk::ModifierType::CONTROL_MASK,
+            self.imp().vte.has_selection(),
+            self.imp().smart_clipboard.get(),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_current_directory_for_test(&self, cwd: Option<&str>) {
         self.imp().current_directory_override.replace(Some(cwd.map(str::to_string)));
     }
@@ -386,7 +427,7 @@ pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SmartClipboardAction {
+pub(crate) enum SmartClipboardAction {
     Copy,
     Paste,
     PassThrough,
@@ -552,6 +593,16 @@ mod tests {
     }
 
     #[test]
+    fn set_smart_clipboard_takes_effect_after_construction() {
+        require_display!();
+
+        let term = TerminalWidget::new("t1", None);
+        assert_eq!(term.ctrl_v_action_for_test(), SmartClipboardAction::PassThrough);
+        term.set_smart_clipboard(true);
+        assert_eq!(term.ctrl_v_action_for_test(), SmartClipboardAction::Paste);
+    }
+
+    #[test]
     fn smart_clipboard_controller_is_attached_to_terminal_widget_capture_phase() {
         require_display!();
 
@@ -559,17 +610,18 @@ mod tests {
         let controllers = term.observe_controllers();
         let smart_controller = (0..controllers.n_items())
             .find_map(|index| controllers.item(index))
-            .and_then(|item| item.downcast::<gtk4::EventControllerKey>().ok())
+            .and_then(|item| item.downcast::<gtk4::ShortcutController>().ok())
             .filter(|controller| controller.name().as_deref() == Some("smart-clipboard"))
             .expect("terminal widget should expose a named smart clipboard controller");
 
         assert_eq!(smart_controller.widget(), Some(term.clone().upcast::<gtk4::Widget>()));
         assert_eq!(smart_controller.propagation_phase(), gtk4::PropagationPhase::Capture);
+        assert_eq!(smart_controller.scope(), gtk4::ShortcutScope::Local);
 
         let vte_controllers = term.vte().observe_controllers();
         let vte_has_smart_controller = (0..vte_controllers.n_items())
             .find_map(|index| vte_controllers.item(index))
-            .and_then(|item| item.downcast::<gtk4::EventControllerKey>().ok())
+            .and_then(|item| item.downcast::<gtk4::ShortcutController>().ok())
             .is_some_and(|controller| controller.name().as_deref() == Some("smart-clipboard"));
         assert!(
             !vte_has_smart_controller,

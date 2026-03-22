@@ -20,7 +20,7 @@ pass through to the shell unchanged. Disabled by default to preserve standard te
 
 ## Goals
 
-- **G1** — `Ctrl+C` copies selected text without sending SIGINT when a VTE selection exists
+- **G1** — `Ctrl+C` copies selected text without sending SIGINT when a VTE selection exists and the feature is enabled
 - **G2** — `Ctrl+V` pastes from clipboard without sending `\x16` (quoted-insert) when the feature is enabled
 - **G3** — Feature is opt-in; default behavior is unchanged standard terminal
 
@@ -47,7 +47,7 @@ keystroke.
 | Audience | Impact |
 | --- | --- |
 | End users | Optional: `Ctrl+C` copies selected text; `Ctrl+V` pastes — matches IDE conventions |
-| Contributors | Minimal: one `EventControllerKey` on `TerminalWidget`; one boolean preference |
+| Contributors | Minimal: one `ShortcutController` on `TerminalWidget`; one boolean preference |
 | Packagers | None |
 
 ---
@@ -62,8 +62,9 @@ users who run shells and TUI applications.
 
 ### Option B — Context-aware interception, opt-in
 
-`Ctrl+C`: intercept only when `vte.has_selection()` is true.
-`Ctrl+V`: intercept only when `prefs.smart_clipboard` is true.
+Both `Ctrl+C` and `Ctrl+V` are gated by a single `smart_clipboard` preference. Within that gate,
+`Ctrl+C` only copies when `vte.has_selection()` is true, making it safe — pressing `Ctrl+C`
+without a selection still sends SIGINT as normal.
 
 **Pros**: Standard terminal behavior is the default. Opt-in users get IDE-like convenience without
 any shell breakage for SIGINT paths (selection is never set when pressing `Ctrl+C` to kill a
@@ -83,29 +84,32 @@ straightforward to implement correctly.
 
 Chosen option: B
 
-Context-aware, opt-in. `Ctrl+C` behavior is safe for all users because it only activates when
-there is a VTE selection — a state that never coincides with intentional SIGINT usage. `Ctrl+V`
-requires explicit opt-in because it unconditionally shadows quoted-insert.
+Both keys require the `smart_clipboard` preference to be on. The selection guard on `Ctrl+C` is
+the safety mechanism that makes the feature accident-free in practice — you never have a selection
+when pressing `Ctrl+C` to kill a process — but it is not a reason to bypass the opt-in. A single
+preference governs both keys.
 
 ---
 
 ## Design
 
-An `EventControllerKey` is added to `TerminalWidget` at construction time. It runs in the
-`Capture` propagation phase to intercept events before VTE's default handler.
+A `gtk4::ShortcutController` is added to `TerminalWidget` at construction time. It runs in the
+`Capture` propagation phase and `Local` scope to intercept shortcuts before VTE's default handler.
+The callbacks downcast the widget to read the live preference value from `imp().smart_clipboard`,
+avoiding stale-capture bugs from `Cell::clone()`.
 
 ```text
-EventControllerKey (Capture phase)
+ShortcutController (Capture phase, Local scope)
   Ctrl+C pressed:
-    if vte.has_selection() → copy_clipboard_format(Text) → Stop propagation
+    if smart_clipboard and vte.has_selection() → copy_clipboard_format(Text) → unselect_all() → Stop
     else → Proceed (shell receives \x03)
   Ctrl+V pressed:
-    if prefs.smart_clipboard → paste_clipboard() → Stop propagation
+    if smart_clipboard → paste_clipboard() → Stop propagation
     else → Proceed (shell receives \x16)
 ```
 
 Preference: `smart_clipboard: bool` in `Preferences`, default `false`.
-Toggle exposed in `AdwPreferencesWindow` under the Input section.
+Toggle exposed in `AdwPreferencesWindow` under the Terminal section.
 
 ---
 
@@ -113,7 +117,7 @@ Toggle exposed in `AdwPreferencesWindow` under the Input section.
 
 | Goal | How addressed |
 | --- | --- |
-| G1 — Ctrl+C copies selection | `has_selection()` guard; `copy_clipboard_format(Text)` |
+| G1 — Ctrl+C copies selection | `smart_clipboard` guard + `has_selection()` guard; `copy_clipboard_format(Text)` |
 | G2 — Ctrl+V pastes | `paste_clipboard()` when `prefs.smart_clipboard` is true |
 | G3 — Opt-in, default off | `smart_clipboard: bool` default `false`; standard behavior unchanged |
 
@@ -122,9 +126,11 @@ Toggle exposed in `AdwPreferencesWindow` under the Input section.
 ## Development Plan
 
 - [x] Add `smart_clipboard: bool` to `Preferences`
-- [x] Add `EventControllerKey` to `TerminalWidget`
+- [x] Add `ShortcutController` to `TerminalWidget` (Capture phase, Local scope)
 - [x] Implement `Ctrl+C` selection-guard copy
 - [x] Implement `Ctrl+V` conditional paste
 - [x] Expose toggle in `AdwPreferencesWindow`
+- [x] Fix: callbacks read live preference via widget downcast, not stale `Cell::clone()`
+- [x] Test: `set_smart_clipboard_takes_effect_after_construction` regression test
 
 ---
