@@ -800,6 +800,7 @@ impl Window {
         let uuid = term.uuid();
         let recoverable_term = term.clone();
         let handler_id = term.vte().connect_child_exited(move |_, status| {
+            recoverable_term.reset_terminal_state();
             if win.handle_recoverable_terminal_exit(&recoverable_term, &uuid, status) {
                 return;
             }

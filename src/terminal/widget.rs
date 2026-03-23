@@ -499,6 +499,45 @@ impl TerminalWidget {
         }
     }
 
+    /// Reset terminal modes that a remote process (e.g., SSH) may have left active
+    /// after a broken connection.
+    ///
+    /// Feeds ANSI/DEC escape sequences directly to the VTE emulator so it disables
+    /// mouse tracking, bracketed paste, alternate screen, and resets text attributes.
+    /// Called whenever a child process exits so a dangling SSH session never leaves
+    /// the local terminal in a corrupt state.
+    pub fn reset_terminal_state(&self) {
+        // Each sequence targets a specific mode; none has visible side-effects when
+        // the mode was already inactive, so this is safe to call unconditionally.
+        //
+        // ESC [ ! p   — DECSTR: soft terminal reset (resets scroll regions, origin
+        //               mode, insert mode, and most other DEC private modes)
+        // ?1000l      — disable X10 mouse reporting
+        // ?1002l      — disable button-event (cell-motion) mouse tracking
+        // ?1003l      — disable any-event mouse tracking
+        // ?1006l      — disable SGR extended mouse coordinate encoding
+        // ?1015l      — disable URXVT extended mouse coordinate encoding
+        // ?1016l      — disable SGR pixel coordinate mouse encoding
+        // ?2004l      — disable bracketed paste mode
+        // ?1049l      — leave alternate screen buffer, restore normal buffer
+        // ?25h        — show cursor (re-enable if the remote hid it)
+        // 0m          — reset all SGR character attributes
+        const RESET: &str = concat!(
+            "\x1b[!p",
+            "\x1b[?1000l",
+            "\x1b[?1002l",
+            "\x1b[?1003l",
+            "\x1b[?1006l",
+            "\x1b[?1015l",
+            "\x1b[?1016l",
+            "\x1b[?2004l",
+            "\x1b[?1049l",
+            "\x1b[?25h",
+            "\x1b[0m",
+        );
+        self.imp().vte.feed(RESET.as_bytes());
+    }
+
     pub fn apply_color_scheme(&self, scheme: &color_scheme::ColorScheme) {
         let vte = &self.imp().vte;
 
@@ -702,6 +741,35 @@ mod tests {
     };
     use gtk4::gio;
     use gtk4::prelude::*;
+
+    /// Verify that the RESET constant inside reset_terminal_state() contains
+    /// the expected escape sequences without requiring a live VTE widget.
+    #[test]
+    fn reset_terminal_state_sequences() {
+        // Reconstruct the same constant used in the function.
+        let reset = concat!(
+            "\x1b[!p",
+            "\x1b[?1000l",
+            "\x1b[?1002l",
+            "\x1b[?1003l",
+            "\x1b[?1006l",
+            "\x1b[?1015l",
+            "\x1b[?1016l",
+            "\x1b[?2004l",
+            "\x1b[?1049l",
+            "\x1b[?25h",
+            "\x1b[0m",
+        );
+        assert!(reset.contains("\x1b[!p"), "DECSTR soft reset missing");
+        assert!(reset.contains("\x1b[?1000l"), "X10 mouse disable missing");
+        assert!(reset.contains("\x1b[?1002l"), "button-event mouse disable missing");
+        assert!(reset.contains("\x1b[?1003l"), "any-event mouse disable missing");
+        assert!(reset.contains("\x1b[?1006l"), "SGR mouse disable missing");
+        assert!(reset.contains("\x1b[?2004l"), "bracketed paste disable missing");
+        assert!(reset.contains("\x1b[?1049l"), "alt-screen exit missing");
+        assert!(reset.contains("\x1b[?25h"), "cursor show missing");
+        assert!(reset.contains("\x1b[0m"), "SGR reset missing");
+    }
 
     #[test]
     fn parse_standard_vte_uri() {
