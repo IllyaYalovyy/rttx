@@ -3,7 +3,7 @@
 This directory documents the current Flatpak strategy for `rttx`.
 
 The repository keeps a **safe default manifest** at
-[`io.github.IllyaYalovyy.rttx.json`](/path/to/rttx/io.github.IllyaYalovyy.rttx.json).
+[`io.github.IllyaYalovyy.rttx.json`](../../io.github.IllyaYalovyy.rttx.json).
 It is intentionally conservative:
 
 - current GNOME runtime
@@ -90,7 +90,7 @@ flatpak build-bundle repo rttx.flatpak io.github.IllyaYalovyy.rttx
 ## Dependency manifest for Flathub
 
 The repository now includes generated offline Rust dependency metadata at
-[`packaging/flatpak/cargo-sources.json`](/path/to/rttx/packaging/flatpak/cargo-sources.json).
+[`packaging/flatpak/cargo-sources.json`](cargo-sources.json).
 
 That file is required for reproducible Flatpak builds because Cargo cannot reach `crates.io` inside
 the Flatpak build sandbox.

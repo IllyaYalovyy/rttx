@@ -83,18 +83,17 @@ afterthought.
 
 The current codebase is a good base for this design:
 
-- [`src/terminal/widget.rs`](/path/to/rttx/src/terminal/widget.rs) spawns the shell in
-  one place via `vte.spawn_async()`
+- [`src/terminal/widget.rs`](../src/terminal/widget.rs) spawns the shell in one place via
+  `vte.spawn_async()`
 - bookmark/session recovery already feeds ordinary shell commands such as `ssh` and `tmux` into the
   terminal rather than depending on custom IPC
 - clickable paths and links open through
-  [`gio::AppInfo::launch_default_for_uri()`](/path/to/rttx/src/terminal/widget.rs#L520),
+  [`gio::AppInfo::launch_default_for_uri()`](../src/terminal/widget.rs),
   which aligns well with portal-backed desktop integration
 - notifications go through
-  [`gio::Notification`](/path/to/rttx/src/window.rs#L1718), which GTK desktops and
-  portals already understand
+  [`gio::Notification`](../src/window.rs), which GTK desktops and portals already understand
 - config lives under `glib::user_config_dir()` in
-  [`src/config.rs`](/path/to/rttx/src/config.rs), so the app already respects XDG-style
+  [`src/config.rs`](../src/config.rs), so the app already respects XDG-style
   storage
 
 This means we do not need to redesign session recovery or UI architecture to make Flatpak possible.
@@ -646,8 +645,8 @@ Supplementary references:
 
 Local implementation references:
 
-- [`Cargo.toml`](/path/to/rttx/Cargo.toml)
-- [`src/terminal/widget.rs`](/path/to/rttx/src/terminal/widget.rs)
-- [`src/window.rs`](/path/to/rttx/src/window.rs)
-- [`src/config.rs`](/path/to/rttx/src/config.rs)
-- [`designs/RFC-005-distribution-packaging.md`](/path/to/rttx/designs/RFC-005-distribution-packaging.md)
+- [`Cargo.toml`](../Cargo.toml)
+- [`src/terminal/widget.rs`](../src/terminal/widget.rs)
+- [`src/window.rs`](../src/window.rs)
+- [`src/config.rs`](../src/config.rs)
+- [`designs/RFC-005-distribution-packaging.md`](RFC-005-distribution-packaging.md)
