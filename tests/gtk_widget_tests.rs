@@ -753,26 +753,21 @@ fn terminal_context_menu_model_has_actions() {
     let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
         .expect("context menu must be parented (see terminal_context_menu_is_parented_to_widget)");
 
-    let model = popover
-        .menu_model()
-        .expect("PopoverMenu must have a menu model");
+    let model = popover.menu_model().expect("PopoverMenu must have a menu model");
 
     let n_sections = model.n_items();
     assert!(n_sections > 0, "context menu model must have at least one section");
 
     let mut total_items = 0;
     for section_idx in 0..n_sections {
-        let section = model
-            .item_link(section_idx, "section")
-            .expect("each top-level item must be a section");
+        let section =
+            model.item_link(section_idx, "section").expect("each top-level item must be a section");
 
         let n = section.n_items();
         assert!(n > 0, "section {section_idx} must not be empty");
 
         for item_idx in 0..n {
-            let has_action = section
-                .item_attribute_value(item_idx, "action", None)
-                .is_some();
+            let has_action = section.item_attribute_value(item_idx, "action", None).is_some();
             assert!(
                 has_action,
                 "context menu section {section_idx} item {item_idx} has no action attribute — \

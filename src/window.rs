@@ -3684,12 +3684,7 @@ mod tests {
 
         let t2_uuid = {
             let state = window.imp().state.borrow();
-            state.sessions[0]
-                .layout
-                .terminal_uuids()
-                .into_iter()
-                .find(|u| u != &t1_uuid)
-                .unwrap()
+            state.sessions[0].layout.terminal_uuids().into_iter().find(|u| u != &t1_uuid).unwrap()
         };
 
         let spawned = wait_until(2000, || {
