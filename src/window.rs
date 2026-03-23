@@ -975,21 +975,17 @@ impl Window {
             .into_iter()
             .filter(|bookmark| crate::bookmarks::matches_query(bookmark, query.as_str()))
         {
-            let row = gtk4::ListBoxRow::new();
             let action_row = adw::ActionRow::new();
             action_row.set_title(&bookmark.name);
             action_row.set_subtitle(&bookmark.summary());
+            action_row.set_activatable(true);
 
-            let run_button = gtk4::Button::builder()
-                .icon_name("go-next-symbolic")
-                .tooltip_text("Run in current pane")
-                .valign(gtk4::Align::Center)
-                .build();
             let new_session_button = gtk4::Button::builder()
                 .icon_name("window-new-symbolic")
                 .tooltip_text("New session from bookmark")
                 .valign(gtk4::Align::Center)
                 .build();
+            new_session_button.add_css_class("flat");
 
             let uuid = bookmark.uuid.clone();
             let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
@@ -1009,15 +1005,13 @@ impl Window {
                 .build();
             more_button.add_css_class("flat");
 
-            action_row.add_suffix(&run_button);
             action_row.add_suffix(&new_session_button);
             action_row.add_suffix(&more_button);
-            row.set_child(Some(&action_row));
-            imp.bookmark_list.append(&row);
+            imp.bookmark_list.append(&action_row);
 
             let win = self.clone();
             let bookmark_for_run = bookmark.clone();
-            run_button.connect_clicked(move |_| {
+            action_row.connect_activated(move |_| {
                 win.execute_bookmark(&bookmark_for_run);
             });
 
@@ -1043,21 +1037,17 @@ impl Window {
             .into_iter()
             .filter(|command| commands::matches_query(command, query.as_str()))
         {
-            let row = gtk4::ListBoxRow::new();
             let action_row = adw::ActionRow::new();
             action_row.set_title(&command.title);
             action_row.set_subtitle(&command.preview());
+            action_row.set_activatable(true);
 
-            let run_button = gtk4::Button::builder()
-                .icon_name("go-next-symbolic")
-                .tooltip_text("Run in current pane")
-                .valign(gtk4::Align::Center)
-                .build();
             let insert_button = gtk4::Button::builder()
                 .icon_name("insert-text-symbolic")
                 .tooltip_text("Insert into current pane")
                 .valign(gtk4::Align::Center)
                 .build();
+            insert_button.add_css_class("flat");
 
             let uuid = command.uuid.clone();
             let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
@@ -1077,15 +1067,13 @@ impl Window {
                 .build();
             more_button.add_css_class("flat");
 
-            action_row.add_suffix(&run_button);
             action_row.add_suffix(&insert_button);
             action_row.add_suffix(&more_button);
-            row.set_child(Some(&action_row));
-            imp.command_list.append(&row);
+            imp.command_list.append(&action_row);
 
             let win = self.clone();
             let command_for_run = command.clone();
-            run_button.connect_clicked(move |_| {
+            action_row.connect_activated(move |_| {
                 win.execute_saved_command(&command_for_run, CommandRunMode::Run);
             });
 
