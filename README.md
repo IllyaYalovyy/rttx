@@ -37,23 +37,7 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 
 ## Distribution
 
-### Fedora (COPR)
-The easiest way to install on Fedora is via the official COPR repository:
-```bash
-sudo dnf copr enable illya/rttx
-sudo dnf install rttx
-```
-
-### Ubuntu/Debian (Coming soon)
-Native `.deb` packages and a PPA are under development.
-
-### Flatpak
-A conservative Flatpak manifest is now in the repository at
-[`io.github.IllyaYalovyy.rttx.json`](io.github.IllyaYalovyy.rttx.json).
-
-The default Flatpak profile is intentionally sandboxed. A detailed setup guide for opt-in native
-host integration lives at
-[`packaging/flatpak/README.md`](packaging/flatpak/README.md).
+See [`INSTALL.md`](INSTALL.md) for installation instructions.
 
 ## Keyboard Shortcuts
 
