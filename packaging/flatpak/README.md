@@ -89,9 +89,11 @@ flatpak build-bundle repo rttx.flatpak io.github.IllyaYalovyy.rttx
 
 ## Dependency manifest for Flathub
 
-The current manifest is good enough to establish the packaging shape, but Rust dependencies still
-need a generated Flatpak dependency manifest before Flathub submission or fully reproducible CI
-builds.
+The repository now includes generated offline Rust dependency metadata at
+[`packaging/flatpak/cargo-sources.json`](/path/to/rttx/packaging/flatpak/cargo-sources.json).
+
+That file is required for reproducible Flatpak builds because Cargo cannot reach `crates.io` inside
+the Flatpak build sandbox.
 
 There is also an earlier native-library blocker:
 
@@ -111,12 +113,12 @@ The current manifest now includes an official GNOME `vte-0.78.7` source module w
 GTK4-only Meson configuration. That is enough to move past the SDK dependency gap and expose the
 next build blocker.
 
-Recommended approach:
+Regeneration workflow:
 
 1. Install `flatpak-builder-tools`
 2. Generate a Cargo source manifest from `Cargo.lock`
-3. Include that generated file in the Flatpak module sources
-4. Regenerate it whenever `Cargo.lock` changes
+3. Regenerate it whenever `Cargo.lock` changes
+4. Commit the updated generated file with the lockfile change
 
 Typical command shape:
 
@@ -215,12 +217,12 @@ What exists now:
 
 - a conservative root manifest
 - a bundled VTE source module in the Flatpak manifest
+- generated offline Cargo source metadata
 - RFC-011 describing the product and permission model
 - this setup guide
 
 What still needs implementation:
 
 - app-side Flatpak detection and dual shell-launch policy
-- generated Cargo dependency metadata for reproducible Flatpak builds
 - CI build/validation for the Flatpak manifest
 - first-run UX that teaches users how to opt into native mode
