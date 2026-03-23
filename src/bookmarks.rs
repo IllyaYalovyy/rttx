@@ -50,7 +50,7 @@ impl Bookmark {
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if let Some(directory) = non_empty(self.directory.as_deref()) {
-            parts.push(format!("dir {directory}"));
+            parts.push(directory.to_string());
         }
         if let Some(target) = non_empty(self.ssh_target.as_deref()) {
             parts.push(format!("ssh {target}"));
