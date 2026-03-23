@@ -48,7 +48,12 @@ sudo dnf install rttx
 Native `.deb` packages and a PPA are under development.
 
 ### Flatpak
-Native Flatpak support via Flathub is under development.
+A conservative Flatpak manifest is now in the repository at
+[`io.github.IllyaYalovyy.rttx.json`](/path/to/rttx/io.github.IllyaYalovyy.rttx.json).
+
+The default Flatpak profile is intentionally sandboxed. A detailed setup guide for opt-in native
+host integration lives at
+[`packaging/flatpak/README.md`](/path/to/rttx/packaging/flatpak/README.md).
 
 ## Keyboard Shortcuts
 
