@@ -77,58 +77,38 @@ flatpak-builder --user --install --force-clean flatpak-build io.github.IllyaYalo
 flatpak run io.github.IllyaYalovyy.rttx
 ```
 
-At the moment, this build is expected to stop at dependency resolution because the GNOME 49 SDK
-does not ship `vte-2.91-gtk4` and the manifest does not yet bundle VTE.
+The manifest bundles VTE 0.78.7 as a source module (the GNOME 49 SDK does not ship
+`vte-2.91-gtk4`), so the build is self-contained.
 
-To export a bundle for local testing:
-
-```bash
-flatpak-builder --repo=repo --force-clean flatpak-build io.github.IllyaYalovyy.rttx.json
-flatpak build-bundle repo rttx.flatpak io.github.IllyaYalovyy.rttx
-```
-
-## Dependency manifest for Flathub
-
-The repository now includes generated offline Rust dependency metadata at
-[`packaging/flatpak/cargo-sources.json`](cargo-sources.json).
-
-That file is required for reproducible Flatpak builds because Cargo cannot reach `crates.io` inside
-the Flatpak build sandbox.
-
-There is also an earlier native-library blocker:
-
-- `org.gnome.Sdk//49` provides `gtk4` and `libadwaita-1`
-- it does **not** provide `vte-2.91-gtk4`
-
-That was verified locally with:
+To export a standalone `.flatpak` bundle for testing or distribution:
 
 ```bash
-flatpak run --devel --command=sh org.gnome.Sdk//49 -c 'pkg-config --modversion vte-2.91-gtk4'
+./packaging/flatpak/build-bundle.sh
+# produces rttx.flatpak in the repository root
 ```
 
-So the current Flatpak work needs a bundled VTE module before the first successful build is
-possible.
+## Dependency handling
 
-The current manifest now includes an official GNOME `vte-0.78.7` source module with a narrow
-GTK4-only Meson configuration. That is enough to move past the SDK dependency gap and expose the
-next build blocker.
+### Native libraries
 
-Regeneration workflow:
+`org.gnome.Sdk//49` provides `gtk4` and `libadwaita-1` but **not** `vte-2.91-gtk4`. The manifest
+bundles VTE 0.78.7 as a source module (official GNOME tarball, GTK4-only Meson config).
 
-1. Install `flatpak-builder-tools`
-2. Generate a Cargo source manifest from `Cargo.lock`
-3. Regenerate it whenever `Cargo.lock` changes
-4. Commit the updated generated file with the lockfile change
+### Rust crates (offline)
 
-Typical command shape:
+[`packaging/flatpak/cargo-sources.json`](cargo-sources.json) lists every Rust dependency for
+offline builds inside the Flatpak sandbox (Cargo cannot reach `crates.io`).
+
+Regenerate whenever `Cargo.lock` changes:
 
 ```bash
 flatpak-cargo-generator Cargo.lock -o packaging/flatpak/cargo-sources.json
 ```
 
-If you use the Python script from `flatpak-builder-tools` directly, the command name will differ.
+If you use the Python script from `flatpak-builder-tools` directly, the command name may differ.
+Commit the regenerated file alongside the lockfile change.
 
-The generated file should be treated as build metadata, not hand-edited.
+The generated file is build metadata — do not hand-edit it.
 
 ## Native mode setup
 
@@ -211,18 +191,29 @@ blindly.
 Document the exact reason before keeping the override. The default package should remain narrow
 unless a concrete limitation proves otherwise.
 
+## Older distro compatibility
+
+Flatpak decouples rttx from host library versions. The GNOME 49 runtime provides GTK 4.20 and
+libadwaita 1.8 regardless of what the host distro ships. VTE is bundled in the manifest. As long as
+the host can run Flatpak and install the GNOME 49 runtime, rttx will work — this covers Fedora 39+,
+Ubuntu 22.04+, Debian 12+, Arch, and similar.
+
+Users on very old distros (e.g., Ubuntu 20.04) may not be able to install a recent enough Flatpak
+or the GNOME 49 runtime. This is an acceptable trade-off — those distros also lack the Wayland
+stack that rttx targets.
+
 ## Current status
 
 What exists now:
 
-- a conservative root manifest
-- a bundled VTE source module in the Flatpak manifest
-- generated offline Cargo source metadata
+- conservative root manifest with bundled VTE 0.78.7 and offline Cargo sources
+- `build-bundle.sh` script for local `.flatpak` bundle export
 - RFC-011 describing the product and permission model
-- this setup guide
+- this setup guide with safe-default and native-mode instructions
 
 What still needs implementation:
 
-- app-side Flatpak detection and dual shell-launch policy
-- CI build/validation for the Flatpak manifest
+- app-side Flatpak detection and dual shell-launch policy (RFC-011 Phase 2–3)
+- CI build validation for the Flatpak manifest (#103)
 - first-run UX that teaches users how to opt into native mode
+- Flathub submission (requires `--talk-name=org.freedesktop.Flatpak` justification for native mode)

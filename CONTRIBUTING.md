@@ -64,19 +64,19 @@ When in doubt, open an issue to discuss before writing code.
 ## Development environment
 
 **Required:**
-- Rust 1.75+
+- Rust 1.85+ (edition 2024)
 - GTK4 4.14+
 - Libadwaita 1.5+
 - VTE 0.78+ (GTK4 variant)
 
 **Fedora:**
 ```bash
-sudo dnf install gtk4-devel libadwaita-devel vte291-gtk4-devel
+sudo dnf install cargo meson pkg-config gtk4-devel libadwaita-devel vte291-gtk4-devel
 ```
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
+sudo apt install cargo meson pkg-config libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
 ```
 
 **For UI behavioral tests** (optional but required for changes touching GTK layout or widget interaction):

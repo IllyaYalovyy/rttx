@@ -2,94 +2,130 @@
 
 ## Fedora
 
+The easiest path on Fedora — installs rttx and all dependencies from a COPR repository:
+
 ```bash
 sudo dnf copr enable illya/rttx
 sudo dnf install rttx
 ```
 
-## Flatpak
+Launch from the app grid or run `rttx` in a terminal.
 
-If you have `rttx.flatpak`:
+To remove:
 
 ```bash
+sudo dnf remove rttx
+```
+
+## Flatpak
+
+Flatpak works on any Linux distribution. The bundle includes everything rttx needs — no host
+library requirements.
+
+### Install
+
+```bash
+# Add Flathub if you haven't already
 flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# Install the GNOME 49 runtime (required, ~800 MB one-time download)
 flatpak install --user flathub org.gnome.Platform//49
+
+# Install rttx from a local bundle
 flatpak install --user ./rttx.flatpak
 ```
 
-Run it:
+Launch from the app grid, or:
 
 ```bash
 flatpak run io.github.IllyaYalovyy.rttx
 ```
 
-If it does not appear in the desktop launcher, log out and log back in.
+If rttx doesn't appear in the app grid, log out and back in.
 
-## Flatpak Host Integration
+### Host shell access
 
-Default Flatpak install is sandboxed.
-
-Enable host shell access:
-
-```bash
-flatpak override --user io.github.IllyaYalovyy.rttx --talk-name=org.freedesktop.Flatpak
-```
-
-Optional access:
-
-SSH agent:
+By default, the Flatpak runs shells inside the sandbox. Most users will want host shell access so
+that rttx behaves like a normal terminal with access to your tools, SSH config, and files:
 
 ```bash
-flatpak override --user io.github.IllyaYalovyy.rttx --socket=ssh-auth
+# Required — enables host shell access
+flatpak override --user io.github.IllyaYalovyy.rttx \
+  --talk-name=org.freedesktop.Flatpak
+
+# Recommended — access to your home directory
+flatpak override --user io.github.IllyaYalovyy.rttx \
+  --filesystem=home
+
+# Optional — if you use SSH
+flatpak override --user io.github.IllyaYalovyy.rttx \
+  --socket=ssh-auth
+
+# Optional — if your SSH keys are managed by GPG agent
+flatpak override --user io.github.IllyaYalovyy.rttx \
+  --socket=gpg-agent
 ```
 
-GPG agent:
+### Remove
 
 ```bash
-flatpak override --user io.github.IllyaYalovyy.rttx --socket=gpg-agent
+flatpak uninstall io.github.IllyaYalovyy.rttx
 ```
 
-Home directory:
+## Build from source
+
+### Install dependencies
+
+**Fedora:**
 
 ```bash
-flatpak override --user io.github.IllyaYalovyy.rttx --filesystem=home
+sudo dnf install cargo meson pkg-config gtk4-devel libadwaita-devel vte291-gtk4-devel
 ```
 
-## Build From Source
+**Ubuntu / Debian:**
+
+```bash
+sudo apt install cargo meson pkg-config libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
+```
+
+**Arch Linux:**
+
+```bash
+sudo pacman -S rust meson pkgconf gtk4 libadwaita vte4
+```
+
+Minimum versions: GTK4 4.14, libadwaita 1.5, VTE 0.78 (GTK4 variant). Rust edition 2024 (Rust
+1.85+).
+
+### Quick build (no install)
 
 ```bash
 cargo build --release
 ./target/release/rttx
 ```
 
-## Install From Source
+### Full install (desktop integration)
 
-User install:
+This installs the binary, desktop file, icons, and AppStream metadata so rttx appears in the app
+grid:
 
 ```bash
 meson setup build --prefix="$HOME/.local"
 meson install -C build
+```
+
+Refresh the icon and app caches:
+
+```bash
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor"
 update-desktop-database "$HOME/.local/share/applications"
 ```
 
-System install:
+For a system-wide install:
 
 ```bash
 meson setup build --prefix=/usr/local
 sudo meson install -C build
 ```
 
-## Remove
-
-Fedora package:
-
-```bash
-sudo dnf remove rttx
-```
-
-Flatpak:
-
-```bash
-flatpak uninstall io.github.IllyaYalovyy.rttx
-```
+If the GNOME app grid still shows a generic icon after a user-local install, log out and back in.
