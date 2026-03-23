@@ -12,6 +12,8 @@ sudo dnf install rttx
 If you have `rttx.flatpak`:
 
 ```bash
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub org.gnome.Platform//49
 flatpak install --user ./rttx.flatpak
 ```
 
@@ -20,6 +22,8 @@ Run it:
 ```bash
 flatpak run io.github.IllyaYalovyy.rttx
 ```
+
+If it does not appear in the desktop launcher, log out and log back in.
 
 ## Flatpak Host Integration
 
