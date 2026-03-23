@@ -1,2 +1,7 @@
 /target
 /META
+/.flatpak-builder
+/b
+/flatpak-build
+/repo
+/rttx.flatpak
