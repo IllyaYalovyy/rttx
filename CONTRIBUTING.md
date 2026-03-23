@@ -79,6 +79,18 @@ sudo dnf install gtk4-devel libadwaita-devel vte291-gtk4-devel
 sudo apt install libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
 ```
 
+**For UI behavioral tests** (optional but required for changes touching GTK layout or widget interaction):
+- `weston` — headless Wayland compositor
+- `python3-gobject` / `python3-atspi` — AT-SPI2 Python bindings
+
+```bash
+# Fedora
+sudo dnf install weston python3-gobject
+
+# Ubuntu/Debian
+sudo apt install weston python3-gi gir1.2-atspi-2.0
+```
+
 ---
 
 ## Building and running
@@ -164,7 +176,13 @@ test prevent?*
 | Property-based tests | `src/session/layout.rs` | Randomized layout trees via `proptest`. |
 | Integration tests | `tests/session_lifecycle.rs`, etc. | End-to-end persistence and compatibility. |
 | GTK contract tests | `tests/gtk_boundary_contracts.rs` | Data-model invariants that `window.rs` depends on. |
-| GTK widget tests | `tests/gtk_widget_tests.rs`, etc. | Real GTK4 widget instantiation via broadway backend. |
+| GTK widget tests | `tests/gtk_widget_tests.rs`, etc. | Real GTK4 widget instantiation and widget-tree structure. |
+| **Behavioral UI tests** | `tests/ui/` (Python + AT-SPI2) | Functional behaviour observed through the accessibility tree. |
+
+The behavioral layer exists because silent functional failures — a blank pane after split, a
+horizontal sidebar that should be vertical — do not cause crashes and are invisible to the Rust
+test layers. AT-SPI2 observes the live widget tree the same way a screen reader would, catching
+layout and interaction regressions that unit tests cannot.
 
 ### Running tests
 
@@ -173,11 +191,19 @@ Standard (no display required for pure-Rust tests):
 cargo test
 ```
 
-Full suite including GTK widget tests (requires a display or broadway):
+Full suite including GTK widget tests:
 ```bash
-broadwayd :5 &
-GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 GTK_A11Y=none cargo test
+GDK_BACKEND=broadway GTK_A11Y=none cargo test
 ```
+
+Behavioral UI tests (requires `weston` and `python3-gobject`):
+```bash
+cargo build && ./run_ui_tests.sh
+```
+
+The UI tests launch a private `RTTX_DEV_MODE=1` instance on a headless weston compositor. They
+are safe to run while rttx is open for normal work — the dev instance uses a separate D-Bus name
+(`io.github.IllyaYalovyy.rttx.Devel`) and a throwaway config directory.
 
 ### Requirements for new code
 
@@ -264,8 +290,8 @@ allocated width is not known until the widget is mapped.
 2. **One PR, one concern.** Do not bundle unrelated changes.
 3. **All checks must pass:**
    - `cargo build` (enforces `rustfmt` + Clippy pedantic/nursery)
-   - `cargo test` (pure-Rust tests)
-   - GTK widget tests via broadway (for changes touching GTK widgets)
+   - `cargo test` (pure-Rust and GTK widget tests)
+   - `./run_ui_tests.sh` (for changes touching GTK layout, widget interaction, or the split/sidebar paths)
 4. **PR description** must explain:
    - What the change does and why
    - How to manually verify it
