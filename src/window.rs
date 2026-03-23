@@ -87,6 +87,7 @@ mod imp {
             let toggle_utility_sidebar = gtk4::ToggleButton::with_label("Tools");
             toggle_utility_sidebar.set_tooltip_text(Some("Toggle tools sidebar"));
             toggle_utility_sidebar.set_active(true);
+            toggle_utility_sidebar.add_css_class("flat");
             header.pack_end(&toggle_utility_sidebar);
 
             let menu_button = gtk4::MenuButton::new();
