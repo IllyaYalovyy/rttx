@@ -1468,6 +1468,7 @@ impl Window {
         let new_term = TerminalWidget::new(new_terminal_uuid, None);
         self.connect_terminal_signals(&new_term);
         imp.terminals.borrow_mut().insert(new_terminal_uuid.to_string(), new_term.clone());
+        new_term.ensure_shell_spawned_when_ready();
 
         let branch_layout = LayoutNode::Split {
             orientation,
@@ -3645,6 +3646,61 @@ mod tests {
         assert_eq!(
             count_before, count_after,
             "split at max depth should be blocked and not add a terminal"
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    /// Regression test: split new pane had no terminal (shell never spawned).
+    ///
+    /// `split_terminal_in_place` creates a new TerminalWidget but previously
+    /// never called `ensure_shell_spawned_when_ready()`. The new pane appeared
+    /// empty — PTY was never started. shell_spawned_for_test() only becomes
+    /// true after spawn_shell_once() runs, which only happens when
+    /// ensure_shell_spawned_when_ready() is called.
+    #[test]
+    fn split_spawns_shell_in_new_pane() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.split-shell-test").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
+
+        let t1_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+
+        window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+
+        let t2_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|u| u != &t1_uuid)
+                .unwrap()
+        };
+
+        let spawned = wait_until(2000, || {
+            let terminals = window.imp().terminals.borrow();
+            terminals.get(&t2_uuid).is_some_and(|t| t.shell_spawned_for_test())
+        });
+
+        assert!(
+            spawned,
+            "new pane from split must have shell_spawned=true after allocation. \
+             ensure_shell_spawned_when_ready() must be called in split_terminal_in_place."
         );
 
         window.close();

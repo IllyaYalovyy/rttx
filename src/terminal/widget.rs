@@ -578,7 +578,14 @@ fn configure_openable_matches(vte: &vte4::Terminal) {
 }
 
 fn register_openable_match(vte: &vte4::Terminal, pattern: &str) {
-    match vte4::Regex::for_match(pattern, 0) {
+    // VTE 0.78 asserts PCRE2_MULTILINE on match_add_regex. Pass the same
+    // defaults VTE uses internally (VTE_REGEX_FLAGS_DEFAULT from vteregex.hh).
+    const PCRE2_FLAGS: u32 = 0x0008_0000  // PCRE2_UTF
+        | 0x4000_0000  // PCRE2_NO_UTF_CHECK
+        | 0x0000_0008  // PCRE2_CASELESS
+        | 0x0000_0400  // PCRE2_MULTILINE
+        | 0x0000_0020; // PCRE2_DOTALL
+    match vte4::Regex::for_match(pattern, PCRE2_FLAGS) {
         Ok(regex) => {
             let tag = vte.match_add_regex(&regex, 0);
             vte.match_set_cursor_name(tag, "pointer");
