@@ -144,6 +144,9 @@ mod imp {
 
             self.bookmark_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
             self.bookmark_scroll.set_vexpand(true);
+            self.bookmark_scroll.set_margin_start(12);
+            self.bookmark_scroll.set_margin_end(12);
+            self.bookmark_scroll.set_margin_bottom(12);
             self.bookmark_scroll.set_child(Some(&self.bookmark_list));
             self.bookmark_scroll.set_visible(false);
 
@@ -178,6 +181,9 @@ mod imp {
 
             self.command_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
             self.command_scroll.set_vexpand(true);
+            self.command_scroll.set_margin_start(12);
+            self.command_scroll.set_margin_end(12);
+            self.command_scroll.set_margin_bottom(12);
             self.command_scroll.set_child(Some(&self.command_list));
             self.command_scroll.set_visible(false);
 
