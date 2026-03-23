@@ -107,6 +107,10 @@ flatpak run --devel --command=sh org.gnome.Sdk//49 -c 'pkg-config --modversion v
 So the current Flatpak work needs a bundled VTE module before the first successful build is
 possible.
 
+The current manifest now includes an official GNOME `vte-0.78.7` source module with a narrow
+GTK4-only Meson configuration. That is enough to move past the SDK dependency gap and expose the
+next build blocker.
+
 Recommended approach:
 
 1. Install `flatpak-builder-tools`
@@ -210,12 +214,12 @@ unless a concrete limitation proves otherwise.
 What exists now:
 
 - a conservative root manifest
+- a bundled VTE source module in the Flatpak manifest
 - RFC-011 describing the product and permission model
 - this setup guide
 
 What still needs implementation:
 
-- a bundled `vte-2.91-gtk4` Flatpak module, because the GNOME 49 SDK does not ship the dependency
 - app-side Flatpak detection and dual shell-launch policy
 - generated Cargo dependency metadata for reproducible Flatpak builds
 - CI build/validation for the Flatpak manifest
