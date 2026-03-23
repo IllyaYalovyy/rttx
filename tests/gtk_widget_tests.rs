@@ -11,6 +11,7 @@
 ///   xvfb-run cargo test --test gtk_widget_tests
 ///
 /// These tests are ignored by default so `cargo test` works headless.
+use gtk4::gio::prelude::*;
 use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -715,4 +716,86 @@ fn paned_extreme_but_valid_ratios_produce_nonzero_positions() {
              notify::width handler may not have fired."
         );
     }
+}
+
+/// Prevent regression: PopoverMenu created without set_parent() crashes on popup().
+///
+/// When the context menu was introduced, forgetting set_parent() causes a GTK
+/// assertion failure the moment the user right-clicks. This test verifies that
+/// the PopoverMenu is registered as a child of the TerminalWidget immediately
+/// after construction, before any interaction.
+#[test]
+fn terminal_context_menu_is_parented_to_widget() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+
+    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>());
+    assert!(
+        popover.is_some(),
+        "TerminalWidget must have a PopoverMenu child after construction. \
+         Call set_parent() on the context menu during constructed()."
+    );
+}
+
+/// Prevent regression: an empty or mis-named action in the context menu produces
+/// a non-functional item with no visible error.
+///
+/// Each section of the menu model is verified to be non-empty and all items must
+/// carry an "action" attribute. Any item without an action attribute is invisible
+/// to the user but silently broken.
+#[test]
+fn terminal_context_menu_model_has_actions() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+
+    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
+        .expect("context menu must be parented (see terminal_context_menu_is_parented_to_widget)");
+
+    let model = popover
+        .menu_model()
+        .expect("PopoverMenu must have a menu model");
+
+    let n_sections = model.n_items();
+    assert!(n_sections > 0, "context menu model must have at least one section");
+
+    let mut total_items = 0;
+    for section_idx in 0..n_sections {
+        let section = model
+            .item_link(section_idx, "section")
+            .expect("each top-level item must be a section");
+
+        let n = section.n_items();
+        assert!(n > 0, "section {section_idx} must not be empty");
+
+        for item_idx in 0..n {
+            let has_action = section
+                .item_attribute_value(item_idx, "action", None)
+                .is_some();
+            assert!(
+                has_action,
+                "context menu section {section_idx} item {item_idx} has no action attribute — \
+                 the item will silently do nothing when clicked"
+            );
+            total_items += 1;
+        }
+    }
+
+    assert!(
+        total_items >= 8,
+        "context menu must have at least 8 items; found {total_items}. \
+         A section may have been accidentally emptied."
+    );
+}
+
+fn find_popover_child(widget: &gtk4::Widget) -> Option<gtk4::PopoverMenu> {
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Ok(popover) = c.clone().downcast::<gtk4::PopoverMenu>() {
+            return Some(popover);
+        }
+        child = c.next_sibling();
+    }
+    None
 }

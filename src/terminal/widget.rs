@@ -237,6 +237,41 @@ mod imp {
 
             obj.add_controller(smart_clipboard_controller);
 
+            let menu = gtk4::gio::Menu::new();
+            let clipboard_section = gtk4::gio::Menu::new();
+            clipboard_section.append(Some("Copy"), Some("win.copy"));
+            clipboard_section.append(Some("Paste"), Some("win.paste"));
+            let pane_section = gtk4::gio::Menu::new();
+            pane_section.append(Some("Search"), Some("win.search"));
+            pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
+            pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
+            let session_section = gtk4::gio::Menu::new();
+            session_section.append(Some("New Session"), Some("win.new-session"));
+            session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
+            session_section.append(Some("Bookmark Session"), Some("win.bookmark-session"));
+            session_section.append(Some("Preferences"), Some("win.preferences"));
+            let close_section = gtk4::gio::Menu::new();
+            close_section.append(Some("Close Pane"), Some("win.close-terminal"));
+            menu.append_section(None, &clipboard_section);
+            menu.append_section(None, &pane_section);
+            menu.append_section(None, &session_section);
+            menu.append_section(None, &close_section);
+
+            let context_menu = gtk4::PopoverMenu::from_model(Some(&menu));
+            context_menu.set_has_arrow(false);
+            context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
+
+            let right_click = gtk4::GestureClick::new();
+            right_click.set_button(3);
+            right_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                context_menu
+                    .set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                context_menu.popup();
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+            });
+            self.vte.add_controller(right_click);
+
             obj.append(&self.header);
             obj.append(&self.recovery_bar);
             obj.append(&self.search_bar);
