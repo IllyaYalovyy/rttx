@@ -1,0 +1,282 @@
+Downloading sources
+Starting build of io.github.IllyaYalovyy.rttx
+Cache hit for vte, skipping build
+Cache miss, checking out last cache hit
+========================================================================
+Building module rttx in <repo>/.flatpak-builder/build/rttx-4
+========================================================================
+The Meson build system
+Version: 1.9.2
+Source dir: /run/build/rttx
+Build dir: /run/build/rttx/_flatpak_build
+Build type: native build
+Project name: rttx
+Project version: 0.1.0
+Host machine cpu family: x86_64
+Host machine cpu: x86_64
+Program git found: YES (/usr/bin/git)
+Found pkg-config: YES (/usr/bin/pkg-config) 2.5.1
+Run-time dependency gtk4 found: YES 4.20.3
+Run-time dependency libadwaita-1 found: YES 1.8.4
+Run-time dependency vte-2.91-gtk4 found: YES 0.78.7
+Program cargo found: YES (/usr/lib/sdk/rust-stable/bin/cargo)
+Build targets in project: 1
+
+rttx 0.1.0
+
+  User defined options
+    libdir   : /app/lib
+    prefix   : /app
+    wrap_mode: nodownload
+
+Found ninja-1.13.2 at /usr/bin/ninja
+[0/1] Generating rttx-binary with a custom command
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+   Compiling winnow v1.0.0
+   Compiling target-lexicon v0.13.3
+   Compiling heck v0.5.0
+   Compiling winnow v0.7.15
+   Compiling serde_spanned v1.0.4
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling smallvec v1.15.1
+   Compiling pkg-config v0.3.32
+   Compiling version-compare v0.2.1
+   Compiling libc v0.2.183
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+    Checking memchr v2.8.0
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.16.1
+   Compiling toml_datetime v1.0.1+spec-1.1.0
+    Checking futures-core v0.3.32
+    Checking futures-task v0.3.32
+    Checking slab v0.4.12
+    Checking pin-project-lite v0.2.17
+    Checking futures-channel v0.3.32
+    Checking bitflags v2.11.0
+   Compiling gio v0.20.12
+    Checking futures-io v0.3.32
+   Compiling autocfg v1.5.0
+   Compiling semver v1.0.27
+   Compiling serde_core v1.0.228
+    Checking regex-syntax v0.8.10
+   Compiling zmij v1.0.21
+   Compiling io-lifetimes v2.0.4
+   Compiling getrandom v0.4.2
+    Checking termcolor v1.4.1
+    Checking aho-corasick v1.1.4
+   Compiling rustc_version v0.4.1
+   Compiling serde_json v1.0.149
+    Checking log v0.4.29
+    Checking cfg-if v1.0.4
+   Compiling serde v1.0.228
+    Checking humantime v2.3.0
+   Compiling memoffset v0.9.1
+   Compiling cfg-expr v0.20.7
+   Compiling indexmap v2.13.0
+    Checking itoa v1.0.17
+   Compiling field-offset v0.3.6
+   Compiling syn v2.0.117
+    Checking is-terminal v0.4.17
+    Checking regex-automata v0.4.14
+    Checking uuid v1.22.0
+   Compiling toml_parser v1.0.10+spec-1.1.0
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling toml_edit v0.25.5+spec-1.1.0
+   Compiling system-deps v7.0.7
+   Compiling proc-macro-crate v3.5.0
+   Compiling glib-sys v0.20.10
+   Compiling gobject-sys v0.20.10
+   Compiling gio-sys v0.20.10
+   Compiling gdk-pixbuf-sys v0.20.10
+   Compiling pango-sys v0.20.10
+   Compiling cairo-sys-rs v0.20.10
+   Compiling gdk4-sys v0.9.6
+   Compiling graphene-sys v0.20.10
+   Compiling gsk4-sys v0.9.6
+   Compiling gtk4-sys v0.9.6
+   Compiling vte4-sys v0.8.0
+   Compiling libadwaita-sys v0.7.2
+    Checking regex v1.12.3
+    Checking env_logger v0.10.2
+    Checking pretty_env_logger v0.5.0
+   Compiling futures-macro v0.3.32
+   Compiling glib-macros v0.20.12
+   Compiling gtk4-macros v0.9.5
+   Compiling serde_derive v1.0.228
+    Checking futures-util v0.3.32
+    Checking futures-executor v0.3.32
+    Checking glib v0.20.12
+    Checking cairo-rs v0.20.12
+    Checking graphene-rs v0.20.10
+    Checking gdk-pixbuf v0.20.10
+    Checking pango v0.20.12
+    Checking gdk4 v0.9.6
+    Checking gsk4 v0.9.6
+    Checking gtk4 v0.9.7
+    Checking vte4 v0.8.0
+    Checking libadwaita v0.7.2
+    Checking rttx v0.1.0 (/run/build/rttx)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 32.39s
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+   Compiling winnow v1.0.0
+   Compiling target-lexicon v0.13.3
+   Compiling smallvec v1.15.1
+   Compiling winnow v0.7.15
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling heck v0.5.0
+   Compiling serde_spanned v1.0.4
+   Compiling pkg-config v0.3.32
+   Compiling version-compare v0.2.1
+   Compiling libc v0.2.183
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling memchr v2.8.0
+   Compiling hashbrown v0.16.1
+   Compiling equivalent v1.0.2
+   Compiling toml_datetime v1.0.1+spec-1.1.0
+   Compiling futures-core v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling slab v0.4.12
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-channel v0.3.32
+   Compiling bitflags v2.11.0
+   Compiling gio v0.20.12
+   Compiling futures-io v0.3.32
+   Compiling semver v1.0.27
+   Compiling autocfg v1.5.0
+   Compiling regex-syntax v0.8.10
+   Compiling serde_core v1.0.228
+   Compiling io-lifetimes v2.0.4
+   Compiling zmij v1.0.21
+   Compiling rustc_version v0.4.1
+   Compiling getrandom v0.4.2
+   Compiling termcolor v1.4.1
+   Compiling humantime v2.3.0
+   Compiling aho-corasick v1.1.4
+   Compiling indexmap v2.13.0
+   Compiling serde_json v1.0.149
+   Compiling memoffset v0.9.1
+   Compiling cfg-expr v0.20.7
+   Compiling field-offset v0.3.6
+   Compiling cfg-if v1.0.4
+   Compiling log v0.4.29
+   Compiling serde v1.0.228
+   Compiling syn v2.0.117
+   Compiling itoa v1.0.17
+   Compiling toml_parser v1.0.10+spec-1.1.0
+   Compiling is-terminal v0.4.17
+   Compiling uuid v1.22.0
+   Compiling toml_edit v0.25.5+spec-1.1.0
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling regex-automata v0.4.14
+   Compiling system-deps v7.0.7
+   Compiling proc-macro-crate v3.5.0
+   Compiling glib-sys v0.20.10
+   Compiling gobject-sys v0.20.10
+   Compiling gio-sys v0.20.10
+   Compiling gdk-pixbuf-sys v0.20.10
+   Compiling pango-sys v0.20.10
+   Compiling cairo-sys-rs v0.20.10
+   Compiling graphene-sys v0.20.10
+   Compiling gdk4-sys v0.9.6
+   Compiling gsk4-sys v0.9.6
+   Compiling gtk4-sys v0.9.6
+   Compiling vte4-sys v0.8.0
+   Compiling libadwaita-sys v0.7.2
+   Compiling futures-macro v0.3.32
+   Compiling glib-macros v0.20.12
+   Compiling gtk4-macros v0.9.5
+   Compiling serde_derive v1.0.228
+   Compiling futures-util v0.3.32
+   Compiling regex v1.12.3
+   Compiling env_logger v0.10.2
+   Compiling pretty_env_logger v0.5.0
+   Compiling futures-executor v0.3.32
+   Compiling glib v0.20.12
+   Compiling cairo-rs v0.20.12
+   Compiling graphene-rs v0.20.10
+   Compiling pango v0.20.12
+   Compiling gdk-pixbuf v0.20.10
+   Compiling gdk4 v0.9.6
+   Compiling gsk4 v0.9.6
+   Compiling gtk4 v0.9.7
+   Compiling vte4 v0.8.0
+   Compiling libadwaita v0.7.2
+   Compiling rttx v0.1.0 (/run/build/rttx)
+    Finished `release` profile [optimized] target(s) in 53.11s
+[0/2] Generating rttx-binary with a custom command
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+warning: `/run/build/rttx/cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+    Finished `release` profile [optimized] target(s) in 0.07s
+[1/2] Installing files
+Installing rttx to /app/bin
+Installing /run/build/rttx/data/io.github.IllyaYalovyy.rttx.desktop to /app/share/applications
+Installing /run/build/rttx/data/io.github.IllyaYalovyy.rttx.metainfo.xml to /app/share/metainfo
+Installing /run/build/rttx/data/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.svg to /app/share/icons/hicolor/scalable/apps
+Installing /run/build/rttx/data/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.Devel.svg to /app/share/icons/hicolor/scalable/apps
+Recording license file LICENSE
+compressing debuginfo in: <repo>/b/files/bin/rttx
+processing: <repo>/b/files/bin/rttx
+Nothing to do.
+stripping <repo>/b/files/bin/rttx to <repo>/b/files/lib/debug/bin/rttx.debug
+Committing stage build-rttx to cache
+Cleaning up
+Running appstreamcli compose
+Only accepting components: io.github.IllyaYalovyy.rttx, io.github.IllyaYalovyy.rttx.desktop
+Processing directory: <repo>/b/files
+Composing metadata...
+Success!
+Committing stage cleanup to cache
+Finishing app
+Exporting share/applications/io.github.IllyaYalovyy.rttx.desktop
+Exporting share/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.svg
+Exporting share/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.Devel.svg
+Exporting share/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml
+Please review the exported files and the metadata
+Committing stage finish to cache
+Exporting io.github.IllyaYalovyy.rttx to repo
+Commit: de9e5e503c39e81d89ec6f6842677b4b0748ebec6696efc99acf5a317e21bf83
+Metadata Total: 283
+Metadata Written: 47
+Content Total: 141
+Content Written: 136
+Content Bytes Written: 3507939 (3.5 MB)
+Exporting io.github.IllyaYalovyy.rttx.Locale to repo
+Commit: a20c3b739c7483c8e889b72ba48f22fa5fa6bdb595e673677b4ae30d1b46d019
+Metadata Total: 745
+Metadata Written: 373
+Content Total: 97
+Content Written: 97
+Content Bytes Written: 167008 (167.0 kB)
+Exporting io.github.IllyaYalovyy.rttx.Debug to repo
+Commit: dcacf177fc1f5fdcd85df4deed98322b3d4a07f1a5ad21248bd7a750c5bf01b1
+Metadata Total: 29
+Metadata Written: 15
+Content Total: 146
+Content Written: 138
+Content Bytes Written: 7884942 (7.9 MB)
+Pruning cache
