@@ -14,6 +14,7 @@ mod imp {
     pub struct SessionRow {
         pub uuid: RefCell<String>,
         pub name: RefCell<String>,
+        pub position_label: gtk4::Label,
         pub activity_dot: gtk4::Image,
         pub terminal_count_label: gtk4::Label,
         pub close_button: gtk4::Button,
@@ -26,9 +27,14 @@ mod imp {
             activity_dot.add_css_class("accent");
             activity_dot.set_visible(false);
 
+            let position_label = gtk4::Label::new(None);
+            position_label.add_css_class("dim-label");
+            position_label.add_css_class("caption");
+
             Self {
                 uuid: RefCell::new(String::new()),
                 name: RefCell::new(String::new()),
+                position_label,
                 activity_dot,
                 terminal_count_label: gtk4::Label::new(None),
                 close_button: gtk4::Button::from_icon_name("window-close-symbolic"),
@@ -57,6 +63,7 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.add_css_class("circular");
 
+            obj.add_prefix(&self.position_label);
             obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.terminal_count_label);
             obj.add_suffix(&self.close_button);
@@ -112,6 +119,20 @@ impl SessionRow {
     #[must_use]
     pub fn has_activity(&self) -> bool {
         self.imp().activity_dot.is_visible()
+    }
+
+    pub fn set_position(&self, position: usize) {
+        if position < 9 {
+            self.imp().position_label.set_label(&format!("{}", position + 1));
+            self.imp().position_label.set_visible(true);
+        } else {
+            self.imp().position_label.set_visible(false);
+        }
+    }
+
+    #[must_use]
+    pub fn position_label_text(&self) -> String {
+        self.imp().position_label.label().to_string()
     }
 
     #[must_use]
@@ -188,5 +209,29 @@ mod tests {
 
         row.set_has_activity(false);
         assert!(!row.has_activity());
+    }
+
+    #[test]
+    fn position_label_shows_number() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session", 1);
+        row.set_position(0);
+        assert_eq!(row.position_label_text(), "1");
+
+        row.set_position(8);
+        assert_eq!(row.position_label_text(), "9");
+    }
+
+    #[test]
+    fn position_label_hidden_beyond_nine() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session", 1);
+        row.set_position(0);
+        assert!(row.imp().position_label.is_visible());
+
+        row.set_position(9);
+        assert!(!row.imp().position_label.is_visible(), "positions >= 9 should hide the label");
     }
 }

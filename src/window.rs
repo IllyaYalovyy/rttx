@@ -619,6 +619,17 @@ impl Window {
         imp.sidebar_list.append(&list_row);
     }
 
+    fn renumber_session_rows(&self) {
+        let imp = self.imp();
+        let mut idx = 0;
+        while let Some(row) = imp.sidebar_list.row_at_index(idx) {
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
+                session_row.set_position(idx as usize);
+            }
+            idx += 1;
+        }
+    }
+
     fn build_session(&self, session_state: &SessionState) {
         let imp = self.imp();
         self.append_session_row(session_state);
@@ -628,6 +639,7 @@ impl Window {
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
         session::schedule_initial_paned_ratios(&content, &session_state.layout);
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
+        self.renumber_session_rows();
     }
 
     fn build_session_content(&self, session_state: &SessionState) -> gtk4::Widget {
@@ -1420,6 +1432,7 @@ impl Window {
                 }
             }
         }
+        self.renumber_session_rows();
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -1483,6 +1496,7 @@ impl Window {
         if let Some(row) = imp.sidebar_list.row_at_index(new_index as i32) {
             imp.sidebar_list.select_row(Some(&row));
         }
+        self.renumber_session_rows();
     }
 
     fn split_terminal(&self, terminal_uuid: &str, orientation: SplitOrientation) {
