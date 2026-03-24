@@ -575,7 +575,7 @@ impl Window {
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
         row.close_button().connect_clicked(move |_| {
-            win.close_session(&session_uuid);
+            win.confirm_close_session(&session_uuid);
         });
 
         let win = self.clone();
@@ -1357,6 +1357,42 @@ impl Window {
         alert.connect_response(None, move |_, response| {
             if response == "delete" {
                 on_delete();
+            }
+        });
+        alert.present(Some(self));
+    }
+
+    fn confirm_close_session(&self, session_uuid: &str) {
+        let terminal_count = {
+            let state = self.imp().state.borrow();
+            state
+                .sessions
+                .iter()
+                .find(|s| s.uuid == session_uuid)
+                .map_or(0, |s| s.layout.terminal_count())
+        };
+
+        if terminal_count <= 1 {
+            self.close_session(session_uuid);
+            return;
+        }
+
+        let win = self.clone();
+        let uuid = session_uuid.to_string();
+        let alert = adw::AlertDialog::new(
+            Some("Close Session?"),
+            Some(&format!(
+                "This session has {terminal_count} terminals. All terminals and their running processes will be closed."
+            )),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("close", "Close Session");
+        alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+        alert.connect_response(None, move |_, response| {
+            if response == "close" {
+                win.close_session(&uuid);
             }
         });
         alert.present(Some(self));
