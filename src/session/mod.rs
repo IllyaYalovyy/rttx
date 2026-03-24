@@ -110,13 +110,15 @@ where
         LayoutNode::Terminal { uuid, cwd, profile, custom_title } => {
             make_terminal(uuid, cwd.as_deref(), profile.as_deref(), custom_title.as_deref())
         }
-        LayoutNode::Split { orientation, ratio: _, first, second } => {
+        LayoutNode::Split { orientation, ratio, first, second } => {
             let gtk_orientation = match orientation {
                 SplitOrientation::Horizontal => gtk4::Orientation::Horizontal,
                 SplitOrientation::Vertical => gtk4::Orientation::Vertical,
             };
             let paned = gtk4::Paned::new(gtk_orientation);
             paned.set_wide_handle(true);
+            paned.set_resize_start_child(false);
+            paned.set_resize_end_child(false);
             paned.set_position(200);
 
             let first_widget = build_layout_widget(first, make_terminal);
@@ -125,9 +127,58 @@ where
             paned.set_start_child(Some(&first_widget));
             paned.set_end_child(Some(&second_widget));
 
+            install_proportional_resize(&paned, *ratio);
+
             paned.upcast()
         }
     }
+}
+
+/// Attach a proportional-resize handler to a `GtkPaned`.
+///
+/// GTK4 `GtkPaned` distributes extra space equally (or only to one side) on
+/// resize, which destroys the user's chosen split ratio.  This function
+/// stores the desired ratio on the widget and reapplies it whenever the
+/// paned's total allocation changes.
+fn install_proportional_resize(paned: &gtk4::Paned, initial_ratio: f64) {
+    use std::cell::Cell;
+
+    let ratio = std::rc::Rc::new(Cell::new(initial_ratio.clamp(0.05, 0.95)));
+    let last_total = std::rc::Rc::new(Cell::new(0i32));
+    let applying = std::rc::Rc::new(Cell::new(false));
+
+    // When the user drags the divider, update the stored ratio.
+    {
+        let ratio = ratio.clone();
+        let applying = applying.clone();
+        paned.connect_notify_local(Some("position"), move |p, _| {
+            if applying.get() {
+                return;
+            }
+            let total = match p.orientation() {
+                gtk4::Orientation::Horizontal => p.width(),
+                _ => p.height(),
+            };
+            if total > 0 {
+                ratio.set((f64::from(p.position()) / f64::from(total)).clamp(0.05, 0.95));
+            }
+        });
+    }
+
+    // When the paned's size changes, reapply the stored ratio.
+    paned.add_tick_callback(move |p, _| {
+        let total = match p.orientation() {
+            gtk4::Orientation::Horizontal => p.width(),
+            _ => p.height(),
+        };
+        if total > 0 && total != last_total.get() {
+            applying.set(true);
+            p.set_position((f64::from(total) * ratio.get()) as i32);
+            applying.set(false);
+            last_total.set(total);
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 pub fn schedule_initial_paned_ratios(content: &gtk4::Widget, layout: &LayoutNode) {
