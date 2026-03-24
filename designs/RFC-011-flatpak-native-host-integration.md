@@ -591,12 +591,66 @@ But that is not this product's goal.
 - test on Fedora, Ubuntu, and one non-GNOME distro
 - write user-facing setup and troubleshooting guide
 
-### Phase 5 — Flathub submission hardening
+### Phase 5 — Flathub submission
 
-- run Flathub linter locally
-- keep the shipped manifest at the minimum proven-safe permission set
-- treat native mode as documented user opt-in unless later review/support experience justifies
-  baking more into the base package
+Complete the following steps once the manifest is stable and the native-mode implementation
+is done (or submit the safe-default manifest first and add native mode in a follow-up PR).
+
+#### 5.1 — Run the Flathub linter
+
+```bash
+pip install flatpak-builder-lint
+flatpak-builder-lint manifest io.github.IllyaYalovyy.rttx.json
+```
+
+Fix all errors before opening a PR. Common failure categories for new submissions:
+- Missing or short AppStream description
+- Missing screenshots in AppStream metainfo
+- Missing `<releases>` entries in AppStream metainfo
+- Broad filesystem permissions without justification
+- `--talk-name=org.freedesktop.Flatpak` requires a written justification
+
+#### 5.2 — Prepare the permission justification
+
+Flathub reviewers require a written explanation for `--talk-name=org.freedesktop.Flatpak`.
+Include this in the PR body:
+
+> rttx is a tiling terminal emulator. Its primary function is to run the user's host shell,
+> SSH sessions, and tmux attachments. Without `org.freedesktop.Flatpak`, the sandboxed process
+> has no access to host binaries, SSH config, tmux, or the user's real environment.
+> The permission enables `flatpak-spawn --host` so each terminal session launches a shell in
+> the host namespace rather than the Flatpak runtime. This is the same mechanism used by
+> existing GNOME terminal apps on Flathub (Ptyxis, Console).
+
+If submitting the safe-default manifest first (no `--talk-name`), skip this step and add
+native mode in a follow-up PR after the app is accepted.
+
+#### 5.3 — Fork flathub/flathub and open a PR
+
+```bash
+# Fork https://github.com/flathub/flathub on GitHub, then:
+git clone https://github.com/<your-fork>/flathub.git
+cd flathub
+git checkout -b new-pr/io.github.IllyaYalovyy.rttx
+mkdir io.github.IllyaYalovyy.rttx
+cp /path/to/rttx/io.github.IllyaYalovyy.rttx.json io.github.IllyaYalovyy.rttx/
+git add io.github.IllyaYalovyy.rttx/
+git commit -m "Add io.github.IllyaYalovyy.rttx"
+git push origin new-pr/io.github.IllyaYalovyy.rttx
+```
+
+Open a PR from that branch to `flathub/flathub:master`. The Flathub bot runs automated checks;
+a human reviewer follows. Typical review time: 1–4 weeks.
+
+#### 5.4 — After acceptance
+
+Flathub creates a dedicated repository:
+`https://github.com/flathub/io.github.IllyaYalovyy.rttx`
+
+The maintainer is added as a collaborator. All future releases are published by committing an
+updated manifest to that repository — no further PRs to `flathub/flathub` are needed.
+The CI release pipeline (`release.yml`) should be extended to commit the new manifest there
+on each version tag.
 
 ### Phase 6 — Reassess helper needs
 

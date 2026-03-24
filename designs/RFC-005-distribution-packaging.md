@@ -96,16 +96,56 @@ that adding a format does not add per-release manual work.
 | Flatpak | `flatpak-builder` | Flathub | Pending |
 | AppImage | `linuxdeploy` + GTK plugin | GitHub Releases | Pending |
 
-### COPR build flow
+### COPR repository setup
 
-Two options for triggering builds:
+The live repository is `https://copr.fedorainfracloud.org/coprs/illya/rttx/`.
 
-- **Webhook (lazy)**: GitHub push webhook → COPR build servers. Zero GitHub Actions involvement.
-  Use `rpkg` as the build method with a `.spec` file in `packaging/fedora/`.
-- **GitHub Actions (gated)**: Tests pass → `copr-cli` submits SRPM. Ensures only tested code
-  reaches users.
+#### Creating the project (one-time)
 
-The gated approach is preferred for alignment with the stability goal.
+1. Sign in at `https://copr.fedorainfracloud.org` with a Fedora Account System (FAS) account
+   (`https://accounts.fedoraproject.org`)
+2. Click **New Project**, fill in name (`rttx`), homepage, and description
+3. Under **Build options**, enable the target chroots:
+   `fedora-rawhide-x86_64`, `fedora-41-x86_64`, `fedora-40-x86_64` and their `aarch64` variants
+4. Click **Create**
+
+#### API token for CI
+
+1. Go to `https://copr.fedorainfracloud.org/api/` and copy the token configuration block
+2. Add three repository secrets in GitHub settings:
+   - `COPR_LOGIN` — the `login` value from the token block
+   - `COPR_USERNAME` — the `username` value
+   - `COPR_TOKEN` — the `token` value
+
+The release pipeline reads these and calls `copr-cli build` automatically on each version tag.
+
+#### Build trigger options
+
+- **GitHub Actions (gated)** *(chosen)*: Tests pass → `copr-cli` submits RPM to COPR.
+  Only tested code reaches users. Implemented in `.github/workflows/release.yml`.
+- **Webhook (lazy)** *(alternative)*: GitHub push webhook → COPR build servers directly.
+  No test gate. Simpler but less safe.
+
+#### Adding a new Fedora release to the build matrix
+
+1. Go to the project settings page on copr.fedorainfracloud.org
+2. **Edit → Build options** → enable the new chroot (e.g., `fedora-42-x86_64`)
+3. Optionally resubmit the latest release to build against the new chroot immediately
+
+#### Manual build submission
+
+Install `copr-cli` (`sudo dnf install copr-cli`), configure `~/.config/copr` with the token
+block from the API page, then:
+
+```bash
+# Submit a local RPM
+copr-cli build illya/rttx target/generate-rpm/rttx-<version>-1.x86_64.rpm
+
+# Watch build status
+copr-cli watch-build <build-id>
+```
+
+Build history is also visible at `https://copr.fedorainfracloud.org/coprs/illya/rttx/builds/`.
 
 ### Release pipeline (GitHub Actions)
 
