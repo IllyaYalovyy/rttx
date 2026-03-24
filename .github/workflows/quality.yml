@@ -27,69 +27,56 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    container: fedora:latest
     steps:
+      - name: Install toolchain and dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkg-config rustup \
+            gtk4-devel libadwaita-devel vte291-gtk4-devel
+
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Install system dependencies
+      - name: Setup Rust
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev \
-            libadwaita-1-dev \
-            libvte-2.91-gtk4-dev
+          rustup-init -y --default-toolchain stable --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: |
+          source "$HOME/.cargo/env"
+          cargo clippy -- -D warnings
 
   test:
     name: Test
     runs-on: ubuntu-latest
+    container: fedora:latest
     steps:
+      - name: Install toolchain and dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkg-config rustup \
+            gtk4-devel gtk4 libadwaita-devel vte291-gtk4-devel
+
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Install system dependencies
+      - name: Setup Rust
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev \
-            libgtk-4-bin \
-            libadwaita-1-dev \
-            libvte-2.91-gtk4-dev
+          rustup-init -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start Broadway display server
         run: |
-          gtkbroadwayd :0 &
+          gtk4-broadwayd :0 &
           sleep 1
 
       - name: Run tests
         env:
           GDK_BACKEND: broadway
           GTK_A11Y: none
-        run: cargo test
+        run: |
+          source "$HOME/.cargo/env"
+          cargo test
 
   manifest:
     name: Flatpak manifest

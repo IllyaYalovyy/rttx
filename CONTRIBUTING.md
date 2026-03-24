@@ -36,6 +36,12 @@ rttx has five core principles (see `designs/RFC-001-manifesto.md` for the full r
 5. **Practical tools over impressive features** — Every feature must answer: does this help a
    developer or sysadmin get real work done faster?
 
+6. **Infrastructure serves the application, never the reverse** — Do not downgrade dependencies,
+   remove features, or lower version requirements to satisfy CI runners, old distributions, or
+   test environments. If CI fails because a runner lacks a library, fix the runner. If a
+   distribution ships an outdated package, use a different distribution or build from source.
+   The application's requirements are ground truth. Everything else adapts.
+
 Contributions that conflict with these principles will not be accepted regardless of implementation
 quality.
 
