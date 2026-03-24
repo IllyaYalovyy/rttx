@@ -14,6 +14,18 @@ pub enum TerminalThemeMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefaultSessionFolder {
+    Home,
+    CurrentSession,
+    Custom(String),
+}
+
+const fn default_session_folder() -> DefaultSessionFolder {
+    DefaultSessionFolder::Home
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Preferences {
     #[serde(default = "default_font")]
     pub font: String,
@@ -40,6 +52,8 @@ pub struct Preferences {
     pub visual_bell: bool,
     #[serde(default)]
     pub smart_clipboard: bool,
+    #[serde(default = "default_session_folder")]
+    pub default_session_folder: DefaultSessionFolder,
 }
 
 fn default_font() -> String {
@@ -78,6 +92,7 @@ impl Default for Preferences {
             audible_bell: true,
             visual_bell: true,
             smart_clipboard: false,
+            default_session_folder: default_session_folder(),
         }
     }
 }
@@ -125,6 +140,8 @@ struct PreferencesDisk {
     visual_bell: bool,
     #[serde(default)]
     smart_clipboard: bool,
+    #[serde(default = "default_session_folder")]
+    default_session_folder: DefaultSessionFolder,
 }
 
 impl From<PreferencesDisk> for Preferences {
@@ -154,6 +171,7 @@ impl From<PreferencesDisk> for Preferences {
             audible_bell: raw.audible_bell,
             visual_bell: raw.visual_bell,
             smart_clipboard: raw.smart_clipboard,
+            default_session_folder: raw.default_session_folder,
         }
     }
 }
@@ -328,5 +346,38 @@ mod tests {
         assert!(!loaded.scroll_on_output, "scroll_on_output should default false");
         assert!(loaded.audible_bell, "audible_bell should default true");
         assert!(loaded.visual_bell, "visual_bell should default true");
+    }
+
+    #[test]
+    fn default_session_folder_defaults_to_home() {
+        let prefs = Preferences::default();
+        assert_eq!(prefs.default_session_folder, DefaultSessionFolder::Home);
+    }
+
+    #[test]
+    fn default_session_folder_roundtrips() {
+        let dir = TempDir::new().unwrap();
+
+        for folder in [
+            DefaultSessionFolder::Home,
+            DefaultSessionFolder::CurrentSession,
+            DefaultSessionFolder::Custom("/home/user/dev".into()),
+        ] {
+            let path = dir.path().join("prefs.json");
+            let prefs =
+                Preferences { default_session_folder: folder.clone(), ..Default::default() };
+            save_to(&prefs, &path).unwrap();
+            let loaded = load_from(&path);
+            assert_eq!(loaded.default_session_folder, prefs.default_session_folder);
+        }
+    }
+
+    #[test]
+    fn missing_session_folder_defaults_to_home() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{}").unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.default_session_folder, DefaultSessionFolder::Home);
     }
 }

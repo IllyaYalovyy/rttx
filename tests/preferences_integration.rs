@@ -1,5 +1,5 @@
 /// Integration tests for preferences persistence.
-use rttx::preferences::{self, Preferences, TerminalThemeMode};
+use rttx::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
 use tempfile::TempDir;
 
 #[test]
@@ -27,6 +27,7 @@ fn preferences_roundtrip_all_fields() {
         audible_bell: false,
         visual_bell: true,
         smart_clipboard: true,
+        default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
     };
 
     preferences::save_to(&prefs, &path).unwrap();

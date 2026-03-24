@@ -904,13 +904,48 @@ impl Window {
     pub fn add_session(&self) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
-        let session_state = SessionState::new(format!("Session {count}"));
+        let initial_cwd = self.resolve_default_session_folder();
+        let session_state =
+            SessionState::new_with_initial_cwd(format!("Session {count}"), initial_cwd);
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state);
 
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
+    fn resolve_default_session_folder(&self) -> Option<String> {
+        let prefs = preferences::load();
+        match prefs.default_session_folder {
+            preferences::DefaultSessionFolder::Home => None,
+            preferences::DefaultSessionFolder::CurrentSession => {
+                let terminal_uuid = {
+                    let state = self.imp().state.borrow();
+                    let active = state.active_session_index;
+                    state.sessions.get(active).and_then(|session| {
+                        session
+                            .active_terminal_uuid
+                            .clone()
+                            .or_else(|| session.layout.terminal_uuids().into_iter().next())
+                    })
+                };
+                terminal_uuid.and_then(|uuid| {
+                    self.imp()
+                        .terminals
+                        .borrow()
+                        .get(&uuid)
+                        .and_then(super::terminal::widget::TerminalWidget::current_directory)
+                })
+            }
+            preferences::DefaultSessionFolder::Custom(ref path) => {
+                if path.is_empty() {
+                    None
+                } else {
+                    Some(path.clone())
+                }
+            }
         }
     }
 

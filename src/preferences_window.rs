@@ -4,7 +4,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::color_scheme;
-use crate::preferences::{self, Preferences, TerminalThemeMode};
+use crate::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
 
 /// Build and present the preferences window.
 pub fn show(parent: &impl IsA<gtk4::Window>) {
@@ -116,11 +116,47 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     smart_clipboard_row.set_active(prefs.smart_clipboard);
     terminal_group.add(&smart_clipboard_row);
 
+    let session_group = adw::PreferencesGroup::new();
+    session_group.set_title("Sessions");
+
+    let folder_mode_row = adw::ComboRow::builder().title("Default folder for new sessions").build();
+    let folder_mode_names = ["Home directory", "Same as current session", "Custom path"];
+    let folder_mode_model = gtk4::StringList::new(&folder_mode_names);
+    folder_mode_row.set_model(Some(&folder_mode_model));
+
+    let custom_folder_row =
+        adw::EntryRow::builder().title("Custom folder path").show_apply_button(false).build();
+
+    match &prefs.default_session_folder {
+        DefaultSessionFolder::Home => {
+            folder_mode_row.set_selected(0);
+            custom_folder_row.set_visible(false);
+        }
+        DefaultSessionFolder::CurrentSession => {
+            folder_mode_row.set_selected(1);
+            custom_folder_row.set_visible(false);
+        }
+        DefaultSessionFolder::Custom(path) => {
+            folder_mode_row.set_selected(2);
+            custom_folder_row.set_text(path);
+            custom_folder_row.set_visible(true);
+        }
+    }
+
+    let custom_row_ref = custom_folder_row.clone();
+    folder_mode_row.connect_selected_notify(move |row| {
+        custom_row_ref.set_visible(row.selected() == 2);
+    });
+
+    session_group.add(&folder_mode_row);
+    session_group.add(&custom_folder_row);
+
     let page = adw::PreferencesPage::new();
     page.set_icon_name(Some("preferences-system-symbolic"));
     page.set_title("General");
     page.add(&appearance_group);
     page.add(&terminal_group);
+    page.add(&session_group);
     window.add(&page);
 
     let parent_window = parent.as_ref().clone();
@@ -155,6 +191,11 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             audible_bell: bell_row.is_active(),
             visual_bell: visual_bell_row.is_active(),
             smart_clipboard: smart_clipboard_row.is_active(),
+            default_session_folder: match folder_mode_row.selected() {
+                1 => DefaultSessionFolder::CurrentSession,
+                2 => DefaultSessionFolder::Custom(custom_folder_row.text().to_string()),
+                _ => DefaultSessionFolder::Home,
+            },
         };
         if let Err(e) = preferences::save(&new_prefs) {
             log::error!("Failed to save preferences: {e}");
