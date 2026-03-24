@@ -139,10 +139,10 @@ On a version tag (`v*`):
 ## Development Plan
 
 - [x] COPR RPM repository live
-- [ ] **DEB packaging** — Add `[package.metadata.deb]` to `Cargo.toml`; configure `cargo-deb` — *tracked in todo.md — Distribution*
-- [ ] **Flatpak manifest** — `io.github.illya.rttx.json`; offline Cargo dependencies via `rust-bundle` extension
+- [ ] **DEB packaging** — Add `[package.metadata.deb]` to `Cargo.toml`; configure `cargo-deb` — tracked in #108
+- [x] **Flatpak manifest** — `io.github.IllyaYalovyy.rttx.json`; offline Cargo dependencies via `rust-bundle` extension (implemented; see RFC-011)
 - [ ] **AppImage** — `linuxdeploy` with GTK + Rust plugins
-- [ ] **GitHub Actions release workflow** — `.github/workflows/release.yml`; all formats on version tag — *tracked in todo.md — Stability, Testing & Maintenance*
+- [ ] **GitHub Actions release workflow** — `.github/workflows/release.yml`; all formats on version tag — designed in RFC-012
 
 ---
 
