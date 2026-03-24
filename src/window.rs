@@ -45,6 +45,7 @@ mod imp {
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
+        pub session_lru: RefCell<Vec<String>>,
     }
 
     #[glib::object_subclass]
@@ -320,6 +321,13 @@ impl Window {
                 paned.set_position((total - right_sidebar_width).max(0));
             }
         });
+
+        let mut lru: Vec<String> = state.sessions.iter().map(|s| s.uuid.clone()).collect();
+        if active_index < lru.len() {
+            let active_uuid = lru.remove(active_index);
+            lru.insert(0, active_uuid);
+        }
+        self.imp().session_lru.replace(lru);
 
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
@@ -919,12 +927,19 @@ impl Window {
         {
             session_row.set_has_activity(false);
         }
+        self.push_session_lru(&uuid);
         self.focus_session_terminal(&uuid);
         if let Some(action) = self.lookup_action("toggle-input-sync")
             && let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>()
         {
             action.set_state(&input_sync.to_variant());
         }
+    }
+
+    fn push_session_lru(&self, uuid: &str) {
+        let mut lru = self.imp().session_lru.borrow_mut();
+        lru.retain(|u| u != uuid);
+        lru.insert(0, uuid.to_string());
     }
 
     fn focus_session_terminal(&self, session_uuid: &str) {
@@ -1306,6 +1321,8 @@ impl Window {
             }
         }
 
+        imp.session_lru.borrow_mut().retain(|u| u != session_uuid);
+
         if let Some(child) = imp.session_stack.child_by_name(session_uuid) {
             imp.session_stack.remove(&child);
         }
@@ -1673,15 +1690,28 @@ impl Window {
 
     fn cycle_session(&self, delta: i32) {
         let imp = self.imp();
+        let lru = imp.session_lru.borrow();
         let state = imp.state.borrow();
-        let len = state.sessions.len() as i32;
-        if len == 0 {
+        if state.sessions.len() <= 1 {
             return;
         }
-        let current = imp.sidebar_list.selected_row().map_or(0, |r| r.index());
-        let next = (current + delta).rem_euclid(len);
+        let visible_uuid = imp.session_stack.visible_child_name().map(|n| n.to_string());
+        let lru_pos = visible_uuid
+            .as_ref()
+            .and_then(|uuid| lru.iter().position(|u| u == uuid))
+            .unwrap_or(0);
+        let lru_len = lru.len() as i32;
+        if lru_len == 0 {
+            return;
+        }
+        let next_lru_pos = (lru_pos as i32 + delta).rem_euclid(lru_len) as usize;
+        let target_uuid = lru[next_lru_pos].clone();
+        let target_index = state.sessions.iter().position(|s| s.uuid == target_uuid);
         drop(state);
-        if let Some(row) = imp.sidebar_list.row_at_index(next) {
+        drop(lru);
+        if let Some(idx) = target_index
+            && let Some(row) = imp.sidebar_list.row_at_index(idx as i32)
+        {
             imp.sidebar_list.select_row(Some(&row));
         }
     }
@@ -3737,6 +3767,60 @@ mod tests {
             "new pane from split must have shell_spawned=true after allocation. \
              ensure_shell_spawned_when_ready() must be called in split_terminal_in_place."
         );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn session_lru_tracks_visit_order() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.session-lru-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        window.add_session();
+        pump_events(50);
+
+        // Three sessions exist (indices 0, 1, 2). Session 0 is active.
+        let lru = window.imp().session_lru.borrow().clone();
+        assert_eq!(lru.len(), 3, "LRU should contain all sessions");
+
+        // Switch to session at index 2.
+        window.switch_to_session_number(3);
+        pump_events(50);
+
+        let lru = window.imp().session_lru.borrow().clone();
+        let uuid2 = {
+            let state = window.imp().state.borrow();
+            state.sessions[2].uuid.clone()
+        };
+        assert_eq!(lru[0], uuid2, "most recently visited session should be first");
+
+        // Switch to session at index 1.
+        window.switch_to_session_number(2);
+        pump_events(50);
+
+        let lru = window.imp().session_lru.borrow().clone();
+        let uuid1 = {
+            let state = window.imp().state.borrow();
+            state.sessions[1].uuid.clone()
+        };
+        let uuid0 = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].uuid.clone()
+        };
+        assert_eq!(lru[0], uuid1, "session 2 should now be first");
+        assert_eq!(lru[1], uuid2, "session 3 should be second");
+        assert_eq!(lru[2], uuid0, "session 1 should be last");
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
