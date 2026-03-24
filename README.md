@@ -4,6 +4,8 @@ A tiling terminal emulator for GNOME, built with Rust, GTK4, and Libadwaita.
 
 Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from scratch for the modern GNOME desktop.
 
+![rttx screenshot](data/screenshots/rttx-main.png)
+
 ## Install
 
 **Fedora (COPR):**
