@@ -1039,6 +1039,30 @@ impl Window {
 
             action_row.add_suffix(&new_session_button);
             action_row.add_suffix(&more_button);
+
+            let drag_source = gtk4::DragSource::new();
+            drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+            let drag_uuid = bookmark.uuid.clone();
+            drag_source.connect_prepare(move |_, _, _| {
+                Some(gtk4::gdk::ContentProvider::for_value(&drag_uuid.to_value()))
+            });
+            action_row.add_controller(drag_source);
+
+            let drop_target =
+                gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+            let win = self.clone();
+            let target_uuid = bookmark.uuid.clone();
+            drop_target.connect_drop(move |_, value, _, _| {
+                if let Ok(source_uuid) = value.get::<String>()
+                    && source_uuid != target_uuid
+                {
+                    win.reorder_bookmark(&source_uuid, &target_uuid);
+                    return true;
+                }
+                false
+            });
+            action_row.add_controller(drop_target);
+
             imp.bookmark_list.append(&action_row);
 
             let win = self.clone();
@@ -1101,6 +1125,30 @@ impl Window {
 
             action_row.add_suffix(&insert_button);
             action_row.add_suffix(&more_button);
+
+            let drag_source = gtk4::DragSource::new();
+            drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+            let drag_uuid = command.uuid.clone();
+            drag_source.connect_prepare(move |_, _, _| {
+                Some(gtk4::gdk::ContentProvider::for_value(&drag_uuid.to_value()))
+            });
+            action_row.add_controller(drag_source);
+
+            let drop_target =
+                gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+            let win = self.clone();
+            let target_uuid = command.uuid.clone();
+            drop_target.connect_drop(move |_, value, _, _| {
+                if let Ok(source_uuid) = value.get::<String>()
+                    && source_uuid != target_uuid
+                {
+                    win.reorder_command(&source_uuid, &target_uuid);
+                    return true;
+                }
+                false
+            });
+            action_row.add_controller(drop_target);
+
             imp.command_list.append(&action_row);
 
             let win = self.clone();
@@ -1118,6 +1166,20 @@ impl Window {
         let is_empty = imp.command_list.row_at_index(0).is_none();
         imp.command_scroll.set_visible(!is_empty);
         imp.command_empty.set_visible(is_empty);
+    }
+
+    fn reorder_bookmark(&self, source_uuid: &str, target_uuid: &str) {
+        let mut items = crate::bookmarks::load();
+        crate::bookmarks::reorder(&mut items, source_uuid, target_uuid);
+        let _ = crate::bookmarks::save(&items);
+        self.refresh_bookmark_sidebar();
+    }
+
+    fn reorder_command(&self, source_uuid: &str, target_uuid: &str) {
+        let mut items = commands::load();
+        commands::reorder(&mut items, source_uuid, target_uuid);
+        let _ = commands::save(&items);
+        self.refresh_command_sidebar();
     }
 
     pub(crate) fn execute_saved_command(&self, command: &SavedCommand, run_mode: CommandRunMode) {
@@ -1696,10 +1758,8 @@ impl Window {
             return;
         }
         let visible_uuid = imp.session_stack.visible_child_name().map(|n| n.to_string());
-        let lru_pos = visible_uuid
-            .as_ref()
-            .and_then(|uuid| lru.iter().position(|u| u == uuid))
-            .unwrap_or(0);
+        let lru_pos =
+            visible_uuid.as_ref().and_then(|uuid| lru.iter().position(|u| u == uuid)).unwrap_or(0);
         let lru_len = lru.len() as i32;
         if lru_len == 0 {
             return;
@@ -3780,9 +3840,8 @@ mod tests {
         crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
         crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.session-lru-tests")
-            .build();
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.session-lru-tests").build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);

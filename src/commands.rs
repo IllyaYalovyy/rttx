@@ -83,6 +83,18 @@ pub fn load_from(path: &Path) -> Vec<SavedCommand> {
         .unwrap_or_default()
 }
 
+/// Move the item with `source_uuid` to the position of `target_uuid`.
+pub fn reorder(items: &mut Vec<SavedCommand>, source_uuid: &str, target_uuid: &str) {
+    let Some(src) = items.iter().position(|c| c.uuid == source_uuid) else {
+        return;
+    };
+    let Some(tgt) = items.iter().position(|c| c.uuid == target_uuid) else {
+        return;
+    };
+    let item = items.remove(src);
+    items.insert(tgt, item);
+}
+
 pub fn save_to(commands: &[SavedCommand], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -136,5 +148,48 @@ mod tests {
     fn preview_uses_first_non_empty_line_verbatim() {
         let command = SavedCommand::new("Build", "cargo test\ncargo clippy");
         assert_eq!(command.preview(), "cargo test");
+    }
+
+    #[test]
+    fn reorder_moves_item_to_target_position() {
+        let mut items = vec![
+            SavedCommand { uuid: "a".into(), ..SavedCommand::new("A", "echo a") },
+            SavedCommand { uuid: "b".into(), ..SavedCommand::new("B", "echo b") },
+            SavedCommand { uuid: "c".into(), ..SavedCommand::new("C", "echo c") },
+        ];
+
+        reorder(&mut items, "c", "a");
+        let uuids: Vec<&str> = items.iter().map(|c| c.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn reorder_noop_for_unknown_uuid() {
+        let mut items = vec![
+            SavedCommand { uuid: "a".into(), ..SavedCommand::new("A", "echo a") },
+            SavedCommand { uuid: "b".into(), ..SavedCommand::new("B", "echo b") },
+        ];
+
+        reorder(&mut items, "z", "a");
+        let uuids: Vec<&str> = items.iter().map(|c| c.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn reorder_persists_through_save_and_load() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("commands.json");
+        let mut items = vec![
+            SavedCommand { uuid: "a".into(), ..SavedCommand::new("A", "echo a") },
+            SavedCommand { uuid: "b".into(), ..SavedCommand::new("B", "echo b") },
+            SavedCommand { uuid: "c".into(), ..SavedCommand::new("C", "echo c") },
+        ];
+
+        reorder(&mut items, "c", "b");
+        save_to(&items, &path).unwrap();
+
+        let loaded = load_from(&path);
+        let uuids: Vec<&str> = loaded.iter().map(|c| c.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["a", "c", "b"]);
     }
 }

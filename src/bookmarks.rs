@@ -178,6 +178,18 @@ pub fn load_from(path: &Path) -> Vec<Bookmark> {
         .unwrap_or_default()
 }
 
+/// Move the item with `source_uuid` to the position of `target_uuid`.
+pub fn reorder(items: &mut Vec<Bookmark>, source_uuid: &str, target_uuid: &str) {
+    let Some(src) = items.iter().position(|b| b.uuid == source_uuid) else {
+        return;
+    };
+    let Some(tgt) = items.iter().position(|b| b.uuid == target_uuid) else {
+        return;
+    };
+    let item = items.remove(src);
+    items.insert(tgt, item);
+}
+
 pub fn save_to(bookmarks: &[Bookmark], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -374,5 +386,48 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("missing.json");
         assert!(load_from(&path).is_empty());
+    }
+
+    #[test]
+    fn reorder_moves_item_to_target_position() {
+        let mut items = vec![
+            Bookmark { uuid: "a".into(), ..Bookmark::new("A") },
+            Bookmark { uuid: "b".into(), ..Bookmark::new("B") },
+            Bookmark { uuid: "c".into(), ..Bookmark::new("C") },
+        ];
+
+        reorder(&mut items, "c", "a");
+        let uuids: Vec<&str> = items.iter().map(|b| b.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn reorder_noop_for_unknown_uuid() {
+        let mut items = vec![
+            Bookmark { uuid: "a".into(), ..Bookmark::new("A") },
+            Bookmark { uuid: "b".into(), ..Bookmark::new("B") },
+        ];
+
+        reorder(&mut items, "z", "a");
+        let uuids: Vec<&str> = items.iter().map(|b| b.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn reorder_persists_through_save_and_load() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bookmarks.json");
+        let mut items = vec![
+            Bookmark { uuid: "a".into(), ..Bookmark::new("A") },
+            Bookmark { uuid: "b".into(), ..Bookmark::new("B") },
+            Bookmark { uuid: "c".into(), ..Bookmark::new("C") },
+        ];
+
+        reorder(&mut items, "c", "b");
+        save_to(&items, &path).unwrap();
+
+        let loaded = load_from(&path);
+        let uuids: Vec<&str> = loaded.iter().map(|b| b.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["a", "c", "b"]);
     }
 }
