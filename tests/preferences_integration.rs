@@ -25,6 +25,7 @@ fn preferences_roundtrip_all_fields() {
         scroll_on_keystroke: false,
         scroll_on_output: true,
         audible_bell: false,
+        visual_bell: true,
         smart_clipboard: true,
     };
 

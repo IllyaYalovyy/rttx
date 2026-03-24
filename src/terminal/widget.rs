@@ -18,6 +18,7 @@ mod imp {
         pub initial_cwd: RefCell<Option<String>>,
         pub shell_spawned: Cell<bool>,
         pub smart_clipboard: Cell<bool>,
+        pub visual_bell: Cell<bool>,
         pub pending_shell_inputs: RefCell<Vec<String>>,
         #[cfg(test)]
         pub current_directory_override: RefCell<Option<Option<String>>>,
@@ -364,6 +365,25 @@ impl TerminalWidget {
 
     pub fn set_smart_clipboard(&self, enabled: bool) {
         self.imp().smart_clipboard.set(enabled);
+    }
+
+    pub fn set_visual_bell(&self, enabled: bool) {
+        self.imp().visual_bell.set(enabled);
+    }
+
+    pub fn flash_bell(&self) {
+        if !self.imp().visual_bell.get() {
+            return;
+        }
+        let header = &self.imp().header;
+        header.remove_css_class("bell-flash");
+        header.add_css_class("bell-flash");
+        let header_weak = header.downgrade();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            if let Some(h) = header_weak.upgrade() {
+                h.remove_css_class("bell-flash");
+            }
+        });
     }
 
     #[must_use]

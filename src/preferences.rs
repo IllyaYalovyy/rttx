@@ -36,6 +36,8 @@ pub struct Preferences {
     pub scroll_on_output: bool,
     #[serde(default = "default_true")]
     pub audible_bell: bool,
+    #[serde(default = "default_true")]
+    pub visual_bell: bool,
     #[serde(default)]
     pub smart_clipboard: bool,
 }
@@ -74,6 +76,7 @@ impl Default for Preferences {
             scroll_on_keystroke: true,
             scroll_on_output: false,
             audible_bell: true,
+            visual_bell: true,
             smart_clipboard: false,
         }
     }
@@ -118,6 +121,8 @@ struct PreferencesDisk {
     scroll_on_output: bool,
     #[serde(default = "default_true")]
     audible_bell: bool,
+    #[serde(default = "default_true")]
+    visual_bell: bool,
     #[serde(default)]
     smart_clipboard: bool,
 }
@@ -147,6 +152,7 @@ impl From<PreferencesDisk> for Preferences {
             scroll_on_keystroke: raw.scroll_on_keystroke,
             scroll_on_output: raw.scroll_on_output,
             audible_bell: raw.audible_bell,
+            visual_bell: raw.visual_bell,
             smart_clipboard: raw.smart_clipboard,
         }
     }
@@ -321,5 +327,6 @@ mod tests {
         assert!(loaded.scroll_on_keystroke, "scroll_on_keystroke should default true");
         assert!(!loaded.scroll_on_output, "scroll_on_output should default false");
         assert!(loaded.audible_bell, "audible_bell should default true");
+        assert!(loaded.visual_bell, "visual_bell should default true");
     }
 }

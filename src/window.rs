@@ -756,6 +756,11 @@ impl Window {
             win.forward_input(&uuid, text);
         });
 
+        let bell_term = term.clone();
+        term.vte().connect_bell(move |_| {
+            bell_term.flash_bell();
+        });
+
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let uuid = term.uuid();
@@ -1578,6 +1583,7 @@ impl Window {
         vte.set_scroll_on_keystroke(prefs.scroll_on_keystroke);
         vte.set_scroll_on_output(prefs.scroll_on_output);
         vte.set_audible_bell(prefs.audible_bell);
+        term.set_visual_bell(prefs.visual_bell);
         term.set_smart_clipboard(prefs.smart_clipboard);
 
         term.imp().header.set_visible(prefs.show_headerbar);

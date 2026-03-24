@@ -16,13 +16,30 @@ pub fn run() -> glib::ExitCode {
         .build();
 
     app.connect_startup(|_| {
+        let Some(display) = gtk4::gdk::Display::default() else {
+            return;
+        };
+
+        let css = gtk4::CssProvider::new();
+        css.load_from_string(
+            "@keyframes bell-flash {
+                from { background-color: alpha(@warning_color, 0.4); }
+                to   { background-color: transparent; }
+            }
+            .bell-flash {
+                animation: bell-flash 0.15s ease-out;
+            }",
+        );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &css,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
         if !config::is_development() {
             return;
         }
 
-        let Some(display) = gtk4::gdk::Display::default() else {
-            return;
-        };
         let icon_search_path = config::dev_icon_search_path();
         if !icon_search_path.exists() {
             return;
