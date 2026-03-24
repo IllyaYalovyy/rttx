@@ -1659,7 +1659,8 @@ impl Window {
         let new_term = TerminalWidget::new(new_terminal_uuid, inherited_cwd.as_deref());
         self.connect_terminal_signals(&new_term);
         imp.terminals.borrow_mut().insert(new_terminal_uuid.to_string(), new_term.clone());
-        new_term.ensure_shell_spawned_when_ready();
+        // NOTE: shell spawn is deferred until after in-place surgery succeeds,
+        // to avoid leaving a live PTY if the surgery fails (#2).
 
         let branch_layout = LayoutNode::Split {
             orientation,
@@ -1707,11 +1708,14 @@ impl Window {
             stack.add_named(&branch, Some(session_uuid));
             stack.set_visible_child_name(session_uuid);
             session::schedule_initial_paned_ratios(&branch, &branch_layout);
+            if let Some(term) = imp.terminals.borrow().get(new_terminal_uuid) {
+                term.ensure_shell_spawned_when_ready();
+            }
             return true;
         }
 
         let Ok(paned) = parent.downcast::<gtk4::Paned>() else {
-            imp.terminals.borrow_mut().remove(new_terminal_uuid);
+            Self::cleanup_unspliced_terminal(imp, new_terminal_uuid);
             return false;
         };
 
@@ -1722,7 +1726,7 @@ impl Window {
         let is_end = end_child.as_ref() == Some(&target_widget);
 
         if !is_start && !is_end {
-            imp.terminals.borrow_mut().remove(new_terminal_uuid);
+            Self::cleanup_unspliced_terminal(imp, new_terminal_uuid);
             return false;
         }
 
@@ -1739,7 +1743,17 @@ impl Window {
             paned.set_end_child(Some(&branch));
         }
         session::schedule_initial_paned_ratios(&branch, &branch_layout);
+        if let Some(term) = imp.terminals.borrow().get(new_terminal_uuid) {
+            term.ensure_shell_spawned_when_ready();
+        }
         true
+    }
+
+    fn cleanup_unspliced_terminal(imp: &imp::Window, uuid: &str) {
+        if let Some(term) = imp.terminals.borrow().get(uuid) {
+            term.disconnect_child_exited();
+        }
+        imp.terminals.borrow_mut().remove(uuid);
     }
 
     fn update_sidebar_count(&self, session_uuid: &str, count: usize) {
