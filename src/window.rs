@@ -700,8 +700,7 @@ impl Window {
         // SessionRow itself, because SessionRow is a ListBoxRow subclass that
         // isn't directly in the ListBox — attaching to it causes GTK to fail
         // the `box != NULL` assertion when grabbing focus.
-        let popover_parent =
-            row.parent().unwrap_or_else(|| row.clone().upcast::<gtk4::Widget>());
+        let popover_parent = row.parent().unwrap_or_else(|| row.clone().upcast::<gtk4::Widget>());
         popover.set_parent(&popover_parent);
 
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
