@@ -215,13 +215,33 @@ cache). All steps are within the free tier.
 
 ## AT-SPI2 UI tests (deferred)
 
-The AT-SPI2 test suite (`tests/ui/`, `run_ui_tests.sh`) requires:
-- Weston headless compositor (`weston --backend=headless`)
-- `python3-pyatspi` and `python3-gi`
-- A D-Bus session
+The AT-SPI2 test suite (`tests/ui/`, `run_ui_tests.sh`) requires the following on the runner:
 
-Running Weston in a GitHub Actions container requires `--backend=headless` and a virtual framebuffer
-(`Xvfb`) for the Wayland socket. This is feasible but adds significant setup complexity.
+**Packages:**
+```
+weston python3-atspi python3-gi gir1.2-atspi-2.0 dbus-x11
+```
+
+**Runtime setup:**
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+weston --backend=headless --socket=rttx-test &
+```
+
+**Environment for the app under test:**
+```
+WAYLAND_DISPLAY=rttx-test
+GDK_BACKEND=wayland
+RTTX_DEV_MODE=1
+RTTX_DISABLE_SHELL_SPAWN=1
+XDG_CONFIG_HOME=<tmpdir>
+NO_AT_BRIDGE=0
+# Unset: GTK_A11Y (must not disable a11y), DISPLAY (prevent X11 fallback)
+```
+
+Running Weston on a GitHub Actions `ubuntu-latest` runner requires `XDG_RUNTIME_DIR` to exist
+and appropriate permissions. This is doable but adds ~60 lines of setup compared to the quality
+pipeline. Kept in a separate file to not slow down the main gate.
 
 The AT-SPI2 suite is deferred to a separate follow-on job (`ui-tests.yml`) to keep the initial
 quality pipeline simple and fast. It will run on a schedule (nightly) rather than on every push.
