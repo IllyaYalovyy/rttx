@@ -696,7 +696,13 @@ impl Window {
         let popover = gtk4::Popover::new();
         popover.set_has_arrow(true);
         popover.set_position(gtk4::PositionType::Bottom);
-        popover.set_parent(row);
+        // Parent the popover on the wrapper ListBoxRow (row's parent), not the
+        // SessionRow itself, because SessionRow is a ListBoxRow subclass that
+        // isn't directly in the ListBox — attaching to it causes GTK to fail
+        // the `box != NULL` assertion when grabbing focus.
+        let popover_parent =
+            row.parent().unwrap_or_else(|| row.clone().upcast::<gtk4::Widget>());
+        popover.set_parent(&popover_parent);
 
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
         content.set_margin_start(12);
