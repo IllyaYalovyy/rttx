@@ -595,14 +595,11 @@ impl Window {
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let drag_uuid = session_state.uuid.clone();
         drag_source.connect_prepare(move |_, _, _| {
-            Some(gtk4::gdk::ContentProvider::for_value(
-                &format!("session:{drag_uuid}").to_value(),
-            ))
+            Some(gtk4::gdk::ContentProvider::for_value(&format!("session:{drag_uuid}").to_value()))
         });
         row.add_controller(drag_source);
 
-        let drop_target =
-            gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+        let drop_target = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
         let win = self.clone();
         let target_uuid = session_state.uuid.clone();
         drop_target.connect_drop(move |_, value, _, _| {
@@ -3951,6 +3948,185 @@ mod tests {
         assert_eq!(lru[0], uuid1, "session 2 should now be first");
         assert_eq!(lru[1], uuid2, "session 3 should be second");
         assert_eq!(lru[2], uuid0, "session 1 should be last");
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn background_session_detection_identifies_foreground_terminal() {
+        use crate::test_helpers::{session, term, window_state};
+
+        let state = window_state(vec![
+            session("s1", "A", term("t1")),
+            session("s2", "B", term("t2")),
+        ]);
+
+        assert!(
+            !terminal_is_in_background_session("t1", Some("s1"), &state),
+            "t1 is in the visible session s1"
+        );
+        assert!(
+            terminal_is_in_background_session("t2", Some("s1"), &state),
+            "t2 is in background session s2"
+        );
+        assert!(
+            terminal_is_in_background_session("t1", None, &state),
+            "no visible session means everything is background"
+        );
+    }
+
+    #[test]
+    fn background_session_detection_unknown_terminal_is_background() {
+        use crate::test_helpers::{session, term, window_state};
+
+        let state = window_state(vec![session("s1", "A", term("t1"))]);
+
+        assert!(
+            terminal_is_in_background_session("nonexistent", Some("s1"), &state),
+            "unknown terminal should be treated as background"
+        );
+    }
+
+    #[test]
+    fn session_reorder_updates_state_order() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.session-reorder-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        window.add_session();
+        pump_events(50);
+
+        let (uuid0, uuid1, uuid2) = {
+            let state = window.imp().state.borrow();
+            (
+                state.sessions[0].uuid.clone(),
+                state.sessions[1].uuid.clone(),
+                state.sessions[2].uuid.clone(),
+            )
+        };
+
+        // Move session 2 (index 2) to session 0's position (index 0).
+        window.reorder_session(&uuid2, &uuid0);
+        pump_events(50);
+
+        let order: Vec<String> = {
+            let state = window.imp().state.borrow();
+            state.sessions.iter().map(|s| s.uuid.clone()).collect()
+        };
+        assert_eq!(order, vec![uuid2.clone(), uuid0.clone(), uuid1.clone()]);
+
+        // Verify sidebar rows match the new order.
+        let sidebar_uuid_0 = window
+            .imp()
+            .sidebar_list
+            .row_at_index(0)
+            .and_then(|r| r.child())
+            .and_then(|c| c.downcast::<SessionRow>().ok())
+            .map(|sr| sr.uuid());
+        assert_eq!(sidebar_uuid_0.as_deref(), Some(uuid2.as_str()));
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn cycle_session_follows_lru_order() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.cycle-session-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        window.add_session();
+        pump_events(50);
+
+        let (uuid0, uuid1, uuid2) = {
+            let state = window.imp().state.borrow();
+            (
+                state.sessions[0].uuid.clone(),
+                state.sessions[1].uuid.clone(),
+                state.sessions[2].uuid.clone(),
+            )
+        };
+
+        // Visit order: 0 → 2 → 1. LRU = [1, 2, 0].
+        window.switch_to_session_number(3);
+        pump_events(50);
+        window.switch_to_session_number(2);
+        pump_events(50);
+
+        let visible = window.imp().session_stack.visible_child_name().unwrap().to_string();
+        assert_eq!(visible, uuid1, "after setup, session 1 should be visible");
+
+        // Cycle forward (+1) should go to next in LRU = session 2.
+        window.cycle_session(1);
+        pump_events(50);
+
+        let visible = window.imp().session_stack.visible_child_name().unwrap().to_string();
+        assert_eq!(visible, uuid2, "cycle +1 from session 1 should show session 2 (next in LRU)");
+
+        // Cycle forward again should go to session 0.
+        window.cycle_session(1);
+        pump_events(50);
+
+        let visible = window.imp().session_stack.visible_child_name().unwrap().to_string();
+        assert_eq!(visible, uuid0, "cycle +1 from session 2 should show session 0");
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn close_session_removes_from_lru() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.close-session-lru-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        pump_events(50);
+
+        let uuid1 = {
+            let state = window.imp().state.borrow();
+            state.sessions[1].uuid.clone()
+        };
+
+        assert!(
+            window.imp().session_lru.borrow().contains(&uuid1),
+            "session should be in LRU before close"
+        );
+
+        window.close_session(&uuid1);
+        pump_events(50);
+
+        assert!(
+            !window.imp().session_lru.borrow().contains(&uuid1),
+            "closed session should be removed from LRU"
+        );
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

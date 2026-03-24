@@ -229,3 +229,44 @@ fn empty_session_name_is_valid() {
     let restored: SessionState = serde_json::from_str(&json).unwrap();
     assert_eq!(session, restored);
 }
+
+#[test]
+fn session_order_persists_through_serialization() {
+    let state = WindowState {
+        sessions: vec![
+            SessionState {
+                uuid: "s3".into(),
+                name: "Third".into(),
+                layout: term("t3"),
+                terminal_recovery: Default::default(),
+                active_terminal_uuid: None,
+                input_sync: false,
+            },
+            SessionState {
+                uuid: "s1".into(),
+                name: "First".into(),
+                layout: term("t1"),
+                terminal_recovery: Default::default(),
+                active_terminal_uuid: None,
+                input_sync: false,
+            },
+            SessionState {
+                uuid: "s2".into(),
+                name: "Second".into(),
+                layout: term("t2"),
+                terminal_recovery: Default::default(),
+                active_terminal_uuid: None,
+                input_sync: false,
+            },
+        ],
+        active_session_index: 1,
+        ..WindowState::default()
+    };
+
+    let json = serde_json::to_string_pretty(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+    let uuids: Vec<&str> = restored.sessions.iter().map(|s| s.uuid.as_str()).collect();
+    assert_eq!(uuids, vec!["s3", "s1", "s2"], "session order must be preserved");
+    assert_eq!(restored.active_session_index, 1);
+}
