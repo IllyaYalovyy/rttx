@@ -564,7 +564,7 @@ impl Window {
         self.refresh_command_sidebar();
     }
 
-    fn build_session(&self, session_state: &SessionState) {
+    fn append_session_row(&self, session_state: &SessionState) {
         let imp = self.imp();
         let row = SessionRow::new(
             &session_state.uuid,
@@ -591,9 +591,40 @@ impl Window {
         });
         row.add_controller(rename_gesture);
 
+        let drag_source = gtk4::DragSource::new();
+        drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+        let drag_uuid = session_state.uuid.clone();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gtk4::gdk::ContentProvider::for_value(
+                &format!("session:{drag_uuid}").to_value(),
+            ))
+        });
+        row.add_controller(drag_source);
+
+        let drop_target =
+            gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+        let win = self.clone();
+        let target_uuid = session_state.uuid.clone();
+        drop_target.connect_drop(move |_, value, _, _| {
+            if let Ok(payload) = value.get::<String>()
+                && let Some(source_uuid) = payload.strip_prefix("session:")
+                && source_uuid != target_uuid
+            {
+                win.reorder_session(source_uuid, &target_uuid);
+                return true;
+            }
+            false
+        });
+        row.add_controller(drop_target);
+
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
+    }
+
+    fn build_session(&self, session_state: &SessionState) {
+        let imp = self.imp();
+        self.append_session_row(session_state);
 
         let content = self.build_session_content(session_state);
 
@@ -923,8 +954,7 @@ impl Window {
         };
         imp.session_stack.set_visible_child_name(&uuid);
         if let Some(row) = imp.sidebar_list.row_at_index(index as i32)
-            && let Some(session_row) =
-                row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+            && let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
         {
             session_row.set_has_activity(false);
         }
@@ -1348,6 +1378,46 @@ impl Window {
                 win.refresh_command_sidebar();
             },
         );
+    }
+
+    fn reorder_session(&self, source_uuid: &str, target_uuid: &str) {
+        let imp = self.imp();
+        let visible_uuid = imp.session_stack.visible_child_name().map(|n| n.to_string());
+
+        {
+            let mut state = imp.state.borrow_mut();
+            let Some(src) = state.sessions.iter().position(|s| s.uuid == source_uuid) else {
+                return;
+            };
+            let Some(tgt) = state.sessions.iter().position(|s| s.uuid == target_uuid) else {
+                return;
+            };
+            let session = state.sessions.remove(src);
+            state.sessions.insert(tgt, session);
+        }
+
+        // Rebuild sidebar rows to reflect new order.
+        while let Some(row) = imp.sidebar_list.row_at_index(0) {
+            imp.sidebar_list.remove(&row);
+        }
+        let sessions: Vec<_> = {
+            let state = imp.state.borrow();
+            state.sessions.clone()
+        };
+        for session_state in &sessions {
+            self.append_session_row(session_state);
+        }
+
+        // Re-select the previously visible session.
+        if let Some(uuid) = &visible_uuid {
+            let state = imp.state.borrow();
+            if let Some(idx) = state.sessions.iter().position(|s| s.uuid == *uuid) {
+                drop(state);
+                if let Some(row) = imp.sidebar_list.row_at_index(idx as i32) {
+                    imp.sidebar_list.select_row(Some(&row));
+                }
+            }
+        }
     }
 
     fn close_session(&self, session_uuid: &str) {
@@ -1838,8 +1908,7 @@ impl Window {
         let list = &imp.sidebar_list;
         let mut idx = 0;
         while let Some(row) = list.row_at_index(idx) {
-            if let Some(session_row) =
-                row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
                 && session_row.uuid() == session_uuid
             {
                 session_row.set_has_activity(true);
