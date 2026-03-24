@@ -761,6 +761,12 @@ impl Window {
             bell_term.flash_bell();
         });
 
+        let win = self.clone();
+        let uuid = term.uuid();
+        term.vte().connect_contents_changed(move |_| {
+            win.mark_session_activity(&uuid);
+        });
+
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let uuid = term.uuid();
@@ -908,6 +914,11 @@ impl Window {
             (session.uuid.clone(), session.input_sync)
         };
         imp.session_stack.set_visible_child_name(&uuid);
+        if let Some(row) = imp.sidebar_list.row_at_index(index as i32)
+            && let Ok(session_row) = row.downcast::<SessionRow>()
+        {
+            session_row.set_has_activity(false);
+        }
         self.focus_session_terminal(&uuid);
         if let Some(action) = self.lookup_action("toggle-input-sync")
             && let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>()
@@ -1716,6 +1727,33 @@ impl Window {
                 }
                 _ => vte.set_font_scale(1.0),
             }
+        }
+    }
+
+    fn mark_session_activity(&self, terminal_uuid: &str) {
+        let imp = self.imp();
+        let visible_session = imp.session_stack.visible_child_name();
+        let state = imp.state.borrow();
+        if !terminal_is_in_background_session(terminal_uuid, visible_session.as_deref(), &state) {
+            return;
+        }
+        let session_uuid = state
+            .sessions
+            .iter()
+            .find(|s| s.layout.contains_terminal(terminal_uuid))
+            .map(|s| s.uuid.clone());
+        drop(state);
+        let Some(session_uuid) = session_uuid else { return };
+        let list = &imp.sidebar_list;
+        let mut idx = 0;
+        while let Some(row) = list.row_at_index(idx) {
+            if let Ok(session_row) = row.downcast::<SessionRow>()
+                && session_row.uuid() == session_uuid
+            {
+                session_row.set_has_activity(true);
+                break;
+            }
+            idx += 1;
         }
     }
 

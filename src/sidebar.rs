@@ -14,15 +14,22 @@ mod imp {
     pub struct SessionRow {
         pub uuid: RefCell<String>,
         pub name: RefCell<String>,
+        pub activity_dot: gtk4::Image,
         pub terminal_count_label: gtk4::Label,
         pub close_button: gtk4::Button,
     }
 
     impl Default for SessionRow {
         fn default() -> Self {
+            let activity_dot = gtk4::Image::from_icon_name("media-record-symbolic");
+            activity_dot.set_pixel_size(8);
+            activity_dot.add_css_class("accent");
+            activity_dot.set_visible(false);
+
             Self {
                 uuid: RefCell::new(String::new()),
                 name: RefCell::new(String::new()),
+                activity_dot,
                 terminal_count_label: gtk4::Label::new(None),
                 close_button: gtk4::Button::from_icon_name("window-close-symbolic"),
             }
@@ -50,6 +57,7 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.add_css_class("circular");
 
+            obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.terminal_count_label);
             obj.add_suffix(&self.close_button);
         }
@@ -95,6 +103,15 @@ impl SessionRow {
 
     pub fn update_terminal_count(&self, count: usize) {
         self.imp().terminal_count_label.set_label(&format!("{count}"));
+    }
+
+    pub fn set_has_activity(&self, active: bool) {
+        self.imp().activity_dot.set_visible(active);
+    }
+
+    #[must_use]
+    pub fn has_activity(&self) -> bool {
+        self.imp().activity_dot.is_visible()
     }
 
     #[must_use]
@@ -157,5 +174,19 @@ mod tests {
         assert_eq!(row.session_name(), "Renamed");
         assert_eq!(row.title().as_str(), "Renamed");
         assert_eq!(row.imp().terminal_count_label.label().as_str(), "5");
+    }
+
+    #[test]
+    fn activity_indicator_toggles() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session", 1);
+        assert!(!row.has_activity(), "activity should be off initially");
+
+        row.set_has_activity(true);
+        assert!(row.has_activity());
+
+        row.set_has_activity(false);
+        assert!(!row.has_activity());
     }
 }
