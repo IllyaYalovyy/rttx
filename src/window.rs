@@ -3957,10 +3957,8 @@ mod tests {
     fn background_session_detection_identifies_foreground_terminal() {
         use crate::test_helpers::{session, term, window_state};
 
-        let state = window_state(vec![
-            session("s1", "A", term("t1")),
-            session("s2", "B", term("t2")),
-        ]);
+        let state =
+            window_state(vec![session("s1", "A", term("t1")), session("s2", "B", term("t2"))]);
 
         assert!(
             !terminal_is_in_background_session("t1", Some("s1"), &state),
