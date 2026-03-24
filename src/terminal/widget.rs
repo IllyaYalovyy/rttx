@@ -511,6 +511,11 @@ impl TerminalWidget {
         self.imp().current_directory_override.replace(Some(cwd.map(str::to_string)));
     }
 
+    #[cfg(test)]
+    pub(crate) fn initial_cwd_for_test(&self) -> Option<String> {
+        self.imp().initial_cwd.borrow().clone()
+    }
+
     /// Disconnect the `child_exited` signal handler to prevent re-entrancy
     /// panics when the terminal is dropped while a `RefCell` is borrowed.
     pub fn disconnect_child_exited(&self) {

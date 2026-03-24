@@ -407,6 +407,22 @@ impl LayoutNode {
         }
     }
 
+    #[must_use]
+    pub fn terminal_cwd(&self, target_uuid: &str) -> Option<String> {
+        match self {
+            Self::Terminal { uuid, cwd, .. } => {
+                if uuid == target_uuid {
+                    cwd.clone()
+                } else {
+                    None
+                }
+            }
+            Self::Split { first, second, .. } => {
+                first.terminal_cwd(target_uuid).or_else(|| second.terminal_cwd(target_uuid))
+            }
+        }
+    }
+
     pub fn set_terminal_cwd(&mut self, target_uuid: &str, cwd: Option<String>) -> bool {
         match self {
             Self::Terminal { uuid, cwd: terminal_cwd, .. } => {
@@ -982,6 +998,32 @@ mod tests {
     fn set_terminal_cwd_returns_false_for_unknown_terminal() {
         let mut layout = hsplit(term("t1"), term("t2"));
         assert!(!layout.set_terminal_cwd("missing", Some("/tmp".into())));
+    }
+
+    #[test]
+    fn terminal_cwd_returns_cwd_for_matching_terminal() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+        layout.set_terminal_cwd("t2", Some("/home/user".into()));
+        assert_eq!(layout.terminal_cwd("t2").as_deref(), Some("/home/user"));
+        assert_eq!(layout.terminal_cwd("t1"), None);
+        assert_eq!(layout.terminal_cwd("missing"), None);
+    }
+
+    #[test]
+    fn split_then_set_cwd_on_new_terminal() {
+        let layout = LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: Some("/original".into()),
+            custom_title: None,
+        };
+        let (mut new_layout, new_uuid) =
+            layout.split_terminal_with_new_uuid("t1", SplitOrientation::Horizontal).unwrap();
+
+        new_layout.set_terminal_cwd(&new_uuid, Some("/original".into()));
+
+        assert_eq!(new_layout.terminal_cwd(&new_uuid).as_deref(), Some("/original"));
+        assert_eq!(new_layout.terminal_cwd("t1").as_deref(), Some("/original"));
     }
 
     #[test]

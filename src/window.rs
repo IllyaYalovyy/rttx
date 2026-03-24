@@ -1501,6 +1501,14 @@ impl Window {
 
     fn split_terminal(&self, terminal_uuid: &str, orientation: SplitOrientation) {
         let imp = self.imp();
+
+        // Read the source terminal's CWD before borrowing state mutably.
+        let source_cwd = imp
+            .terminals
+            .borrow()
+            .get(terminal_uuid)
+            .and_then(super::terminal::widget::TerminalWidget::current_directory);
+
         let mut state = imp.state.borrow_mut();
 
         let session_idx = state
@@ -1520,9 +1528,13 @@ impl Window {
                 return;
             }
 
-            if let Some((new_layout, new_terminal_uuid)) =
+            if let Some((mut new_layout, new_terminal_uuid)) =
                 state.sessions[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
+                // Propagate the source terminal's CWD to the new terminal node.
+                if let Some(cwd) = &source_cwd {
+                    new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd.clone()));
+                }
                 state.sessions[idx].layout = new_layout;
                 state.sessions[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
                 state.sessions[idx].normalize_active_terminal();
@@ -1643,7 +1655,8 @@ impl Window {
             return false;
         };
 
-        let new_term = TerminalWidget::new(new_terminal_uuid, None);
+        let inherited_cwd = target.current_directory();
+        let new_term = TerminalWidget::new(new_terminal_uuid, inherited_cwd.as_deref());
         self.connect_terminal_signals(&new_term);
         imp.terminals.borrow_mut().insert(new_terminal_uuid.to_string(), new_term.clone());
         new_term.ensure_shell_spawned_when_ready();
@@ -4144,6 +4157,66 @@ mod tests {
             !window.imp().session_lru.borrow().contains(&uuid1),
             "closed session should be removed from LRU"
         );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn split_inherits_cwd_from_source_terminal() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.split-cwd-test").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
+
+        let t1_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+
+        // Set a fake CWD on the source terminal.
+        {
+            let terminals = window.imp().terminals.borrow();
+            let t1 = terminals.get(&t1_uuid).unwrap();
+            t1.set_current_directory_for_test(Some("/home/user/project"));
+        }
+
+        window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+
+        let (t2_uuid, t2_cwd) = {
+            let state = window.imp().state.borrow();
+            let uuids = state.sessions[0].layout.terminal_uuids();
+            let t2 = uuids.into_iter().find(|u| u != &t1_uuid).unwrap();
+            let cwd = state.sessions[0].layout.terminal_cwd(&t2);
+            (t2, cwd)
+        };
+
+        assert_eq!(
+            t2_cwd.as_deref(),
+            Some("/home/user/project"),
+            "new pane from split should inherit source terminal's CWD in layout"
+        );
+
+        // Also verify the TerminalWidget was created with the inherited CWD.
+        {
+            let terminals = window.imp().terminals.borrow();
+            let t2 = terminals.get(&t2_uuid).unwrap();
+            assert_eq!(
+                t2.initial_cwd_for_test(),
+                Some("/home/user/project".to_string()),
+                "new TerminalWidget should receive inherited CWD"
+            );
+        }
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
