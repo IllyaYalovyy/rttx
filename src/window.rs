@@ -923,7 +923,8 @@ impl Window {
         };
         imp.session_stack.set_visible_child_name(&uuid);
         if let Some(row) = imp.sidebar_list.row_at_index(index as i32)
-            && let Ok(session_row) = row.downcast::<SessionRow>()
+            && let Some(session_row) =
+                row.child().and_then(|c| c.downcast::<SessionRow>().ok())
         {
             session_row.set_has_activity(false);
         }
@@ -1837,7 +1838,8 @@ impl Window {
         let list = &imp.sidebar_list;
         let mut idx = 0;
         while let Some(row) = list.row_at_index(idx) {
-            if let Ok(session_row) = row.downcast::<SessionRow>()
+            if let Some(session_row) =
+                row.child().and_then(|c| c.downcast::<SessionRow>().ok())
                 && session_row.uuid() == session_uuid
             {
                 session_row.set_has_activity(true);
