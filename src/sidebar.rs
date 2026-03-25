@@ -5,10 +5,27 @@ use gtk4::subclass::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
+use std::time::Duration;
+
+#[cfg(test)]
+const ACTIVITY_IDLE_DELAY_MS: u64 = 30;
+#[cfg(not(test))]
+const ACTIVITY_IDLE_DELAY_MS: u64 = 1_200;
+
+/// Visual state for the session activity indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityState {
+    /// No unread activity.
+    None,
+    /// Terminal is actively producing output.
+    Active,
+    /// Output was produced but has since stopped.
+    Idle,
+}
 
 mod imp {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     #[derive(Debug)]
     pub struct SessionRow {
@@ -18,13 +35,14 @@ mod imp {
         pub activity_dot: gtk4::Image,
         pub terminal_count_label: gtk4::Label,
         pub close_button: gtk4::Button,
+        pub activity_state: Cell<ActivityState>,
+        pub idle_transition_source: RefCell<Option<glib::SourceId>>,
     }
 
     impl Default for SessionRow {
         fn default() -> Self {
             let activity_dot = gtk4::Image::from_icon_name("media-record-symbolic");
             activity_dot.set_pixel_size(8);
-            activity_dot.add_css_class("accent");
             activity_dot.set_visible(false);
 
             let position_label = gtk4::Label::new(None);
@@ -38,6 +56,8 @@ mod imp {
                 activity_dot,
                 terminal_count_label: gtk4::Label::new(None),
                 close_button: gtk4::Button::from_icon_name("window-close-symbolic"),
+                activity_state: Cell::new(ActivityState::None),
+                idle_transition_source: RefCell::new(None),
             }
         }
     }
@@ -112,13 +132,68 @@ impl SessionRow {
         self.imp().terminal_count_label.set_label(&format!("{count}"));
     }
 
-    pub fn set_has_activity(&self, active: bool) {
-        self.imp().activity_dot.set_visible(active);
+    fn set_activity_state_internal(&self, state: ActivityState) {
+        let imp = self.imp();
+        imp.activity_state.set(state);
+        match state {
+            ActivityState::None => {
+                imp.activity_dot.remove_css_class("accent");
+                imp.activity_dot.remove_css_class("session-activity-idle");
+                imp.activity_dot.set_tooltip_text(None);
+                imp.activity_dot.set_visible(false);
+            }
+            ActivityState::Active => {
+                imp.activity_dot.remove_css_class("session-activity-idle");
+                imp.activity_dot.add_css_class("accent");
+                imp.activity_dot.set_tooltip_text(Some("Background activity is ongoing"));
+                imp.activity_dot.set_visible(true);
+            }
+            ActivityState::Idle => {
+                imp.activity_dot.remove_css_class("accent");
+                imp.activity_dot.add_css_class("session-activity-idle");
+                imp.activity_dot
+                    .set_tooltip_text(Some("Unread activity is waiting in this session"));
+                imp.activity_dot.set_visible(true);
+            }
+        }
     }
 
     #[must_use]
     pub fn has_activity(&self) -> bool {
-        self.imp().activity_dot.is_visible()
+        self.activity_state() != ActivityState::None
+    }
+
+    #[must_use]
+    pub fn activity_state(&self) -> ActivityState {
+        self.imp().activity_state.get()
+    }
+
+    fn clear_pending_idle_transition(&self) {
+        if let Some(source_id) = self.imp().idle_transition_source.borrow_mut().take() {
+            source_id.remove();
+        }
+    }
+
+    pub fn mark_activity(&self) {
+        self.clear_pending_idle_transition();
+        self.set_activity_state_internal(ActivityState::Active);
+
+        let row_weak = self.downgrade();
+        let source_id =
+            glib::timeout_add_local(Duration::from_millis(ACTIVITY_IDLE_DELAY_MS), move || {
+                let Some(row) = row_weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                row.imp().idle_transition_source.borrow_mut().take();
+                row.set_activity_state_internal(ActivityState::Idle);
+                glib::ControlFlow::Break
+            });
+        self.imp().idle_transition_source.replace(Some(source_id));
+    }
+
+    pub fn clear_activity(&self) {
+        self.clear_pending_idle_transition();
+        self.set_activity_state_internal(ActivityState::None);
     }
 
     pub fn set_position(&self, position: usize) {
@@ -144,6 +219,7 @@ impl SessionRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     macro_rules! require_display {
         () => {
@@ -152,6 +228,27 @@ mod tests {
                 return;
             }
         };
+    }
+
+    fn pump_events(max_ms: u64) {
+        let ctx = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        while Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    fn wait_until(max_ms: u64, condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        while Instant::now() < deadline {
+            pump_events(20);
+            if condition() {
+                return true;
+            }
+        }
+        condition()
     }
 
     #[test]
@@ -184,12 +281,66 @@ mod tests {
         require_display!();
 
         let row = SessionRow::new("s1", "Session", 1);
+        assert_eq!(row.activity_state(), ActivityState::None);
         assert!(!row.has_activity(), "activity should be off initially");
 
-        row.set_has_activity(true);
+        row.mark_activity();
+        assert!(row.has_activity());
+        assert_eq!(row.activity_state(), ActivityState::Active);
+
+        assert!(
+            wait_until(250, || row.activity_state() == ActivityState::Idle),
+            "activity should settle to idle after output stops"
+        );
         assert!(row.has_activity());
 
-        row.set_has_activity(false);
+        row.clear_activity();
+        assert!(!row.has_activity());
+        assert_eq!(row.activity_state(), ActivityState::None);
+    }
+
+    #[test]
+    fn repeated_activity_refreshes_idle_timer() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session", 1);
+
+        row.mark_activity();
+        pump_events(ACTIVITY_IDLE_DELAY_MS / 2);
+
+        row.mark_activity();
+        assert_eq!(row.activity_state(), ActivityState::Active);
+
+        pump_events((ACTIVITY_IDLE_DELAY_MS / 2) + 10);
+        assert_eq!(
+            row.activity_state(),
+            ActivityState::Active,
+            "a second activity event should refresh the idle timer"
+        );
+
+        assert!(
+            wait_until(250, || row.activity_state() == ActivityState::Idle),
+            "refreshed activity should eventually settle to idle"
+        );
+    }
+
+    #[test]
+    fn clear_activity_cancels_pending_idle_transition() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session", 1);
+
+        row.mark_activity();
+        assert_eq!(row.activity_state(), ActivityState::Active);
+
+        row.clear_activity();
+        pump_events(100);
+
+        assert_eq!(
+            row.activity_state(),
+            ActivityState::None,
+            "clearing activity should prevent a later idle transition"
+        );
         assert!(!row.has_activity());
     }
 

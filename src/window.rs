@@ -1020,7 +1020,7 @@ impl Window {
         if let Some(row) = imp.sidebar_list.row_at_index(index as i32)
             && let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
         {
-            session_row.set_has_activity(false);
+            session_row.clear_activity();
         }
         self.push_session_lru(&uuid);
         self.focus_session_terminal(&uuid);
@@ -2049,7 +2049,7 @@ impl Window {
             if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
                 && session_row.uuid() == session_uuid
             {
-                session_row.set_has_activity(true);
+                session_row.mark_activity();
                 break;
             }
             idx += 1;
@@ -2195,6 +2195,16 @@ mod tests {
             }
         }
         condition()
+    }
+
+    fn session_row_at(window: &Window, index: i32) -> SessionRow {
+        window
+            .imp()
+            .sidebar_list
+            .row_at_index(index)
+            .and_then(|row| row.child())
+            .and_then(|child| child.downcast::<SessionRow>().ok())
+            .expect("session row should exist")
     }
 
     fn make_state_two_sessions() -> WindowState {
@@ -4264,6 +4274,171 @@ mod tests {
         assert!(
             !window.imp().session_lru.borrow().contains(&uuid1),
             "closed session should be removed from LRU"
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn background_activity_indicator_transitions_to_idle() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.background-activity-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        pump_events(50);
+
+        let background_terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[1].layout.terminal_uuids()[0].clone()
+        };
+
+        window.mark_session_activity(&background_terminal_uuid);
+
+        let session_row = session_row_at(&window, 1);
+        assert_eq!(session_row.activity_state(), crate::sidebar::ActivityState::Active);
+
+        assert!(
+            wait_until(250, || {
+                session_row.activity_state() == crate::sidebar::ActivityState::Idle
+            }),
+            "background activity should settle to idle when output stops"
+        );
+        assert!(session_row.has_activity(), "idle sessions should keep the unread indicator");
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn switching_to_session_clears_background_activity_indicator() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.clear-activity-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        pump_events(50);
+
+        let background_terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[1].layout.terminal_uuids()[0].clone()
+        };
+
+        window.mark_session_activity(&background_terminal_uuid);
+        pump_events(20);
+        assert_eq!(
+            session_row_at(&window, 1).activity_state(),
+            crate::sidebar::ActivityState::Active
+        );
+
+        window.switch_to_session_number(2);
+        pump_events(50);
+
+        assert_eq!(
+            session_row_at(&window, 1).activity_state(),
+            crate::sidebar::ActivityState::None
+        );
+        assert!(!session_row_at(&window, 1).has_activity());
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn visible_session_activity_does_not_show_indicator() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.visible-activity-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        pump_events(50);
+
+        let visible_terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids()[0].clone()
+        };
+
+        window.mark_session_activity(&visible_terminal_uuid);
+        pump_events(100);
+
+        let session_row = session_row_at(&window, 0);
+        assert_eq!(session_row.activity_state(), crate::sidebar::ActivityState::None);
+        assert!(!session_row.has_activity());
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn repeated_background_activity_refreshes_window_indicator() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.refresh-activity-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.add_session();
+        pump_events(50);
+
+        let background_terminal_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[1].layout.terminal_uuids()[0].clone()
+        };
+
+        window.mark_session_activity(&background_terminal_uuid);
+        assert!(
+            wait_until(250, || {
+                session_row_at(&window, 1).activity_state() == crate::sidebar::ActivityState::Idle
+            }),
+            "initial background activity should settle to idle"
+        );
+
+        window.mark_session_activity(&background_terminal_uuid);
+        let session_row = session_row_at(&window, 1);
+        assert_eq!(session_row.activity_state(), crate::sidebar::ActivityState::Active);
+
+        pump_events(20);
+        assert_eq!(
+            session_row.activity_state(),
+            crate::sidebar::ActivityState::Active,
+            "fresh background output should move the indicator back to active"
+        );
+
+        assert!(
+            wait_until(250, || {
+                session_row.activity_state() == crate::sidebar::ActivityState::Idle
+            }),
+            "refreshed background activity should settle back to idle"
         );
 
         window.close();

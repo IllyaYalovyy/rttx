@@ -31,6 +31,9 @@ pub fn run() -> glib::ExitCode {
             }
             .bell-flash {
                 animation: bell-flash 0.15s ease-out;
+            }
+            .session-activity-idle {
+                opacity: 0.45;
             }",
         );
         gtk4::style_context_add_provider_for_display(
