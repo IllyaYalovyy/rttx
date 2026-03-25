@@ -34,6 +34,7 @@ mod imp {
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
         pub child_exited_handler: RefCell<Option<glib::SignalHandlerId>>,
+        pub last_match_at_click: RefCell<Option<String>>,
     }
 
     #[glib::object_subclass]
@@ -238,10 +239,28 @@ mod imp {
 
             obj.add_controller(smart_clipboard_controller);
 
+            let copy_link_action = gtk4::gio::SimpleAction::new("copy-link", None);
+            copy_link_action.set_enabled(false);
+            let action_group = gtk4::gio::SimpleActionGroup::new();
+            action_group.add_action(&copy_link_action);
+            obj.insert_action_group("term", Some(&action_group));
+
+            let obj_weak = obj.downgrade();
+            copy_link_action.connect_activate(move |_, _| {
+                let Some(obj) = obj_weak.upgrade() else { return };
+                let matched = obj.imp().last_match_at_click.borrow().clone();
+                if let Some(text) = matched
+                    && let Some(display) = gtk4::gdk::Display::default()
+                {
+                    display.clipboard().set_text(&text);
+                }
+            });
+
             let menu = gtk4::gio::Menu::new();
             let clipboard_section = gtk4::gio::Menu::new();
             clipboard_section.append(Some("Copy"), Some("win.copy"));
             clipboard_section.append(Some("Paste"), Some("win.paste"));
+            clipboard_section.append(Some("Copy Link"), Some("term.copy-link"));
             let pane_section = gtk4::gio::Menu::new();
             pane_section.append(Some("Search"), Some("win.search"));
             pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
@@ -265,7 +284,14 @@ mod imp {
             let right_click = gtk4::GestureClick::new();
             right_click.set_button(3);
             right_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            let copy_link_ref = copy_link_action;
+            let obj_weak = obj.downgrade();
             right_click.connect_pressed(move |gesture, _, x, y| {
+                if let Some(obj) = obj_weak.upgrade() {
+                    let matched = obj.openable_uri_at(x, y, &obj.imp().vte);
+                    copy_link_ref.set_enabled(matched.is_some());
+                    obj.imp().last_match_at_click.replace(matched);
+                }
                 context_menu
                     .set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 context_menu.popup();
