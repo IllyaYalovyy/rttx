@@ -148,9 +148,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             _ => TerminalThemeMode::System,
         };
         let new_prefs = Preferences {
-            font: font_button
-                .font_desc()
-                .map_or_else(|| prefs.font.clone(), |d| d.to_string()),
+            font: font_button.font_desc().map_or_else(|| prefs.font.clone(), |d| d.to_string()),
             color_scheme: legacy_color_scheme.clone(),
             terminal_theme_mode,
             light_color_scheme: light_scheme_row

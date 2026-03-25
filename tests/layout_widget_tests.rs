@@ -4,8 +4,7 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 static GTK_INIT: Once = Once::new();
-static GTK_AVAILABLE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static GTK_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn ensure_gtk_init() -> bool {
     GTK_INIT.call_once(|| {
@@ -14,10 +13,8 @@ fn ensure_gtk_init() -> bool {
         unsafe {
             std::env::set_var("GTK_A11Y", "none")
         };
-        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            gtk4::init().is_ok()
-        }))
-        .unwrap_or(false);
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
+            .unwrap_or(false);
         if ok {
             if let Some(display) = gtk4::gdk::Display::default() {
                 std::mem::forget(display);
