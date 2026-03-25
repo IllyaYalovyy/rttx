@@ -22,7 +22,10 @@ pub fn run() -> glib::ExitCode {
 
         let css = gtk4::CssProvider::new();
         css.load_from_string(
-            "@keyframes bell-flash {
+            "vte-terminal {
+                padding: 2px 6px;
+            }
+            @keyframes bell-flash {
                 from { background-color: alpha(@warning_color, 0.4); }
                 to   { background-color: transparent; }
             }
