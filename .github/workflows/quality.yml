@@ -38,14 +38,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Rust
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
         run: |
           rustup-init -y --default-toolchain stable --component clippy
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/cargo/bin" >> "$GITHUB_PATH"
 
       - name: Clippy
-        run: |
-          source "$HOME/.cargo/env"
-          cargo clippy -- -D warnings
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: cargo clippy -- -D warnings
 
   test:
     name: Test
@@ -61,9 +65,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Rust
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
         run: |
           rustup-init -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start Broadway display server
         run: |
@@ -74,9 +81,9 @@ jobs:
         env:
           GDK_BACKEND: broadway
           GTK_A11Y: none
-        run: |
-          source "$HOME/.cargo/env"
-          cargo test
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: cargo test -- --test-threads=1
 
   manifest:
     name: Flatpak manifest
