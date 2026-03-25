@@ -808,7 +808,7 @@ impl Window {
         let uuid = term.uuid();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
-            win.imp().focused_terminal_uuid.replace(Some(uuid.clone()));
+            win.set_focused_terminal(Some(&uuid));
             let mut state = win.imp().state.borrow_mut();
             if let Some(session) =
                 state.sessions.iter_mut().find(|session| session.layout.contains_terminal(&uuid))
@@ -1074,7 +1074,7 @@ impl Window {
         let target_uuid = term.uuid();
         glib::idle_add_local_once(move || {
             if term.vte().grab_focus() {
-                win.imp().focused_terminal_uuid.replace(Some(target_uuid));
+                win.set_focused_terminal(Some(&target_uuid));
             }
         });
     }
@@ -1327,7 +1327,7 @@ impl Window {
         };
         term.queue_input_for_shell(input.to_string());
         let _ = term.vte().grab_focus();
-        self.imp().focused_terminal_uuid.replace(Some(term.uuid()));
+        self.set_focused_terminal(Some(&term.uuid()));
     }
 
     fn set_terminal_recovery(&self, terminal_uuid: &str, recovery: PaneRecovery) {
@@ -1940,6 +1940,27 @@ impl Window {
 
     fn focused_terminal_uuid(&self) -> Option<String> {
         self.imp().focused_terminal_uuid.borrow().clone()
+    }
+
+    fn set_focused_terminal(&self, terminal_uuid: Option<&str>) {
+        let next = terminal_uuid.map(str::to_string);
+        let previous = self.imp().focused_terminal_uuid.replace(next.clone());
+        let (previous_term, next_term) = {
+            let terminals = self.imp().terminals.borrow();
+            (
+                previous.as_deref().and_then(|uuid| terminals.get(uuid)).cloned(),
+                next.as_deref().and_then(|uuid| terminals.get(uuid)).cloned(),
+            )
+        };
+
+        if let Some(term) = previous_term
+            && previous != next
+        {
+            term.set_active(false);
+        }
+        if let Some(term) = next_term {
+            term.set_active(true);
+        }
     }
 
     fn close_focused_terminal(&self) {
@@ -3172,6 +3193,67 @@ mod tests {
         window.imp().sidebar_list.select_row(Some(&first_row));
         let restored_focus = wait_until(1000, || first_terminal.vte().has_focus());
         assert!(restored_focus, "switching back should focus the visible terminal without a click");
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn active_pane_class_tracks_terminal_focus() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.active-pane-tests").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1000, 700);
+        window.present();
+        pump_events(100);
+
+        let first_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        window.split_terminal(&first_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let (first_term, second_term) = {
+            let state = window.imp().state.borrow();
+            let second_uuid = state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|uuid| uuid != &first_uuid)
+                .unwrap();
+            let terminals = window.imp().terminals.borrow();
+            (
+                terminals.get(&first_uuid).cloned().unwrap(),
+                terminals.get(&second_uuid).cloned().unwrap(),
+            )
+        };
+
+        assert!(first_term.vte().grab_focus());
+        assert!(
+            wait_until(1000, || {
+                first_term.has_css_class("terminal-pane-active")
+                    && !second_term.has_css_class("terminal-pane-active")
+            }),
+            "first pane should gain the active-pane class when focused"
+        );
+
+        assert!(second_term.vte().grab_focus());
+        assert!(
+            wait_until(1000, || {
+                second_term.has_css_class("terminal-pane-active")
+                    && !first_term.has_css_class("terminal-pane-active")
+            }),
+            "active-pane class should move to the newly focused pane"
+        );
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

@@ -22,7 +22,29 @@ pub fn run() -> glib::ExitCode {
 
         let css = gtk4::CssProvider::new();
         css.load_from_string(
-            "vte-terminal {
+            ".terminal-pane {
+                border-radius: 10px;
+                border: 1px solid alpha(@window_fg_color, 0.10);
+                background: alpha(@view_bg_color, 0.78);
+            }
+            .terminal-pane-active {
+                border-color: alpha(@accent_bg_color, 0.85);
+                background: alpha(@view_bg_color, 0.92);
+            }
+            .terminal-header {
+                padding: 6px 8px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+                background: alpha(@headerbar_bg_color, 0.72);
+            }
+            .terminal-pane-active .terminal-header {
+                background: alpha(@accent_bg_color, 0.14);
+            }
+            .terminal-scroller {
+                background: transparent;
+            }
+            vte-terminal {
                 margin: 2px 6px;
             }
             @keyframes bell-flash {

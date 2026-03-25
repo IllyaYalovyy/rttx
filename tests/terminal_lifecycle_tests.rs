@@ -133,10 +133,24 @@ fn assert_live_tree_matches_layout(
             .clone();
         let term_widget = term.clone().upcast::<gtk4::Widget>();
 
+        let scroller = term
+            .vte()
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk4::ScrolledWindow>().ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "Rebuild {rebuild_index}: terminal {uuid} lost the ScrolledWindow wrapper around its VTE"
+                )
+            });
         assert_eq!(
-            term.vte().parent(),
+            scroller.parent(),
             Some(term_widget.clone()),
-            "Rebuild {rebuild_index}: terminal {uuid} lost its VTE child",
+            "Rebuild {rebuild_index}: terminal {uuid} lost its ScrolledWindow child",
+        );
+        assert_eq!(
+            scroller.child(),
+            Some(term.vte().clone().upcast::<gtk4::Widget>()),
+            "Rebuild {rebuild_index}: terminal {uuid} lost its VTE child inside the ScrolledWindow",
         );
         assert!(
             is_descendant_of(&term_widget, root),

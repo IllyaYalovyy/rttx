@@ -735,6 +735,31 @@ fn terminal_context_menu_is_parented_to_widget() {
     );
 }
 
+/// Prevent regression: mounting VTE directly in the pane removes any visible
+/// scrollbar, which made it impossible to discover backlog scrolling from the UI.
+#[test]
+fn terminal_widget_wraps_vte_in_scrolled_window() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+
+    let vte_parent = term.vte().parent().expect("VTE must have a parent widget");
+    let scroller = vte_parent
+        .downcast::<gtk4::ScrolledWindow>()
+        .expect("VTE should be wrapped in a ScrolledWindow so the pane exposes a scrollbar");
+
+    assert_eq!(
+        scroller.parent(),
+        Some(term.clone().upcast::<gtk4::Widget>()),
+        "ScrolledWindow should be mounted directly under TerminalWidget",
+    );
+    assert_eq!(
+        scroller.child(),
+        Some(term.vte().clone().upcast::<gtk4::Widget>()),
+        "ScrolledWindow should own the VTE child",
+    );
+}
+
 /// Prevent regression: an empty or mis-named action in the context menu produces
 /// a non-functional item with no visible error.
 ///

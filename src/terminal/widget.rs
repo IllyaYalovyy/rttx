@@ -23,6 +23,7 @@ mod imp {
         #[cfg(test)]
         pub current_directory_override: RefCell<Option<Option<String>>>,
         pub vte: vte4::Terminal,
+        pub terminal_scroller: gtk4::ScrolledWindow,
         pub header: gtk4::Box,
         pub recovery_bar: gtk4::Box,
         pub recovery_label: gtk4::Label,
@@ -50,6 +51,11 @@ mod imp {
             let obj = self.obj();
             obj.set_orientation(gtk4::Orientation::Vertical);
             obj.set_spacing(0);
+            obj.add_css_class("terminal-pane");
+            obj.set_margin_start(6);
+            obj.set_margin_end(6);
+            obj.set_margin_top(6);
+            obj.set_margin_bottom(6);
 
             self.header.set_orientation(gtk4::Orientation::Horizontal);
             self.header.set_spacing(4);
@@ -147,6 +153,13 @@ mod imp {
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
             configure_openable_matches(&self.vte);
+
+            self.terminal_scroller.set_hscrollbar_policy(gtk4::PolicyType::Never);
+            self.terminal_scroller.set_vscrollbar_policy(gtk4::PolicyType::Automatic);
+            self.terminal_scroller.set_hexpand(true);
+            self.terminal_scroller.set_vexpand(true);
+            self.terminal_scroller.add_css_class("terminal-scroller");
+            self.terminal_scroller.set_child(Some(&self.vte));
 
             let click_target = obj.downgrade();
             let open_match_click = gtk4::GestureClick::new();
@@ -302,7 +315,7 @@ mod imp {
             obj.append(&self.header);
             obj.append(&self.recovery_bar);
             obj.append(&self.search_bar);
-            obj.append(&self.vte);
+            obj.append(&self.terminal_scroller);
         }
     }
 
@@ -395,6 +408,14 @@ impl TerminalWidget {
 
     pub fn set_visual_bell(&self, enabled: bool) {
         self.imp().visual_bell.set(enabled);
+    }
+
+    pub(crate) fn set_active(&self, active: bool) {
+        if active {
+            self.add_css_class("terminal-pane-active");
+        } else {
+            self.remove_css_class("terminal-pane-active");
+        }
     }
 
     pub fn flash_bell(&self) {
