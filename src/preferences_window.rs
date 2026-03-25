@@ -18,33 +18,14 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     appearance_group.set_title("Appearance");
     let legacy_color_scheme = prefs.color_scheme.clone();
 
-    let font_row =
-        adw::ActionRow::builder().title("Font").subtitle(&prefs.font).activatable(true).build();
-    let font_label = gtk4::Label::new(Some(&prefs.font));
-    font_label.add_css_class("dim-label");
-    font_row.add_suffix(&font_label);
+    let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
+    let font_dialog = gtk4::FontDialog::new();
+    let font_button = gtk4::FontDialogButton::new(Some(font_dialog));
+    font_button.set_font_desc(&font_desc);
+    font_button.set_valign(gtk4::Align::Center);
 
-    let win_ref = window.clone();
-    let font_label_ref = font_label.clone();
-    font_row.connect_activated(move |row| {
-        let dialog = gtk4::FontDialog::new();
-        let desc = gtk4::pango::FontDescription::from_string(&font_label_ref.label());
-        let parent = win_ref.clone();
-        let subtitle_row = row.clone();
-        let fl = font_label_ref.clone();
-        dialog.choose_font(
-            Some(&parent),
-            Some(&desc),
-            gtk4::gio::Cancellable::NONE,
-            move |result| {
-                if let Ok(font_desc) = result {
-                    let name = font_desc.to_string();
-                    fl.set_label(&name);
-                    subtitle_row.set_subtitle(&name);
-                }
-            },
-        );
-    });
+    let font_row = adw::ActionRow::builder().title("Font").build();
+    font_row.add_suffix(&font_button);
     appearance_group.add(&font_row);
 
     let mode_row = adw::ComboRow::builder().title("Terminal theme mode").build();
@@ -167,7 +148,9 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             _ => TerminalThemeMode::System,
         };
         let new_prefs = Preferences {
-            font: font_label.label().to_string(),
+            font: font_button
+                .font_desc()
+                .map_or_else(|| prefs.font.clone(), |d| d.to_string()),
             color_scheme: legacy_color_scheme.clone(),
             terminal_theme_mode,
             light_color_scheme: light_scheme_row
