@@ -125,9 +125,8 @@ mod imp {
                         let header2 = header.clone();
                         let label2 = label.clone();
                         let committed = Rc::new(Cell::new(false));
-                        let committed_for_commit = committed.clone();
                         let commit = move |entry: &gtk4::Entry| {
-                            if !begin_one_shot_title_commit(&committed_for_commit) {
+                            if !begin_one_shot_title_commit(&committed) {
                                 return;
                             }
                             let text = entry.text().to_string();
@@ -823,7 +822,7 @@ fn smart_clipboard_action(
     }
 }
 
-fn begin_one_shot_title_commit(committed: &Cell<bool>) -> bool {
+const fn begin_one_shot_title_commit(committed: &Cell<bool>) -> bool {
     !committed.replace(true)
 }
 
