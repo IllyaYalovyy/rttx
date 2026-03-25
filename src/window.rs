@@ -2141,29 +2141,11 @@ fn preferred_command_target_uuid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Once;
     use std::time::{Duration, Instant};
-
-    static GTK_INIT: Once = Once::new();
-
-    fn ensure_gtk_init() -> bool {
-        let mut success = false;
-        GTK_INIT.call_once(|| {
-            crate::test_helpers::set_env("GTK_A11Y", "none");
-            success = gtk4::init().is_ok();
-        });
-        if !success {
-            success = std::panic::catch_unwind(|| {
-                let _ = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            })
-            .is_ok();
-        }
-        success
-    }
 
     macro_rules! require_display {
         () => {
-            if !ensure_gtk_init() {
+            if !crate::test_helpers::ensure_gtk() {
                 eprintln!("SKIPPED: no display available");
                 return;
             }

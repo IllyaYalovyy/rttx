@@ -116,6 +116,40 @@ pub fn test_scheme_full() -> ColorScheme {
     }
 }
 
+// ── GTK init for tests ───────────────────────────────────────────
+
+static GTK_INIT: std::sync::Once = std::sync::Once::new();
+static GTK_AVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Initialize GTK once for the entire test binary. Returns `true` if a
+/// display is available and GTK widgets can be created.
+///
+/// Catches panics from `gtk4::init()` (e.g. "two different threads" in CI
+/// containers) so the `Once` never poisons and tests skip gracefully.
+///
+/// Keeps a leaked reference to the default GDK display so it survives
+/// between test functions — without this, dropping all widgets from one
+/// test module can close the Broadway connection, causing SIGSEGV in the
+/// next module.
+pub fn ensure_gtk() -> bool {
+    GTK_INIT.call_once(|| {
+        set_env("GTK_A11Y", "none");
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            gtk4::init().is_ok()
+        }))
+        .unwrap_or(false);
+        if ok {
+            // Pin the display so it is never closed for the lifetime of the process.
+            if let Some(display) = gtk4::gdk::Display::default() {
+                std::mem::forget(display);
+            }
+        }
+        GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
+    });
+    GTK_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 // ── Environment helpers ──────────────────────────────────────────
 
 /// Sets an environment variable in tests.

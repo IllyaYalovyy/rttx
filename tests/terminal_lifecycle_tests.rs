@@ -8,24 +8,28 @@ use std::rc::Rc;
 use std::sync::Once;
 
 static GTK_INIT: Once = Once::new();
+static GTK_AVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn ensure_gtk_init() -> bool {
-    let mut success = false;
     GTK_INIT.call_once(|| {
         // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
         #[allow(unsafe_code)]
         unsafe {
             std::env::set_var("GTK_A11Y", "none")
         };
-        success = gtk4::init().is_ok();
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            gtk4::init().is_ok()
+        }))
+        .unwrap_or(false);
+        if ok {
+            if let Some(display) = gtk4::gdk::Display::default() {
+                std::mem::forget(display);
+            }
+        }
+        GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
     });
-    if !success {
-        success = std::panic::catch_unwind(|| {
-            let _ = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        })
-        .is_ok();
-    }
-    success
+    GTK_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 macro_rules! require_display {
