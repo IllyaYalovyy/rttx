@@ -2,6 +2,7 @@ use gtk4::glib;
 use gtk4::glib::subclass::prelude::*;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use vte4::prelude::*;
 
@@ -10,6 +11,7 @@ use crate::color_scheme;
 mod imp {
     use super::*;
     use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     #[derive(Default, Debug)]
     pub struct TerminalWidget {
@@ -122,13 +124,20 @@ mod imp {
 
                         let header2 = header.clone();
                         let label2 = label.clone();
+                        let committed = Rc::new(Cell::new(false));
+                        let committed_for_commit = committed.clone();
                         let commit = move |entry: &gtk4::Entry| {
+                            if !begin_one_shot_title_commit(&committed_for_commit) {
+                                return;
+                            }
                             let text = entry.text().to_string();
                             if !text.is_empty() {
                                 obj.set_custom_title(Some(&text));
                             }
                             label2.set_visible(true);
-                            header2.remove(entry);
+                            if entry.parent().as_ref() == Some(header2.upcast_ref()) {
+                                header2.remove(entry);
+                            }
                         };
 
                         let commit2 = commit.clone();
@@ -814,13 +823,19 @@ fn smart_clipboard_action(
     }
 }
 
+fn begin_one_shot_title_commit(committed: &Cell<bool>) -> bool {
+    !committed.replace(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        SmartClipboardAction, openable_uri_from_match_text, parse_file_uri, smart_clipboard_action,
+        SmartClipboardAction, begin_one_shot_title_commit, openable_uri_from_match_text,
+        parse_file_uri, smart_clipboard_action,
     };
     use gtk4::gio;
     use gtk4::prelude::*;
+    use std::cell::Cell;
 
     /// Verify that the RESET constant inside reset_terminal_state() contains
     /// the expected escape sequences without requiring a live VTE widget.
@@ -988,5 +1003,12 @@ mod tests {
             ),
             SmartClipboardAction::PassThrough
         );
+    }
+
+    #[test]
+    fn title_edit_commit_guard_runs_only_once() {
+        let committed = Cell::new(false);
+        assert!(begin_one_shot_title_commit(&committed));
+        assert!(!begin_one_shot_title_commit(&committed));
     }
 }
