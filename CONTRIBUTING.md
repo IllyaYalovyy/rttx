@@ -269,6 +269,11 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 **Rules:**
 - Summary line: 72 characters maximum, imperative mood, no trailing period.
 - Use the body to explain motivation and context when it is not obvious from the diff.
+- Every pushed commit must reference the tracked GitHub issue in a footer.
+- If the commit fully resolves the issue, use a GitHub closing keyword in that footer so the issue
+  closes automatically when the commit lands on the default branch. Preferred forms:
+  `Fixes #123` or `Closes #123`.
+- If the commit is only partial work, use a non-closing footer such as `Refs #123`.
 - One logical change per commit. Do not mix feature work with unrelated cleanup.
 - Do not amend or force-push commits that have been pushed to a shared branch.
 
@@ -279,6 +284,8 @@ feat: resizable session and tools sidebars via GtkPaned
 Replace OverlaySplitView and Revealer with Paned widgets so users can
 drag either divider to their preferred width. Widths persist across
 restarts via WindowState.
+
+Fixes #42
 ```
 
 ```
@@ -286,6 +293,8 @@ fix: restore right sidebar width after restart
 
 right_paned position must be set in connect_realize because the total
 allocated width is not known until the widget is mapped.
+
+Refs #57
 ```
 
 ---
