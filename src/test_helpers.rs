@@ -119,8 +119,7 @@ pub fn test_scheme_full() -> ColorScheme {
 // ── GTK init for tests ───────────────────────────────────────────
 
 static GTK_INIT: std::sync::Once = std::sync::Once::new();
-static GTK_AVAILABLE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static GTK_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Initialize GTK once for the entire test binary. Returns `true` if a
 /// display is available and GTK widgets can be created.
@@ -135,12 +134,9 @@ static GTK_AVAILABLE: std::sync::atomic::AtomicBool =
 pub fn ensure_gtk() -> bool {
     GTK_INIT.call_once(|| {
         set_env("GTK_A11Y", "none");
-        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            gtk4::init().is_ok()
-        }))
-        .unwrap_or(false);
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
+            .unwrap_or(false);
         if ok {
-            // Pin the display so it is never closed for the lifetime of the process.
             if let Some(display) = gtk4::gdk::Display::default() {
                 std::mem::forget(display);
             }

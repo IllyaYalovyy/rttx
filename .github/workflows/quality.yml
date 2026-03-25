@@ -60,7 +60,7 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             git gcc pkg-config rustup \
-            gtk4-devel gtk4 libadwaita-devel vte291-gtk4-devel
+            gtk4-devel libadwaita-devel vte291-gtk4-devel
 
       - uses: actions/checkout@v4
 
@@ -72,18 +72,11 @@ jobs:
           rustup-init -y --default-toolchain stable
           echo "/usr/local/cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Start Broadway display server
-        run: |
-          gtk4-broadwayd :0 &
-          sleep 1
-
       - name: Run tests
         env:
-          GDK_BACKEND: broadway
-          GTK_A11Y: none
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
-        run: cargo test -- --test-threads=1
+        run: cargo test
 
   manifest:
     name: Flatpak manifest
