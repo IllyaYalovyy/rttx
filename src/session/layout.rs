@@ -439,6 +439,43 @@ impl LayoutNode {
             }
         }
     }
+
+    #[must_use]
+    pub fn terminal_custom_title(&self, target_uuid: &str) -> Option<String> {
+        match self {
+            Self::Terminal { uuid, custom_title, .. } => {
+                if uuid == target_uuid {
+                    custom_title.clone()
+                } else {
+                    None
+                }
+            }
+            Self::Split { first, second, .. } => first
+                .terminal_custom_title(target_uuid)
+                .or_else(|| second.terminal_custom_title(target_uuid)),
+        }
+    }
+
+    pub fn set_terminal_custom_title(
+        &mut self,
+        target_uuid: &str,
+        custom_title: Option<String>,
+    ) -> bool {
+        match self {
+            Self::Terminal { uuid, custom_title: terminal_custom_title, .. } => {
+                if uuid == target_uuid {
+                    *terminal_custom_title = custom_title;
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Split { first, second, .. } => {
+                first.set_terminal_custom_title(target_uuid, custom_title.clone())
+                    || second.set_terminal_custom_title(target_uuid, custom_title)
+            }
+        }
+    }
 }
 
 /// State of a single terminal session.
@@ -1007,6 +1044,51 @@ mod tests {
         assert_eq!(layout.terminal_cwd("t2").as_deref(), Some("/home/user"));
         assert_eq!(layout.terminal_cwd("t1"), None);
         assert_eq!(layout.terminal_cwd("missing"), None);
+    }
+
+    #[test]
+    fn set_terminal_custom_title_updates_nested_target_terminal_only() {
+        let mut layout = hsplit(
+            term_full("t1", "/old/one", "one"),
+            split_ratio(
+                SplitOrientation::Vertical,
+                0.5,
+                term_full("t2", "/old/two", "two"),
+                term_full("t3", "/old/three", "three"),
+            ),
+        );
+
+        assert!(layout.set_terminal_custom_title("t2", Some("editor".into())));
+
+        let LayoutNode::Split { first, second, .. } = &layout else {
+            panic!("expected split");
+        };
+        let LayoutNode::Terminal { custom_title: first_title, .. } = first.as_ref() else {
+            panic!("expected terminal");
+        };
+        assert_eq!(first_title.as_deref(), Some("one"));
+
+        let LayoutNode::Split { first: inner_first, second: inner_second, .. } = second.as_ref()
+        else {
+            panic!("expected nested split");
+        };
+        let LayoutNode::Terminal { custom_title: second_title, .. } = inner_first.as_ref() else {
+            panic!("expected target terminal");
+        };
+        let LayoutNode::Terminal { custom_title: third_title, .. } = inner_second.as_ref() else {
+            panic!("expected sibling terminal");
+        };
+        assert_eq!(second_title.as_deref(), Some("editor"));
+        assert_eq!(third_title.as_deref(), Some("three"));
+    }
+
+    #[test]
+    fn terminal_custom_title_returns_title_for_matching_terminal() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+        layout.set_terminal_custom_title("t2", Some("logs".into()));
+        assert_eq!(layout.terminal_custom_title("t2").as_deref(), Some("logs"));
+        assert_eq!(layout.terminal_custom_title("t1"), None);
+        assert_eq!(layout.terminal_custom_title("missing"), None);
     }
 
     #[test]

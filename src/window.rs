@@ -366,6 +366,7 @@ impl Window {
                 for node_uuid in session.layout.terminal_uuids() {
                     if let Some(term) = terminals.get(&node_uuid) {
                         session.layout.set_terminal_cwd(&node_uuid, term.current_directory());
+                        session.layout.set_terminal_custom_title(&node_uuid, term.custom_title());
                     }
                 }
             }
@@ -661,8 +662,7 @@ impl Window {
 
         let term = TerminalWidget::new(uuid, cwd);
         if let Some(title) = custom_title {
-            term.set_title(title);
-            term.imp().custom_title.replace(Some(title.to_string()));
+            term.set_custom_title(Some(title));
         }
         self.connect_terminal_signals(&term);
         self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
@@ -2203,6 +2203,20 @@ mod tests {
             .expect("session row should exist")
     }
 
+    fn emit_left_click(widget: &gtk4::Widget, n_press: i32) {
+        let controllers = widget.observe_controllers();
+        for index in 0..controllers.n_items() {
+            let Some(controller) = controllers.item(index) else {
+                continue;
+            };
+            if let Ok(gesture) = controller.downcast::<gtk4::GestureClick>() {
+                gesture.emit_by_name::<()>("released", &[&n_press, &0.0_f64, &0.0_f64]);
+                return;
+            }
+        }
+        panic!("widget should have a GestureClick controller");
+    }
+
     fn make_state_two_sessions() -> WindowState {
         WindowState {
             active_session_index: 0,
@@ -3224,6 +3238,68 @@ mod tests {
     }
 
     #[test]
+    fn clicking_title_label_focuses_the_terminal() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.title-click-focus-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        window.set_default_size(1000, 700);
+        window.present();
+        pump_events(100);
+
+        let first_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        window.split_terminal(&first_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let (first_term, second_term, second_uuid) = {
+            let state = window.imp().state.borrow();
+            let second_uuid = state.sessions[0]
+                .layout
+                .terminal_uuids()
+                .into_iter()
+                .find(|uuid| uuid != &first_uuid)
+                .unwrap();
+            let terminals = window.imp().terminals.borrow();
+            (
+                terminals.get(&first_uuid).cloned().unwrap(),
+                terminals.get(&second_uuid).cloned().unwrap(),
+                second_uuid,
+            )
+        };
+
+        assert!(second_term.vte().grab_focus());
+        assert!(
+            wait_until(1000, || window.focused_terminal_uuid().as_deref()
+                == Some(second_uuid.as_str())),
+            "test setup should start with the second pane focused"
+        );
+
+        emit_left_click(first_term.title_label().upcast_ref::<gtk4::Widget>(), 1);
+        assert!(
+            wait_until(1000, || {
+                window.focused_terminal_uuid().as_deref() == Some(first_uuid.as_str())
+                    && first_term.has_css_class("terminal-pane-active")
+                    && !second_term.has_css_class("terminal-pane-active")
+            }),
+            "clicking the title label should focus and activate that pane"
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
     fn split_rebuild_starts_new_panes_evenly() {
         require_display!();
 
@@ -3466,6 +3542,65 @@ mod tests {
         assert_eq!(second_cwd.as_deref(), Some("/tmp/project-b"));
 
         window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn save_and_restart_restores_custom_terminal_title() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.custom-title-tests").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let first_window = Window::new(&app);
+        first_window.set_default_size(900, 600);
+        first_window.present();
+        pump_events(100);
+
+        let terminal_uuid = {
+            let state = first_window.imp().state.borrow();
+            state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+        };
+        let term = first_window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("initial terminal should exist");
+        term.set_custom_title(Some("Editor"));
+
+        first_window.save_state();
+        let saved_state = session::load_window_state();
+        assert_eq!(
+            saved_state.sessions[0].layout.terminal_custom_title(&terminal_uuid).as_deref(),
+            Some("Editor"),
+            "save_state should capture the live custom pane title into the layout"
+        );
+
+        first_window.close();
+
+        let second_window = Window::new(&app);
+        second_window.set_default_size(900, 600);
+        second_window.present();
+        pump_events(100);
+
+        let restored_term = second_window
+            .imp()
+            .terminals
+            .borrow()
+            .get(&terminal_uuid)
+            .cloned()
+            .expect("restored terminal should exist");
+        assert_eq!(restored_term.custom_title().as_deref(), Some("Editor"));
+        assert_eq!(restored_term.title_label().label().as_str(), "Editor");
+
+        second_window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
     }
 

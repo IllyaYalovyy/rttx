@@ -106,8 +106,10 @@ mod imp {
             gesture.set_button(1);
             let header = self.header.clone();
             let label = self.title_label.clone();
+            let vte = self.vte.clone();
             let obj_weak = obj.downgrade();
             gesture.connect_released(move |g, n_press, _, _| {
+                let _ = vte.grab_focus();
                 if n_press == 2 {
                     if let Some(obj) = obj_weak.upgrade() {
                         let entry = gtk4::Entry::new();
@@ -123,8 +125,7 @@ mod imp {
                         let commit = move |entry: &gtk4::Entry| {
                             let text = entry.text().to_string();
                             if !text.is_empty() {
-                                label2.set_label(&text);
-                                obj.imp().custom_title.replace(Some(text));
+                                obj.set_custom_title(Some(&text));
                             }
                             label2.set_visible(true);
                             header2.remove(entry);
@@ -378,6 +379,13 @@ impl TerminalWidget {
 
     pub fn set_title(&self, title: &str) {
         self.imp().title_label.set_label(title);
+    }
+
+    pub fn set_custom_title(&self, title: Option<&str>) {
+        self.imp().custom_title.replace(title.map(str::to_string));
+        if let Some(title) = title {
+            self.set_title(title);
+        }
     }
 
     #[must_use]
