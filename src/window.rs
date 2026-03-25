@@ -1744,6 +1744,11 @@ impl Window {
             return false;
         };
 
+        let pre_split_position = match orientation {
+            SplitOrientation::Horizontal => target.width() / 2,
+            SplitOrientation::Vertical => target.height() / 2,
+        };
+
         let inherited_cwd = target.current_directory();
         let new_term = TerminalWidget::new(new_terminal_uuid, inherited_cwd.as_deref());
         self.connect_terminal_signals(&new_term);
@@ -1794,6 +1799,9 @@ impl Window {
         if let Ok(stack) = parent.clone().downcast::<gtk4::Stack>() {
             stack.remove(&target);
             let branch = build_branch();
+            if let Some(p) = branch.downcast_ref::<gtk4::Paned>() {
+                p.set_position(pre_split_position);
+            }
             stack.add_named(&branch, Some(session_uuid));
             stack.set_visible_child_name(session_uuid);
             session::schedule_initial_paned_ratios(&branch, &branch_layout);
@@ -1826,6 +1834,9 @@ impl Window {
         }
 
         let branch = build_branch();
+        if let Some(p) = branch.downcast_ref::<gtk4::Paned>() {
+            p.set_position(pre_split_position);
+        }
         if is_start {
             paned.set_start_child(Some(&branch));
         } else {
