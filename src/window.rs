@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 mod imp {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     #[derive(Default, Debug)]
     pub struct Window {
@@ -46,6 +46,7 @@ mod imp {
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
         pub session_lru: RefCell<Vec<String>>,
+        pub suppress_lru_update: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -1017,6 +1018,9 @@ impl Window {
     }
 
     fn push_session_lru(&self, uuid: &str) {
+        if self.imp().suppress_lru_update.get() {
+            return;
+        }
         let mut lru = self.imp().session_lru.borrow_mut();
         lru.retain(|u| u != uuid);
         lru.insert(0, uuid.to_string());
@@ -1954,11 +1958,15 @@ impl Window {
         let target_index = state.sessions.iter().position(|s| s.uuid == target_uuid);
         drop(state);
         drop(lru);
+        // Suppress LRU reordering so repeated Ctrl+Tab walks the full
+        // list instead of bouncing between two sessions.
+        imp.suppress_lru_update.set(true);
         if let Some(idx) = target_index
             && let Some(row) = imp.sidebar_list.row_at_index(idx as i32)
         {
             imp.sidebar_list.select_row(Some(&row));
         }
+        imp.suppress_lru_update.set(false);
     }
 
     fn switch_to_session_number(&self, number: usize) {
@@ -4185,6 +4193,23 @@ mod tests {
 
         let visible = window.imp().session_stack.visible_child_name().unwrap().to_string();
         assert_eq!(visible, uuid0, "cycle +1 from session 2 should show session 0");
+
+        // Verify LRU order is unchanged after cycling (no bounce-back).
+        let lru = window.imp().session_lru.borrow().clone();
+        assert_eq!(lru[0], uuid1, "LRU should be unchanged after cycling");
+        assert_eq!(lru[1], uuid2);
+        assert_eq!(lru[2], uuid0);
+
+        // Cycle backward should walk in reverse.
+        window.cycle_session(-1);
+        pump_events(50);
+        let visible = window.imp().session_stack.visible_child_name().unwrap().to_string();
+        assert_eq!(visible, uuid2, "cycle -1 from session 0 should show session 2");
+
+        window.cycle_session(-1);
+        pump_events(50);
+        let visible = window.imp().session_stack.visible_child_name().unwrap().to_string();
+        assert_eq!(visible, uuid1, "cycle -1 from session 2 should show session 1");
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
