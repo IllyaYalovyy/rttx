@@ -87,8 +87,5 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     assert_eq!(log_files.len(), 1, "expected exactly one scrollback log, found: {log_files:?}");
 
     let content = std::fs::read_to_string(&log_files[0]).unwrap();
-    assert!(
-        content.contains(marker),
-        "expected '{marker}' in scrollback log, got: {content}"
-    );
+    assert!(content.contains(marker), "expected '{marker}' in scrollback log, got: {content}");
 }

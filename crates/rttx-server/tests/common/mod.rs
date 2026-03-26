@@ -50,9 +50,7 @@ impl TestClient {
 
     /// Receive a server message with the default timeout.
     pub async fn recv_or_timeout(&mut self) -> proto::ServerMessage {
-        self.try_recv(DEFAULT_RECV_TIMEOUT)
-            .await
-            .expect("timed out waiting for server message")
+        self.try_recv(DEFAULT_RECV_TIMEOUT).await.expect("timed out waiting for server message")
     }
 
     /// Collect all messages received within a time window.
@@ -121,6 +119,13 @@ pub async fn start_test_server(
 
     let os = TestOs { runtime_dir, cache_dir };
     let server = Arc::new(Mutex::new(Server::new(Box::new(os))));
+
+    // Load persisted state and reconstruct sessions (if any).
+    {
+        let mut s = server.lock().await;
+        s.load_persisted_state();
+    }
+    Server::reconstruct_sessions(&server).await;
 
     let sock = socket_path.clone();
     let handle = tokio::spawn(async move { rttx_server::server::run(server).await });

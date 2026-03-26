@@ -4,8 +4,8 @@
 //! serialization loop, and manages the PTY read loops.
 
 use crate::engine::Engine;
-use crate::engine::native::NativeEngine;
 use crate::engine::PaneSpawnConfig;
+use crate::engine::native::NativeEngine;
 use crate::ipc::{ClientConnection, Listener};
 use crate::os::OsInterface;
 use crate::pane::Pane;
@@ -69,6 +69,104 @@ impl Server {
             }
             Err(e) => {
                 log::error!("Failed to load persisted state: {e}");
+            }
+        }
+    }
+
+    /// Reconstruct resurrected sessions: replay scrollback logs into pane
+    /// screens and spawn fresh shells in saved working directories.
+    ///
+    /// Called after `load_persisted_state` once the server is wrapped in
+    /// `Arc<Mutex<>>` so we can spawn PTY read loops.
+    #[allow(clippy::significant_drop_tightening)]
+    pub async fn reconstruct_sessions(server: &Arc<Mutex<Self>>) {
+        let panes_to_reconstruct: Vec<(Uuid, Uuid, Option<String>, u16, u16)> = {
+            let mut s = server.lock().await;
+
+            for session in s.sessions.values_mut() {
+                for pane in session.panes.values_mut() {
+                    // Replay scrollback log into the pane screen.
+                    if let Some(ref log_path) = pane.scrollback_log_path
+                        && log_path.exists()
+                    {
+                        match std::fs::read(log_path) {
+                            Ok(data) => {
+                                log::info!(
+                                    "Replaying {} bytes of scrollback for pane {}",
+                                    data.len(),
+                                    pane.id
+                                );
+                                pane.screen.feed(&data);
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to read scrollback log for pane {}: {e}",
+                                    pane.id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Collect panes that need fresh shells spawned.
+            s.sessions
+                .values()
+                .flat_map(|session| {
+                    session.panes.values().map(move |pane| {
+                        (session.id, pane.id, pane.cwd.clone(), pane.cols, pane.rows)
+                    })
+                })
+                .collect()
+        };
+
+        if panes_to_reconstruct.is_empty() {
+            return;
+        }
+
+        log::info!("Reconstructing {} panes", panes_to_reconstruct.len());
+
+        for (session_id, pane_id, cwd, cols, rows) in panes_to_reconstruct {
+            let pty_result = {
+                let s = server.lock().await;
+                let config = PaneSpawnConfig { command: vec![], cwd, cols, rows };
+                s.engine.spawn_pane(pane_id, &config)
+            };
+
+            match pty_result {
+                Ok(pty) => {
+                    let (reader, writer, child) = pty.into_parts();
+                    let (kill_tx, kill_rx) = oneshot::channel();
+                    {
+                        let mut s = server.lock().await;
+                        s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
+                        s.pty_kill_senders.insert(pane_id, kill_tx);
+                        // Clear exit status — fresh shell is running.
+                        if let Some(session) = s.sessions.get_mut(&session_id)
+                            && let Some(pane) = session.panes.get_mut(&pane_id)
+                        {
+                            pane.exit_status = None;
+                        }
+                    }
+                    spawn_pty_read_loop(
+                        Arc::clone(server),
+                        session_id,
+                        pane_id,
+                        reader,
+                        child,
+                        kill_rx,
+                    );
+                    log::info!("Reconstructed pane {pane_id} in session {session_id}");
+                }
+                Err(e) => {
+                    log::error!("Failed to reconstruct pane {pane_id}: {e}");
+                    let mut s = server.lock().await;
+                    if let Some(session) = s.sessions.get_mut(&session_id)
+                        && let Some(pane) = session.panes.get_mut(&pane_id)
+                    {
+                        pane.set_exited(-1);
+                    }
+                }
             }
         }
     }
@@ -199,8 +297,7 @@ impl Server {
                     let pane = Pane::new(pane_id, 80, 24);
                     session.add_pane(pane);
 
-                    let config =
-                        PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
+                    let config = PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)
                 };
 
@@ -210,10 +307,8 @@ impl Server {
                         let (kill_tx, kill_rx) = oneshot::channel();
                         {
                             let mut s = server.lock().await;
-                            s.pty_writers.insert(
-                                pane_id,
-                                Arc::new(tokio::sync::Mutex::new(writer)),
-                            );
+                            s.pty_writers
+                                .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
                         }
                         spawn_pty_read_loop(
@@ -408,10 +503,7 @@ pub async fn serialization_loop(server: Arc<Mutex<Server>>, interval: Duration) 
             if let Some(session) = s.sessions.get_mut(&session_id) {
                 for pane in session.panes.values_mut() {
                     if let Err(e) = pane.flush_scrollback(&cache_dir, session_id) {
-                        log::error!(
-                            "Failed to flush scrollback for pane {}: {e}",
-                            pane.id
-                        );
+                        log::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
                     }
                 }
             }

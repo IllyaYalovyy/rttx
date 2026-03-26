@@ -7,9 +7,7 @@ use rttx_proto::{bytes_to_uuid, proto};
 use std::time::Duration;
 
 /// Helper: create a session, create a pane, attach, and return IDs.
-async fn setup_attached_pane(
-    client: &mut TestClient,
-) -> (Vec<u8>, Vec<u8>) {
+async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
 
     // Create session.
@@ -62,10 +60,8 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
     // A shell produces a prompt or at least some output on startup.
     // Collect any Delta messages within a reasonable window.
     let msgs = client.drain(Duration::from_secs(2)).await;
-    let delta_count = msgs
-        .iter()
-        .filter(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_))))
-        .count();
+    let delta_count =
+        msgs.iter().filter(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_)))).count();
     assert!(delta_count > 0, "expected at least one Delta, got {delta_count} messages: {msgs:?}");
 }
 
@@ -103,10 +99,7 @@ async fn input_reaches_pty_and_echoes_back_as_delta() {
         .flatten()
         .collect();
     let output_str = String::from_utf8_lossy(&output);
-    assert!(
-        output_str.contains(marker),
-        "expected '{marker}' in delta output, got: {output_str}"
-    );
+    assert!(output_str.contains(marker), "expected '{marker}' in delta output, got: {output_str}");
 }
 
 #[tokio::test]
@@ -148,11 +141,8 @@ async fn resize_updates_pane_dimensions() {
     let resp = client.recv_or_timeout().await;
     match resp.msg {
         Some(proto::server_message::Msg::Snapshot(snap)) => {
-            let pane_snap = snap
-                .panes
-                .iter()
-                .find(|p| p.pane_id == pane_id)
-                .expect("pane not in snapshot");
+            let pane_snap =
+                snap.panes.iter().find(|p| p.pane_id == pane_id).expect("pane not in snapshot");
             assert_eq!(pane_snap.cols, 120, "expected cols=120");
             assert_eq!(pane_snap.rows, 40, "expected rows=40");
         }

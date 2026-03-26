@@ -114,6 +114,7 @@ impl Pty {
     /// The reader goes to the PTY output loop, the writer is stored for
     /// Input/Resize routing, and the child is owned by the output loop
     /// for exit-status collection.
+    #[must_use]
     pub fn into_parts(
         self,
     ) -> (pty_process::OwnedReadPty, pty_process::OwnedWritePty, tokio::process::Child) {

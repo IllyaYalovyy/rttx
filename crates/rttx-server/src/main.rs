@@ -63,6 +63,9 @@ fn start(foreground: bool) -> anyhow::Result<()> {
             s.load_persisted_state();
         }
 
+        // Reconstruct sessions: replay scrollback, spawn fresh shells.
+        Server::reconstruct_sessions(&server).await;
+
         let sig_server = Arc::clone(&server);
         tokio::spawn(async move {
             handle_signals(sig_server).await;

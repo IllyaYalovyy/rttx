@@ -89,7 +89,7 @@ impl Pane {
 
     /// Whether there are unflushed scrollback bytes.
     #[must_use]
-    pub fn has_pending_flush(&self) -> bool {
+    pub const fn has_pending_flush(&self) -> bool {
         !self.pending_flush.is_empty()
     }
 
