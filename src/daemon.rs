@@ -2,6 +2,8 @@
 //!
 //! Provides a `DaemonConnection` that communicates with rttxd over a Unix
 //! socket using the length-prefixed protobuf framing from `rttx-proto`.
+//! After the handshake, the connection can be split into a `DaemonReader`
+//! and `DaemonWriter` for concurrent read/write from the glib main loop.
 //! This module has no GTK dependency — it is pure async Rust.
 
 use bytes::BytesMut;
@@ -11,6 +13,7 @@ use rttx_proto::{
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use uuid::Uuid;
 
 /// Default socket path for the local rttxd instance.
@@ -61,7 +64,12 @@ pub enum DaemonError {
     Disconnected,
 }
 
-/// A connection to a running rttxd instance.
+/// A connection to a running rttxd instance (pre-split).
+///
+/// Used for the handshake and initial request/response exchanges
+/// (create session, attach, create pane). Once setup is complete,
+/// call [`into_split`](DaemonConnection::into_split) to get separate
+/// reader and writer halves for concurrent use.
 pub struct DaemonConnection {
     stream: UnixStream,
     read_buf: BytesMut,
@@ -89,6 +97,20 @@ impl DaemonConnection {
         let mut conn = Self { stream, read_buf: BytesMut::with_capacity(8192), client_id };
         conn.handshake().await?;
         Ok(conn)
+    }
+
+    /// Split into independent reader and writer halves.
+    ///
+    /// The writer is used for sending input/resize/detach messages.
+    /// The reader is used by the single reader loop that dispatches
+    /// server messages to panes.
+    #[must_use]
+    pub fn into_split(self) -> (DaemonReader, DaemonWriter) {
+        let (read_half, write_half) = self.stream.into_split();
+        (
+            DaemonReader { stream: read_half, read_buf: self.read_buf },
+            DaemonWriter { stream: write_half },
+        )
     }
 
     /// Send a client message to the daemon.
@@ -222,7 +244,23 @@ impl DaemonConnection {
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
+}
 
+/// Write half of a split daemon connection.
+///
+/// Used by input/resize/detach handlers. Shared via `Rc<RefCell<>>` on
+/// the glib main thread.
+pub struct DaemonWriter {
+    stream: OwnedWriteHalf,
+}
+
+impl std::fmt::Debug for DaemonWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DaemonWriter").finish_non_exhaustive()
+    }
+}
+
+impl DaemonWriter {
     /// Send keyboard input to a pane.
     pub async fn send_input(
         &mut self,
@@ -230,14 +268,14 @@ impl DaemonConnection {
         pane_id: Uuid,
         data: &[u8],
     ) -> Result<(), DaemonError> {
-        let msg = proto::ClientMessage {
+        self.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: uuid_to_bytes(session_id),
                 pane_id: uuid_to_bytes(pane_id),
                 data: data.to_vec(),
             })),
-        };
-        self.send(&msg).await
+        })
+        .await
     }
 
     /// Notify the daemon of a pane resize.
@@ -248,26 +286,86 @@ impl DaemonConnection {
         cols: u16,
         rows: u16,
     ) -> Result<(), DaemonError> {
-        let msg = proto::ClientMessage {
+        self.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
                 session_id: uuid_to_bytes(session_id),
                 pane_id: uuid_to_bytes(pane_id),
                 cols: u32::from(cols),
                 rows: u32::from(rows),
             })),
-        };
-        self.send(&msg).await
+        })
+        .await
     }
 
     /// Detach from a session without killing it.
     pub async fn detach_session(&mut self, session_id: Uuid) -> Result<(), DaemonError> {
-        let msg = proto::ClientMessage {
+        self.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
                 session_id: uuid_to_bytes(session_id),
             })),
-        };
-        self.send(&msg).await
+        })
+        .await
     }
+
+    async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        Ok(())
+    }
+}
+
+/// Read half of a split daemon connection.
+///
+/// Owned by the single reader loop that dispatches server messages
+/// to the correct `PersistentPaneView` by `pane_id`.
+pub struct DaemonReader {
+    stream: OwnedReadHalf,
+    read_buf: BytesMut,
+}
+
+impl std::fmt::Debug for DaemonReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DaemonReader").finish_non_exhaustive()
+    }
+}
+
+impl DaemonReader {
+    /// Read the next server message. Returns `None` on clean disconnect.
+    pub async fn recv(&mut self) -> Result<Option<proto::ServerMessage>, DaemonError> {
+        loop {
+            match decode_frame::<proto::ServerMessage>(&mut self.read_buf) {
+                Ok(msg) => return Ok(Some(msg)),
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => return Err(DaemonError::Frame(e)),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+/// Extract the `pane_id` bytes from a server message, if present.
+#[must_use]
+pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
+    use proto::server_message::Msg;
+    let bytes = match msg.msg.as_ref()? {
+        Msg::Delta(m) => &m.pane_id,
+        Msg::PaneExited(m) => &m.pane_id,
+        Msg::PaneCreated(m) => &m.pane_id,
+        Msg::PaneClosed(m) => &m.pane_id,
+        Msg::TitleChanged(m) => &m.pane_id,
+        Msg::CwdChanged(m) => &m.pane_id,
+        Msg::Bell(m) => &m.pane_id,
+        Msg::HelloAck(_)
+        | Msg::SessionList(_)
+        | Msg::SessionCreated(_)
+        | Msg::Snapshot(_)
+        | Msg::Error(_) => return None,
+    };
+    bytes_to_uuid(bytes).ok()
 }
 
 #[cfg(test)]
@@ -342,7 +440,6 @@ mod tests {
             async move { DaemonConnection::connect(&sock).await }
         });
 
-        // Accept and send a HelloAck with wrong version.
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buf = BytesMut::with_capacity(4096);
         loop {
@@ -415,7 +512,7 @@ mod tests {
         });
 
         let server_stream = serve_handshake(&listener).await;
-        drop(server_stream); // Clean disconnect.
+        drop(server_stream);
 
         let result = client_task.await.unwrap().unwrap();
         assert!(result.is_none());
@@ -433,14 +530,13 @@ mod tests {
         let client_task = tokio::spawn({
             let sock = sock.clone();
             async move {
-                let mut conn = DaemonConnection::connect(&sock).await.unwrap();
-                conn.send_input(session_id, pane_id, b"hello").await.unwrap();
+                let conn = DaemonConnection::connect(&sock).await.unwrap();
+                let (_reader, mut writer) = conn.into_split();
+                writer.send_input(session_id, pane_id, b"hello").await.unwrap();
             }
         });
 
         let mut server_stream = serve_handshake(&listener).await;
-
-        // Read the Input message from the server side.
         let mut buf = BytesMut::with_capacity(4096);
         loop {
             let n = server_stream.read_buf(&mut buf).await.unwrap();
@@ -475,8 +571,9 @@ mod tests {
         let client_task = tokio::spawn({
             let sock = sock.clone();
             async move {
-                let mut conn = DaemonConnection::connect(&sock).await.unwrap();
-                conn.send_resize(session_id, pane_id, 120, 40).await.unwrap();
+                let conn = DaemonConnection::connect(&sock).await.unwrap();
+                let (_reader, mut writer) = conn.into_split();
+                writer.send_resize(session_id, pane_id, 120, 40).await.unwrap();
             }
         });
 
@@ -500,5 +597,29 @@ mod tests {
         }
 
         client_task.await.unwrap();
+    }
+
+    #[test]
+    fn extract_pane_id_from_delta() {
+        let pane_id = Uuid::new_v4();
+        let msg = proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+                session_id: uuid_to_bytes(Uuid::new_v4()),
+                pane_id: uuid_to_bytes(pane_id),
+                data: vec![],
+            })),
+        };
+        assert_eq!(extract_pane_id(&msg), Some(pane_id));
+    }
+
+    #[test]
+    fn extract_pane_id_from_error_is_none() {
+        let msg = proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::Error(proto::Error {
+                code: 1,
+                message: "test".into(),
+            })),
+        };
+        assert_eq!(extract_pane_id(&msg), None);
     }
 }
