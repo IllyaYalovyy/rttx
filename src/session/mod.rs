@@ -248,10 +248,7 @@ fn apply_initial_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
     };
 
     if total > 0 {
-        let current = paned.position();
-        if current == 0 || current == 200 {
-            paned.set_position((f64::from(total) * ratio.clamp(0.05, 0.95)) as i32);
-        }
+        paned.set_position((f64::from(total) * ratio.clamp(0.05, 0.95)) as i32);
     }
 
     if let Some(first_child) = paned.start_child() {
@@ -265,7 +262,38 @@ fn apply_initial_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
     use tempfile::TempDir;
+
+    static GTK_INIT: Once = Once::new();
+    static GTK_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    fn ensure_gtk_init() -> bool {
+        GTK_INIT.call_once(|| {
+            // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var("GTK_A11Y", "none")
+            };
+            let ok =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
+                    .unwrap_or(false);
+            if ok && let Some(display) = gtk4::gdk::Display::default() {
+                std::mem::forget(display);
+            }
+            GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
+        });
+        GTK_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    macro_rules! require_display {
+        () => {
+            if !ensure_gtk_init() {
+                eprintln!("SKIPPED: no display available");
+                return;
+            }
+        };
+    }
 
     #[test]
     fn save_and_load_roundtrip() {
@@ -334,6 +362,70 @@ mod tests {
         fs::write(path, "{corrupt").unwrap();
         let loaded = load_state_from(tmp.path());
         assert_eq!(loaded, WindowState::default_for_test());
+    }
+
+    #[test]
+    fn apply_initial_paned_ratios_restores_nested_non_sentinel_positions() {
+        require_display!();
+
+        let layout = LayoutNode::Split {
+            orientation: SplitOrientation::Horizontal,
+            ratio: 0.35,
+            first: Box::new(LayoutNode::Terminal {
+                uuid: "t1".into(),
+                profile: None,
+                cwd: None,
+                custom_title: None,
+            }),
+            second: Box::new(LayoutNode::Split {
+                orientation: SplitOrientation::Vertical,
+                ratio: 0.7,
+                first: Box::new(LayoutNode::Terminal {
+                    uuid: "t2".into(),
+                    profile: None,
+                    cwd: None,
+                    custom_title: None,
+                }),
+                second: Box::new(LayoutNode::Terminal {
+                    uuid: "t3".into(),
+                    profile: None,
+                    cwd: None,
+                    custom_title: None,
+                }),
+            }),
+        };
+
+        let widget =
+            build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+
+        let outer = widget.downcast_ref::<gtk4::Paned>().expect("root widget should be a Paned");
+        outer.set_size_request(1000, 800);
+        outer.allocate(1000, 800, -1, None);
+
+        let inner = outer
+            .end_child()
+            .expect("nested branch should exist")
+            .downcast::<gtk4::Paned>()
+            .expect("nested branch should be a Paned");
+        inner.set_size_request(650, 800);
+        inner.allocate(650, 800, -1, None);
+
+        outer.set_position(111);
+        inner.set_position(123);
+
+        apply_initial_paned_ratios(&layout, &widget);
+
+        let outer_ratio = outer.position() as f64 / outer.width().max(1) as f64;
+        let inner_ratio = inner.position() as f64 / inner.height().max(1) as f64;
+
+        assert!(
+            (outer_ratio - 0.35).abs() < 0.03,
+            "outer split should restore saved ratio from a non-sentinel position, got {outer_ratio}"
+        );
+        assert!(
+            (inner_ratio - 0.7).abs() < 0.03,
+            "inner split should restore saved ratio from a non-sentinel position, got {inner_ratio}"
+        );
     }
 
     fn load_state_from(dir: &std::path::Path) -> WindowState {
