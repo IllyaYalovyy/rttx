@@ -1062,11 +1062,15 @@ impl Window {
         // If daemon isn't running, try to start it.
         if !socket_path.exists() {
             log::info!("Daemon not running, attempting to start rttx-server");
-            let spawn_result = std::process::Command::new("rttx-server")
-                .arg("start")
+            let mut cmd = std::process::Command::new("rttx-server");
+            cmd.arg("start")
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+                .stderr(std::process::Stdio::null());
+            // Propagate dev mode to the daemon so it uses matching paths.
+            if crate::config::is_development() {
+                cmd.env("RTTX_DEV_MODE", "1");
+            }
+            let spawn_result = cmd.spawn();
 
             if let Ok(mut child) = spawn_result {
                 let _ = child.wait();
