@@ -11,8 +11,6 @@ use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
-use crate::daemon::{default_socket_path, extract_pane_id};
-use crate::daemon_bridge::DaemonBridge;
 use crate::preferences::{self, Preferences};
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
@@ -48,7 +46,7 @@ mod imp {
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
-        pub daemon_bridge: RefCell<Option<DaemonBridge>>,
+        pub daemon_bridge: RefCell<Option<crate::daemon_bridge::DaemonBridge>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
@@ -329,8 +327,6 @@ impl Window {
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
         }
-
-        self.restore_persistent_sessions();
     }
 
     pub fn save_state(&self) {
@@ -414,7 +410,6 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
-            ("new-persistent-session", &["<Ctrl><Shift>P"], Self::add_persistent_session),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
@@ -657,6 +652,11 @@ impl Window {
         cwd: Option<&str>,
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
+        // Persistent sessions use PersistentPaneView for all panes.
+        if session_state.mode.is_persistent() {
+            return self.materialize_persistent_terminal(session_state, uuid, custom_title);
+        }
+
         let existing = {
             let terminals = self.imp().terminals.borrow();
             terminals.get(uuid).cloned()
@@ -676,6 +676,34 @@ impl Window {
         self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
         self.initialize_terminal_recovery(&term, session_state, uuid);
         term.upcast()
+    }
+
+    /// Create a `PersistentPaneView` for a daemon-backed session.
+    fn materialize_persistent_terminal(
+        &self,
+        session_state: &SessionState,
+        uuid: &str,
+        custom_title: Option<&str>,
+    ) -> gtk4::Widget {
+        let existing = {
+            let panes = self.imp().persistent_terminals.borrow();
+            panes.get(uuid).cloned()
+        };
+        if let Some(existing) = existing {
+            if existing.parent().is_some() {
+                existing.unparent();
+            }
+            return existing.upcast();
+        }
+
+        let daemon_session_id = session_state.mode.daemon_session_id().unwrap_or_default();
+        let pane_view = PersistentPaneView::new(uuid, daemon_session_id);
+        if let Some(title) = custom_title {
+            pane_view.set_custom_title(Some(title));
+        }
+        self.apply_preferences_to_persistent_pane(&pane_view);
+        self.imp().persistent_terminals.borrow_mut().insert(uuid.to_string(), pane_view.clone());
+        pane_view.upcast()
     }
 
     fn initialize_terminal_recovery(
@@ -927,310 +955,6 @@ impl Window {
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
-        }
-    }
-
-    /// Create a new persistent session backed by the rttxd daemon.
-    pub fn add_persistent_session(&self) {
-        if let Err(e) = self.add_persistent_session_impl() {
-            log::error!("Failed to create persistent session: {e}");
-            let toast = adw::Toast::new(&format!("Persistent session failed: {e}"));
-            self.imp().toast_overlay.add_toast(toast);
-        }
-    }
-
-    fn add_persistent_session_impl(&self) -> Result<(), crate::daemon::DaemonError> {
-        self.ensure_daemon_bridge()?;
-
-        let bridge = self.imp().daemon_bridge.borrow();
-        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
-
-        let count = self.imp().state.borrow().sessions.len() + 1;
-        let socket_path = default_socket_path();
-        let mut conn = bridge.connect(&socket_path)?;
-
-        let session_id = bridge.run(conn.create_session(&format!("Session {count}")))?;
-        let _snapshot = bridge.run(conn.attach_session(session_id))?;
-        let pane_id = bridge.run(conn.create_pane(session_id))?;
-
-        // Install connection (split + reader loop).
-        let msg_rx = bridge.install_connection(conn);
-        let _ = bridge;
-
-        // Start polling server messages on the glib main loop.
-        self.start_message_poller(msg_rx);
-
-        let pane_uuid = pane_id.to_string();
-        let session_state = SessionState::new(format!(
-            "⏻ Session {}",
-            self.imp().state.borrow().sessions.len() + 1
-        ));
-        let session_uuid = session_state.uuid.clone();
-
-        self.imp().state.borrow_mut().sessions.push(session_state.clone());
-        self.append_session_row(&session_state);
-
-        let pane_view = PersistentPaneView::new(&pane_uuid, &session_id.to_string());
-        pane_view.set_connected(true);
-        self.connect_persistent_pane_signals(&pane_view, session_id, pane_id);
-        self.apply_preferences_to_persistent_pane(&pane_view);
-        self.imp().persistent_terminals.borrow_mut().insert(pane_uuid, pane_view.clone());
-
-        let content: gtk4::Widget = pane_view.upcast();
-        self.imp().session_stack.add_named(&content, Some(&session_uuid));
-
-        let index = self.imp().state.borrow().sessions.len() as i32 - 1;
-        if let Some(row) = self.imp().sidebar_list.row_at_index(index) {
-            self.imp().sidebar_list.select_row(Some(&row));
-        }
-
-        Ok(())
-    }
-
-    /// Try to restore persistent sessions from a running daemon on GUI start.
-    pub fn restore_persistent_sessions(&self) {
-        let socket_path = default_socket_path();
-        if !socket_path.exists() {
-            return;
-        }
-
-        if let Err(e) = self.restore_persistent_sessions_impl() {
-            log::info!("No persistent sessions to restore: {e}");
-        }
-    }
-
-    fn restore_persistent_sessions_impl(&self) -> Result<(), crate::daemon::DaemonError> {
-        self.ensure_daemon_bridge()?;
-
-        let bridge = self.imp().daemon_bridge.borrow();
-        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
-
-        let socket_path = default_socket_path();
-        let mut conn = bridge.connect(&socket_path)?;
-
-        let sessions = bridge.run(conn.list_sessions())?;
-        if sessions.is_empty() {
-            return Ok(());
-        }
-
-        for info in &sessions {
-            let session_id =
-                rttx_proto::bytes_to_uuid(&info.id).map_err(crate::daemon::DaemonError::Frame)?;
-            let snapshot = bridge.run(conn.attach_session(session_id))?;
-
-            let session_state = SessionState::new(format!("⏻ {}", info.name));
-            let session_uuid = session_state.uuid.clone();
-            self.imp().state.borrow_mut().sessions.push(session_state.clone());
-            self.append_session_row(&session_state);
-
-            for pane_snap in &snapshot.panes {
-                let pane_id = rttx_proto::bytes_to_uuid(&pane_snap.pane_id)
-                    .map_err(crate::daemon::DaemonError::Frame)?;
-                let pane_uuid = pane_id.to_string();
-
-                let pane_view = PersistentPaneView::new(&pane_uuid, &session_id.to_string());
-                pane_view.set_connected(true);
-                pane_view.feed_snapshot(&pane_snap.scrollback);
-                if !pane_snap.title.is_empty() {
-                    pane_view.set_title(&pane_snap.title);
-                }
-                self.connect_persistent_pane_signals(&pane_view, session_id, pane_id);
-                self.apply_preferences_to_persistent_pane(&pane_view);
-                self.imp().persistent_terminals.borrow_mut().insert(pane_uuid, pane_view.clone());
-
-                let content: gtk4::Widget = pane_view.upcast();
-                self.imp().session_stack.add_named(&content, Some(&session_uuid));
-            }
-        }
-
-        let msg_rx = bridge.install_connection(conn);
-        let _ = bridge;
-        self.start_message_poller(msg_rx);
-
-        log::info!("Restored {} persistent sessions from daemon", sessions.len());
-        Ok(())
-    }
-
-    /// Ensure the daemon bridge (tokio runtime) exists.
-    fn ensure_daemon_bridge(&self) -> Result<(), crate::daemon::DaemonError> {
-        if self.imp().daemon_bridge.borrow().is_some() {
-            return Ok(());
-        }
-
-        let socket_path = default_socket_path();
-
-        // If daemon isn't running, try to start it.
-        if !socket_path.exists() {
-            log::info!("Daemon not running, attempting to start rttx-server");
-            let mut cmd = std::process::Command::new("rttx-server");
-            cmd.arg("start")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            // Propagate dev mode to the daemon so it uses matching paths.
-            if crate::config::is_development() {
-                cmd.env("RTTX_DEV_MODE", "1");
-            }
-            let spawn_result = cmd.spawn();
-
-            if let Ok(mut child) = spawn_result {
-                let _ = child.wait();
-                // Poll for socket.
-                for _ in 0..20 {
-                    if socket_path.exists() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            }
-        }
-
-        let bridge = DaemonBridge::new()?;
-        self.imp().daemon_bridge.replace(Some(bridge));
-        Ok(())
-    }
-
-    fn connect_persistent_pane_signals(
-        &self,
-        pane: &PersistentPaneView,
-        session_id: uuid::Uuid,
-        pane_id: uuid::Uuid,
-    ) {
-        // Forward keyboard input to daemon via the bridge.
-        let win = self.clone();
-        pane.connect_input(move |text| {
-            let data = text.as_bytes().to_vec();
-            if let Some(ref bridge) = *win.imp().daemon_bridge.borrow() {
-                bridge.send_input(session_id, pane_id, data);
-            }
-        });
-
-        // Forward resize events to daemon via the bridge.
-        let win2 = self.clone();
-        pane.connect_resize(move |cols, rows| {
-            if let Some(ref bridge) = *win2.imp().daemon_bridge.borrow() {
-                bridge.send_resize(session_id, pane_id, cols, rows);
-            }
-        });
-
-        // Focus tracking.
-        let win = self.clone();
-        let uuid = pane.uuid();
-        let focus_controller = gtk4::EventControllerFocus::new();
-        focus_controller.connect_enter(move |_| {
-            win.set_focused_terminal(Some(&uuid));
-        });
-        pane.vte().add_controller(focus_controller);
-
-        // Bell.
-        let bell_pane = pane.clone();
-        pane.vte().connect_bell(move |_| {
-            bell_pane.flash_bell();
-        });
-
-        // Close/detach button.
-        let win = self.clone();
-        let pane_session_id = pane.session_id();
-        let pane_uuid = pane.uuid();
-        pane.close_button().connect_clicked(move |_| {
-            win.detach_persistent_session(&pane_session_id, &pane_uuid);
-        });
-    }
-
-    /// Poll the server message channel and dispatch to panes.
-    ///
-    /// Uses `glib::timeout_add_local` to periodically check for messages
-    /// from the tokio reader loop without blocking the GTK main loop.
-    fn start_message_poller(
-        &self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<rttx_proto::proto::ServerMessage>,
-    ) {
-        let win = self.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(4), move || {
-            // Drain all available messages without blocking.
-            while let Ok(msg) = rx.try_recv() {
-                win.dispatch_daemon_message(&msg);
-            }
-            glib::ControlFlow::Continue
-        });
-    }
-
-    /// Route a server message to the correct `PersistentPaneView` by `pane_id`.
-    fn dispatch_daemon_message(&self, msg: &rttx_proto::proto::ServerMessage) {
-        use rttx_proto::proto::server_message::Msg;
-
-        let Some(ref inner) = msg.msg else { return };
-
-        let Some(pane_id) = extract_pane_id(msg) else {
-            if let Msg::Error(e) = inner {
-                log::error!("Daemon error: {} (code {})", e.message, e.code);
-            }
-            return;
-        };
-
-        let pane_uuid = pane_id.to_string();
-        let panes = self.imp().persistent_terminals.borrow();
-        let Some(pane) = panes.get(&pane_uuid) else {
-            return;
-        };
-
-        match inner {
-            Msg::Delta(delta) => pane.feed_output(&delta.data),
-            Msg::TitleChanged(tc) => {
-                if pane.custom_title().is_none() {
-                    pane.set_title(&tc.title);
-                }
-            }
-            Msg::PaneExited(exited) => {
-                log::info!("Persistent pane {pane_uuid} exited with status {}", exited.status);
-            }
-            Msg::Bell(_) => pane.flash_bell(),
-            _ => {}
-        }
-    }
-
-    /// Detach a persistent session: send `DetachSession`, remove from UI.
-    fn detach_persistent_session(&self, session_id_str: &str, pane_uuid: &str) {
-        if let Ok(session_id) = uuid::Uuid::parse_str(session_id_str)
-            && let Some(ref bridge) = *self.imp().daemon_bridge.borrow()
-        {
-            bridge.detach_session(session_id);
-        }
-
-        self.imp().persistent_terminals.borrow_mut().remove(pane_uuid);
-
-        let session_uuid = {
-            let state = self.imp().state.borrow();
-            state
-                .sessions
-                .iter()
-                .find(|s| self.imp().session_stack.child_by_name(&s.uuid).is_some())
-                .map(|s| s.uuid.clone())
-        };
-        if let Some(uuid) = session_uuid {
-            self.close_session(&uuid);
-        }
-    }
-
-    fn apply_preferences_to_persistent_pane(&self, pane: &PersistentPaneView) {
-        let prefs = preferences::load();
-        let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
-        pane.vte().set_font(Some(&font_desc));
-        pane.vte().set_scrollback_lines(prefs.scrollback_lines as i64);
-        pane.set_smart_clipboard(prefs.smart_clipboard);
-
-        let is_dark = adw::StyleManager::default().is_dark();
-        let effective_name = prefs.effective_color_scheme_name(is_dark);
-        if let Some(scheme) =
-            color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
-                let fallback = if is_dark {
-                    color_scheme::BUILTIN_DARK_SCHEME_NAME
-                } else {
-                    color_scheme::BUILTIN_LIGHT_SCHEME_NAME
-                };
-                color_scheme::load_color_scheme_by_name(fallback)
-            })
-        {
-            pane.apply_color_scheme(&scheme);
         }
     }
 
@@ -2208,6 +1932,34 @@ impl Window {
         for term in terminals {
             Self::apply_preferences_to_terminal(&term, &prefs, &font_desc, scheme.as_ref());
         }
+        let persistent: Vec<PersistentPaneView> =
+            self.imp().persistent_terminals.borrow().values().cloned().collect();
+        for pane in persistent {
+            self.apply_preferences_to_persistent_pane(&pane);
+        }
+    }
+
+    fn apply_preferences_to_persistent_pane(&self, pane: &PersistentPaneView) {
+        let prefs = preferences::load();
+        let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
+        pane.vte().set_font(Some(&font_desc));
+        pane.vte().set_scrollback_lines(prefs.scrollback_lines);
+        pane.set_smart_clipboard(prefs.smart_clipboard);
+
+        let is_dark = adw::StyleManager::default().is_dark();
+        let effective_name = prefs.effective_color_scheme_name(is_dark);
+        if let Some(scheme) =
+            color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
+                let fallback = if is_dark {
+                    color_scheme::BUILTIN_DARK_SCHEME_NAME
+                } else {
+                    color_scheme::BUILTIN_LIGHT_SCHEME_NAME
+                };
+                color_scheme::load_color_scheme_by_name(fallback)
+            })
+        {
+            pane.apply_color_scheme(&scheme);
+        }
     }
 
     fn forward_input(&self, source_uuid: &str, text: &str) {
@@ -2419,18 +2171,22 @@ impl Window {
     }
 
     fn clipboard_copy(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
-        {
-            term.vte().copy_clipboard_format(vte4::Format::Text);
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.vte().copy_clipboard_format(vte4::Format::Text);
+            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
+                pane.vte().copy_clipboard_format(vte4::Format::Text);
+            }
         }
     }
 
     fn clipboard_paste(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
-        {
-            term.vte().paste_clipboard();
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.vte().paste_clipboard();
+            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
+                pane.vte().paste_clipboard();
+            }
         }
     }
 }
