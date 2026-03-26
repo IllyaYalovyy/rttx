@@ -36,12 +36,16 @@ dbg_macro = "warn"
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_14"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
-vte4 = { version = "0.8", features = ["v0_78"] }
+vte4 = { version = "0.8", features = ["v0_76"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 pretty_env_logger = "0.5"
+rttx-proto = { path = "../rttxd/crates/rttx-proto" }
+bytes = "1"
+tokio = { version = "1", features = ["net", "io-util", "sync", "rt", "macros"] }
+thiserror = "2"
 
 [dev-dependencies]
 tempfile = "3"
