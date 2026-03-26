@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Detect VTE version and select the right feature flag.
+VTE_VERSION=$(pkg-config --modversion vte-2.91-gtk4 2>/dev/null || echo "0.78")
+if printf '%s\n' "0.78" "$VTE_VERSION" | sort -V | head -n1 | grep -q "^0\.78"; then
+    FEATURES=""
+else
+    FEATURES="--no-default-features --features vte-0_76"
+fi
+
 cargo fmt
-cargo clippy -- -D warnings
+cargo clippy $FEATURES -- -D warnings
