@@ -1,7 +1,7 @@
 pub mod layout;
 
 pub use layout::{
-    LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
+    LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionMode, SessionState,
     SplitOrientation, StartupStep, WindowState,
 };
 

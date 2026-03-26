@@ -329,6 +329,8 @@ impl Window {
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
         }
+
+        self.restore_persistent_sessions();
     }
 
     pub fn save_state(&self) {
@@ -377,7 +379,6 @@ impl Window {
             }
         }
 
-        // Save state to disk.
         if let Err(e) = session::save_window_state(&state) {
             log::error!("Failed to save window state: {e}");
         }
@@ -413,6 +414,7 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
+            ("new-persistent-session", &["<Ctrl><Shift>P"], Self::add_persistent_session),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
@@ -655,14 +657,6 @@ impl Window {
         cwd: Option<&str>,
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
-        // Check if this pane should be persistent (daemon-backed).
-        if let Some(recovery) = session_state.recovery_for(uuid)
-            && let Some(target) = &recovery.target
-            && target.is_persistent()
-        {
-            return self.materialize_persistent_terminal(uuid, target, custom_title);
-        }
-
         let existing = {
             let terminals = self.imp().terminals.borrow();
             terminals.get(uuid).cloned()
@@ -682,101 +676,6 @@ impl Window {
         self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
         self.initialize_terminal_recovery(&term, session_state, uuid);
         term.upcast()
-    }
-
-    fn materialize_persistent_terminal(
-        &self,
-        uuid: &str,
-        target: &crate::session::PaneTarget,
-        custom_title: Option<&str>,
-    ) -> gtk4::Widget {
-        // Reuse existing persistent pane if already created.
-        let existing = {
-            let panes = self.imp().persistent_terminals.borrow();
-            panes.get(uuid).cloned()
-        };
-        if let Some(existing) = existing {
-            if existing.parent().is_some() {
-                existing.unparent();
-            }
-            return existing.upcast();
-        }
-
-        let daemon_session_id = target.daemon_session_id().unwrap_or_default();
-        let daemon_pane_id = target.daemon_pane_id().unwrap_or_default();
-
-        let pane_view = PersistentPaneView::new(uuid, daemon_session_id);
-        if let Some(title) = custom_title {
-            pane_view.set_custom_title(Some(title));
-        }
-        self.apply_preferences_to_persistent_pane(&pane_view);
-
-        // Try to connect and attach.
-        if let Ok(session_uuid) = uuid::Uuid::parse_str(daemon_session_id)
-            && let Ok(pane_uuid) = uuid::Uuid::parse_str(daemon_pane_id)
-        {
-            self.attach_persistent_pane(
-                &pane_view,
-                session_uuid,
-                pane_uuid,
-                target.persistent_host(),
-            );
-        }
-
-        self.imp().persistent_terminals.borrow_mut().insert(uuid.to_string(), pane_view.clone());
-        pane_view.upcast()
-    }
-
-    /// Connect to the daemon and attach a persistent pane.
-    fn attach_persistent_pane(
-        &self,
-        pane_view: &PersistentPaneView,
-        daemon_session_id: uuid::Uuid,
-        daemon_pane_id: uuid::Uuid,
-        _host: Option<&str>,
-    ) {
-        if self.ensure_daemon_bridge().is_err() {
-            pane_view.set_connected(false);
-            return;
-        }
-
-        let bridge = self.imp().daemon_bridge.borrow();
-        let Some(bridge) = bridge.as_ref() else {
-            pane_view.set_connected(false);
-            return;
-        };
-
-        let socket_path = default_socket_path();
-        let Ok(mut conn) = bridge.connect(&socket_path) else {
-            pane_view.set_connected(false);
-            return;
-        };
-
-        // Attach to the session and feed snapshot.
-        if let Ok(snapshot) = bridge.run(conn.attach_session(daemon_session_id)) {
-            for pane_snap in &snapshot.panes {
-                if let Ok(pid) = rttx_proto::bytes_to_uuid(&pane_snap.pane_id)
-                    && pid == daemon_pane_id
-                {
-                    pane_view.feed_snapshot(&pane_snap.scrollback);
-                    if !pane_snap.title.is_empty() {
-                        pane_view.set_title(&pane_snap.title);
-                    }
-                }
-            }
-            pane_view.set_connected(true);
-        } else {
-            pane_view.set_connected(false);
-            return;
-        }
-
-        // Wire input/resize signals.
-        self.connect_persistent_pane_signals(pane_view, daemon_session_id, daemon_pane_id);
-
-        // Install connection and start reader loop.
-        let msg_rx = bridge.install_connection(conn);
-        let _ = bridge;
-        self.start_message_poller(msg_rx);
     }
 
     fn initialize_terminal_recovery(
@@ -935,12 +834,6 @@ impl Window {
             win.mark_session_activity(&uuid);
         });
 
-        // Persist button: convert this pane to daemon-backed.
-        let win = self.clone();
-        term.persist_button().connect_clicked(move |_| {
-            win.make_pane_persistent();
-        });
-
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let uuid = term.uuid();
@@ -1038,29 +931,75 @@ impl Window {
     }
 
     /// Create a new persistent session backed by the rttxd daemon.
-    /// Make the focused pane persistent (daemon-backed).
-    ///
-    /// Creates a daemon session and pane, updates the pane's recovery
-    /// recipe to `PaneTarget::Persistent`, and replaces the direct VTE
-    /// terminal with a `PersistentPaneView`.
-    pub fn make_pane_persistent(&self) {
-        if let Err(e) = self.make_pane_persistent_impl() {
-            log::error!("Failed to make pane persistent: {e}");
-            let toast = adw::Toast::new(&format!("Persistent pane failed: {e}"));
+    pub fn add_persistent_session(&self) {
+        if let Err(e) = self.add_persistent_session_impl() {
+            log::error!("Failed to create persistent session: {e}");
+            let toast = adw::Toast::new(&format!("Persistent session failed: {e}"));
             self.imp().toast_overlay.add_toast(toast);
         }
     }
 
-    fn make_pane_persistent_impl(&self) -> Result<(), crate::daemon::DaemonError> {
-        let Some(terminal_uuid) = self.focused_terminal_uuid() else {
-            return Ok(());
-        };
+    fn add_persistent_session_impl(&self) -> Result<(), crate::daemon::DaemonError> {
+        self.ensure_daemon_bridge()?;
 
-        // Don't convert if already persistent.
-        if self.imp().persistent_terminals.borrow().contains_key(&terminal_uuid) {
-            return Ok(());
+        let bridge = self.imp().daemon_bridge.borrow();
+        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
+
+        let count = self.imp().state.borrow().sessions.len() + 1;
+        let socket_path = default_socket_path();
+        let mut conn = bridge.connect(&socket_path)?;
+
+        let session_id = bridge.run(conn.create_session(&format!("Session {count}")))?;
+        let _snapshot = bridge.run(conn.attach_session(session_id))?;
+        let pane_id = bridge.run(conn.create_pane(session_id))?;
+
+        // Install connection (split + reader loop).
+        let msg_rx = bridge.install_connection(conn);
+        let _ = bridge;
+
+        // Start polling server messages on the glib main loop.
+        self.start_message_poller(msg_rx);
+
+        let pane_uuid = pane_id.to_string();
+        let session_state = SessionState::new(format!(
+            "⏻ Session {}",
+            self.imp().state.borrow().sessions.len() + 1
+        ));
+        let session_uuid = session_state.uuid.clone();
+
+        self.imp().state.borrow_mut().sessions.push(session_state.clone());
+        self.append_session_row(&session_state);
+
+        let pane_view = PersistentPaneView::new(&pane_uuid, &session_id.to_string());
+        pane_view.set_connected(true);
+        self.connect_persistent_pane_signals(&pane_view, session_id, pane_id);
+        self.apply_preferences_to_persistent_pane(&pane_view);
+        self.imp().persistent_terminals.borrow_mut().insert(pane_uuid, pane_view.clone());
+
+        let content: gtk4::Widget = pane_view.upcast();
+        self.imp().session_stack.add_named(&content, Some(&session_uuid));
+
+        let index = self.imp().state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = self.imp().sidebar_list.row_at_index(index) {
+            self.imp().sidebar_list.select_row(Some(&row));
         }
 
+        Ok(())
+    }
+
+    /// Try to restore persistent sessions from a running daemon on GUI start.
+    pub fn restore_persistent_sessions(&self) {
+        let socket_path = default_socket_path();
+        if !socket_path.exists() {
+            return;
+        }
+
+        if let Err(e) = self.restore_persistent_sessions_impl() {
+            log::info!("No persistent sessions to restore: {e}");
+        }
+    }
+
+    fn restore_persistent_sessions_impl(&self) -> Result<(), crate::daemon::DaemonError> {
         self.ensure_daemon_bridge()?;
 
         let bridge = self.imp().daemon_bridge.borrow();
@@ -1069,69 +1008,46 @@ impl Window {
         let socket_path = default_socket_path();
         let mut conn = bridge.connect(&socket_path)?;
 
-        // Get the current CWD from the direct terminal.
-        let current_cwd = self
-            .imp()
-            .terminals
-            .borrow()
-            .get(&terminal_uuid)
-            .and_then(TerminalWidget::current_directory);
+        let sessions = bridge.run(conn.list_sessions())?;
+        if sessions.is_empty() {
+            return Ok(());
+        }
 
-        // Create daemon session and pane.
-        let session_name = format!("pane-{}", &terminal_uuid[..8.min(terminal_uuid.len())]);
-        let daemon_session_id = bridge.run(conn.create_session(&session_name))?;
-        let _snapshot = bridge.run(conn.attach_session(daemon_session_id))?;
-        let daemon_pane_id = bridge.run(conn.create_pane(daemon_session_id))?;
+        for info in &sessions {
+            let session_id =
+                rttx_proto::bytes_to_uuid(&info.id).map_err(crate::daemon::DaemonError::Frame)?;
+            let snapshot = bridge.run(conn.attach_session(session_id))?;
 
-        // Install connection.
+            let session_state = SessionState::new(format!("⏻ {}", info.name));
+            let session_uuid = session_state.uuid.clone();
+            self.imp().state.borrow_mut().sessions.push(session_state.clone());
+            self.append_session_row(&session_state);
+
+            for pane_snap in &snapshot.panes {
+                let pane_id = rttx_proto::bytes_to_uuid(&pane_snap.pane_id)
+                    .map_err(crate::daemon::DaemonError::Frame)?;
+                let pane_uuid = pane_id.to_string();
+
+                let pane_view = PersistentPaneView::new(&pane_uuid, &session_id.to_string());
+                pane_view.set_connected(true);
+                pane_view.feed_snapshot(&pane_snap.scrollback);
+                if !pane_snap.title.is_empty() {
+                    pane_view.set_title(&pane_snap.title);
+                }
+                self.connect_persistent_pane_signals(&pane_view, session_id, pane_id);
+                self.apply_preferences_to_persistent_pane(&pane_view);
+                self.imp().persistent_terminals.borrow_mut().insert(pane_uuid, pane_view.clone());
+
+                let content: gtk4::Widget = pane_view.upcast();
+                self.imp().session_stack.add_named(&content, Some(&session_uuid));
+            }
+        }
+
         let msg_rx = bridge.install_connection(conn);
         let _ = bridge;
         self.start_message_poller(msg_rx);
 
-        // Update the recovery recipe using the data model method.
-        {
-            let mut state = self.imp().state.borrow_mut();
-            for session in &mut state.sessions {
-                if session.make_pane_persistent(
-                    &terminal_uuid,
-                    None,
-                    daemon_session_id.to_string(),
-                    daemon_pane_id.to_string(),
-                ) {
-                    break;
-                }
-            }
-        }
-
-        // Rebuild the session content. The build_session_content →
-        // materialize_terminal path sees PaneTarget::Persistent and
-        // creates a PersistentPaneView automatically. This reuses the
-        // existing, tested rebuild_session_content method instead of
-        // manually swapping widgets in the GTK tree.
-        let session_info = self
-            .imp()
-            .state
-            .borrow()
-            .sessions
-            .iter()
-            .find(|s| s.layout.contains_terminal(&terminal_uuid))
-            .cloned();
-        if let Some(session_state) = session_info {
-            self.rebuild_session_content(&session_state.uuid, &session_state);
-        }
-
-        // Send CWD change command to the new daemon pane.
-        if let Some(cwd) = current_cwd {
-            let bridge = self.imp().daemon_bridge.borrow();
-            if let Some(bridge) = bridge.as_ref() {
-                bridge.send_input(
-                    daemon_session_id,
-                    daemon_pane_id,
-                    format!("cd {}\n", crate::shell_quote(&cwd)).into_bytes(),
-                );
-            }
-        }
-
+        log::info!("Restored {} persistent sessions from daemon", sessions.len());
         Ok(())
     }
 
@@ -1143,19 +1059,23 @@ impl Window {
 
         let socket_path = default_socket_path();
 
-        // If socket doesn't exist, try to start the daemon.
+        // If daemon isn't running, try to start it.
         if !socket_path.exists() {
-            log::info!("Daemon not reachable, attempting to start rttx-server");
+            log::info!("Daemon not running, attempting to start rttx-server");
             let mut cmd = std::process::Command::new("rttx-server");
             cmd.arg("start")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
+            // Propagate dev mode to the daemon so it uses matching paths.
             if crate::config::is_development() {
                 cmd.env("RTTX_DEV_MODE", "1");
             }
-            if let Ok(mut child) = cmd.spawn() {
+            let spawn_result = cmd.spawn();
+
+            if let Ok(mut child) = spawn_result {
                 let _ = child.wait();
-                for _ in 0..30 {
+                // Poll for socket.
+                for _ in 0..20 {
                     if socket_path.exists() {
                         break;
                     }
@@ -1165,10 +1085,6 @@ impl Window {
         }
 
         let bridge = DaemonBridge::new()?;
-        // Verify we can actually connect.
-        let conn = bridge.connect(&socket_path)?;
-        // Drop the test connection — make_pane_persistent_impl will create its own.
-        drop(conn);
         self.imp().daemon_bridge.replace(Some(bridge));
         Ok(())
     }
@@ -2021,6 +1937,7 @@ impl Window {
 
     fn close_terminal(&self, terminal_uuid: &str) {
         #[derive(Debug)]
+        #[allow(clippy::large_enum_variant)]
         enum Action {
             CloseSession(String),
             Rebuild { session_uuid: String, session_state: SessionState },
@@ -2502,22 +2419,18 @@ impl Window {
     }
 
     fn clipboard_copy(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.vte().copy_clipboard_format(vte4::Format::Text);
-            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
-                pane.vte().copy_clipboard_format(vte4::Format::Text);
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+        {
+            term.vte().copy_clipboard_format(vte4::Format::Text);
         }
     }
 
     fn clipboard_paste(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.vte().paste_clipboard();
-            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
-                pane.vte().paste_clipboard();
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+        {
+            term.vte().paste_clipboard();
         }
     }
 }
@@ -2631,6 +2544,7 @@ mod tests {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: false,
+                    mode: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2639,6 +2553,7 @@ mod tests {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: false,
+                    mode: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -2678,6 +2593,7 @@ mod tests {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
+                mode: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2711,6 +2627,7 @@ mod tests {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
+                mode: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2733,6 +2650,7 @@ mod tests {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: false,
+                    mode: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2746,6 +2664,7 @@ mod tests {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: false,
+                    mode: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -3310,6 +3229,7 @@ mod tests {
                 )]),
                 active_terminal_uuid: Some(terminal_uuid.clone()),
                 input_sync: false,
+                mode: Default::default(),
             }],
             ..WindowState::default()
         };

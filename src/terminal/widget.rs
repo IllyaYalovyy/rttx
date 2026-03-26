@@ -32,7 +32,6 @@ mod imp {
         pub close_button: gtk4::Button,
         pub split_h_button: gtk4::Button,
         pub split_v_button: gtk4::Button,
-        pub persist_button: gtk4::Button,
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
         pub child_exited_handler: RefCell<Option<glib::SignalHandlerId>>,
@@ -79,12 +78,7 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.set_tooltip_text(Some("Close terminal"));
 
-            self.persist_button.set_icon_name("media-record-symbolic");
-            self.persist_button.add_css_class("flat");
-            self.persist_button.set_tooltip_text(Some("Make persistent (daemon-backed)"));
-
             self.header.append(&self.title_label);
-            self.header.append(&self.persist_button);
             self.header.append(&self.split_h_button);
             self.header.append(&self.split_v_button);
             self.header.append(&self.close_button);
@@ -340,12 +334,6 @@ impl TerminalWidget {
     #[must_use]
     pub fn split_v_button(&self) -> &gtk4::Button {
         &self.imp().split_v_button
-    }
-
-    /// The make-persistent button.
-    #[must_use]
-    pub fn persist_button(&self) -> &gtk4::Button {
-        &self.imp().persist_button
     }
 
     #[must_use]

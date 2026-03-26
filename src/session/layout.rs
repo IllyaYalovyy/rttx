@@ -65,29 +65,10 @@ pub enum StartupStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PaneTarget {
-    LocalFolder {
-        path: String,
-    },
-    LocalTmux {
-        session: String,
-    },
-    RemoteShell {
-        ssh_target: String,
-        remote_folder: Option<String>,
-    },
-    RemoteTmux {
-        ssh_target: String,
-        tmux_session: String,
-    },
-    /// A pane backed by the rttxd persistent session daemon.
-    ///
-    /// The daemon owns the PTY. The GUI renders output via VTE feed mode.
-    /// `host` is `None` for local daemon, `Some("user@host")` for remote.
-    Persistent {
-        host: Option<String>,
-        daemon_session_id: String,
-        daemon_pane_id: String,
-    },
+    LocalFolder { path: String },
+    LocalTmux { session: String },
+    RemoteShell { ssh_target: String, remote_folder: Option<String> },
+    RemoteTmux { ssh_target: String, tmux_session: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,7 +99,7 @@ impl PaneTarget {
     #[must_use]
     pub fn managed_startup_input(&self) -> Option<String> {
         match self {
-            Self::LocalFolder { .. } | Self::Persistent { .. } => None,
+            Self::LocalFolder { .. } => None,
             Self::LocalTmux { session } => Some(format!("exec {}\n", tmux_attach_command(session))),
             Self::RemoteShell { ssh_target, remote_folder } => {
                 let remote_command = remote_folder.as_deref().map(remote_shell_command);
@@ -133,7 +114,7 @@ impl PaneTarget {
 
     #[must_use]
     pub const fn manages_child_lifecycle(&self) -> bool {
-        !matches!(self, Self::LocalFolder { .. } | Self::Persistent { .. })
+        !matches!(self, Self::LocalFolder { .. })
     }
 
     #[must_use]
@@ -153,45 +134,6 @@ impl PaneTarget {
                     "Failed to attach tmux session {tmux_session} on {ssh_target} (exit status {status})"
                 )
             }
-            Self::Persistent { host, daemon_pane_id, .. } => {
-                let target = host.as_deref().unwrap_or("local");
-                format!(
-                    "Persistent pane {daemon_pane_id} on {target} failed (exit status {status})"
-                )
-            }
-        }
-    }
-
-    /// Whether this target is a persistent daemon-backed pane.
-    #[must_use]
-    pub const fn is_persistent(&self) -> bool {
-        matches!(self, Self::Persistent { .. })
-    }
-
-    /// Return the daemon pane ID if this is a persistent target.
-    #[must_use]
-    pub fn daemon_pane_id(&self) -> Option<&str> {
-        match self {
-            Self::Persistent { daemon_pane_id, .. } => Some(daemon_pane_id),
-            _ => None,
-        }
-    }
-
-    /// Return the daemon session ID if this is a persistent target.
-    #[must_use]
-    pub fn daemon_session_id(&self) -> Option<&str> {
-        match self {
-            Self::Persistent { daemon_session_id, .. } => Some(daemon_session_id),
-            _ => None,
-        }
-    }
-
-    /// Return the host for a persistent target (`None` = local).
-    #[must_use]
-    pub fn persistent_host(&self) -> Option<&str> {
-        match self {
-            Self::Persistent { host, .. } => host.as_deref(),
-            _ => None,
         }
     }
 }
@@ -536,6 +478,54 @@ impl LayoutNode {
     }
 }
 
+/// How a session's terminals are backed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionMode {
+    /// Local VTE terminals with PTYs owned by the GUI process.
+    #[default]
+    Direct,
+    /// All panes backed by the local rttxd daemon.
+    Persistent {
+        /// Daemon session ID (UUID string).
+        daemon_session_id: String,
+    },
+    /// All panes backed by a remote rttxd daemon via SSH.
+    RemotePersistent {
+        /// SSH target (e.g., `user@host`).
+        host: String,
+        /// Daemon session ID on the remote host.
+        daemon_session_id: String,
+    },
+}
+
+impl SessionMode {
+    /// Whether this session is backed by a daemon (local or remote).
+    #[must_use]
+    pub const fn is_persistent(&self) -> bool {
+        !matches!(self, Self::Direct)
+    }
+
+    /// The daemon session ID, if persistent.
+    #[must_use]
+    pub fn daemon_session_id(&self) -> Option<&str> {
+        match self {
+            Self::Direct => None,
+            Self::Persistent { daemon_session_id }
+            | Self::RemotePersistent { daemon_session_id, .. } => Some(daemon_session_id),
+        }
+    }
+
+    /// The SSH host, if remote.
+    #[must_use]
+    pub fn host(&self) -> Option<&str> {
+        match self {
+            Self::RemotePersistent { host, .. } => Some(host),
+            _ => None,
+        }
+    }
+}
+
 /// State of a single terminal session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionState {
@@ -548,6 +538,9 @@ pub struct SessionState {
     pub active_terminal_uuid: Option<String>,
     #[serde(default)]
     pub input_sync: bool,
+    /// How this session's terminals are backed.
+    #[serde(default)]
+    pub mode: SessionMode,
 }
 
 impl SessionState {
@@ -576,6 +569,7 @@ impl SessionState {
             terminal_recovery,
             active_terminal_uuid,
             input_sync: false,
+            mode: SessionMode::default(),
         }
     }
 
@@ -591,6 +585,7 @@ impl SessionState {
             terminal_recovery,
             active_terminal_uuid: Some("test-terminal-uuid".to_string()),
             input_sync: false,
+            mode: SessionMode::default(),
         }
     }
 }
@@ -603,39 +598,6 @@ impl SessionState {
     #[must_use]
     pub fn recovery_for(&self, terminal_uuid: &str) -> Option<&PaneRecovery> {
         self.terminal_recovery.get(terminal_uuid)
-    }
-
-    /// Convert a pane to persistent by updating its recovery recipe.
-    ///
-    /// Returns `true` if the pane was found and updated, `false` if the
-    /// terminal UUID doesn't exist in this session.
-    pub fn make_pane_persistent(
-        &mut self,
-        terminal_uuid: &str,
-        host: Option<String>,
-        daemon_session_id: String,
-        daemon_pane_id: String,
-    ) -> bool {
-        if !self.layout.contains_terminal(terminal_uuid) {
-            return false;
-        }
-        self.set_recovery(
-            terminal_uuid,
-            PaneRecovery {
-                source: PaneSource::EmptyShell,
-                target: Some(PaneTarget::Persistent { host, daemon_session_id, daemon_pane_id }),
-                startup: Vec::new(),
-            },
-        );
-        true
-    }
-
-    /// Check if a pane is persistent.
-    #[must_use]
-    pub fn is_pane_persistent(&self, terminal_uuid: &str) -> bool {
-        self.recovery_for(terminal_uuid)
-            .and_then(|r| r.target.as_ref())
-            .is_some_and(PaneTarget::is_persistent)
     }
 
     pub fn prune_recovery(&mut self) {
@@ -942,6 +904,7 @@ mod tests {
             terminal_recovery,
             active_terminal_uuid: Some("t2".into()),
             input_sync: true,
+            mode: SessionMode::default(),
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -961,6 +924,89 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let restored: WindowState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
+    }
+
+    #[test]
+    fn session_mode_default_is_direct() {
+        let session = SessionState::new("Test".into());
+        assert_eq!(session.mode, SessionMode::Direct);
+        assert!(!session.mode.is_persistent());
+        assert!(session.mode.daemon_session_id().is_none());
+        assert!(session.mode.host().is_none());
+    }
+
+    #[test]
+    fn session_mode_persistent_accessors() {
+        let mode = SessionMode::Persistent { daemon_session_id: "ds1".into() };
+        assert!(mode.is_persistent());
+        assert_eq!(mode.daemon_session_id(), Some("ds1"));
+        assert!(mode.host().is_none());
+    }
+
+    #[test]
+    fn session_mode_remote_persistent_accessors() {
+        let mode = SessionMode::RemotePersistent {
+            host: "user@devbox".into(),
+            daemon_session_id: "ds2".into(),
+        };
+        assert!(mode.is_persistent());
+        assert_eq!(mode.daemon_session_id(), Some("ds2"));
+        assert_eq!(mode.host(), Some("user@devbox"));
+    }
+
+    #[test]
+    fn session_mode_roundtrips_through_json() {
+        for mode in [
+            SessionMode::Direct,
+            SessionMode::Persistent { daemon_session_id: "abc-123".into() },
+            SessionMode::RemotePersistent {
+                host: "admin@prod".into(),
+                daemon_session_id: "def-456".into(),
+            },
+        ] {
+            let mut session = SessionState::new("Test".into());
+            session.mode = mode.clone();
+            let json = serde_json::to_string(&session).unwrap();
+            let restored: SessionState = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.mode, mode);
+        }
+    }
+
+    #[test]
+    fn backward_compat_session_without_mode_field() {
+        // Old sessions.json files won't have the "mode" field.
+        let json = r#"{
+            "uuid": "s1",
+            "name": "Old",
+            "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}},
+            "terminal_recovery": {},
+            "active_terminal_uuid": "t1",
+            "input_sync": false
+        }"#;
+        let session: SessionState = serde_json::from_str(json).unwrap();
+        assert_eq!(session.mode, SessionMode::Direct);
+    }
+
+    #[test]
+    fn persistent_session_in_window_state_roundtrips() {
+        let mut session = SessionState::new("Persistent".into());
+        session.mode = SessionMode::Persistent { daemon_session_id: "ds-1".into() };
+
+        let state = WindowState {
+            sessions: vec![SessionState::new("Direct".into()), session],
+            active_session_index: 1,
+            width: 1920,
+            height: 1080,
+            is_maximized: false,
+            ..WindowState::default()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: WindowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.sessions[0].mode, SessionMode::Direct);
+        assert_eq!(
+            restored.sessions[1].mode,
+            SessionMode::Persistent { daemon_session_id: "ds-1".into() }
+        );
     }
 
     #[test]
@@ -1264,246 +1310,12 @@ mod tests {
             terminal_recovery,
             active_terminal_uuid: Some("t1".into()),
             input_sync: false,
+            mode: SessionMode::default(),
         };
 
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
         assert_eq!(session, restored);
-    }
-
-    #[test]
-    fn persistent_pane_target_roundtrips_through_json() {
-        let recovery = PaneRecovery {
-            source: PaneSource::EmptyShell,
-            target: Some(PaneTarget::Persistent {
-                host: None,
-                daemon_session_id: "d-sess-1".into(),
-                daemon_pane_id: "d-pane-1".into(),
-            }),
-            startup: Vec::new(),
-        };
-        let json = serde_json::to_string(&recovery).unwrap();
-        let restored: PaneRecovery = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovery, restored);
-    }
-
-    #[test]
-    fn persistent_pane_target_remote_roundtrips() {
-        let recovery = PaneRecovery {
-            source: PaneSource::EmptyShell,
-            target: Some(PaneTarget::Persistent {
-                host: Some("user@devbox".into()),
-                daemon_session_id: "d-sess-2".into(),
-                daemon_pane_id: "d-pane-2".into(),
-            }),
-            startup: Vec::new(),
-        };
-        let json = serde_json::to_string(&recovery).unwrap();
-        let restored: PaneRecovery = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovery, restored);
-        assert_eq!(restored.target.as_ref().unwrap().persistent_host(), Some("user@devbox"));
-    }
-
-    #[test]
-    fn persistent_target_accessors() {
-        let target = PaneTarget::Persistent {
-            host: Some("prod-host".into()),
-            daemon_session_id: "sess-abc".into(),
-            daemon_pane_id: "pane-xyz".into(),
-        };
-        assert!(target.is_persistent());
-        assert_eq!(target.daemon_pane_id(), Some("pane-xyz"));
-        assert_eq!(target.daemon_session_id(), Some("sess-abc"));
-        assert_eq!(target.persistent_host(), Some("prod-host"));
-        assert_eq!(target.initial_cwd(), None);
-        assert_eq!(target.managed_startup_input(), None);
-        assert!(!target.manages_child_lifecycle());
-    }
-
-    #[test]
-    fn non_persistent_target_accessors_return_none() {
-        let target = PaneTarget::LocalFolder { path: "/tmp".into() };
-        assert!(!target.is_persistent());
-        assert_eq!(target.daemon_pane_id(), None);
-        assert_eq!(target.daemon_session_id(), None);
-        assert_eq!(target.persistent_host(), None);
-    }
-
-    #[test]
-    fn persistent_target_failure_message() {
-        let local = PaneTarget::Persistent {
-            host: None,
-            daemon_session_id: "s1".into(),
-            daemon_pane_id: "p1".into(),
-        };
-        assert!(local.failure_message(1).contains("local"));
-        assert!(local.failure_message(1).contains("p1"));
-
-        let remote = PaneTarget::Persistent {
-            host: Some("devbox".into()),
-            daemon_session_id: "s2".into(),
-            daemon_pane_id: "p2".into(),
-        };
-        assert!(remote.failure_message(1).contains("devbox"));
-    }
-
-    #[test]
-    fn session_with_mixed_direct_and_persistent_panes_roundtrips() {
-        let mut terminal_recovery = BTreeMap::new();
-        terminal_recovery.insert("t1".into(), PaneRecovery::empty_shell());
-        terminal_recovery.insert(
-            "t2".into(),
-            PaneRecovery {
-                source: PaneSource::EmptyShell,
-                target: Some(PaneTarget::Persistent {
-                    host: None,
-                    daemon_session_id: "ds1".into(),
-                    daemon_pane_id: "dp1".into(),
-                }),
-                startup: Vec::new(),
-            },
-        );
-        let session = SessionState {
-            uuid: "s1".into(),
-            name: "Mixed".into(),
-            layout: hsplit(term("t1"), term("t2")),
-            terminal_recovery,
-            active_terminal_uuid: Some("t1".into()),
-            input_sync: false,
-        };
-
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
-        assert_eq!(session, restored);
-
-        // t1 is direct, t2 is persistent.
-        assert!(
-            !restored
-                .recovery_for("t1")
-                .unwrap()
-                .target
-                .as_ref()
-                .is_some_and(PaneTarget::is_persistent)
-        );
-        assert!(
-            restored
-                .recovery_for("t2")
-                .unwrap()
-                .target
-                .as_ref()
-                .is_some_and(PaneTarget::is_persistent)
-        );
-    }
-
-    #[test]
-    fn backward_compat_old_json_without_persistent_field() {
-        // Simulate loading a sessions.json from before Persistent existed.
-        let json = r#"{
-            "uuid": "s1",
-            "name": "Old",
-            "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}},
-            "terminal_recovery": {
-                "t1": {
-                    "source": "empty-shell",
-                    "target": {"local-folder": {"path": "/home/user"}},
-                    "startup": []
-                }
-            },
-            "active_terminal_uuid": "t1",
-            "input_sync": false
-        }"#;
-        let session: SessionState = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            session.recovery_for("t1").unwrap().target,
-            Some(PaneTarget::LocalFolder { path: "/home/user".into() })
-        );
-    }
-
-    #[test]
-    fn make_pane_persistent_updates_recovery() {
-        let mut session = SessionState::new("Work".into());
-        let uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-
-        assert!(!session.is_pane_persistent(&uuid));
-
-        let result = session.make_pane_persistent(
-            &uuid,
-            None,
-            "daemon-sess-1".into(),
-            "daemon-pane-1".into(),
-        );
-        assert!(result);
-        assert!(session.is_pane_persistent(&uuid));
-
-        let recovery = session.recovery_for(&uuid).unwrap();
-        assert_eq!(
-            recovery.target,
-            Some(PaneTarget::Persistent {
-                host: None,
-                daemon_session_id: "daemon-sess-1".into(),
-                daemon_pane_id: "daemon-pane-1".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn make_pane_persistent_returns_false_for_unknown_uuid() {
-        let mut session = SessionState::new("Work".into());
-        assert!(!session.make_pane_persistent("nonexistent", None, "s".into(), "p".into()));
-    }
-
-    #[test]
-    fn make_pane_persistent_with_remote_host() {
-        let mut session = SessionState::new("Work".into());
-        let uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-
-        session.make_pane_persistent(&uuid, Some("user@devbox".into()), "ds".into(), "dp".into());
-
-        let target = session.recovery_for(&uuid).unwrap().target.as_ref().unwrap();
-        assert_eq!(target.persistent_host(), Some("user@devbox"));
-    }
-
-    #[test]
-    fn make_pane_persistent_survives_save_and_load() {
-        let mut session = SessionState::new("Persist".into());
-        let uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-
-        session.make_pane_persistent(&uuid, None, "ds1".into(), "dp1".into());
-
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
-
-        assert!(restored.is_pane_persistent(&uuid));
-        assert_eq!(
-            restored.recovery_for(&uuid).unwrap().target.as_ref().unwrap().daemon_pane_id(),
-            Some("dp1")
-        );
-    }
-
-    #[test]
-    fn mixed_session_split_has_persistent_and_direct_panes() {
-        let mut session = SessionState {
-            uuid: "s1".into(),
-            name: "Mixed".into(),
-            layout: hsplit(term("t1"), term("t2")),
-            terminal_recovery: BTreeMap::new(),
-            active_terminal_uuid: Some("t1".into()),
-            input_sync: false,
-        };
-        session.set_recovery("t1", PaneRecovery::empty_shell());
-        session.set_recovery("t2", PaneRecovery::empty_shell());
-
-        // Make only t2 persistent.
-        session.make_pane_persistent("t2", None, "ds".into(), "dp".into());
-
-        assert!(!session.is_pane_persistent("t1"));
-        assert!(session.is_pane_persistent("t2"));
-
-        // Round-trip.
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
-        assert!(!restored.is_pane_persistent("t1"));
-        assert!(restored.is_pane_persistent("t2"));
     }
 
     #[test]
@@ -1557,6 +1369,7 @@ mod tests {
             ]),
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
+            mode: SessionMode::default(),
         };
 
         session.layout = session.layout.remove_terminal("t2").unwrap();
@@ -1576,6 +1389,7 @@ mod tests {
             terminal_recovery: Default::default(),
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
+            mode: SessionMode::default(),
         };
 
         session.normalize_active_terminal();

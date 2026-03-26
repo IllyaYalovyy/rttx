@@ -62,6 +62,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
         terminal_recovery: Default::default(),
         active_terminal_uuid: None,
         input_sync: false,
+        mode: Default::default(),
     }
 }
 
