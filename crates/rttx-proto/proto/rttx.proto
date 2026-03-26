@@ -1,0 +1,169 @@
+syntax = "proto3";
+package rttx;
+
+// --- Client → Server ---
+
+message Hello {
+    uint32 protocol_version = 1;
+    bytes client_id = 2; // 16-byte UUID
+}
+
+message ListSessions {}
+
+message CreateSession {
+    string name = 1;
+}
+
+message AttachSession {
+    bytes session_id = 1;
+}
+
+message DetachSession {
+    bytes session_id = 1;
+}
+
+message CreatePane {
+    bytes session_id = 1;
+}
+
+message ClosePane {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+}
+
+message Input {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    bytes data = 3;
+}
+
+message Resize {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    uint32 cols = 3;
+    uint32 rows = 4;
+}
+
+message SetPaneTitle {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    string title = 3;
+}
+
+message Shutdown {}
+
+// --- Server → Client ---
+
+message HelloAck {
+    uint32 protocol_version = 1;
+    bytes server_id = 2;
+}
+
+message SessionList {
+    repeated SessionInfo sessions = 1;
+}
+
+message SessionInfo {
+    bytes id = 1;
+    string name = 2;
+    uint32 pane_count = 3;
+    bool has_attached_client = 4;
+}
+
+message SessionCreated {
+    bytes session_id = 1;
+}
+
+message Snapshot {
+    bytes session_id = 1;
+    repeated PaneSnapshot panes = 2;
+}
+
+message PaneSnapshot {
+    bytes pane_id = 1;
+    string title = 2;
+    string cwd = 3;
+    uint32 cols = 4;
+    uint32 rows = 5;
+    bytes scrollback = 6;
+    optional int32 exit_status = 7;
+}
+
+message Delta {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    bytes data = 3;
+}
+
+message PaneCreated {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+}
+
+message PaneClosed {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+}
+
+message PaneExited {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    int32 status = 3;
+}
+
+message Bell {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+}
+
+message TitleChanged {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    string title = 3;
+}
+
+message CwdChanged {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    string cwd = 3;
+}
+
+message Error {
+    uint32 code = 1;
+    string message = 2;
+}
+
+// --- Envelope ---
+
+message ClientMessage {
+    oneof msg {
+        Hello hello = 1;
+        ListSessions list_sessions = 2;
+        CreateSession create_session = 3;
+        AttachSession attach_session = 4;
+        DetachSession detach_session = 5;
+        CreatePane create_pane = 6;
+        ClosePane close_pane = 7;
+        Input input = 8;
+        Resize resize = 9;
+        SetPaneTitle set_pane_title = 10;
+        Shutdown shutdown = 11;
+    }
+}
+
+message ServerMessage {
+    oneof msg {
+        HelloAck hello_ack = 1;
+        SessionList session_list = 2;
+        SessionCreated session_created = 3;
+        Snapshot snapshot = 4;
+        Delta delta = 5;
+        PaneCreated pane_created = 6;
+        PaneClosed pane_closed = 7;
+        PaneExited pane_exited = 8;
+        Bell bell = 9;
+        TitleChanged title_changed = 10;
+        CwdChanged cwd_changed = 11;
+        Error error = 12;
+    }
+}

@@ -1,0 +1,21 @@
+name: Quality
+
+on:
+  push:
+    branches: [mainline]
+  pull_request:
+    branches: [mainline]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
+      - run: cargo test
