@@ -103,6 +103,49 @@ mod imp {
             obj.append(&self.header);
             obj.append(&self.terminal_scroller);
 
+            // Smart clipboard: Ctrl+C copies if selection exists, Ctrl+V pastes.
+            let smart_clipboard_controller = gtk4::ShortcutController::new();
+            smart_clipboard_controller.set_name(Some("smart-clipboard"));
+            smart_clipboard_controller.set_scope(gtk4::ShortcutScope::Local);
+            smart_clipboard_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+            let copy_vte = self.vte.clone();
+            let copy_flag = self.smart_clipboard.clone();
+            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
+                Some(gtk4::KeyvalTrigger::new(
+                    gtk4::gdk::Key::c,
+                    gtk4::gdk::ModifierType::CONTROL_MASK,
+                )),
+                Some(gtk4::CallbackAction::new(move |_, _| {
+                    if copy_flag.get() && copy_vte.has_selection() {
+                        copy_vte.copy_clipboard_format(vte4::Format::Text);
+                        copy_vte.unselect_all();
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                })),
+            ));
+
+            let paste_vte = self.vte.clone();
+            let paste_flag = self.smart_clipboard.clone();
+            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
+                Some(gtk4::KeyvalTrigger::new(
+                    gtk4::gdk::Key::v,
+                    gtk4::gdk::ModifierType::CONTROL_MASK,
+                )),
+                Some(gtk4::CallbackAction::new(move |_, _| {
+                    if paste_flag.get() {
+                        paste_vte.paste_clipboard();
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                })),
+            ));
+
+            self.vte.add_controller(smart_clipboard_controller);
+
             // Focus VTE on header click.
             let gesture = gtk4::GestureClick::new();
             gesture.set_button(1);
