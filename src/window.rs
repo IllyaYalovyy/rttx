@@ -1088,69 +1088,39 @@ impl Window {
         let _ = bridge;
         self.start_message_poller(msg_rx);
 
-        // Update the recovery recipe in the session state.
-        let persistent_target = crate::session::PaneTarget::Persistent {
-            host: None,
-            daemon_session_id: daemon_session_id.to_string(),
-            daemon_pane_id: daemon_pane_id.to_string(),
-        };
+        // Update the recovery recipe using the data model method.
         {
             let mut state = self.imp().state.borrow_mut();
             for session in &mut state.sessions {
-                if session.layout.contains_terminal(&terminal_uuid) {
-                    session.set_recovery(
-                        &terminal_uuid,
-                        crate::session::PaneRecovery {
-                            source: crate::session::PaneSource::EmptyShell,
-                            target: Some(persistent_target),
-                            startup: Vec::new(),
-                        },
-                    );
+                if session.make_pane_persistent(
+                    &terminal_uuid,
+                    None,
+                    daemon_session_id.to_string(),
+                    daemon_pane_id.to_string(),
+                ) {
                     break;
                 }
             }
         }
 
-        // Remove the direct terminal and create a persistent pane view.
-        let old_term = self.imp().terminals.borrow_mut().remove(&terminal_uuid);
-
-        let pane_view = PersistentPaneView::new(&terminal_uuid, &daemon_session_id.to_string());
-        pane_view.set_connected(true);
-        self.connect_persistent_pane_signals(&pane_view, daemon_session_id, daemon_pane_id);
-        self.apply_preferences_to_persistent_pane(&pane_view);
-        self.imp().persistent_terminals.borrow_mut().insert(terminal_uuid, pane_view.clone());
-
-        // Replace the widget in the layout.
-        if let Some(old) = &old_term
-            && let Some(parent) = old.parent()
-        {
-            if let Some(paned) = parent.downcast_ref::<gtk4::Paned>() {
-                let is_start = paned.start_child().as_ref() == Some(old.upcast_ref());
-                old.unparent();
-                if is_start {
-                    paned.set_start_child(Some(&pane_view));
-                } else {
-                    paned.set_end_child(Some(&pane_view));
-                }
-            } else if let Some(stack) = parent.downcast_ref::<gtk4::Stack>() {
-                // Single pane in session — replace in stack.
-                let name = stack
-                    .pages()
-                    .iter::<gtk4::StackPage>()
-                    .flatten()
-                    .find(|p| p.child() == *old.upcast_ref::<gtk4::Widget>())
-                    .and_then(|p| p.name().map(|n| n.to_string()));
-                stack.remove(old);
-                if let Some(name) = name {
-                    stack.add_named(&pane_view, Some(&name));
-                    stack.set_visible_child_name(&name);
-                } else {
-                    stack.add_child(&pane_view);
-                }
-            }
+        // Rebuild the session content. The build_session_content →
+        // materialize_terminal path sees PaneTarget::Persistent and
+        // creates a PersistentPaneView automatically. This reuses the
+        // existing, tested rebuild_session_content method instead of
+        // manually swapping widgets in the GTK tree.
+        let session_info = self
+            .imp()
+            .state
+            .borrow()
+            .sessions
+            .iter()
+            .find(|s| s.layout.contains_terminal(&terminal_uuid))
+            .cloned();
+        if let Some(session_state) = session_info {
+            self.rebuild_session_content(&session_state.uuid, &session_state);
         }
 
-        // Send CWD change command to the new daemon pane if we had one.
+        // Send CWD change command to the new daemon pane.
         if let Some(cwd) = current_cwd {
             let bridge = self.imp().daemon_bridge.borrow();
             if let Some(bridge) = bridge.as_ref() {
@@ -1162,7 +1132,6 @@ impl Window {
             }
         }
 
-        let _ = pane_view.grab_focus();
         Ok(())
     }
 
