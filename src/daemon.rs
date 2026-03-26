@@ -1,19 +1,18 @@
 //! Async connection manager for the rttxd persistent session daemon.
 //!
 //! Provides a `DaemonConnection` that communicates with rttxd over a Unix
-//! socket using the length-prefixed protobuf framing from `rttx-proto`.
-//! After the handshake, the connection can be split into a `DaemonReader`
-//! and `DaemonWriter` for concurrent read/write from the glib main loop.
-//! This module has no GTK dependency — it is pure async Rust.
+//! socket or SSH subprocess using the length-prefixed protobuf framing
+//! from `rttx-proto`. After the handshake, the connection can be split
+//! into a `DaemonReader` and `DaemonWriter` for concurrent read/write
+//! from the glib main loop. This module has no GTK dependency.
 
 use bytes::BytesMut;
 use rttx_proto::{
     PROTOCOL_VERSION, bytes_to_uuid, decode_frame, encode_frame, proto, uuid_to_bytes,
 };
 use std::path::{Path, PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use uuid::Uuid;
 
 /// Default socket path for the local rttxd instance.
@@ -71,7 +70,8 @@ pub enum DaemonError {
 /// call [`into_split`](DaemonConnection::into_split) to get separate
 /// reader and writer halves for concurrent use.
 pub struct DaemonConnection {
-    stream: UnixStream,
+    reader: Box<dyn AsyncRead + Unpin + Send>,
+    writer: Box<dyn AsyncWrite + Unpin + Send>,
     read_buf: BytesMut,
     client_id: Uuid,
 }
@@ -85,31 +85,58 @@ impl std::fmt::Debug for DaemonConnection {
 }
 
 impl DaemonConnection {
-    /// Connect to rttxd at the given socket path and perform the handshake.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the socket is unreachable, the handshake fails,
-    /// or the protocol version is incompatible.
+    /// Connect to rttxd at the given Unix socket path and perform the handshake.
     pub async fn connect(socket_path: &Path) -> Result<Self, DaemonError> {
         let stream = UnixStream::connect(socket_path).await?;
-        let client_id = Uuid::new_v4();
-        let mut conn = Self { stream, read_buf: BytesMut::with_capacity(8192), client_id };
+        let (read_half, write_half) = stream.into_split();
+        let mut conn = Self {
+            reader: Box::new(read_half),
+            writer: Box::new(write_half),
+            read_buf: BytesMut::with_capacity(8192),
+            client_id: Uuid::new_v4(),
+        };
         conn.handshake().await?;
         Ok(conn)
     }
 
-    /// Split into independent reader and writer halves.
+    /// Connect to rttxd on a remote host via SSH.
     ///
-    /// The writer is used for sending input/resize/detach messages.
-    /// The reader is used by the single reader loop that dispatches
-    /// server messages to panes.
+    /// Spawns `ssh <host> rttx-server attach-stdio` and speaks the protocol
+    /// over the subprocess's stdin/stdout. The returned `SshHandle` must be
+    /// kept alive for the connection to persist.
+    pub async fn connect_ssh(host: &str) -> Result<(Self, SshHandle), DaemonError> {
+        let mut child = tokio::process::Command::new("ssh")
+            .arg(host)
+            .arg("rttx-server")
+            .arg("attach-stdio")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+
+        let child_stdin =
+            child.stdin.take().ok_or_else(|| DaemonError::Io(std::io::Error::other("no stdin")))?;
+        let child_stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| DaemonError::Io(std::io::Error::other("no stdout")))?;
+
+        let mut conn = Self {
+            reader: Box::new(child_stdout),
+            writer: Box::new(child_stdin),
+            read_buf: BytesMut::with_capacity(8192),
+            client_id: Uuid::new_v4(),
+        };
+        conn.handshake().await?;
+        Ok((conn, SshHandle { child }))
+    }
+
+    /// Split into independent reader and writer halves.
     #[must_use]
     pub fn into_split(self) -> (DaemonReader, DaemonWriter) {
-        let (read_half, write_half) = self.stream.into_split();
         (
-            DaemonReader { stream: read_half, read_buf: self.read_buf },
-            DaemonWriter { stream: write_half },
+            DaemonReader { stream: self.reader, read_buf: self.read_buf },
+            DaemonWriter { stream: self.writer },
         )
     }
 
@@ -117,7 +144,8 @@ impl DaemonConnection {
     async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
-        self.stream.write_all(&buf).await?;
+        self.writer.write_all(&buf).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 
@@ -129,7 +157,7 @@ impl DaemonConnection {
                 Err(rttx_proto::FrameError::Incomplete) => {}
                 Err(e) => return Err(DaemonError::Frame(e)),
             }
-            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            let n = self.reader.read_buf(&mut self.read_buf).await?;
             if n == 0 {
                 return Ok(None);
             }
@@ -246,12 +274,37 @@ impl DaemonConnection {
     }
 }
 
+/// Handle to the SSH subprocess. Must be kept alive for the connection
+/// to persist. Dropping it kills the SSH process.
+pub struct SshHandle {
+    child: tokio::process::Child,
+}
+
+impl std::fmt::Debug for SshHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshHandle").finish_non_exhaustive()
+    }
+}
+
+impl SshHandle {
+    /// Kill the SSH subprocess.
+    pub fn kill(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+impl Drop for SshHandle {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 /// Write half of a split daemon connection.
 ///
 /// Used by input/resize/detach handlers. Shared via `Rc<RefCell<>>` on
 /// the glib main thread.
 pub struct DaemonWriter {
-    stream: OwnedWriteHalf,
+    stream: Box<dyn AsyncWrite + Unpin + Send>,
 }
 
 impl std::fmt::Debug for DaemonWriter {
@@ -311,6 +364,7 @@ impl DaemonWriter {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
         Ok(())
     }
 }
@@ -320,7 +374,7 @@ impl DaemonWriter {
 /// Owned by the single reader loop that dispatches server messages
 /// to the correct `PersistentPaneView` by `pane_id`.
 pub struct DaemonReader {
-    stream: OwnedReadHalf,
+    stream: Box<dyn AsyncRead + Unpin + Send>,
     read_buf: BytesMut,
 }
 

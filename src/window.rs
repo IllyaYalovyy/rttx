@@ -11,7 +11,8 @@ use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
-use crate::daemon::{DaemonConnection, DaemonWriter, default_socket_path, extract_pane_id};
+use crate::daemon::{default_socket_path, extract_pane_id};
+use crate::daemon_bridge::DaemonBridge;
 use crate::preferences::{self, Preferences};
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
@@ -47,7 +48,7 @@ mod imp {
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
-        pub daemon_writer: std::rc::Rc<RefCell<Option<DaemonWriter>>>,
+        pub daemon_bridge: RefCell<Option<DaemonBridge>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
@@ -930,28 +931,34 @@ impl Window {
     }
 
     /// Create a new persistent session backed by the rttxd daemon.
-    ///
-    /// Connects to the daemon (auto-starting it if needed), creates a
-    /// session and pane on the server, and wires a `PersistentPaneView`
-    /// into the session layout.
     pub fn add_persistent_session(&self) {
-        let win = self.clone();
-        glib::spawn_future_local(async move {
-            if let Err(e) = win.add_persistent_session_async().await {
-                log::error!("Failed to create persistent session: {e}");
-                let toast = adw::Toast::new(&format!("Persistent session failed: {e}"));
-                win.imp().toast_overlay.add_toast(toast);
-            }
-        });
+        if let Err(e) = self.add_persistent_session_impl() {
+            log::error!("Failed to create persistent session: {e}");
+            let toast = adw::Toast::new(&format!("Persistent session failed: {e}"));
+            self.imp().toast_overlay.add_toast(toast);
+        }
     }
 
-    async fn add_persistent_session_async(&self) -> Result<(), crate::daemon::DaemonError> {
-        let mut conn = self.ensure_daemon_connected().await?;
+    fn add_persistent_session_impl(&self) -> Result<(), crate::daemon::DaemonError> {
+        self.ensure_daemon_bridge()?;
+
+        let bridge = self.imp().daemon_bridge.borrow();
+        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
 
         let count = self.imp().state.borrow().sessions.len() + 1;
-        let session_id = conn.create_session(&format!("Session {count}")).await?;
-        let _snapshot = conn.attach_session(session_id).await?;
-        let pane_id = conn.create_pane(session_id).await?;
+        let socket_path = default_socket_path();
+        let mut conn = bridge.connect(&socket_path)?;
+
+        let session_id = bridge.run(conn.create_session(&format!("Session {count}")))?;
+        let _snapshot = bridge.run(conn.attach_session(session_id))?;
+        let pane_id = bridge.run(conn.create_pane(session_id))?;
+
+        // Install connection (split + reader loop).
+        let msg_rx = bridge.install_connection(conn);
+        let _ = bridge;
+
+        // Start polling server messages on the glib main loop.
+        self.start_message_poller(msg_rx);
 
         let pane_uuid = pane_id.to_string();
         let session_state = SessionState::new(format!(
@@ -972,9 +979,6 @@ impl Window {
         let content: gtk4::Widget = pane_view.upcast();
         self.imp().session_stack.add_named(&content, Some(&session_uuid));
 
-        // Split connection and start the reader loop.
-        self.install_daemon_connection(conn);
-
         let index = self.imp().state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = self.imp().sidebar_list.row_at_index(index) {
             self.imp().sidebar_list.select_row(Some(&row));
@@ -984,23 +988,27 @@ impl Window {
     }
 
     /// Try to restore persistent sessions from a running daemon on GUI start.
-    ///
-    /// Called during window setup. If the daemon is not running, this is a
-    /// no-op — we do not auto-start the daemon just for restore.
     pub fn restore_persistent_sessions(&self) {
-        let win = self.clone();
-        glib::spawn_future_local(async move {
-            if let Err(e) = win.restore_persistent_sessions_async().await {
-                log::info!("No persistent sessions to restore: {e}");
-            }
-        });
+        let socket_path = default_socket_path();
+        if !socket_path.exists() {
+            return;
+        }
+
+        if let Err(e) = self.restore_persistent_sessions_impl() {
+            log::info!("No persistent sessions to restore: {e}");
+        }
     }
 
-    async fn restore_persistent_sessions_async(&self) -> Result<(), crate::daemon::DaemonError> {
-        let socket_path = default_socket_path();
-        let mut conn = DaemonConnection::connect(&socket_path).await?;
+    fn restore_persistent_sessions_impl(&self) -> Result<(), crate::daemon::DaemonError> {
+        self.ensure_daemon_bridge()?;
 
-        let sessions = conn.list_sessions().await?;
+        let bridge = self.imp().daemon_bridge.borrow();
+        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
+
+        let socket_path = default_socket_path();
+        let mut conn = bridge.connect(&socket_path)?;
+
+        let sessions = bridge.run(conn.list_sessions())?;
         if sessions.is_empty() {
             return Ok(());
         }
@@ -1008,7 +1016,7 @@ impl Window {
         for info in &sessions {
             let session_id =
                 rttx_proto::bytes_to_uuid(&info.id).map_err(crate::daemon::DaemonError::Frame)?;
-            let snapshot = conn.attach_session(session_id).await?;
+            let snapshot = bridge.run(conn.attach_session(session_id))?;
 
             let session_state = SessionState::new(format!("⏻ {}", info.name));
             let session_uuid = session_state.uuid.clone();
@@ -1035,64 +1043,46 @@ impl Window {
             }
         }
 
-        self.install_daemon_connection(conn);
+        let msg_rx = bridge.install_connection(conn);
+        let _ = bridge;
+        self.start_message_poller(msg_rx);
+
         log::info!("Restored {} persistent sessions from daemon", sessions.len());
         Ok(())
     }
 
-    /// Connect to the daemon, auto-starting it if needed.
-    ///
-    /// Returns the connection for initial setup (create session, attach,
-    /// create pane). After setup, call `install_daemon_connection` to split
-    /// it into reader/writer halves.
-    async fn ensure_daemon_connected(
-        &self,
-    ) -> Result<DaemonConnection, crate::daemon::DaemonError> {
+    /// Ensure the daemon bridge (tokio runtime) exists.
+    fn ensure_daemon_bridge(&self) -> Result<(), crate::daemon::DaemonError> {
+        if self.imp().daemon_bridge.borrow().is_some() {
+            return Ok(());
+        }
+
         let socket_path = default_socket_path();
 
-        // Try connecting first.
-        if let Ok(conn) = DaemonConnection::connect(&socket_path).await {
-            return Ok(conn);
-        }
+        // If daemon isn't running, try to start it.
+        if !socket_path.exists() {
+            log::info!("Daemon not running, attempting to start rttx-server");
+            let spawn_result = std::process::Command::new("rttx-server")
+                .arg("start")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
 
-        log::info!("Daemon not running, attempting to start rttx-server");
-
-        // Try to start the daemon (no --foreground so it daemonizes).
-        let spawn_result = std::process::Command::new("rttx-server")
-            .arg("start")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-
-        match spawn_result {
-            Ok(mut child) => {
-                // The daemon forks and the parent exits quickly. Wait for it.
+            if let Ok(mut child) = spawn_result {
                 let _ = child.wait();
-                // Poll for the socket to appear.
+                // Poll for socket.
                 for _ in 0..20 {
-                    glib::timeout_future(std::time::Duration::from_millis(100)).await;
-                    if let Ok(conn) = DaemonConnection::connect(&socket_path).await {
-                        log::info!("Connected to rttx-server");
-                        return Ok(conn);
+                    if socket_path.exists() {
+                        break;
                     }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
-                Err(crate::daemon::DaemonError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "rttx-server started but socket not available after 2s",
-                )))
-            }
-            Err(e) => {
-                log::warn!("Could not start rttx-server: {e}");
-                Err(crate::daemon::DaemonError::Io(e))
             }
         }
-    }
 
-    /// Split a daemon connection into reader/writer and start the reader loop.
-    fn install_daemon_connection(&self, conn: DaemonConnection) {
-        let (reader, writer) = conn.into_split();
-        self.imp().daemon_writer.replace(Some(writer));
-        self.start_daemon_reader_loop(reader);
+        let bridge = DaemonBridge::new()?;
+        self.imp().daemon_bridge.replace(Some(bridge));
+        Ok(())
     }
 
     fn connect_persistent_pane_signals(
@@ -1101,35 +1091,21 @@ impl Window {
         session_id: uuid::Uuid,
         pane_id: uuid::Uuid,
     ) {
-        // Forward keyboard input to daemon via the shared writer.
-        let writer = std::rc::Rc::clone(&self.imp().daemon_writer);
+        // Forward keyboard input to daemon via the bridge.
+        let win = self.clone();
         pane.connect_input(move |text| {
-            let writer = std::rc::Rc::clone(&writer);
             let data = text.as_bytes().to_vec();
-            glib::spawn_future_local(async move {
-                let mut w = writer.borrow_mut().take();
-                if let Some(ref mut w) = w
-                    && let Err(e) = w.send_input(session_id, pane_id, &data).await
-                {
-                    log::error!("Failed to send input: {e}");
-                }
-                *writer.borrow_mut() = w;
-            });
+            if let Some(ref bridge) = *win.imp().daemon_bridge.borrow() {
+                bridge.send_input(session_id, pane_id, data);
+            }
         });
 
-        // Forward resize events to daemon via the shared writer.
-        let writer = std::rc::Rc::clone(&self.imp().daemon_writer);
+        // Forward resize events to daemon via the bridge.
+        let win2 = self.clone();
         pane.connect_resize(move |cols, rows| {
-            let writer = std::rc::Rc::clone(&writer);
-            glib::spawn_future_local(async move {
-                let mut w = writer.borrow_mut().take();
-                if let Some(ref mut w) = w
-                    && let Err(e) = w.send_resize(session_id, pane_id, cols, rows).await
-                {
-                    log::error!("Failed to send resize: {e}");
-                }
-                *writer.borrow_mut() = w;
-            });
+            if let Some(ref bridge) = *win2.imp().daemon_bridge.borrow() {
+                bridge.send_resize(session_id, pane_id, cols, rows);
+            }
         });
 
         // Focus tracking.
@@ -1156,27 +1132,21 @@ impl Window {
         });
     }
 
-    /// Single reader loop that dispatches server messages to panes by `pane_id`.
-    fn start_daemon_reader_loop(&self, mut reader: crate::daemon::DaemonReader) {
+    /// Poll the server message channel and dispatch to panes.
+    ///
+    /// Uses `glib::timeout_add_local` to periodically check for messages
+    /// from the tokio reader loop without blocking the GTK main loop.
+    fn start_message_poller(
+        &self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<rttx_proto::proto::ServerMessage>,
+    ) {
         let win = self.clone();
-        glib::spawn_future_local(async move {
-            loop {
-                match reader.recv().await {
-                    Ok(Some(server_msg)) => {
-                        win.dispatch_daemon_message(&server_msg);
-                    }
-                    Ok(None) => {
-                        log::warn!("Daemon connection closed");
-                        win.mark_all_persistent_panes_disconnected();
-                        break;
-                    }
-                    Err(e) => {
-                        log::error!("Daemon read error: {e}");
-                        win.mark_all_persistent_panes_disconnected();
-                        break;
-                    }
-                }
+        glib::timeout_add_local(std::time::Duration::from_millis(4), move || {
+            // Drain all available messages without blocking.
+            while let Ok(msg) = rx.try_recv() {
+                win.dispatch_daemon_message(&msg);
             }
+            glib::ControlFlow::Continue
         });
     }
 
@@ -1186,7 +1156,6 @@ impl Window {
 
         let Some(ref inner) = msg.msg else { return };
 
-        // Messages without a pane_id are logged but not routed.
         let Some(pane_id) = extract_pane_id(msg) else {
             if let Msg::Error(e) = inner {
                 log::error!("Daemon error: {} (code {})", e.message, e.code);
@@ -1215,37 +1184,18 @@ impl Window {
         }
     }
 
-    /// Mark all persistent panes as disconnected (on connection loss).
-    fn mark_all_persistent_panes_disconnected(&self) {
-        let panes = self.imp().persistent_terminals.borrow();
-        for pane in panes.values() {
-            pane.set_connected(false);
-        }
-    }
-
     /// Detach a persistent session: send `DetachSession`, remove from UI.
     fn detach_persistent_session(&self, session_id_str: &str, pane_uuid: &str) {
-        // Send detach to daemon.
-        if let Ok(session_id) = uuid::Uuid::parse_str(session_id_str) {
-            let writer = std::rc::Rc::clone(&self.imp().daemon_writer);
-            glib::spawn_future_local(async move {
-                let mut w = writer.borrow_mut().take();
-                if let Some(ref mut w) = w
-                    && let Err(e) = w.detach_session(session_id).await
-                {
-                    log::error!("Failed to detach session: {e}");
-                }
-                *writer.borrow_mut() = w;
-            });
+        if let Ok(session_id) = uuid::Uuid::parse_str(session_id_str)
+            && let Some(ref bridge) = *self.imp().daemon_bridge.borrow()
+        {
+            bridge.detach_session(session_id);
         }
 
-        // Remove pane from tracking.
         self.imp().persistent_terminals.borrow_mut().remove(pane_uuid);
 
-        // Find and remove the session from state + sidebar.
         let session_uuid = {
             let state = self.imp().state.borrow();
-            // Find the session that contains this persistent pane in the stack.
             state
                 .sessions
                 .iter()

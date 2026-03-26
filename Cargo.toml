@@ -44,7 +44,7 @@ log = "0.4"
 pretty_env_logger = "0.5"
 rttx-proto = { path = "../rttxd/crates/rttx-proto" }
 bytes = "1"
-tokio = { version = "1", features = ["net", "io-util", "sync", "rt", "macros"] }
+tokio = { version = "1", features = ["net", "io-util", "sync", "rt", "rt-multi-thread", "macros", "process", "time"] }
 thiserror = "2"
 
 [dev-dependencies]
