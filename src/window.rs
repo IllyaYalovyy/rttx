@@ -413,7 +413,6 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
-            ("new-persistent-session", &["<Ctrl><Shift>P"], Self::make_pane_persistent),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
@@ -936,6 +935,12 @@ impl Window {
             win.mark_session_activity(&uuid);
         });
 
+        // Persist button: convert this pane to daemon-backed.
+        let win = self.clone();
+        term.persist_button().connect_clicked(move |_| {
+            win.make_pane_persistent();
+        });
+
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let uuid = term.uuid();
@@ -1135,7 +1140,7 @@ impl Window {
                     .flatten()
                     .find(|p| p.child() == *old.upcast_ref::<gtk4::Widget>())
                     .and_then(|p| p.name().map(|n| n.to_string()));
-                old.unparent();
+                stack.remove(old);
                 if let Some(name) = name {
                     stack.add_named(&pane_view, Some(&name));
                 } else {
