@@ -1013,9 +1013,27 @@ impl Window {
             return Ok(());
         }
 
+        // Check which daemon sessions are already tracked (from a previous restore).
+        let already_tracked: std::collections::HashSet<String> = self
+            .imp()
+            .persistent_terminals
+            .borrow()
+            .values()
+            .map(PersistentPaneView::session_id)
+            .collect();
+
+        let mut restored = 0;
         for info in &sessions {
             let session_id =
                 rttx_proto::bytes_to_uuid(&info.id).map_err(crate::daemon::DaemonError::Frame)?;
+
+            // Skip sessions we already have panes for.
+            if already_tracked.contains(&session_id.to_string()) {
+                // Still attach so we receive deltas for existing panes.
+                let _ = bridge.run(conn.attach_session(session_id));
+                continue;
+            }
+
             let snapshot = bridge.run(conn.attach_session(session_id))?;
 
             let session_state = SessionState::new(format!("⏻ {}", info.name));
@@ -1041,13 +1059,16 @@ impl Window {
                 let content: gtk4::Widget = pane_view.upcast();
                 self.imp().session_stack.add_named(&content, Some(&session_uuid));
             }
+            restored += 1;
         }
 
         let msg_rx = bridge.install_connection(conn);
         let _ = bridge;
         self.start_message_poller(msg_rx);
 
-        log::info!("Restored {} persistent sessions from daemon", sessions.len());
+        if restored > 0 {
+            log::info!("Restored {restored} persistent sessions from daemon");
+        }
         Ok(())
     }
 
@@ -2418,18 +2439,22 @@ impl Window {
     }
 
     fn clipboard_copy(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
-        {
-            term.vte().copy_clipboard_format(vte4::Format::Text);
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.vte().copy_clipboard_format(vte4::Format::Text);
+            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
+                pane.vte().copy_clipboard_format(vte4::Format::Text);
+            }
         }
     }
 
     fn clipboard_paste(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
-        {
-            term.vte().paste_clipboard();
+        if let Some(uuid) = self.focused_terminal_uuid() {
+            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
+                term.vte().paste_clipboard();
+            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
+                pane.vte().paste_clipboard();
+            }
         }
     }
 }
