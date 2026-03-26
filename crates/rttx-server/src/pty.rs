@@ -108,6 +108,17 @@ impl Pty {
         self.child.start_kill()?;
         Ok(())
     }
+
+    /// Consume the PTY and return its components for separate ownership.
+    ///
+    /// The reader goes to the PTY output loop, the writer is stored for
+    /// Input/Resize routing, and the child is owned by the output loop
+    /// for exit-status collection.
+    pub fn into_parts(
+        self,
+    ) -> (pty_process::OwnedReadPty, pty_process::OwnedWritePty, tokio::process::Child) {
+        (self.read_half, self.write_half, self.child)
+    }
 }
 
 /// Determine the user's default shell.

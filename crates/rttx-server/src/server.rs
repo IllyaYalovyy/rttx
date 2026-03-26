@@ -5,6 +5,7 @@
 
 use crate::engine::Engine;
 use crate::engine::native::NativeEngine;
+use crate::engine::PaneSpawnConfig;
 use crate::ipc::{ClientConnection, Listener};
 use crate::os::OsInterface;
 use crate::pane::Pane;
@@ -15,7 +16,8 @@ use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use uuid::Uuid;
 
 /// Shared mutable server state.
@@ -28,6 +30,12 @@ pub struct Server {
     pub engine: Box<dyn Engine>,
     /// OS abstraction for paths.
     pub os: Box<dyn OsInterface>,
+    /// Per-client push channels for server-initiated messages (Deltas, etc.).
+    client_senders: HashMap<Uuid, mpsc::UnboundedSender<proto::ServerMessage>>,
+    /// Per-pane PTY write handles for Input and Resize routing.
+    pty_writers: HashMap<Uuid, Arc<tokio::sync::Mutex<pty_process::OwnedWritePty>>>,
+    /// Per-pane kill signals to cancel PTY read loops.
+    pty_kill_senders: HashMap<Uuid, oneshot::Sender<()>>,
 }
 
 impl Server {
@@ -39,6 +47,9 @@ impl Server {
             server_id: Uuid::new_v4(),
             engine: Box::new(NativeEngine),
             os,
+            client_senders: HashMap::new(),
+            pty_writers: HashMap::new(),
+            pty_kill_senders: HashMap::new(),
         }
     }
 
@@ -69,6 +80,18 @@ impl Server {
             sessions: self.sessions.values().map(Session::to_persisted).collect(),
             serialized_at: std::time::SystemTime::now(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+
+    /// Send a message to all clients attached to a session.
+    fn broadcast_to_session(&self, session_id: Uuid, msg: &proto::ServerMessage) {
+        let Some(session) = self.sessions.get(&session_id) else {
+            return;
+        };
+        for client_id in &session.attached_clients {
+            if let Some(sender) = self.client_senders.get(client_id) {
+                let _ = sender.send(msg.clone());
+            }
         }
     }
 
@@ -166,13 +189,47 @@ impl Server {
                     Ok(id) => id,
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
-                let mut s = server.lock().await;
-                let Some(session) = s.sessions.get_mut(&session_id) else {
-                    return Some(protocol::error(4, "session not found".into()));
-                };
+
                 let pane_id = Uuid::new_v4();
-                let pane = Pane::new(pane_id, 80, 24);
-                session.add_pane(pane);
+                let pty_result = {
+                    let mut s = server.lock().await;
+                    let Some(session) = s.sessions.get_mut(&session_id) else {
+                        return Some(protocol::error(4, "session not found".into()));
+                    };
+                    let pane = Pane::new(pane_id, 80, 24);
+                    session.add_pane(pane);
+
+                    let config =
+                        PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
+                    s.engine.spawn_pane(pane_id, &config)
+                };
+
+                match pty_result {
+                    Ok(pty) => {
+                        let (reader, writer, child) = pty.into_parts();
+                        let (kill_tx, kill_rx) = oneshot::channel();
+                        {
+                            let mut s = server.lock().await;
+                            s.pty_writers.insert(
+                                pane_id,
+                                Arc::new(tokio::sync::Mutex::new(writer)),
+                            );
+                            s.pty_kill_senders.insert(pane_id, kill_tx);
+                        }
+                        spawn_pty_read_loop(
+                            Arc::clone(server),
+                            session_id,
+                            pane_id,
+                            reader,
+                            child,
+                            kill_rx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to spawn PTY for pane {pane_id}: {e}");
+                    }
+                }
+
                 Some(protocol::pane_created(session_id, pane_id))
             }
 
@@ -189,11 +246,62 @@ impl Server {
                 if let Some(session) = s.sessions.get_mut(&session_id) {
                     session.remove_pane(pane_id);
                 }
+                s.pty_writers.remove(&pane_id);
+                if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
+                    let _ = kill_tx.send(());
+                }
                 Some(protocol::pane_closed(session_id, pane_id))
             }
 
-            proto::client_message::Msg::Input(_) | proto::client_message::Msg::Resize(_) => {
-                // Input and Resize are handled by the PTY task, not here.
+            proto::client_message::Msg::Input(req) => {
+                let pane_id = match bytes_to_uuid(&req.pane_id) {
+                    Ok(id) => id,
+                    Err(e) => return Some(protocol::error(3, e.to_string())),
+                };
+                let writer = {
+                    let s = server.lock().await;
+                    s.pty_writers.get(&pane_id).cloned()
+                };
+                if let Some(writer) = writer {
+                    let mut w = writer.lock().await;
+                    if let Err(e) = w.write_all(&req.data).await {
+                        log::error!("Failed to write to PTY {pane_id}: {e}");
+                    }
+                    if let Err(e) = w.flush().await {
+                        log::error!("Failed to flush PTY {pane_id}: {e}");
+                    }
+                }
+                None
+            }
+
+            proto::client_message::Msg::Resize(req) => {
+                let pane_id = match bytes_to_uuid(&req.pane_id) {
+                    Ok(id) => id,
+                    Err(e) => return Some(protocol::error(3, e.to_string())),
+                };
+                let session_id = match bytes_to_uuid(&req.session_id) {
+                    Ok(id) => id,
+                    Err(e) => return Some(protocol::error(3, e.to_string())),
+                };
+                let cols = req.cols as u16;
+                let rows = req.rows as u16;
+
+                let writer = {
+                    let mut s = server.lock().await;
+                    if let Some(session) = s.sessions.get_mut(&session_id)
+                        && let Some(pane) = session.panes.get_mut(&pane_id)
+                    {
+                        pane.cols = cols;
+                        pane.rows = rows;
+                    }
+                    s.pty_writers.get(&pane_id).cloned()
+                };
+                if let Some(writer) = writer {
+                    let w = writer.lock().await;
+                    if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
+                        log::error!("Failed to resize PTY {pane_id}: {e}");
+                    }
+                }
                 None
             }
 
@@ -218,6 +326,72 @@ impl Server {
             proto::client_message::Msg::Shutdown(_) => None,
         }
     }
+}
+
+/// Spawn a background task that reads PTY output and broadcasts Deltas.
+fn spawn_pty_read_loop(
+    server: Arc<Mutex<Server>>,
+    session_id: Uuid,
+    pane_id: Uuid,
+    mut reader: pty_process::OwnedReadPty,
+    mut child: tokio::process::Child,
+    mut kill_rx: oneshot::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            tokio::select! {
+                result = reader.read(&mut buf) => {
+                    match result {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let data = buf[..n].to_vec();
+                            let mut s = server.lock().await;
+                            if let Some(session) = s.sessions.get_mut(&session_id)
+                                && let Some(pane) = session.panes.get_mut(&pane_id)
+                            {
+                                pane.feed_output(&data);
+                            }
+                            let msg = protocol::delta(session_id, pane_id, data);
+                            s.broadcast_to_session(session_id, &msg);
+                        }
+                        Err(e) => {
+                            log::error!("PTY read error for pane {pane_id}: {e}");
+                            break;
+                        }
+                    }
+                }
+                _ = &mut kill_rx => {
+                    let _ = child.start_kill();
+                    log::info!("PTY read loop cancelled for pane {pane_id}");
+                    return;
+                }
+            }
+        }
+
+        // Child exited naturally — collect exit status.
+        let status = match child.wait().await {
+            Ok(s) => s.code().unwrap_or(-1),
+            Err(e) => {
+                log::error!("Failed to wait on child for pane {pane_id}: {e}");
+                -1
+            }
+        };
+
+        let mut s = server.lock().await;
+        if let Some(session) = s.sessions.get_mut(&session_id)
+            && let Some(pane) = session.panes.get_mut(&pane_id)
+        {
+            pane.set_exited(status);
+        }
+        let msg = protocol::pane_exited(session_id, pane_id, status);
+        s.broadcast_to_session(session_id, &msg);
+        s.pty_writers.remove(&pane_id);
+        s.pty_kill_senders.remove(&pane_id);
+        drop(s);
+
+        log::info!("PTY exited for pane {pane_id}, status {status}");
+    });
 }
 
 /// Run the serialization loop, writing state to disk every `interval`.
@@ -271,29 +445,53 @@ async fn handle_client(
     let client_id = Uuid::new_v4();
     log::info!("Client {client_id} connected");
 
-    loop {
-        let Some(msg) = conn.read_message().await? else {
-            log::info!("Client {client_id} disconnected");
-            let mut s = server.lock().await;
-            for session in s.sessions.values_mut() {
-                session.detach_client(client_id);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    {
+        let mut s = server.lock().await;
+        s.client_senders.insert(client_id, tx);
+    }
+
+    let result: anyhow::Result<()> = async {
+        loop {
+            tokio::select! {
+                msg_result = conn.read_message() => {
+                    let Some(msg) = msg_result? else {
+                        log::info!("Client {client_id} disconnected");
+                        break;
+                    };
+
+                    // Check for shutdown.
+                    if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
+                        log::info!("Shutdown requested by client {client_id}");
+                        let s = server.lock().await;
+                        let snapshot = s.build_snapshot();
+                        let state_path = default_state_path(&s.os.cache_dir());
+                        drop(s);
+                        let _ = write_state_atomic(&snapshot, &state_path);
+                        std::process::exit(0);
+                    }
+
+                    if let Some(response) = Server::handle_message(&server, client_id, msg).await {
+                        conn.send_message(&response).await?;
+                    }
+                }
+                Some(push_msg) = rx.recv() => {
+                    conn.send_message(&push_msg).await?;
+                }
             }
-            return Ok(());
-        };
-
-        // Check for shutdown.
-        if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
-            log::info!("Shutdown requested by client {client_id}");
-            let s = server.lock().await;
-            let snapshot = s.build_snapshot();
-            let state_path = default_state_path(&s.os.cache_dir());
-            drop(s);
-            let _ = write_state_atomic(&snapshot, &state_path);
-            std::process::exit(0);
         }
+        Ok(())
+    }
+    .await;
 
-        if let Some(response) = Server::handle_message(&server, client_id, msg).await {
-            conn.send_message(&response).await?;
+    // Cleanup: remove sender and detach from all sessions.
+    {
+        let mut s = server.lock().await;
+        s.client_senders.remove(&client_id);
+        for session in s.sessions.values_mut() {
+            session.detach_client(client_id);
         }
     }
+
+    result
 }

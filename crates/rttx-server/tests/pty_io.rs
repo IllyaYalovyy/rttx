@@ -1,0 +1,243 @@
+//! Integration tests for PTY I/O: Delta streaming, Input routing, Resize.
+
+mod common;
+
+use common::{TestClient, start_test_server};
+use rttx_proto::{bytes_to_uuid, proto};
+use std::time::Duration;
+
+/// Helper: create a session, create a pane, attach, and return IDs.
+async fn setup_attached_pane(
+    client: &mut TestClient,
+) -> (Vec<u8>, Vec<u8>) {
+    client.handshake().await;
+
+    // Create session.
+    let create = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            name: "io-test".into(),
+        })),
+    };
+    client.send(&create).await;
+    let session_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
+        other => panic!("expected SessionCreated, got {other:?}"),
+    };
+
+    // Create pane (spawns PTY).
+    let create_pane = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            session_id: session_id.clone(),
+        })),
+    };
+    client.send(&create_pane).await;
+    let pane_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+        other => panic!("expected PaneCreated, got {other:?}"),
+    };
+
+    // Attach to receive Deltas.
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: session_id.clone(),
+        })),
+    };
+    client.send(&attach).await;
+    match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::Snapshot(_)) => {}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
+
+    (session_id, pane_id)
+}
+
+#[tokio::test]
+async fn pane_creation_spawns_pty_and_produces_deltas() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (_session_id, _pane_id) = setup_attached_pane(&mut client).await;
+
+    // A shell produces a prompt or at least some output on startup.
+    // Collect any Delta messages within a reasonable window.
+    let msgs = client.drain(Duration::from_secs(2)).await;
+    let delta_count = msgs
+        .iter()
+        .filter(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_))))
+        .count();
+    assert!(delta_count > 0, "expected at least one Delta, got {delta_count} messages: {msgs:?}");
+}
+
+#[tokio::test]
+async fn input_reaches_pty_and_echoes_back_as_delta() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+
+    // Drain initial shell startup output.
+    client.drain(Duration::from_millis(500)).await;
+
+    // Send input: a simple echo command.
+    let marker = "RTTX_TEST_MARKER_42";
+    let input_data = format!("echo {marker}\n");
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            session_id: session_id.clone(),
+            pane_id: pane_id.clone(),
+            data: input_data.into_bytes(),
+        })),
+    };
+    client.send(&input).await;
+
+    // Collect output and look for the marker.
+    let msgs = client.drain(Duration::from_secs(3)).await;
+    let output: Vec<u8> = msgs
+        .iter()
+        .filter_map(|m| match &m.msg {
+            Some(proto::server_message::Msg::Delta(d)) => Some(d.data.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains(marker),
+        "expected '{marker}' in delta output, got: {output_str}"
+    );
+}
+
+#[tokio::test]
+async fn resize_updates_pane_dimensions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+
+    // Send resize.
+    let resize = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+            session_id: session_id.clone(),
+            pane_id: pane_id.clone(),
+            cols: 120,
+            rows: 40,
+        })),
+    };
+    client.send(&resize).await;
+
+    // Verify by detaching and re-attaching: snapshot should show new dimensions.
+    let detach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+            session_id: session_id.clone(),
+        })),
+    };
+    client.send(&detach).await;
+
+    // Small delay for the resize to process.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: session_id.clone(),
+        })),
+    };
+    client.send(&attach).await;
+    let resp = client.recv_or_timeout().await;
+    match resp.msg {
+        Some(proto::server_message::Msg::Snapshot(snap)) => {
+            let pane_snap = snap
+                .panes
+                .iter()
+                .find(|p| p.pane_id == pane_id)
+                .expect("pane not in snapshot");
+            assert_eq!(pane_snap.cols, 120, "expected cols=120");
+            assert_eq!(pane_snap.rows, 40, "expected rows=40");
+        }
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn close_pane_kills_pty() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+
+    // Close the pane.
+    let close = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+            session_id: session_id.clone(),
+            pane_id: pane_id.clone(),
+        })),
+    };
+    client.send(&close).await;
+    let resp = client.recv_or_timeout().await;
+    assert!(
+        matches!(resp.msg, Some(proto::server_message::Msg::PaneClosed(_))),
+        "expected PaneClosed, got {resp:?}"
+    );
+
+    // Verify pane is gone: re-attach and check snapshot has no panes.
+    let detach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+            session_id: session_id.clone(),
+        })),
+    };
+    client.send(&detach).await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: session_id.clone(),
+        })),
+    };
+    client.send(&attach).await;
+    let resp = client.recv_or_timeout().await;
+    match resp.msg {
+        Some(proto::server_message::Msg::Snapshot(snap)) => {
+            assert!(snap.panes.is_empty(), "expected no panes after close, got: {:?}", snap.panes);
+        }
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pane_exit_produces_pane_exited_message() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+
+    // Drain startup output.
+    client.drain(Duration::from_millis(500)).await;
+
+    // Tell the shell to exit with a specific code.
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            session_id: session_id.clone(),
+            pane_id: pane_id.clone(),
+            data: b"exit 7\n".to_vec(),
+        })),
+    };
+    client.send(&input).await;
+
+    // Collect messages and look for PaneExited.
+    let msgs = client.drain(Duration::from_secs(3)).await;
+    let exited = msgs.iter().find_map(|m| match &m.msg {
+        Some(proto::server_message::Msg::PaneExited(pe)) => Some(pe.clone()),
+        _ => None,
+    });
+    let exited = exited.expect("expected PaneExited message");
+
+    let exit_pane_id = bytes_to_uuid(&exited.pane_id).unwrap();
+    let expected_pane_id = bytes_to_uuid(&pane_id).unwrap();
+    assert_eq!(exit_pane_id, expected_pane_id);
+    assert_eq!(exited.status, 7);
+}

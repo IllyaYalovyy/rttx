@@ -12,6 +12,9 @@ pub struct TestClient {
     read_buf: BytesMut,
 }
 
+/// Default timeout for `recv_timeout`.
+const DEFAULT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl TestClient {
     /// Connect to the server at the given socket path.
     pub async fn connect(path: &Path) -> Self {
@@ -37,6 +40,36 @@ impl TestClient {
             let n = self.stream.read_buf(&mut self.read_buf).await.expect("read failed");
             assert!(n > 0, "unexpected EOF");
         }
+    }
+
+    /// Try to receive a server message with a timeout.
+    /// Returns `None` if the timeout expires.
+    pub async fn try_recv(&mut self, timeout: std::time::Duration) -> Option<proto::ServerMessage> {
+        tokio::time::timeout(timeout, self.recv()).await.ok()
+    }
+
+    /// Receive a server message with the default timeout.
+    pub async fn recv_or_timeout(&mut self) -> proto::ServerMessage {
+        self.try_recv(DEFAULT_RECV_TIMEOUT)
+            .await
+            .expect("timed out waiting for server message")
+    }
+
+    /// Collect all messages received within a time window.
+    pub async fn drain(&mut self, window: std::time::Duration) -> Vec<proto::ServerMessage> {
+        let mut msgs = Vec::new();
+        let deadline = tokio::time::Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match self.try_recv(remaining).await {
+                Some(msg) => msgs.push(msg),
+                None => break,
+            }
+        }
+        msgs
     }
 
     /// Send Hello and receive HelloAck.
