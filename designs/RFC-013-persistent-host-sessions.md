@@ -30,6 +30,60 @@ UI surface.
 
 ---
 
+## Requirements
+
+### Disruption scenarios
+
+These are the real-world events that persistent sessions must handle. Each has different frequency
+and different user expectations for what survives.
+
+| # | Scenario | Frequency | User expectation |
+|---|---|---|---|
+| D1 | rttx GUI closes or crashes | Common | Everything resumes exactly where I left off |
+| D2 | Local machine sleeps and wakes | Daily | Nothing should change — same as D1 |
+| D3 | Network drops (SSH connection breaks) | Common | Remote work continues; I reconnect and it is all there |
+| D4 | Local machine reboots | Weekly | I get back to my working context fast — layout, folders, scrollback, reconnections |
+| D5 | Remote host reboots | Occasional | I know it happened, I can re-establish context quickly, I can see what I was doing before |
+| D6 | rttx is updated or reinstalled | Occasional | Same as D4 |
+
+### State preservation matrix
+
+What state must survive each disruption scenario.
+
+| State element | D1 GUI crash | D2 Sleep/wake | D3 Network drop | D4 Local reboot | D5 Remote reboot | D6 Update |
+|---|---|---|---|---|---|---|
+| Layout and splits | Must restore | Survives | N/A | Must restore | N/A | Must restore |
+| Session names and pane titles | Must restore | Survives | N/A | Must restore | N/A | Must restore |
+| Working directories | Must restore | Survives | Survives (remote) | Must restore | Lost | Must restore |
+| Scrollback content | Must preserve | Survives | Survives (remote) | Must restore from logs | Must restore from logs | Must restore from logs |
+| Running processes (local) | Must survive | Survives | N/A | Lost (acceptable) | N/A | Lost (acceptable) |
+| Running processes (remote) | Must survive | Must survive | Must survive | Must survive | Lost (acceptable) | Must survive |
+| SSH connections | Must survive | Should reconnect | Must reconnect | Must reconnect | N/A | Must reconnect |
+| tmux sessions (remote) | Must survive | Must survive | Must survive | Must survive | Lost (acceptable) | Must survive |
+| Per-session command history | Must preserve | Survives | Survives (remote) | Must restore | Must restore | Must restore |
+| Focused pane and active session | Must restore | Survives | N/A | Must restore | N/A | Must restore |
+| Bookmark and source provenance | Must restore | Survives | N/A | Must restore | N/A | Must restore |
+
+### Functional requirements
+
+- **R1** — GUI lifecycle must be decoupled from session lifecycle. GUI crash or close must not kill
+  local or remote work.
+- **R2** — Remote processes must survive anything that happens on the local machine: sleep, reboot,
+  network drop, update.
+- **R3** — Scrollback must be persistently logged so it survives any disruption on either end. This
+  is not optional — scrollback is the developer's working memory.
+- **R4** — After local reboot, the user must return to a recognizable workspace: same layout, same
+  sessions, same folders, same scrollback history, with reconnections attempted automatically.
+- **R5** — After remote host reboot, the user must see what happened (scrollback from before the
+  reboot), know the session is gone, and be able to re-establish it with retry.
+- **R6** — Command history must be per-session and persist across all disruption scenarios. All
+  panes within a session share one history. This is separate from shell-level history files.
+- **R7** — Recovery must be automatic on startup — not a manual "restore session" action.
+- **R8** — Partial recovery is acceptable and expected. Individual panes may fail while others
+  succeed. Failures must be visible and retryable in-pane.
+
+---
+
 ## Goals
 
 - **G1** — Support sessions that keep running, updating, and preserving terminal state after the
@@ -579,11 +633,119 @@ The two systems should coexist:
 
 ---
 
+## Prior Art: Zellij
+
+[Zellij](https://github.com/zellij-org/zellij) (MIT, Rust, 30k+ stars) is a terminal workspace
+and multiplexer that has solved many of the same subproblems this RFC addresses. It is the closest
+existing project to what `rttx` needs for persistent sessions, and its architecture deserves
+detailed study.
+
+### Architecture
+
+Zellij uses a client-server model. The server owns all PTYs and keeps running when the client
+(the TUI renderer) disconnects. Clients attach and detach freely. IPC uses protocol buffers over
+Unix domain sockets (named pipes on Windows). Socket paths are versioned by protocol contract
+(`contract_version_1/`), so sessions survive binary upgrades without breaking the wire format.
+
+The server crate (`zellij-server`) is structured around:
+
+- `pty.rs` / `pty_writer.rs` — PTY ownership and I/O
+- `terminal_bytes.rs` — raw terminal byte stream processing
+- `screen.rs` — canonical screen state model
+- `panes/` — pane management and layout
+- `tab/` — tab (session) management
+- `session_layout_metadata.rs` — serialization of session state for resurrection
+- `route.rs` — message routing between client and server
+- `thread_bus.rs` — internal message bus
+- `os_input_output.rs` — platform-abstracted OS interface (separate Unix/Windows impls)
+- `background_jobs.rs` — periodic tasks including session serialization
+
+### Session resurrection
+
+Zellij serializes the full session layout every 1 second to a human-readable KDL file in the
+user's cache directory. This captures:
+
+- pane layout and geometry
+- the command running in each pane
+- optionally the pane viewport (visible screen content)
+- optionally scrollback lines (configurable depth, including unlimited)
+
+On resurrection after crash or reboot:
+
+- layout and pane structure are restored
+- commands are NOT auto-executed — they are placed behind a "Press ENTER to run" safety banner
+- a `post_command_discovery_hook` lets users fix command detection for wrapped commands
+
+Serialized layouts are plain KDL files that can be examined, edited, and shared across machines.
+
+### Key crates used by Zellij
+
+| Crate | Purpose | Relevance to rttx |
+|---|---|---|
+| `vte` 0.11 | Terminal escape sequence parser | Server-side terminal state parsing |
+| `nix` | Unix PTY and signal handling | PTY creation, signal management |
+| `libc` | Low-level POSIX interfaces | PTY and process control |
+| `interprocess` 2.2 | IPC over Unix sockets / named pipes | Client-daemon communication |
+| `prost` | Protocol buffer serialization | Versioned wire protocol |
+| `daemonize` | Process daemonization | Server backgrounding |
+| `signal-hook` | Signal handling | Graceful shutdown, SIGWINCH |
+| `tokio` | Async runtime | Server event loop |
+| `serde` + `serde_json` | State serialization | Session persistence to disk |
+| `kdl` | KDL config/layout format | Human-readable session serialization |
+
+### What rttx can learn from Zellij
+
+**Validated patterns:**
+
+- A Rust-native PTY-owning server works reliably in production at scale. This is direct evidence
+  that the `persistent-native` engine in this RFC is viable, not theoretical.
+- Periodic serialization (every 1 second) of layout + commands + scrollback to disk is a proven
+  approach for surviving reboots (requirement R4).
+- Human-readable serialization format enables debugging, sharing, and manual editing of sessions.
+- The "don't auto-run resurrected commands" safety pattern is important — rttx should adopt
+  something similar for requirements R4 and R5.
+- Versioned protocol contracts allow binary upgrades without breaking running sessions.
+- Platform-abstracted OS input/output behind a trait boundary keeps the server portable.
+
+**Crates to evaluate for reuse:**
+
+- `interprocess` — proven IPC for the `rttx` client-daemon socket protocol
+- `prost` — versioned wire protocol between GUI and session daemon
+- `nix` + `libc` — PTY creation and process management in the native engine
+- `signal-hook` — signal handling in the session daemon
+- `daemonize` — server process management
+- `vte` (the crate, not VTE4/GTK) — server-side terminal escape sequence parsing for maintaining
+  canonical screen state without GTK
+
+**Architectural differences from rttx:**
+
+Zellij is a TUI multiplexer that runs inside a host terminal. rttx is a GTK4 terminal emulator
+that IS the terminal. This creates important differences:
+
+- Zellij's client is a TUI renderer using `crossterm`. rttx's client is a GTK window with VTE
+  widgets. The rendering path is fundamentally different.
+- Zellij can run directly on remote hosts over SSH. rttx's GUI cannot — remote persistence
+  requires a different approach (SSH tunneling to a remote session daemon, or tmux on the remote
+  host).
+- Zellij does not need to worry about clipboard/selection conflicts with tmux because it replaces
+  tmux. rttx must coexist with raw tmux as a separate mode.
+- Zellij uses one server process for all sessions. rttx's RFC-013 proposes per-session isolation
+  to limit blast radius. This is a deliberate trade-off: Zellij accepts the risk of one server
+  crash affecting all sessions in exchange for simpler process management.
+
+---
+
 ## References
 
 - [RFC-007: Per-Pane Recovery Recipes & Smart Session Restoration](./RFC-007-session-recovery.md)
+- [Zellij terminal workspace](https://github.com/zellij-org/zellij) — Rust, MIT, client-server
+  multiplexer with session resurrection
+- [Zellij session resurrection docs](https://zellij.dev/documentation/session-resurrection)
 - [VTE gtk4 Terminal API](https://gnome.pages.gitlab.gnome.org/vte/gtk4/class.Terminal.html)
 - [tmux Control Mode wiki](https://github.com/tmux/tmux/wiki/Control-Mode)
+- [`interprocess` crate](https://docs.rs/interprocess/latest/interprocess/) — cross-platform IPC
+- [`prost` crate](https://docs.rs/prost/latest/prost/) — protocol buffer serialization
+- [`vte` crate](https://docs.rs/vte/latest/vte/) — terminal escape sequence parser (no GTK)
 - [`portable-pty` crate](https://docs.rs/crate/portable-pty/0.4.0)
 - [`vt100` crate](https://docs.rs/vt100/latest/vt100/)
 - [`alacritty_terminal` crate](https://docs.rs/alacritty_terminal/latest/alacritty_terminal/)
