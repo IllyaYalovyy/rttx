@@ -42,25 +42,25 @@ fn print_usage() {
 }
 
 fn start(foreground: bool) -> anyhow::Result<()> {
+    let dev_mode = rttx_server::os::unix::dev_mode_enabled();
+
     let os = UnixOs;
     let runtime_dir = os.runtime_dir();
     let pid_path = runtime_dir.join("rttx-server.pid");
 
     // Check if already running via PID file.
     if is_running_via_pid(&pid_path) {
-        eprintln!("rttx-server is already running");
+        let mode = if dev_mode { "rttx-server (dev)" } else { "rttx-server" };
+        eprintln!("{mode} is already running");
         std::process::exit(1);
     }
 
     if !foreground {
-        // Daemonize before creating the tokio runtime.
         std::fs::create_dir_all(&runtime_dir)?;
         let daemon = daemonize::Daemonize::new().pid_file(&pid_path).working_directory(".");
 
         match daemon.start() {
-            Ok(()) => {
-                // We are now the daemon child process.
-            }
+            Ok(()) => {}
             Err(e) => {
                 eprintln!("Failed to daemonize: {e}");
                 std::process::exit(1);
@@ -68,7 +68,16 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         }
     }
 
-    pretty_env_logger::init();
+    // Initialize logging. In dev mode, default to debug level.
+    let default_level = if dev_mode { "debug" } else { "info" };
+    let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| default_level.to_string());
+    pretty_env_logger::formatted_builder().parse_filters(&env_filter).init();
+
+    if dev_mode {
+        log::info!("Starting rttx-server in DEVELOPMENT mode");
+        log::debug!("Runtime dir: {}", runtime_dir.display());
+        log::debug!("Cache dir: {}", os.cache_dir().display());
+    }
 
     // Write PID file in foreground mode too (daemonize writes it in daemon mode).
     if foreground {
@@ -112,7 +121,10 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 /// client.
 fn attach_stdio() -> anyhow::Result<()> {
     // Stderr is available for logging (stdout is the protocol channel).
-    pretty_env_logger::init();
+    let dev_mode = rttx_server::os::unix::dev_mode_enabled();
+    let default_level = if dev_mode { "debug" } else { "info" };
+    let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| default_level.to_string());
+    pretty_env_logger::formatted_builder().parse_filters(&env_filter).init();
 
     let os = UnixOs;
     let rt = tokio::runtime::Runtime::new()?;
