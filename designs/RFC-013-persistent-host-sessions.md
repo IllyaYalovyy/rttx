@@ -1,32 +1,27 @@
-# RFC-013: Persistent Host Sessions with Raw tmux Compatibility
+# RFC-013: Persistent Sessions with rttxd
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Draft                   |
+| Status        | Draft (v2)              |
 | Author(s)     | Illya Yalovyy           |
-| Supersedes    | —                       |
-| Superseded by | —                       |
+| Supersedes    | RFC-013 v1 (tmux-first) |
+| Superseded by | ---                       |
 
 ---
 
 ## Summary
 
-Add a new persistent host-session architecture to `rttx` while preserving the current direct
-terminal model and the current raw tmux workflow.
+Add persistent sessions to `rttx` backed by `rttxd`, a standalone daemon that owns PTYs and
+terminal state independently from the GUI. The same daemon runs on local and remote hosts. No tmux
+dependency.
 
-The core product decision is:
+The core decisions:
 
-- keep today's direct VTE-based terminal sessions
-- keep today's raw tmux support for users who explicitly want to use tmux itself
-- add a new persistent session family whose lifetime is independent from the GUI
-- support two persistent engines behind one frontend contract:
-  `persistent-tmux` first and `persistent-native` second
-- isolate failures per session, not behind one global daemon
-
-This design addresses the main UX problem discussed in this thread: tmux inside a visible terminal
-pane preserves persistence, but it does not solve selection and clipboard conflicts. The new
-persistent mode must therefore treat tmux as a hidden host-side engine rather than as the visible
-UI surface.
+- `rttxd` is the sole persistent session engine --- no TmuxEngine, no tmux dependency
+- the same daemon binary and protocol serve both local (Unix socket) and remote (SSH tunnel) sessions
+- persistence beyond host reboot is achieved through scrollback logging, state serialization, and
+  session reconstruction --- not process checkpointing
+- the GUI remains a thin client that attaches/detaches freely
 
 ---
 
@@ -34,180 +29,112 @@ UI surface.
 
 ### Disruption scenarios
 
-These are the real-world events that persistent sessions must handle. Each has different frequency
-and different user expectations for what survives.
-
 | # | Scenario | Frequency | User expectation |
 |---|---|---|---|
 | D1 | rttx GUI closes or crashes | Common | Everything resumes exactly where I left off |
-| D2 | Local machine sleeps and wakes | Daily | Nothing should change — same as D1 |
+| D2 | Local machine sleeps and wakes | Daily | Nothing should change --- same as D1 |
 | D3 | Network drops (SSH connection breaks) | Common | Remote work continues; I reconnect and it is all there |
-| D4 | Local machine reboots | Weekly | I get back to my working context fast — layout, folders, scrollback, reconnections |
+| D4 | Local machine reboots | Weekly | I get back to my working context fast --- layout, folders, scrollback, reconnections |
 | D5 | Remote host reboots | Occasional | I know it happened, I can re-establish context quickly, I can see what I was doing before |
 | D6 | rttx is updated or reinstalled | Occasional | Same as D4 |
 
 ### State preservation matrix
 
-What state must survive each disruption scenario.
-
 | State element | D1 GUI crash | D2 Sleep/wake | D3 Network drop | D4 Local reboot | D5 Remote reboot | D6 Update |
 |---|---|---|---|---|---|---|
-| Layout and splits | Must restore | Survives | N/A | Must restore | N/A | Must restore |
-| Session names and pane titles | Must restore | Survives | N/A | Must restore | N/A | Must restore |
-| Working directories | Must restore | Survives | Survives (remote) | Must restore | Lost | Must restore |
-| Scrollback content | Must preserve | Survives | Survives (remote) | Must restore from logs | Must restore from logs | Must restore from logs |
-| Running processes (local) | Must survive | Survives | N/A | Lost (acceptable) | N/A | Lost (acceptable) |
-| Running processes (remote) | Must survive | Must survive | Must survive | Must survive | Lost (acceptable) | Must survive |
-| SSH connections | Must survive | Should reconnect | Must reconnect | Must reconnect | N/A | Must reconnect |
-| tmux sessions (remote) | Must survive | Must survive | Must survive | Must survive | Lost (acceptable) | Must survive |
-| Per-session command history | Must preserve | Survives | Survives (remote) | Must restore | Must restore | Must restore |
-| Focused pane and active session | Must restore | Survives | N/A | Must restore | N/A | Must restore |
-| Bookmark and source provenance | Must restore | Survives | N/A | Must restore | N/A | Must restore |
+| Layout and splits | Survives | Survives | N/A | Reconstructed | Reconstructed | Reconstructed |
+| Session names and pane titles | Survives | Survives | N/A | Reconstructed | Reconstructed | Reconstructed |
+| Working directories | Survives | Survives | Survives (remote) | Reconstructed | Reconstructed | Reconstructed |
+| Scrollback content | Survives | Survives | Survives (remote) | Restored from logs | Restored from logs | Restored from logs |
+| Running processes (local) | Survives | Survives | N/A | Lost (new shells) | N/A | Lost (new shells) |
+| Running processes (remote) | Survives | Survives | Survives | Survives | Lost (new shells) | Survives |
+| SSH connections | Survives | Should reconnect | Must reconnect | Must reconnect | N/A | Must reconnect |
+| Per-session command history | Survives | Survives | Survives (remote) | Restored from disk | Restored from disk | Restored from disk |
+| Focused pane and active session | Survives | Survives | N/A | Reconstructed | Reconstructed | Reconstructed |
 
 ### Functional requirements
 
-- **R1** — GUI lifecycle must be decoupled from session lifecycle. GUI crash or close must not kill
-  local or remote work.
-- **R2** — Remote processes must survive anything that happens on the local machine: sleep, reboot,
+- **R1** --- GUI lifecycle is decoupled from session lifecycle. GUI crash or close does not kill
+  sessions.
+- **R2** --- Remote processes survive anything that happens on the local machine: sleep, reboot,
   network drop, update.
-- **R3** — Scrollback must be persistently logged so it survives any disruption on either end. This
-  is not optional — scrollback is the developer's working memory.
-- **R4** — After local reboot, the user must return to a recognizable workspace: same layout, same
-  sessions, same folders, same scrollback history, with reconnections attempted automatically.
-- **R5** — After remote host reboot, the user must see what happened (scrollback from before the
-  reboot), know the session is gone, and be able to re-establish it with retry.
-- **R6** — Command history must be per-session and persist across all disruption scenarios. All
-  panes within a session share one history. This is separate from shell-level history files.
-- **R7** — Recovery must be automatic on startup — not a manual "restore session" action.
-- **R8** — Partial recovery is acceptable and expected. Individual panes may fail while others
-  succeed. Failures must be visible and retryable in-pane.
+- **R3** --- Scrollback is persistently logged to disk so it survives any disruption on either end.
+- **R4** --- After local reboot, the user returns to a recognizable workspace: same layout, same
+  sessions, same folders, same scrollback, with fresh shells spawned automatically.
+- **R5** --- After remote host reboot, the user sees scrollback from before the reboot, knows the
+  session was reconstructed, and has a live shell in the correct directory.
+- **R6** --- Command history is per-session and persists across all disruption scenarios.
+- **R7** --- Recovery is automatic on startup --- not a manual "restore session" action.
+- **R8** --- Partial recovery is acceptable. Individual panes may fail while others succeed. Failures
+  are visible and retryable.
 
 ---
 
 ## Goals
 
-- **G1** — Support sessions that keep running, updating, and preserving terminal state after the
-  `rttx` GUI disconnects or crashes
-- **G2** — Avoid a single point of failure that can kill all persistent sessions at once
-- **G3** — Preserve the current raw tmux workflow unchanged for users who explicitly want tmux
-- **G4** — Provide a "native" persistent option that does not require tmux
-- **G5** — Keep older-host compatibility by minimizing host-side dependencies and avoiding a GTK/VTE
-  requirement on the host
-- **G6** — Keep the frontend UX under `rttx` control in persistent mode so selection, copy, and
-  search no longer depend on visible tmux behavior
-- **G7** — Keep the architecture open so the tmux-backed persistent engine can ship first without
-  locking the product into tmux forever
+- **G1** --- Sessions survive GUI disconnect, local reboot, and remote reboot
+- **G2** --- One daemon, one engine, no tmux dependency
+- **G3** --- Same daemon binary serves local and remote sessions
+- **G4** --- Preserve the current direct VTE terminal path unchanged
+- **G5** --- Keep the host-side daemon portable: no GTK, no VTE, no systemd requirement
+- **G6** --- Frontend owns selection, copy, search, and clipboard in persistent mode
+- **G7** --- Architecture supports incremental adoption: direct and persistent sessions coexist
 
 ## Non-Goals
 
-- **NG1** — Do not remove or weaken the current direct VTE terminal path
-- **NG2** — Do not replace raw tmux mode with a forced managed mode
-- **NG3** — Do not require `systemd --user` or any Linux-only service manager on the host
-- **NG4** — Do not require VTE or GTK to be installed on the host side
-- **NG5** — Do not promise that the first `persistent-native` implementation is as battle-tested as
-  tmux from day one
-- **NG6** — Do not build one global PTY daemon that owns all sessions
+- **NG1** --- Do not remove or weaken the current direct VTE terminal path
+- **NG2** --- Do not require `systemd --user` or any Linux-only service manager
+- **NG3** --- Do not require VTE or GTK on the host side
+- **NG4** --- Do not attempt process checkpointing (CRIU or similar)
+- **NG5** --- Do not build a TUI client for rttxd --- it is always a backend for the rttx GUI
 
 ---
 
-## Background & Motivation
+## Architecture
 
-The current app architecture is a normal terminal-emulator architecture:
+### Overview
 
-- the GTK frontend creates a `vte4::Terminal`
-- the VTE widget owns a live PTY and child process
-- the app layers bookmarks, sessions, recovery, links, and clipboard shortcuts on top
+```
+Local machine                          Remote host
+--------------                         -----------
+rttx (GTK GUI)                         rttxd (daemon)
+    |                                      |
+    |--- Unix socket ----> rttxd           |--- PTYs (bash, zsh, ...)
+    |    (local daemon)        |           |
+    |                          |           |--- state.json (periodic)
+    |--- SSH tunnel -------->(protocol)    |--- scrollback/*.log
+    |                                      |
+    |--- state.json (layout metadata)
+```
 
-This works well for direct shell sessions and for the existing "tmux inside a terminal pane"
-workflow. It does not satisfy the stronger requirement that a session must continue running after
-the GUI goes away.
+### Process model
 
-That stronger requirement changes the problem shape:
+**rttxd (daemon)** --- runs on any host, owns all persistent PTYs for that host:
 
-- some host-side process must remain alive while the GUI is gone
-- that process must continue draining PTY output or foreground programs can block
-- that process, not the GUI, becomes the long-lived source of truth for session state
+- spawns shells, owns PTY file descriptors
+- continuously drains PTY output into per-pane screen state
+- persists scrollback to per-pane log files on disk (every 1 second)
+- serializes session metadata to `state.json` atomically (every 1 second)
+- on startup, loads persisted state, replays scrollback, spawns fresh shells
+- serves clients over Unix socket (local) or stdio (remote via SSH)
 
-At the same time, using visible tmux inside a VTE pane has an important UX limitation:
+**rttx (GUI)** --- remains the GTK4 frontend:
 
-- tmux still owns mouse/copy-mode semantics inside the pane
-- selection and clipboard behavior still depend on tmux's interaction model
-- users still feel like they are "inside tmux"
+- connects to one or more rttxd instances (local + N remote)
+- renders terminal content from daemon-provided snapshots and deltas
+- owns selection, copy, paste, search, link detection
+- sends keyboard input and resize events to the daemon
+- may crash or disconnect without killing any session
 
-That means "raw tmux in a pane" and "persistent `rttx` session" are different product modes and
-must be modeled explicitly as such.
+### Why one server per host, not per session
 
-The design also needs an honest failure model. A single central daemon that owns every PTY would be
-convenient, but it would create exactly the wrong failure domain: one crash kills all sessions.
-The correct isolation boundary is the session, not the whole app.
+RFC-013 v1 proposed per-session daemon processes (`rttx-sessiond`) for failure isolation. In
+practice, Zellij has proven that one server process per host works reliably at scale. Per-session
+processes add significant complexity (discovery, lifecycle management, socket-per-session) for
+marginal benefit. If the daemon crashes, all sessions on that host are affected --- but the
+scrollback logs and state file survive, so reconstruction is immediate on restart.
 
-This RFC builds on RFC-007's recovery direction but goes beyond recipe replay. Recovery describes
-how to reconstruct context. Persistent sessions keep the context alive in the first place.
-
----
-
-## User Impact
-
-| Audience     | Impact |
-|--------------|--------|
-| End users    | Can choose between today's direct/raw workflows and new persistent sessions that survive GUI disconnects |
-| Contributors | Introduces a host-side session runtime, a transport protocol, and two pane families in the frontend |
-| Packagers    | Need a host-side helper binary; tmux remains optional but recommended for the first persistent engine |
-
----
-
-## Considered Options
-
-### Option A — Keep only the current direct model
-
-Keep VTE-owned PTYs and continue launching raw shells, SSH, and tmux inside visible panes.
-
-**Pros**: Smallest codebase. Lowest implementation risk. Keeps the current architecture simple.
-**Cons**: Cannot keep sessions alive after GUI disconnect. Raw tmux continues to have the same
-selection/clipboard limitations that motivated this RFC.
-
-### Option B — One global persistent daemon for all sessions
-
-Run one host daemon that owns all PTYs for all persistent sessions.
-
-**Pros**: Simplifies discovery and process management. Easiest place to centralize protocol logic.
-**Cons**: Wrong failure model. One daemon crash risks every session. Violates the explicit
-requirement to avoid "everything crashes together."
-
-### Option C — Raw tmux only
-
-Lean into tmux as the answer: keep or expand the current visible-tmux workflow and do not build a
-separate persistent mode.
-
-**Pros**: Reuses a mature multiplexer. Very low backend effort.
-**Cons**: Does not solve the visible tmux UX problem. Selection and clipboard remain constrained by
-tmux behavior inside the terminal pane.
-
-### Option D — Persistent mode with a hidden tmux backend first, plus a native backend path
-
-Preserve raw tmux as one explicit mode, but add a separate persistent session family. Use a hidden
-tmux backend first for durable detach/reattach semantics, then add a native host engine behind the
-same interface.
-
-**Pros**: Best risk-adjusted path. Delivers true detached persistence quickly. Keeps raw tmux
-available. Preserves a future path away from tmux.
-**Cons**: Requires new host-side runtime, protocol, and a second frontend pane path.
-
----
-
-## Decision
-
-**Chosen option: Option D**
-
-The product should explicitly support both:
-
-- `raw tmux` for users who want tmux as tmux
-- `persistent sessions` for users who want `rttx` to own the visible UX
-
-Persistent sessions must use per-session host processes, not one global PTY owner. The first
-persistent engine should be tmux-backed because tmux already solves the durability requirement well.
-The architecture must nevertheless be engine-agnostic so a native host engine can later replace
-tmux for users who prefer fewer dependencies or tighter product control.
+The failure domain is acceptable: one host, one daemon, periodic state to disk.
 
 ---
 
@@ -215,538 +142,287 @@ tmux for users who prefer fewer dependencies or tighter product control.
 
 ### 1. Session families
 
-The app supports two top-level session families.
+Two session families coexist in the same window:
 
-#### Direct sessions
-
-These keep today's model:
-
+**Direct sessions** --- today's model, unchanged:
 - local shell in VTE
 - SSH in VTE
-- raw tmux in VTE
+- raw tmux in VTE (for users who explicitly want tmux)
+
+**Persistent sessions** --- new:
+- backed by rttxd (local or remote)
+- session lifetime independent from GUI
+- scrollback and metadata survive reboots
+
+### 2. Daemon: rttxd
+
+Repository: [IllyaYalovyy/rttxd](https://github.com/IllyaYalovyy/rttxd)
+
+#### Existing implementation
+
+The daemon skeleton exists with:
+- Protobuf wire protocol (`rttx-proto` crate)
+- Unix socket IPC with length-prefixed framing
+- Session/Pane data model with attach/detach semantics
+- NativeEngine with PTY spawning via `pty-process`
+- Periodic state serialization to disk (1-second tick, atomic write)
+- State loading and session resurrection on startup
+
+#### What is missing
+
+| Gap | Issue |
+|---|---|
+| PTY output is not read --- no Delta messages | [rttxd#1](https://github.com/IllyaYalovyy/rttxd/issues/1) |
+| Input/Resize not routed to PTY | [rttxd#2](https://github.com/IllyaYalovyy/rttxd/issues/2) |
+| Scrollback not persisted to disk | [rttxd#3](https://github.com/IllyaYalovyy/rttxd/issues/3) |
+| Sessions not reconstructed on restart (no shell re-spawn, no scrollback replay) | [rttxd#4](https://github.com/IllyaYalovyy/rttxd/issues/4) |
+| No daemon mode (fork, PID file, signals) | [rttxd#5](https://github.com/IllyaYalovyy/rttxd/issues/5) |
+| No SSH stdio transport for remote access | [rttxd#6](https://github.com/IllyaYalovyy/rttxd/issues/6) |
+| TmuxEngine stub should be removed | [rttxd#7](https://github.com/IllyaYalovyy/rttxd/issues/7) |
+
+#### Persistence model
+
+State is written to disk continuously, not just on shutdown.
+
+**Metadata** (`<cache_dir>/state.json`, every 1 second):
+```json
+{
+  "sessions": [{
+    "id": "...",
+    "name": "dev",
+    "panes": [{
+      "id": "...",
+      "cwd": "/home/user/project",
+      "title": "bash",
+      "cols": 120, "rows": 40,
+      "scrollback_log_path": "scrollback/<session>/<pane>.log",
+      "exit_status": null
+    }],
+    "active_pane_id": "...",
+    "command_history": [...]
+  }],
+  "server_version": "0.1.0"
+}
+```
+
+**Scrollback** (`<cache_dir>/scrollback/<session_id>/<pane_id>.log`, append-only, every 1 second):
+- Raw terminal bytes, appended incrementally
+- Pane tracks `flushed_offset` to avoid rewriting
+- Capped at configurable size (default 10 MB per pane) with rotation
+
+**Reconstruction on daemon restart:**
+1. Load `state.json`
+2. For each non-exited pane: load scrollback log into `PaneScreen`
+3. Spawn fresh shell in saved CWD via `NativeEngine`
+4. Wire PTY output loop
+5. On client attach: send Snapshot with replayed scrollback + live output
+
+After reboot, the user sees their previous scrollback and a fresh shell prompt in the same
+directory. Processes are new, but context is preserved.
+
+#### Protocol
+
+Protobuf over length-prefixed frames. Same protocol for both transports.
+
+Key message types (already defined in `rttx.proto`):
+
+| Direction | Message | Purpose |
+|---|---|---|
+| C->S | Hello | Protocol version handshake |
+| C->S | CreateSession / AttachSession / DetachSession | Session lifecycle |
+| C->S | CreatePane / ClosePane | Pane lifecycle |
+| C->S | Input | Keyboard bytes to pane PTY |
+| C->S | Resize | Terminal dimensions change |
+| S->C | Snapshot | Full pane state on attach |
+| S->C | Delta | Incremental PTY output |
+| S->C | PaneExited / PaneClosed | Pane lifecycle events |
+| S->C | Bell / TitleChanged / CwdChanged | Terminal events |
+| S->C | Error | Error responses |
+
+#### Transports
+
+**Local:** Unix domain socket at `<runtime_dir>/rttxd.sock`
+
+**Remote:** SSH stdio tunneling. The GUI runs `ssh <host> rttxd attach-stdio` and speaks the
+protocol over the subprocess's stdin/stdout. This requires only that `rttxd` is installed on the
+remote host and accessible in `$PATH`. No port forwarding, no extra sockets.
+
+### 3. GUI: rttx client changes
 
-Their behavior remains intentionally unchanged.
+#### PersistentPaneView ([#122](https://github.com/IllyaYalovyy/rttx/issues/122))
 
-#### Persistent sessions
+New widget for rendering daemon-backed panes. First implementation: `vte4::Terminal` in feed mode
+(no PTY). The daemon sends raw bytes via Delta; the widget feeds them into VTE for rendering.
 
-These are new:
+- Keyboard input captured and sent as `Input` messages
+- Resize events sent as `Resize` messages
+- Selection, copy, paste owned by the GUI (paste sends bytes as Input)
+- Search operates on locally rendered VTE content
+- Connection status indicator (connected / reconnecting / disconnected)
 
-- session lifetime is independent from the GUI
-- the host runtime owns the authoritative session state
-- the frontend attaches, detaches, and reattaches as a client
+#### Daemon connection manager ([#123](https://github.com/IllyaYalovyy/rttx/issues/123))
 
-Persistent sessions expose two engines:
+`DaemonConnection` struct managing the protocol lifecycle:
 
-- `persistent-tmux`
-- `persistent-native`
+- Local transport: connect to Unix socket
+- Remote transport: spawn SSH subprocess, protocol over stdin/stdout
+- Async message send/receive, routed to GTK main loop via channels
+- Reconnect with exponential backoff on disconnect
+- One connection per rttxd instance (multiplexes sessions/panes)
 
-### 2. Product modes
+#### Local daemon auto-start ([#124](https://github.com/IllyaYalovyy/rttx/issues/124))
 
-The session creation/bookmark model gains an explicit execution mode.
+On GUI startup:
+1. Check if rttxd is running (probe socket or PID file)
+2. If not, spawn `rttxd start` and wait for socket
+3. If rttxd binary not found, persistent sessions unavailable (direct mode only)
+4. Version check via Hello/HelloAck
 
-Suggested modes:
+#### Session creation UI ([#125](https://github.com/IllyaYalovyy/rttx/issues/125))
 
-- `direct`
-- `raw-tmux`
-- `persistent`
+Extend session/bookmark model:
+- `execution_mode: direct | persistent`
+- `host: Option<String>` for remote persistent sessions
+- Visual distinction in sidebar for persistent sessions
+- Close behavior: "detach" (keep running) vs "terminate" (kill session)
+- On GUI restart: re-attach to running daemon sessions
 
-For persistent mode, add:
+#### Remote connection ([#126](https://github.com/IllyaYalovyy/rttx/issues/126))
 
-- `persistent_engine = tmux | native`
+- Bookmark with `host` field triggers SSH transport
+- GUI spawns `ssh <host> rttxd attach-stdio`
+- Same protocol, same PersistentPaneView, different transport
+- SSH auth relies on ssh-agent / SSH config / key files
+- SSH drop detection with reconnect
 
-Expected defaults:
+### 4. Selection and clipboard
 
-- normal local sessions default to `direct`
-- explicit tmux bookmarks default to `raw-tmux`
-- remote persistent workflows default to `persistent` with engine `tmux` first
+**Direct sessions:** no change --- VTE handles everything.
 
-### 3. Process model
+**Persistent sessions:** GUI-local semantics:
+- Selection performed on locally rendered VTE feed-mode widget
+- Copy copies from rttx
+- Paste sends bytes to the daemon as Input
+- No tmux copy-mode conflicts
 
-Use a shared-nothing host runtime.
+### 5. Host compatibility
 
-#### Frontend
+rttxd requires:
+- Rust standard library (statically linked binary is fine)
+- PTY support (POSIX, available on any Linux/macOS)
+- No GTK, no VTE, no systemd, no root
+- User-space installable, launchable through `ssh`
 
-`rttx` remains the GUI client:
+### 6. Failure model
 
-- owns windows, tabs, sidebar, bookmarks, preferences, search UI
-- may crash or disconnect without killing persistent sessions
-- does not own live persistent PTYs
+| Failure | Impact | Recovery |
+|---|---|---|
+| GUI crash | Sessions continue in daemon | Re-attach on restart |
+| Local daemon crash | Local sessions lost in-flight | Reconstruct from state.json + scrollback logs |
+| Local reboot | Local daemon stops | Daemon auto-starts, reconstructs from disk |
+| SSH connection drop | Remote sessions continue | GUI reconnects automatically |
+| Remote daemon crash | Remote sessions lost in-flight | Reconstruct from state.json + scrollback logs on remote |
+| Remote reboot | Remote daemon stops | Remote daemon restarts (systemd/cron/manual), reconstructs |
 
-#### Broker
+After any crash or reboot, the reconstruction model is identical: load metadata, replay scrollback,
+spawn fresh shells. Running processes are lost but working context is preserved.
 
-An optional `rttx-broker` process may exist for:
+### 7. Relationship to current recovery (RFC-007)
 
-- launching `rttx-sessiond`
-- locating existing sessions
-- publishing socket paths or connection metadata
+RFC-007's `PaneRecovery` / `PaneTarget` system remains valid for direct sessions. Persistent
+sessions do not use it --- the daemon owns session state directly.
 
-Rules:
-
-- broker owns no PTYs
-- broker is not on the data path for live pane traffic
-- broker may die without killing existing sessions
-
-#### Session daemon
-
-Each persistent session runs in its own host process:
-
-- `rttx-sessiond <session-id>`
-
-Responsibilities:
-
-- own only that session's PTYs and pane graph
-- keep draining PTY output while no GUI client is attached
-- keep session-local state such as layout, scrollback, current screen model, and metadata
-- serve one or more reconnecting clients
-
-Failure model:
-
-- one `rttx-sessiond` crash affects only one session
-- there is no global PTY owner whose crash can kill all sessions
-
-### 4. Engine abstraction inside `rttx-sessiond`
-
-`rttx-sessiond` should expose one engine-neutral internal contract.
-
-Core operations:
-
-- `create_pane`
-- `split_pane`
-- `close_pane`
-- `resize`
-- `send_input`
-- `paste`
-- `snapshot`
-- `subscribe_deltas`
-- `attach_client`
-- `detach_client`
-- `terminate_session`
-
-Two implementations:
-
-- `TmuxEngine`
-- `NativeEngine`
-
-This lets the frontend and transport stay stable while the backend engine changes.
-
-### 5. Raw tmux compatibility
-
-Raw tmux support remains as it is now.
-
-Properties of `raw-tmux` mode:
-
-- launches tmux inside a visible VTE pane
-- preserves tmux keybindings and copy-mode exactly as today
-- preserves current selection/clipboard limitations exactly as today
-
-This mode exists for users who explicitly want tmux itself, not a tmux-backed `rttx` experience.
-
-The app must not silently "upgrade" raw tmux mode into managed persistent mode.
-
-### 6. Persistent tmux engine
-
-This is the first shipping persistent engine.
-
-#### Core approach
-
-- `rttx-sessiond` creates or attaches to a private tmux session on the host
-- tmux is the durability and pane-multiplexing engine
-- `rttx` does not show raw tmux UI as the primary surface
-- `rttx-sessiond` talks to tmux through control mode and tmux commands
-
-#### Why this engine ships first
-
-- tmux already guarantees that sessions live after client disconnect
-- tmux already supports remote host workflows well
-- tmux remains compatible with older systems better than a fresh native mux
-- if `rttx-sessiond` crashes, the hidden tmux session may continue to exist
-
-#### UX rule
-
-In `persistent-tmux`, tmux is an implementation detail.
-
-That means:
-
-- selection belongs to `rttx`
-- copy belongs to `rttx`
-- search belongs to `rttx`
-- pane chrome belongs to `rttx`
-
-The user should not feel like they are operating raw tmux in a terminal pane.
-
-### 7. Persistent native engine
-
-This is the long-term engine.
-
-#### Core approach
-
-- `rttx-sessiond` owns PTYs directly
-- it spawns shells, SSH commands, and remote child processes itself
-- it continuously drains output and maintains an in-memory terminal state per pane
-
-#### Reused building blocks
-
-Recommended host-side components:
-
-- `portable-pty` for PTY/process management
-- `vt100` for a first screen model and terminal parser
-
-These are sufficient for an MVP and avoid requiring GTK/VTE on the host.
-
-#### Native engine caveat
-
-Unlike the tmux engine, if `rttx-sessiond` is the PTY owner and crashes, that specific session is
-at risk. This is acceptable for per-session isolation but means the native engine starts with a
-weaker durability story than the tmux engine.
-
-The product should therefore treat:
-
-- `persistent-tmux` as the stable first persistent engine
-- `persistent-native` as a preview until its behavior and fidelity are proven
-
-### 8. Frontend pane model
-
-The frontend should support two pane families.
-
-#### `VTEPane`
-
-Used for:
-
-- `direct`
-- `raw-tmux`
-
-This reuses the current widget and behavior.
-
-#### `PersistentPaneView`
-
-Used for:
-
-- `persistent-tmux`
-- `persistent-native`
-
-This pane renders from:
-
-- an initial host-provided snapshot
-- a stream of host-provided deltas
-
-It owns:
-
-- selection
-- copy
-- search
-- link handling on the locally rendered model
-
-VTE remains part of the product, but it is no longer the sole pane implementation.
-
-### 9. Why persistent mode is not "VTE attached to a remote PTY"
-
-Persistent mode requires the host runtime to keep canonical terminal state while the GUI is gone.
-That means the host side must be able to:
-
-- continue draining output
-- preserve screen state and scrollback
-- answer reconnect requests with a snapshot
-
-Therefore the canonical terminal model for persistent mode must live in the host session engine,
-not in a client-side VTE widget.
-
-VTE still fits well for direct mode. It is not the right source of truth for detached persistent
-mode.
-
-### 10. Transport and reconnect model
-
-Use a versioned framed protocol over:
-
-- Unix sockets for local host sessions
-- SSH stdio tunneling for remote host sessions
-
-Representative message types:
-
-- `Hello`
-- `Capabilities`
-- `OpenSession`
-- `Attach`
-- `Detach`
-- `Snapshot`
-- `Delta`
-- `Input`
-- `Paste`
-- `Resize`
-- `CreatePane`
-- `SplitPane`
-- `ClosePane`
-- `Bell`
-- `Exit`
-- `Error`
-
-Reconnect behavior:
-
-- client attaches
-- host sends a full `Snapshot`
-- host resumes `Delta` streaming
-
-### 11. Selection and clipboard semantics
-
-#### Direct / raw tmux
-
-No change:
-
-- current VTE selection behavior remains
-- current raw tmux behavior remains
-
-#### Persistent mode
-
-Frontend-local semantics:
-
-- selection is performed against the locally rendered screen model
-- copy always copies from `rttx`
-- paste sends bytes to the focused host pane
-
-This is the key UX difference that justifies the new mode.
-
-### 12. Host compatibility policy
-
-The host-side runtime must remain conservative:
-
-- no GTK dependency
-- no VTE dependency
-- no systemd requirement
-- no root requirement
-- user-space installable
-- launchable through ordinary `ssh`
-
-Persistent engine availability:
-
-- if host has tmux, `persistent-tmux` is available
-- if host has `rttx-sessiond` native support, `persistent-native` is available
-- if neither is available, the app falls back to `direct` workflows
-
-### 13. Failure model
-
-The architecture intentionally supports different durability levels.
-
-#### GUI failure
-
-- frontend crash does not kill persistent sessions
-
-#### Broker failure
-
-- existing sessions continue to run
-
-#### Session daemon failure
-
-- only one session is affected
-
-#### Persistent tmux engine
-
-- hidden tmux session may survive `rttx-sessiond` failure
-- reconnect can potentially restore control over the tmux-backed session
-
-#### Persistent native engine
-
-- the affected session may die if its owning `rttx-sessiond` dies
-- blast radius is limited to one session
-
-This difference is intentional and should be documented honestly.
-
-### 14. State model changes
-
-Bookmark and session metadata need new fields.
-
-Suggested additions:
-
-- `execution_mode`
-- `persistent_engine`
-- host session identifiers
-- optional reconnect metadata such as socket path, remote helper location, or tmux session name
-
-These fields complement, not replace, RFC-007 recovery metadata.
-
-### 15. Relationship to RFC-007
-
-RFC-007 remains valid.
-
-Recovery and persistence solve different problems:
-
-- recovery reconstructs context after loss
-- persistence keeps context alive so reconstruction is unnecessary
-
-The two systems should coexist:
-
-- `direct` sessions rely primarily on RFC-007 recovery
-- `persistent` sessions rely primarily on host-side continuity
-- recovery still matters if a persistent backend is unavailable or intentionally downgraded
-
----
-
-## Goals Alignment
-
-| Goal | How addressed |
-|------|---------------|
-| G1 | Per-session host runtimes keep sessions alive after GUI disconnect |
-| G2 | No global PTY owner; one session daemon per persistent session |
-| G3 | `raw-tmux` remains a first-class unchanged mode |
-| G4 | `persistent-native` is built into the engine abstraction from the start |
-| G5 | Host runtime avoids GTK/VTE/systemd requirements |
-| G6 | Persistent mode uses `PersistentPaneView` with frontend-owned selection/copy UX |
-| G7 | `TmuxEngine` and `NativeEngine` share one session-daemon contract |
+The two systems coexist:
+- Direct sessions: RFC-007 recovery (reconstruct from bookmarks/commands/CWD)
+- Persistent sessions: daemon state (scrollback + metadata on disk)
+- If a persistent session's daemon is unavailable, the GUI can fall back to RFC-007 recovery as a
+  degraded path
 
 ---
 
 ## Development Plan
 
-- [ ] **Step 1** — Define session-mode and persistent-engine schema changes for bookmarks and
-  session creation UI *(prerequisite: —)*
-- [ ] **Step 2** — Define the versioned host transport protocol and session-daemon lifecycle
-  *(prerequisite: Step 1)*
-- [ ] **Step 3** — Implement `rttx-broker` and `rttx-sessiond` process management with per-session
-  isolation *(prerequisite: Step 2)*
-- [ ] **Step 4** — Implement `persistent-tmux` backend using tmux control mode / commands
-  *(prerequisite: Step 3)*
-- [ ] **Step 5** — Implement `PersistentPaneView` and the frontend attach/snapshot/delta flow
-  *(prerequisite: Step 4)*
-- [ ] **Step 6** — Expose persistent remote sessions in bookmarks/session creation while preserving
-  `direct` and `raw-tmux` modes *(prerequisite: Step 5)*
-- [ ] **Step 7** — Ship `persistent-tmux` as the stable first persistent mode *(prerequisite:
-  Step 6)*
-- [ ] **Step 8** — Prototype `persistent-native` using `portable-pty` plus `vt100`
-  *(prerequisite: Step 5)*
-- [ ] **Step 9** — Validate fidelity, resize semantics, selection, and reconnect behavior for the
-  native engine *(prerequisite: Step 8)*
-- [ ] **Step 10** — Promote `persistent-native` from preview only after quality is acceptable
-  *(prerequisite: Step 9)*
+### Phase 1: Daemon functional (rttxd)
+
+Make rttxd a working terminal multiplexer that a client can connect to and use interactively.
+
+| Step | Description | Issue | Depends on |
+|---|---|---|---|
+| 1.0 | Remove TmuxEngine stub | [rttxd#7](https://github.com/IllyaYalovyy/rttxd/issues/7) | --- |
+| 1.1 | Wire PTY output loop and Delta streaming | [rttxd#1](https://github.com/IllyaYalovyy/rttxd/issues/1) | --- |
+| 1.2 | Route Input and Resize to PTY | [rttxd#2](https://github.com/IllyaYalovyy/rttxd/issues/2) | --- |
+| 1.3 | Persist scrollback to disk | [rttxd#3](https://github.com/IllyaYalovyy/rttxd/issues/3) | 1.1 |
+| 1.4 | Reconstruct sessions on daemon restart | [rttxd#4](https://github.com/IllyaYalovyy/rttxd/issues/4) | 1.1, 1.3 |
+| 1.5 | Daemon lifecycle (fork, PID, signals) | [rttxd#5](https://github.com/IllyaYalovyy/rttxd/issues/5) | --- |
+
+**Milestone:** connect to rttxd with a test client, type commands, see output, restart daemon,
+see scrollback restored.
+
+### Phase 2: GUI integration (rttx + local rttxd)
+
+Connect the rttx GUI to a local rttxd instance.
+
+| Step | Description | Issue | Depends on |
+|---|---|---|---|
+| 2.1 | PersistentPaneView widget | [rttx#122](https://github.com/IllyaYalovyy/rttx/issues/122) | Phase 1 |
+| 2.2 | Daemon connection manager | [rttx#123](https://github.com/IllyaYalovyy/rttx/issues/123) | Phase 1 |
+| 2.3 | Local daemon auto-start | [rttx#124](https://github.com/IllyaYalovyy/rttx/issues/124) | 2.2 |
+| 2.4 | Persistent session creation UI | [rttx#125](https://github.com/IllyaYalovyy/rttx/issues/125) | 2.1, 2.2, 2.3 |
+
+**Milestone:** create a persistent session in rttx, close the GUI, reopen, session is still there
+with scrollback. Reboot, daemon auto-starts, sessions reconstruct.
+
+### Phase 3: Remote sessions (rttx + remote rttxd)
+
+Connect the rttx GUI to rttxd on a remote host over SSH.
+
+| Step | Description | Issue | Depends on |
+|---|---|---|---|
+| 3.1 | SSH stdio transport in rttxd | [rttxd#6](https://github.com/IllyaYalovyy/rttxd/issues/6) | Phase 1 |
+| 3.2 | Remote daemon connection in rttx | [rttx#126](https://github.com/IllyaYalovyy/rttx/issues/126) | 2.2, 3.1 |
+
+**Milestone:** SSH to remote host from rttx, work in persistent pane, close laptop, reopen, remote
+session is still running. Remote host reboots, daemon reconstructs, user sees previous scrollback
+and fresh shell.
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** — Should `persistent-tmux` use one tmux session per `rttx` session or one tmux
-  window group per `rttx` session?
-- [ ] **Q2** — Should `PersistentPaneView` be built as a custom GTK widget immediately, or should
-  the first milestone use a simpler text-surface implementation to prove protocol and UX first?
-- [ ] **Q3** — What minimum host version policy should `persistent-native` target for PTY APIs and
-  SSH transport behavior?
-- [ ] **Q4** — Should `persistent-native` remain preview until a per-session guardian/controller
-  split exists, or is per-session isolation sufficient for the first stable release?
-- [ ] **Q5** — How much scrollback should persistent engines keep by default, and should that be a
-  host-side or client-side policy knob?
+- **Q1** --- Should `PersistentPaneView` use VTE in feed mode (fast, reuses selection/search) or a
+  custom GTK widget (more control, much more work)? Recommendation: VTE feed mode first.
+- **Q2** --- What scrollback log size cap should be the default? 10 MB per pane seems reasonable.
+- **Q3** --- Should the daemon auto-start on login (systemd user unit) or only when rttx launches?
+- **Q4** --- How should the GUI handle multiple remote hosts with different rttxd versions?
+- **Q5** --- Should the reconstruction banner (showing the session was rebuilt after reboot) be
+  injected as terminal output or as a GUI overlay?
 
 ---
 
 ## Prior Art: Zellij
 
-[Zellij](https://github.com/zellij-org/zellij) (MIT, Rust, 30k+ stars) is a terminal workspace
-and multiplexer that has solved many of the same subproblems this RFC addresses. It is the closest
-existing project to what `rttx` needs for persistent sessions, and its architecture deserves
-detailed study.
+[Zellij](https://github.com/zellij-org/zellij) (MIT, Rust, 30k+ stars) validates the core
+architecture of this RFC:
 
-### Architecture
+- A Rust-native PTY-owning server works reliably in production at scale
+- Periodic serialization (every 1 second) of layout + commands + scrollback to disk is proven
+- Session resurrection from serialized state after reboot works well
+- The "don't auto-run resurrected commands" safety pattern is important
+- Versioned protocol contracts allow binary upgrades without breaking sessions
 
-Zellij uses a client-server model. The server owns all PTYs and keeps running when the client
-(the TUI renderer) disconnects. Clients attach and detach freely. IPC uses protocol buffers over
-Unix domain sockets (named pipes on Windows). Socket paths are versioned by protocol contract
-(`contract_version_1/`), so sessions survive binary upgrades without breaking the wire format.
-
-The server crate (`zellij-server`) is structured around:
-
-- `pty.rs` / `pty_writer.rs` — PTY ownership and I/O
-- `terminal_bytes.rs` — raw terminal byte stream processing
-- `screen.rs` — canonical screen state model
-- `panes/` — pane management and layout
-- `tab/` — tab (session) management
-- `session_layout_metadata.rs` — serialization of session state for resurrection
-- `route.rs` — message routing between client and server
-- `thread_bus.rs` — internal message bus
-- `os_input_output.rs` — platform-abstracted OS interface (separate Unix/Windows impls)
-- `background_jobs.rs` — periodic tasks including session serialization
-
-### Session resurrection
-
-Zellij serializes the full session layout every 1 second to a human-readable KDL file in the
-user's cache directory. This captures:
-
-- pane layout and geometry
-- the command running in each pane
-- optionally the pane viewport (visible screen content)
-- optionally scrollback lines (configurable depth, including unlimited)
-
-On resurrection after crash or reboot:
-
-- layout and pane structure are restored
-- commands are NOT auto-executed — they are placed behind a "Press ENTER to run" safety banner
-- a `post_command_discovery_hook` lets users fix command detection for wrapped commands
-
-Serialized layouts are plain KDL files that can be examined, edited, and shared across machines.
-
-### Key crates used by Zellij
-
-| Crate | Purpose | Relevance to rttx |
-|---|---|---|
-| `vte` 0.11 | Terminal escape sequence parser | Server-side terminal state parsing |
-| `nix` | Unix PTY and signal handling | PTY creation, signal management |
-| `libc` | Low-level POSIX interfaces | PTY and process control |
-| `interprocess` 2.2 | IPC over Unix sockets / named pipes | Client-daemon communication |
-| `prost` | Protocol buffer serialization | Versioned wire protocol |
-| `daemonize` | Process daemonization | Server backgrounding |
-| `signal-hook` | Signal handling | Graceful shutdown, SIGWINCH |
-| `tokio` | Async runtime | Server event loop |
-| `serde` + `serde_json` | State serialization | Session persistence to disk |
-| `kdl` | KDL config/layout format | Human-readable session serialization |
-
-### What rttx can learn from Zellij
-
-**Validated patterns:**
-
-- A Rust-native PTY-owning server works reliably in production at scale. This is direct evidence
-  that the `persistent-native` engine in this RFC is viable, not theoretical.
-- Periodic serialization (every 1 second) of layout + commands + scrollback to disk is a proven
-  approach for surviving reboots (requirement R4).
-- Human-readable serialization format enables debugging, sharing, and manual editing of sessions.
-- The "don't auto-run resurrected commands" safety pattern is important — rttx should adopt
-  something similar for requirements R4 and R5.
-- Versioned protocol contracts allow binary upgrades without breaking running sessions.
-- Platform-abstracted OS input/output behind a trait boundary keeps the server portable.
-
-**Crates to evaluate for reuse:**
-
-- `interprocess` — proven IPC for the `rttx` client-daemon socket protocol
-- `prost` — versioned wire protocol between GUI and session daemon
-- `nix` + `libc` — PTY creation and process management in the native engine
-- `signal-hook` — signal handling in the session daemon
-- `daemonize` — server process management
-- `vte` (the crate, not VTE4/GTK) — server-side terminal escape sequence parsing for maintaining
-  canonical screen state without GTK
-
-**Architectural differences from rttx:**
-
-Zellij is a TUI multiplexer that runs inside a host terminal. rttx is a GTK4 terminal emulator
-that IS the terminal. This creates important differences:
-
-- Zellij's client is a TUI renderer using `crossterm`. rttx's client is a GTK window with VTE
-  widgets. The rendering path is fundamentally different.
-- Zellij can run directly on remote hosts over SSH. rttx's GUI cannot — remote persistence
-  requires a different approach (SSH tunneling to a remote session daemon, or tmux on the remote
-  host).
-- Zellij does not need to worry about clipboard/selection conflicts with tmux because it replaces
-  tmux. rttx must coexist with raw tmux as a separate mode.
-- Zellij uses one server process for all sessions. rttx's RFC-013 proposes per-session isolation
-  to limit blast radius. This is a deliberate trade-off: Zellij accepts the risk of one server
-  crash affecting all sessions in exchange for simpler process management.
+Key differences from rttx:
+- Zellij is a TUI multiplexer running inside a terminal; rttx IS the terminal (GTK4)
+- Zellij uses one server for all sessions (same as this RFC's updated process model)
+- Zellij cannot run on remote hosts without SSH + tmux; rttxd can serve remote sessions natively
 
 ---
 
 ## References
 
 - [RFC-007: Per-Pane Recovery Recipes & Smart Session Restoration](./RFC-007-session-recovery.md)
-- [Zellij terminal workspace](https://github.com/zellij-org/zellij) — Rust, MIT, client-server
-  multiplexer with session resurrection
+- [rttxd repository](https://github.com/IllyaYalovyy/rttxd)
+- [Zellij terminal workspace](https://github.com/zellij-org/zellij)
 - [Zellij session resurrection docs](https://zellij.dev/documentation/session-resurrection)
-- [VTE gtk4 Terminal API](https://gnome.pages.gitlab.gnome.org/vte/gtk4/class.Terminal.html)
-- [tmux Control Mode wiki](https://github.com/tmux/tmux/wiki/Control-Mode)
-- [`interprocess` crate](https://docs.rs/interprocess/latest/interprocess/) — cross-platform IPC
-- [`prost` crate](https://docs.rs/prost/latest/prost/) — protocol buffer serialization
-- [`vte` crate](https://docs.rs/vte/latest/vte/) — terminal escape sequence parser (no GTK)
-- [`portable-pty` crate](https://docs.rs/crate/portable-pty/0.4.0)
-- [`vt100` crate](https://docs.rs/vt100/latest/vt100/)
-- [`alacritty_terminal` crate](https://docs.rs/alacritty_terminal/latest/alacritty_terminal/)
-- [`tmux_interface` crate](https://docs.rs/tmux_interface/latest/tmux_interface/)
+- [`pty-process` crate](https://docs.rs/pty-process/latest/pty_process/)
+- [`prost` crate](https://docs.rs/prost/latest/prost/) --- protocol buffer serialization
+- [`vte` crate](https://docs.rs/vte/latest/vte/) --- terminal escape sequence parser (no GTK)
