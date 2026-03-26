@@ -76,7 +76,7 @@ jobs:
         env:
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
-        run: cargo test
+        run: bash .github/scripts/run-quality-tests.sh
 
   manifest:
     name: Flatpak manifest
