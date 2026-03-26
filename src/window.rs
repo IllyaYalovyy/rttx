@@ -11,12 +11,14 @@ use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
+use crate::daemon::{DaemonConnection, default_socket_path};
 use crate::preferences::{self, Preferences};
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
     SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
+use crate::terminal::persistent_widget::PersistentPaneView;
 use crate::terminal::widget::TerminalWidget;
 use std::collections::HashMap;
 
@@ -44,6 +46,8 @@ mod imp {
         pub add_session_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
+        pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
+        pub daemon_conn: RefCell<Option<DaemonConnection>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
@@ -407,6 +411,7 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
+            ("new-persistent-session", &["<Ctrl><Shift>P"], Self::add_persistent_session),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
@@ -919,6 +924,266 @@ impl Window {
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
+    /// Create a new persistent session backed by the rttxd daemon.
+    ///
+    /// Connects to the daemon (auto-starting it if needed), creates a
+    /// session and pane on the server, and wires a `PersistentPaneView`
+    /// into the session layout.
+    pub fn add_persistent_session(&self) {
+        let win = self.clone();
+        glib::spawn_future_local(async move {
+            if let Err(e) = win.add_persistent_session_async().await {
+                log::error!("Failed to create persistent session: {e}");
+                let toast = adw::Toast::new(&format!("Persistent session failed: {e}"));
+                win.imp().toast_overlay.add_toast(toast);
+            }
+        });
+    }
+
+    async fn add_persistent_session_async(&self) -> Result<(), crate::daemon::DaemonError> {
+        self.ensure_daemon_connected().await?;
+
+        let count = self.imp().state.borrow().sessions.len() + 1;
+
+        // Take the connection out of the RefCell for the async calls.
+        let mut conn = self
+            .imp()
+            .daemon_conn
+            .borrow_mut()
+            .take()
+            .ok_or(crate::daemon::DaemonError::Disconnected)?;
+
+        let result = async {
+            let session_id = conn.create_session(&format!("Session {count}")).await?;
+            let _snapshot = conn.attach_session(session_id).await?;
+            let pane_id = conn.create_pane(session_id).await?;
+            Ok::<_, crate::daemon::DaemonError>((session_id, pane_id))
+        }
+        .await;
+
+        // Put the connection back regardless of success/failure.
+        self.imp().daemon_conn.replace(Some(conn));
+
+        let (daemon_session_id, daemon_pane_id) = result?;
+
+        let pane_uuid = daemon_pane_id.to_string();
+        let session_state = SessionState::new(format!(
+            "⏻ Session {}",
+            self.imp().state.borrow().sessions.len() + 1
+        ));
+        let session_uuid = session_state.uuid.clone();
+
+        self.imp().state.borrow_mut().sessions.push(session_state.clone());
+        self.append_session_row(&session_state);
+
+        let pane_view = PersistentPaneView::new(&pane_uuid, &daemon_session_id.to_string());
+        pane_view.set_connected(true);
+        self.connect_persistent_pane_signals(&pane_view, daemon_session_id, daemon_pane_id);
+        self.apply_preferences_to_persistent_pane(&pane_view);
+        self.imp().persistent_terminals.borrow_mut().insert(pane_uuid, pane_view.clone());
+
+        let content: gtk4::Widget = pane_view.upcast();
+        self.imp().session_stack.add_named(&content, Some(&session_uuid));
+
+        let index = self.imp().state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = self.imp().sidebar_list.row_at_index(index) {
+            self.imp().sidebar_list.select_row(Some(&row));
+        }
+
+        Ok(())
+    }
+
+    /// Ensure a daemon connection exists, auto-starting rttxd if needed.
+    async fn ensure_daemon_connected(&self) -> Result<(), crate::daemon::DaemonError> {
+        if self.imp().daemon_conn.borrow().is_some() {
+            return Ok(());
+        }
+
+        let socket_path = default_socket_path();
+
+        // Try connecting first.
+        match DaemonConnection::connect(&socket_path).await {
+            Ok(conn) => {
+                self.imp().daemon_conn.replace(Some(conn));
+                return Ok(());
+            }
+            Err(_) => {
+                log::info!("Daemon not running, attempting to start rttx-server");
+            }
+        }
+
+        // Try to start the daemon.
+        let spawn_result = std::process::Command::new("rttx-server")
+            .arg("start")
+            .arg("--foreground")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        match spawn_result {
+            Ok(_child) => {
+                // Poll for the socket to appear.
+                for _ in 0..20 {
+                    glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                    if let Ok(conn) = DaemonConnection::connect(&socket_path).await {
+                        self.imp().daemon_conn.replace(Some(conn));
+                        log::info!("Connected to rttx-server");
+                        return Ok(());
+                    }
+                }
+                Err(crate::daemon::DaemonError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "rttx-server started but socket not available after 2s",
+                )))
+            }
+            Err(e) => {
+                log::warn!("Could not start rttx-server: {e}");
+                Err(crate::daemon::DaemonError::Io(e))
+            }
+        }
+    }
+
+    fn connect_persistent_pane_signals(
+        &self,
+        pane: &PersistentPaneView,
+        session_id: uuid::Uuid,
+        pane_id: uuid::Uuid,
+    ) {
+        // Forward keyboard input to daemon.
+        let win = self.clone();
+        pane.connect_input(move |text| {
+            let win = win.clone();
+            let data = text.as_bytes().to_vec();
+            glib::spawn_future_local(async move {
+                let mut conn = win.imp().daemon_conn.borrow_mut().take();
+                if let Some(ref mut c) = conn
+                    && let Err(e) = c.send_input(session_id, pane_id, &data).await
+                {
+                    log::error!("Failed to send input: {e}");
+                }
+                win.imp().daemon_conn.replace(conn);
+            });
+        });
+
+        // Forward resize events to daemon.
+        let win = self.clone();
+        pane.connect_resize(move |cols, rows| {
+            let win = win.clone();
+            glib::spawn_future_local(async move {
+                let mut conn = win.imp().daemon_conn.borrow_mut().take();
+                if let Some(ref mut c) = conn
+                    && let Err(e) = c.send_resize(session_id, pane_id, cols, rows).await
+                {
+                    log::error!("Failed to send resize: {e}");
+                }
+                win.imp().daemon_conn.replace(conn);
+            });
+        });
+
+        // Focus tracking.
+        let win = self.clone();
+        let uuid = pane.uuid();
+        let focus_controller = gtk4::EventControllerFocus::new();
+        focus_controller.connect_enter(move |_| {
+            win.set_focused_terminal(Some(&uuid));
+        });
+        pane.vte().add_controller(focus_controller);
+
+        // Bell.
+        let bell_pane = pane.clone();
+        pane.vte().connect_bell(move |_| {
+            bell_pane.flash_bell();
+        });
+
+        // Start the delta reader loop.
+        self.start_daemon_reader(pane.clone());
+    }
+
+    /// Spawn a glib future that reads server messages and routes them to panes.
+    fn start_daemon_reader(&self, pane: PersistentPaneView) {
+        let win = self.clone();
+        glib::spawn_future_local(async move {
+            loop {
+                let msg = {
+                    let mut conn = win.imp().daemon_conn.borrow_mut().take();
+                    let result = match conn {
+                        Some(ref mut c) => c.recv().await,
+                        None => break,
+                    };
+                    win.imp().daemon_conn.replace(conn);
+                    result
+                };
+                match msg {
+                    Ok(Some(server_msg)) => {
+                        win.handle_daemon_message(&pane, &server_msg);
+                    }
+                    Ok(None) => {
+                        log::warn!("Daemon connection closed");
+                        pane.set_connected(false);
+                        break;
+                    }
+                    Err(e) => {
+                        log::error!("Daemon read error: {e}");
+                        pane.set_connected(false);
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    fn handle_daemon_message(
+        &self,
+        pane: &PersistentPaneView,
+        msg: &rttx_proto::proto::ServerMessage,
+    ) {
+        use rttx_proto::proto::server_message::Msg;
+        let Some(ref inner) = msg.msg else { return };
+        match inner {
+            Msg::Delta(delta) => {
+                pane.feed_output(&delta.data);
+            }
+            Msg::TitleChanged(tc) => {
+                if pane.custom_title().is_none() {
+                    pane.set_title(&tc.title);
+                }
+            }
+            Msg::PaneExited(exited) => {
+                log::info!("Persistent pane exited with status {}", exited.status);
+            }
+            Msg::Bell(_) => {
+                pane.flash_bell();
+            }
+            Msg::Error(e) => {
+                log::error!("Daemon error: {} (code {})", e.message, e.code);
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_preferences_to_persistent_pane(&self, pane: &PersistentPaneView) {
+        let prefs = preferences::load();
+        let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
+        pane.vte().set_font(Some(&font_desc));
+        pane.vte().set_scrollback_lines(prefs.scrollback_lines as i64);
+        pane.set_smart_clipboard(prefs.smart_clipboard);
+
+        let is_dark = adw::StyleManager::default().is_dark();
+        let effective_name = prefs.effective_color_scheme_name(is_dark);
+        if let Some(scheme) =
+            color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
+                let fallback = if is_dark {
+                    color_scheme::BUILTIN_DARK_SCHEME_NAME
+                } else {
+                    color_scheme::BUILTIN_LIGHT_SCHEME_NAME
+                };
+                color_scheme::load_color_scheme_by_name(fallback)
+            })
+        {
+            pane.apply_color_scheme(&scheme);
         }
     }
 
