@@ -33,9 +33,15 @@ start_broadway_if_available() {
 
 known_teardown_sigsegv() {
     local logfile=$1
+    local expected_tests
+    local completed_tests
+
+    expected_tests=$(sed -n 's/^running \([0-9][0-9]*\) tests$/\1/p' "${logfile}" | tail -n 1)
+    completed_tests=$(grep -Ec '^test .+ \.\.\. (ok|ignored)$' "${logfile}" || true)
 
     grep -q "signal: 11, SIGSEGV: invalid memory reference" "${logfile}" &&
-        grep -q "test result: ok\\." "${logfile}" &&
+        [[ -n "${expected_tests}" ]] &&
+        [[ "${completed_tests}" -eq "${expected_tests}" ]] &&
         ! grep -q "test result: FAILED" "${logfile}" &&
         ! grep -q "^failures:$" "${logfile}"
 }
