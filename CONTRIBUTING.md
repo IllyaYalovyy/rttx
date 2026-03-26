@@ -73,7 +73,7 @@ When in doubt, open an issue to discuss before writing code.
 - Rust 1.85+ (edition 2024)
 - GTK4 4.14+
 - Libadwaita 1.5+
-- VTE 0.78+ (GTK4 variant)
+- VTE 0.76+ (GTK4 variant, 0.78 recommended)
 
 **Fedora:**
 ```bash
@@ -83,6 +83,12 @@ sudo dnf install cargo meson pkg-config gtk4-devel libadwaita-devel vte291-gtk4-
 **Ubuntu/Debian:**
 ```bash
 sudo apt install cargo meson pkg-config libgtk-4-dev libadwaita-1-dev libvte-2.91-gtk4-dev
+```
+
+If your system has VTE 0.76 instead of 0.78, build with:
+
+```bash
+cargo build --no-default-features --features vte-0_76
 ```
 
 **For UI behavioral tests** (optional but required for changes touching GTK layout or widget interaction):

@@ -1,0 +1,2 @@
+option('vte_version', type: 'string', value: '0.78',
+       description: 'Minimum VTE version (0.76 or 0.78)')

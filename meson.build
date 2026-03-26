@@ -23,7 +23,15 @@ endif
 # Dependencies (checked early for better user feedback)
 dependency('gtk4', version: '>= 4.14')
 dependency('libadwaita-1', version: '>= 1.5')
-dependency('vte-2.91-gtk4', version: '>= 0.76.0')
+
+vte_version = get_option('vte_version')
+dependency('vte-2.91-gtk4', version: '>= ' + vte_version)
+
+if vte_version.version_compare('>= 0.78')
+  cargo_vte_features = '--features=vte-0_78'
+else
+  cargo_vte_features = '--no-default-features --features=vte-0_76'
+endif
 
 # Find cargo
 cargo = find_program('cargo')
@@ -35,7 +43,7 @@ custom_target('rttx-binary',
     'sh', '-c',
     cargo.full_path() + ' fmt --check && ' +
     cargo.full_path() + ' clippy -- -D warnings && ' +
-    cargo.full_path() + ' build --release --manifest-path ' + meson.project_source_root() / 'Cargo.toml' +
+    cargo.full_path() + ' build --release ' + cargo_vte_features + ' --manifest-path ' + meson.project_source_root() / 'Cargo.toml' +
     ' --target-dir ' + meson.project_build_root() / 'cargo-target && ' +
     'cp ' + meson.project_build_root() / 'cargo-target' / 'release' / 'rttx' + ' @OUTPUT@'
   ],

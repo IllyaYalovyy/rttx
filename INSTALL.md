@@ -94,14 +94,20 @@ sudo apt install cargo meson pkg-config libgtk-4-dev libadwaita-1-dev libvte-2.9
 sudo pacman -S rust meson pkgconf gtk4 libadwaita vte4
 ```
 
-Minimum versions: GTK4 4.14, libadwaita 1.5, VTE 0.78 (GTK4 variant). Rust edition 2024 (Rust
-1.85+).
+Minimum versions: GTK4 4.14, libadwaita 1.5, VTE 0.76+ (GTK4 variant, 0.78 recommended). Rust
+edition 2024 (Rust 1.85+).
 
 ### Quick build (no install)
 
 ```bash
 cargo build --release
 ./target/release/rttx
+```
+
+If your system has VTE 0.76 instead of 0.78 (e.g., Fedora 40):
+
+```bash
+cargo build --release --no-default-features --features vte-0_76
 ```
 
 ### Full install (desktop integration)
@@ -111,6 +117,13 @@ grid:
 
 ```bash
 meson setup build --prefix="$HOME/.local"
+meson install -C build
+```
+
+For systems with VTE 0.76 instead of 0.78:
+
+```bash
+meson setup build --prefix="$HOME/.local" -Dvte_version=0.76
 meson install -C build
 ```
 
