@@ -49,6 +49,7 @@ mod imp {
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
         pub daemon_bridge: RefCell<Option<DaemonBridge>>,
+        pub restored_daemon_sessions: RefCell<bool>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
@@ -989,6 +990,11 @@ impl Window {
 
     /// Try to restore persistent sessions from a running daemon on GUI start.
     pub fn restore_persistent_sessions(&self) {
+        // Only restore once per GUI lifetime.
+        if *self.imp().restored_daemon_sessions.borrow() {
+            return;
+        }
+
         let socket_path = default_socket_path();
         if !socket_path.exists() {
             return;
@@ -997,6 +1003,7 @@ impl Window {
         if let Err(e) = self.restore_persistent_sessions_impl() {
             log::info!("No persistent sessions to restore: {e}");
         }
+        self.imp().restored_daemon_sessions.replace(true);
     }
 
     fn restore_persistent_sessions_impl(&self) -> Result<(), crate::daemon::DaemonError> {
@@ -1010,11 +1017,6 @@ impl Window {
 
         let sessions = bridge.run(conn.list_sessions())?;
         if sessions.is_empty() {
-            return Ok(());
-        }
-
-        // Don't restore sessions we already have panes for (e.g., if called twice).
-        if !self.imp().persistent_terminals.borrow().is_empty() {
             return Ok(());
         }
 
@@ -1069,27 +1071,30 @@ impl Window {
 
         let socket_path = default_socket_path();
 
-        // If daemon isn't running, try to start it.
-        if !socket_path.exists() {
-            log::info!("Daemon not running, attempting to start rttx-server");
-            let mut cmd = std::process::Command::new("rttx-server");
-            cmd.arg("start")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            // Propagate dev mode to the daemon so it uses matching paths.
-            if crate::config::is_development() {
-                cmd.env("RTTX_DEV_MODE", "1");
-            }
-            let spawn_result = cmd.spawn();
-
-            if let Ok(mut child) = spawn_result {
-                let _ = child.wait();
-                // Poll for socket.
-                for _ in 0..20 {
-                    if socket_path.exists() {
-                        break;
+        // Try to start the daemon if it's not reachable.
+        // A stale socket file may exist from a crashed daemon, so we can't
+        // just check socket_path.exists() — we must try connecting.
+        {
+            let test_bridge = DaemonBridge::new()?;
+            if test_bridge.connect(&socket_path).is_err() {
+                log::info!("Daemon not reachable, attempting to start rttx-server");
+                // Remove stale socket if present.
+                let _ = std::fs::remove_file(&socket_path);
+                let mut cmd = std::process::Command::new("rttx-server");
+                cmd.arg("start")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                if crate::config::is_development() {
+                    cmd.env("RTTX_DEV_MODE", "1");
+                }
+                if let Ok(mut child) = cmd.spawn() {
+                    let _ = child.wait();
+                    for _ in 0..20 {
+                        if socket_path.exists() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
         }
