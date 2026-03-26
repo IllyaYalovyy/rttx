@@ -380,6 +380,9 @@ impl Window {
             }
         }
 
+        // Don't persist daemon-backed sessions — they're restored from the daemon.
+        state.sessions.retain(|s| !s.name.starts_with('⏻'));
+
         if let Err(e) = session::save_window_state(&state) {
             log::error!("Failed to save window state: {e}");
         }
