@@ -1013,26 +1013,15 @@ impl Window {
             return Ok(());
         }
 
-        // Check which daemon sessions are already tracked (from a previous restore).
-        let already_tracked: std::collections::HashSet<String> = self
-            .imp()
-            .persistent_terminals
-            .borrow()
-            .values()
-            .map(PersistentPaneView::session_id)
-            .collect();
+        // Don't restore sessions we already have panes for (e.g., if called twice).
+        if !self.imp().persistent_terminals.borrow().is_empty() {
+            return Ok(());
+        }
 
         let mut restored = 0;
         for info in &sessions {
             let session_id =
                 rttx_proto::bytes_to_uuid(&info.id).map_err(crate::daemon::DaemonError::Frame)?;
-
-            // Skip sessions we already have panes for.
-            if already_tracked.contains(&session_id.to_string()) {
-                // Still attach so we receive deltas for existing panes.
-                let _ = bridge.run(conn.attach_session(session_id));
-                continue;
-            }
 
             let snapshot = bridge.run(conn.attach_session(session_id))?;
 

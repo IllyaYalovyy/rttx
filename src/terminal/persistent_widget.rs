@@ -15,13 +15,14 @@ use crate::color_scheme;
 mod imp {
     use super::*;
     use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
-    #[derive(Default, Debug)]
+    #[derive(Debug)]
     pub struct PersistentPaneView {
         pub uuid: RefCell<String>,
         pub session_id: RefCell<String>,
         pub custom_title: RefCell<Option<String>>,
-        pub smart_clipboard: Cell<bool>,
+        pub smart_clipboard: Rc<Cell<bool>>,
         pub visual_bell: Cell<bool>,
         pub connected: Cell<bool>,
         pub vte: vte4::Terminal,
@@ -32,6 +33,27 @@ mod imp {
         pub split_h_button: gtk4::Button,
         pub split_v_button: gtk4::Button,
         pub status_label: gtk4::Label,
+    }
+
+    impl Default for PersistentPaneView {
+        fn default() -> Self {
+            Self {
+                uuid: RefCell::default(),
+                session_id: RefCell::default(),
+                custom_title: RefCell::default(),
+                smart_clipboard: Rc::new(Cell::new(false)),
+                visual_bell: Cell::default(),
+                connected: Cell::default(),
+                vte: vte4::Terminal::new(),
+                terminal_scroller: gtk4::ScrolledWindow::new(),
+                header: gtk4::Box::default(),
+                title_label: gtk4::Label::default(),
+                close_button: gtk4::Button::default(),
+                split_h_button: gtk4::Button::default(),
+                split_v_button: gtk4::Button::default(),
+                status_label: gtk4::Label::default(),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -110,7 +132,7 @@ mod imp {
             smart_clipboard_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
 
             let copy_vte = self.vte.clone();
-            let copy_flag = self.smart_clipboard.clone();
+            let copy_flag = std::rc::Rc::clone(&self.smart_clipboard);
             smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
                 Some(gtk4::KeyvalTrigger::new(
                     gtk4::gdk::Key::c,
@@ -128,7 +150,7 @@ mod imp {
             ));
 
             let paste_vte = self.vte.clone();
-            let paste_flag = self.smart_clipboard.clone();
+            let paste_flag = std::rc::Rc::clone(&self.smart_clipboard);
             smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
                 Some(gtk4::KeyvalTrigger::new(
                     gtk4::gdk::Key::v,
