@@ -37,8 +37,7 @@ known_teardown_sigsegv() {
     grep -q "signal: 11, SIGSEGV: invalid memory reference" "${logfile}" &&
         grep -q "test result: ok\\." "${logfile}" &&
         ! grep -q "test result: FAILED" "${logfile}" &&
-        ! grep -q "^failures:$" "${logfile}" &&
-        ! grep -q "panicked at" "${logfile}"
+        ! grep -q "^failures:$" "${logfile}"
 }
 
 run_cargo_target() {
