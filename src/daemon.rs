@@ -16,13 +16,23 @@ use tokio::net::UnixStream;
 use uuid::Uuid;
 
 /// Default socket path for the local rttxd instance.
+///
+/// In dev mode (`RTTX_DEV_MODE=1`), uses `rttxd-devel` instead of
+/// `rttx-server` so the development daemon runs alongside production.
 #[must_use]
 pub fn default_socket_path() -> PathBuf {
+    let dir_name = if crate::config::is_development() { "rttxd-devel" } else { "rttx-server" };
     std::env::var("XDG_RUNTIME_DIR")
         .map_or_else(|_| PathBuf::from("/tmp"), PathBuf::from)
-        .join("rttx-server")
+        .join(dir_name)
         .join("v1")
         .join("rttx-server.sock")
+}
+
+/// Return the daemon binary name for the current mode.
+#[must_use]
+pub const fn daemon_binary() -> &'static str {
+    "rttx-server"
 }
 
 /// Errors from daemon communication.

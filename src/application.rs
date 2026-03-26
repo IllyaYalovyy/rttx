@@ -8,7 +8,11 @@ use crate::window::Window;
 /// Build and run the application.
 #[must_use]
 pub fn run() -> glib::ExitCode {
-    pretty_env_logger::init();
+    if config::is_development() && std::env::var_os("RUST_LOG").is_none() {
+        pretty_env_logger::formatted_builder().filter_level(log::LevelFilter::Debug).init();
+    } else {
+        pretty_env_logger::init();
+    }
 
     let app = adw::Application::builder()
         .application_id(config::app_id())
