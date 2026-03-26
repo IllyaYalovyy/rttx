@@ -19,6 +19,7 @@ fn main() -> anyhow::Result<()> {
     match command {
         "start" => start(foreground),
         "stop" => stop(),
+        "attach-stdio" => attach_stdio(),
         "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -37,6 +38,7 @@ fn print_usage() {
     eprintln!("Commands:");
     eprintln!("  start [--foreground]  Start the daemon");
     eprintln!("  stop                  Stop the running daemon");
+    eprintln!("  attach-stdio          Serve one client over stdin/stdout (for SSH)");
 }
 
 fn start(foreground: bool) -> anyhow::Result<()> {
@@ -98,6 +100,41 @@ fn start(foreground: bool) -> anyhow::Result<()> {
     // Cleanup PID file on normal exit.
     let _ = std::fs::remove_file(&pid_path);
     result
+}
+
+/// Serve a single client over stdin/stdout.
+///
+/// Intended to be invoked via SSH: `ssh host rttx-server attach-stdio`.
+/// The daemon must already be running on the remote host. This process
+/// connects to the local daemon socket and bridges the client's
+/// stdin/stdout to it, but that would add latency. Instead, we load
+/// state and serve directly — the stdio process IS the server for this
+/// client.
+fn attach_stdio() -> anyhow::Result<()> {
+    // Stderr is available for logging (stdout is the protocol channel).
+    pretty_env_logger::init();
+
+    let os = UnixOs;
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let server = Arc::new(Mutex::new(Server::new(Box::new(os))));
+
+        {
+            let mut s = server.lock().await;
+            s.load_persisted_state();
+        }
+
+        Server::reconstruct_sessions(&server).await;
+
+        // Start serialization loop so state is persisted while this client is connected.
+        let ser_server = Arc::clone(&server);
+        tokio::spawn(async move {
+            rttx_server::server::serialization_loop(ser_server, std::time::Duration::from_secs(1))
+                .await;
+        });
+
+        rttx_server::server::handle_stdio_client(server).await
+    })
 }
 
 fn stop() -> anyhow::Result<()> {

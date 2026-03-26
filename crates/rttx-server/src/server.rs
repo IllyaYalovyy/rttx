@@ -546,11 +546,25 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     }
 }
 
+/// Handle a single stdio client (for `attach-stdio` SSH tunneling).
+///
+/// Serves one client over stdin/stdout using the same protocol as the
+/// Unix socket path. The server must already be running (sessions loaded,
+/// PTYs reconstructed).
+pub async fn handle_stdio_client(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
+    let stream = crate::ipc::StdioStream::new();
+    let conn = ClientConnection::new(stream);
+    handle_client(server, conn).await
+}
+
 #[allow(clippy::significant_drop_tightening)]
-async fn handle_client(
+async fn handle_client<S>(
     server: Arc<Mutex<Server>>,
-    mut conn: ClientConnection,
-) -> anyhow::Result<()> {
+    mut conn: ClientConnection<S>,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let client_id = Uuid::new_v4();
     log::info!("Client {client_id} connected");
 

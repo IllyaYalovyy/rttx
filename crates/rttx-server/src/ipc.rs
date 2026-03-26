@@ -1,12 +1,14 @@
 //! Unix socket listener and client connection handling.
 //!
 //! Manages the server's listening socket and per-client read/write loops
-//! with length-prefixed protobuf framing.
+//! with length-prefixed protobuf framing. `ClientConnection` is generic
+//! over any async read/write pair, supporting both Unix sockets (local)
+//! and stdin/stdout (remote via SSH).
 
 use bytes::BytesMut;
 use rttx_proto::{decode_frame, encode_frame, proto};
 use std::path::{Path, PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
 /// Errors from IPC operations.
@@ -42,7 +44,7 @@ impl Listener {
     }
 
     /// Accept the next client connection.
-    pub async fn accept(&self) -> Result<ClientConnection, IpcError> {
+    pub async fn accept(&self) -> Result<ClientConnection<UnixStream>, IpcError> {
         let (stream, _addr) = self.inner.accept().await?;
         Ok(ClientConnection::new(stream))
     }
@@ -66,20 +68,22 @@ impl Drop for Listener {
 }
 
 /// A connected client with buffered read/write.
-pub struct ClientConnection {
-    stream: UnixStream,
+///
+/// Generic over the transport: `UnixStream` for local connections,
+/// or a stdin/stdout pair for SSH stdio mode.
+pub struct ClientConnection<S> {
+    stream: S,
     read_buf: BytesMut,
 }
 
-impl ClientConnection {
-    fn new(stream: UnixStream) -> Self {
-        Self { stream, read_buf: BytesMut::with_capacity(8192) }
-    }
-
-    /// Create a client connection from an existing stream (used by the `stop` command).
+impl<S> ClientConnection<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Create a new client connection wrapping any async read/write stream.
     #[must_use]
-    pub fn from_stream(stream: UnixStream) -> Self {
-        Self::new(stream)
+    pub fn new(stream: S) -> Self {
+        Self { stream, read_buf: BytesMut::with_capacity(8192) }
     }
 
     /// Read the next client message. Returns `None` on clean disconnect.
@@ -103,6 +107,7 @@ impl ClientConnection {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
         Ok(())
     }
 
@@ -114,7 +119,74 @@ impl ClientConnection {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
         Ok(())
+    }
+}
+
+/// Convenience alias for Unix socket connections.
+impl ClientConnection<UnixStream> {
+    /// Create a client connection from an existing Unix stream.
+    #[must_use]
+    pub fn from_stream(stream: UnixStream) -> Self {
+        Self::new(stream)
+    }
+}
+
+/// A combined async read/write wrapper over stdin + stdout.
+///
+/// Used by the `attach-stdio` command to serve a single client over
+/// the process's standard I/O (for SSH tunneling).
+pub struct StdioStream {
+    stdin: tokio::io::Stdin,
+    stdout: tokio::io::Stdout,
+}
+
+impl StdioStream {
+    /// Create a new stdio stream from the process's stdin and stdout.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { stdin: tokio::io::stdin(), stdout: tokio::io::stdout() }
+    }
+}
+
+impl Default for StdioStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsyncRead for StdioStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdin).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for StdioStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.stdout).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdout).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdout).poll_shutdown(cx)
     }
 }
 
@@ -136,7 +208,6 @@ mod tests {
         let listener = Listener::bind(&sock_path).unwrap();
         assert!(sock_path.exists());
 
-        // Connect a client.
         let client_task = tokio::spawn(async move {
             let _stream = UnixStream::connect(&sock_path).await.unwrap();
         });
@@ -156,7 +227,6 @@ mod tests {
             let stream = UnixStream::connect(&path_clone).await.unwrap();
             let mut conn = ClientConnection::new(stream);
 
-            // Send a Hello message.
             let hello = proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Hello(proto::Hello {
                     protocol_version: rttx_proto::PROTOCOL_VERSION,
@@ -189,13 +259,11 @@ mod tests {
         let path_clone = sock_path.clone();
         let client_task = tokio::spawn(async move {
             let _stream = UnixStream::connect(&path_clone).await.unwrap();
-            // Drop immediately — clean disconnect.
         });
 
         let mut server_conn = listener.accept().await.unwrap();
         client_task.await.unwrap();
 
-        // Give the OS a moment to propagate the close.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let msg = server_conn.read_message().await.unwrap();
         assert!(msg.is_none());
