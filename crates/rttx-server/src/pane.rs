@@ -4,8 +4,10 @@
 //! process and an in-memory screen state.
 
 use crate::screen::PaneScreen;
+use crate::serialization::scrollback_log_path;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use uuid::Uuid;
 
@@ -30,6 +32,8 @@ pub struct Pane {
     pub exit_status: Option<i32>,
     /// Path to the scrollback log file.
     pub scrollback_log_path: Option<PathBuf>,
+    /// Bytes received since last flush to disk.
+    pending_flush: Vec<u8>,
 }
 
 impl Pane {
@@ -45,15 +49,48 @@ impl Pane {
             rows,
             exit_status: None,
             scrollback_log_path: None,
+            pending_flush: Vec::new(),
         }
     }
 
     /// Feed PTY output into the screen state.
     pub fn feed_output(&mut self, data: &[u8]) {
         self.screen.feed(data);
+        self.pending_flush.extend_from_slice(data);
         if let Some(title) = self.screen.title() {
             self.title = Some(title.to_string());
         }
+    }
+
+    /// Flush pending scrollback bytes to the log file on disk.
+    ///
+    /// Appends only the bytes received since the last flush. Sets the
+    /// `scrollback_log_path` on the pane for persistence metadata.
+    pub fn flush_scrollback(
+        &mut self,
+        cache_dir: &Path,
+        session_id: Uuid,
+    ) -> Result<(), std::io::Error> {
+        if self.pending_flush.is_empty() {
+            return Ok(());
+        }
+
+        let path = scrollback_log_path(cache_dir, session_id, self.id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        file.write_all(&self.pending_flush)?;
+        self.pending_flush.clear();
+        self.scrollback_log_path = Some(path);
+        Ok(())
+    }
+
+    /// Whether there are unflushed scrollback bytes.
+    #[must_use]
+    pub fn has_pending_flush(&self) -> bool {
+        !self.pending_flush.is_empty()
     }
 
     /// Mark the pane as exited.
@@ -137,6 +174,51 @@ mod tests {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         pane.feed_output(b"hello");
         assert_eq!(pane.screen.raw_bytes(), b"hello");
+    }
+
+    #[test]
+    fn flush_scrollback_creates_log_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello world");
+        assert!(pane.has_pending_flush());
+
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+        assert!(!pane.has_pending_flush());
+
+        let log_path = pane.scrollback_log_path.as_ref().unwrap();
+        assert!(log_path.exists());
+        let content = std::fs::read(log_path).unwrap();
+        assert_eq!(content, b"hello world");
+    }
+
+    #[test]
+    fn flush_scrollback_appends_incrementally() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        pane.feed_output(b"first ");
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+
+        pane.feed_output(b"second");
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+
+        let log_path = pane.scrollback_log_path.as_ref().unwrap();
+        let content = std::fs::read(log_path).unwrap();
+        assert_eq!(content, b"first second");
+    }
+
+    #[test]
+    fn flush_scrollback_noop_when_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        assert!(!pane.has_pending_flush());
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+        assert!(pane.scrollback_log_path.is_none());
     }
 
     #[test]

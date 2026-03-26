@@ -399,9 +399,26 @@ pub async fn serialization_loop(server: Arc<Mutex<Server>>, interval: Duration) 
     let mut ticker = tokio::time::interval(interval);
     loop {
         ticker.tick().await;
-        let s = server.lock().await;
+        let mut s = server.lock().await;
+        let cache_dir = s.os.cache_dir();
+
+        // Flush scrollback for all panes in all sessions.
+        let session_ids: Vec<_> = s.sessions.keys().copied().collect();
+        for session_id in session_ids {
+            if let Some(session) = s.sessions.get_mut(&session_id) {
+                for pane in session.panes.values_mut() {
+                    if let Err(e) = pane.flush_scrollback(&cache_dir, session_id) {
+                        log::error!(
+                            "Failed to flush scrollback for pane {}: {e}",
+                            pane.id
+                        );
+                    }
+                }
+            }
+        }
+
         let snapshot = s.build_snapshot();
-        let state_path = default_state_path(&s.os.cache_dir());
+        let state_path = default_state_path(&cache_dir);
         drop(s);
 
         if let Err(e) = write_state_atomic(&snapshot, &state_path) {
