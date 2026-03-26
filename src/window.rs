@@ -1143,6 +1143,7 @@ impl Window {
                 stack.remove(old);
                 if let Some(name) = name {
                     stack.add_named(&pane_view, Some(&name));
+                    stack.set_visible_child_name(&name);
                 } else {
                     stack.add_child(&pane_view);
                 }
@@ -1173,35 +1174,32 @@ impl Window {
 
         let socket_path = default_socket_path();
 
-        // Try to start the daemon if it's not reachable.
-        // A stale socket file may exist from a crashed daemon, so we can't
-        // just check socket_path.exists() — we must try connecting.
-        {
-            let test_bridge = DaemonBridge::new()?;
-            if test_bridge.connect(&socket_path).is_err() {
-                log::info!("Daemon not reachable, attempting to start rttx-server");
-                // Remove stale socket if present.
-                let _ = std::fs::remove_file(&socket_path);
-                let mut cmd = std::process::Command::new("rttx-server");
-                cmd.arg("start")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                if crate::config::is_development() {
-                    cmd.env("RTTX_DEV_MODE", "1");
-                }
-                if let Ok(mut child) = cmd.spawn() {
-                    let _ = child.wait();
-                    for _ in 0..20 {
-                        if socket_path.exists() {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+        // If socket doesn't exist, try to start the daemon.
+        if !socket_path.exists() {
+            log::info!("Daemon not reachable, attempting to start rttx-server");
+            let mut cmd = std::process::Command::new("rttx-server");
+            cmd.arg("start")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            if crate::config::is_development() {
+                cmd.env("RTTX_DEV_MODE", "1");
+            }
+            if let Ok(mut child) = cmd.spawn() {
+                let _ = child.wait();
+                for _ in 0..30 {
+                    if socket_path.exists() {
+                        break;
                     }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
         }
 
         let bridge = DaemonBridge::new()?;
+        // Verify we can actually connect.
+        let conn = bridge.connect(&socket_path)?;
+        // Drop the test connection — make_pane_persistent_impl will create its own.
+        drop(conn);
         self.imp().daemon_bridge.replace(Some(bridge));
         Ok(())
     }
