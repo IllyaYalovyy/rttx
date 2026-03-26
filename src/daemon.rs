@@ -269,3 +269,236 @@ impl DaemonConnection {
         self.send(&msg).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rttx_proto::{decode_frame, encode_frame, proto};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+
+    /// Accept one client, read `Hello`, send `HelloAck`.
+    async fn serve_handshake(listener: &UnixListener) -> UnixStream {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = stream.read_buf(&mut buf).await.unwrap();
+            assert!(n > 0, "client disconnected before Hello");
+            if let Ok(_hello) = decode_frame::<proto::ClientMessage>(&mut buf) {
+                break;
+            }
+        }
+        let ack = proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::HelloAck(proto::HelloAck {
+                protocol_version: PROTOCOL_VERSION,
+                server_id: uuid_to_bytes(Uuid::new_v4()),
+            })),
+        };
+        let mut out = BytesMut::new();
+        encode_frame(&ack, &mut out).unwrap();
+        stream.write_all(&out).await.unwrap();
+        stream
+    }
+
+    #[test]
+    fn default_socket_path_contains_version() {
+        let path = default_socket_path();
+        assert!(path.to_string_lossy().contains("v1"));
+        assert!(path.to_string_lossy().contains("rttx-server"));
+    }
+
+    #[tokio::test]
+    async fn connect_to_nonexistent_socket_returns_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("nonexistent.sock");
+        let result = DaemonConnection::connect(&sock).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn handshake_succeeds_with_matching_version() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move { DaemonConnection::connect(&sock).await }
+        });
+
+        let _server_stream = serve_handshake(&listener).await;
+        let conn = client_task.await.unwrap().unwrap();
+        assert!(!conn.client_id.is_nil());
+    }
+
+    #[tokio::test]
+    async fn handshake_fails_on_version_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move { DaemonConnection::connect(&sock).await }
+        });
+
+        // Accept and send a HelloAck with wrong version.
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = stream.read_buf(&mut buf).await.unwrap();
+            assert!(n > 0);
+            if decode_frame::<proto::ClientMessage>(&mut buf).is_ok() {
+                break;
+            }
+        }
+        let ack = proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::HelloAck(proto::HelloAck {
+                protocol_version: 999,
+                server_id: uuid_to_bytes(Uuid::new_v4()),
+            })),
+        };
+        let mut out = BytesMut::new();
+        encode_frame(&ack, &mut out).unwrap();
+        stream.write_all(&out).await.unwrap();
+
+        let result = client_task.await.unwrap();
+        assert!(matches!(result, Err(DaemonError::VersionMismatch { server: 999, .. })));
+    }
+
+    #[tokio::test]
+    async fn handshake_fails_on_server_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move { DaemonConnection::connect(&sock).await }
+        });
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = stream.read_buf(&mut buf).await.unwrap();
+            assert!(n > 0);
+            if decode_frame::<proto::ClientMessage>(&mut buf).is_ok() {
+                break;
+            }
+        }
+        let err = proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::Error(proto::Error {
+                code: 2,
+                message: "version mismatch".into(),
+            })),
+        };
+        let mut out = BytesMut::new();
+        encode_frame(&err, &mut out).unwrap();
+        stream.write_all(&out).await.unwrap();
+
+        let result = client_task.await.unwrap();
+        assert!(matches!(result, Err(DaemonError::ServerError { code: 2, .. })));
+    }
+
+    #[tokio::test]
+    async fn recv_returns_none_on_clean_disconnect() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move {
+                let mut conn = DaemonConnection::connect(&sock).await.unwrap();
+                conn.recv().await
+            }
+        });
+
+        let server_stream = serve_handshake(&listener).await;
+        drop(server_stream); // Clean disconnect.
+
+        let result = client_task.await.unwrap().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_input_encodes_correctly() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let session_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move {
+                let mut conn = DaemonConnection::connect(&sock).await.unwrap();
+                conn.send_input(session_id, pane_id, b"hello").await.unwrap();
+            }
+        });
+
+        let mut server_stream = serve_handshake(&listener).await;
+
+        // Read the Input message from the server side.
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = server_stream.read_buf(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
+                match msg.msg {
+                    Some(proto::client_message::Msg::Input(input)) => {
+                        assert_eq!(input.data, b"hello");
+                        assert_eq!(bytes_to_uuid(&input.session_id).unwrap(), session_id);
+                        assert_eq!(bytes_to_uuid(&input.pane_id).unwrap(), pane_id);
+                    }
+                    other => panic!("expected Input, got {other:?}"),
+                }
+                break;
+            }
+        }
+
+        client_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_resize_encodes_correctly() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let session_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move {
+                let mut conn = DaemonConnection::connect(&sock).await.unwrap();
+                conn.send_resize(session_id, pane_id, 120, 40).await.unwrap();
+            }
+        });
+
+        let mut server_stream = serve_handshake(&listener).await;
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = server_stream.read_buf(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
+                match msg.msg {
+                    Some(proto::client_message::Msg::Resize(resize)) => {
+                        assert_eq!(resize.cols, 120);
+                        assert_eq!(resize.rows, 40);
+                    }
+                    other => panic!("expected Resize, got {other:?}"),
+                }
+                break;
+            }
+        }
+
+        client_task.await.unwrap();
+    }
+}

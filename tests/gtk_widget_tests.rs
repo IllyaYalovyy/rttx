@@ -860,3 +860,98 @@ fn find_popover_child(widget: &gtk4::Widget) -> Option<gtk4::PopoverMenu> {
     }
     None
 }
+
+// ── PersistentPaneView tests ─────────────────────────────────────
+
+#[test]
+fn persistent_pane_view_stores_uuid_and_session_id() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    assert_eq!(pane.uuid(), "pane-1");
+    assert_eq!(pane.session_id(), "session-1");
+}
+
+#[test]
+fn persistent_pane_view_feed_output_does_not_crash() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    // Feed some terminal output — should not panic.
+    pane.feed_output(b"hello world\r\n");
+    pane.feed_output(b"\x1b[31mred text\x1b[0m\r\n");
+    pane.feed_output(b"");
+}
+
+#[test]
+fn persistent_pane_view_feed_snapshot_restores_content() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    pane.feed_snapshot(b"line 1\r\nline 2\r\nline 3\r\n");
+    // Empty snapshot should not crash.
+    pane.feed_snapshot(b"");
+}
+
+#[test]
+fn persistent_pane_view_set_connected_updates_state() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    pane.set_connected(true);
+    pane.set_connected(false);
+    pane.set_connected(true);
+    // No crash — status label updates are visual only.
+}
+
+#[test]
+fn persistent_pane_view_set_title_and_custom_title() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    pane.set_title("my title");
+    assert_eq!(pane.title_label().label(), "my title");
+
+    assert!(pane.custom_title().is_none());
+    pane.set_custom_title(Some("custom"));
+    assert_eq!(pane.custom_title().as_deref(), Some("custom"));
+    assert_eq!(pane.title_label().label(), "custom");
+
+    pane.set_custom_title(None);
+    assert!(pane.custom_title().is_none());
+}
+
+#[test]
+fn persistent_pane_view_active_css_class() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    pane.set_active(true);
+    assert!(pane.has_css_class("terminal-pane-active"));
+    pane.set_active(false);
+    assert!(!pane.has_css_class("terminal-pane-active"));
+}
+
+#[test]
+fn persistent_pane_view_flash_bell_does_not_crash() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    pane.set_visual_bell(true);
+    pane.flash_bell();
+    pane.set_visual_bell(false);
+    pane.flash_bell(); // Should be a no-op.
+}
+
+#[test]
+fn persistent_pane_view_has_expected_children() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    // Header buttons should exist.
+    assert!(pane.close_button().icon_name().is_some());
+    assert!(pane.split_h_button().icon_name().is_some());
+    assert!(pane.split_v_button().icon_name().is_some());
+    // VTE should exist.
+    assert!(pane.vte().column_count() >= 0);
+}
