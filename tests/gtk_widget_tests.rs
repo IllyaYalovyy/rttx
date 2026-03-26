@@ -387,6 +387,20 @@ fn pump_events(max_ms: u64) {
     }
 }
 
+fn emit_left_click(widget: &gtk4::Widget, n_press: i32) {
+    let controllers = widget.observe_controllers();
+    for index in 0..controllers.n_items() {
+        let Some(controller) = controllers.item(index) else {
+            continue;
+        };
+        if let Ok(gesture) = controller.downcast::<gtk4::GestureClick>() {
+            gesture.emit_by_name::<()>("released", &[&n_press, &0.0_f64, &0.0_f64]);
+            return;
+        }
+    }
+    panic!("widget should have a GestureClick controller");
+}
+
 // ── M2: RefCell re-entrancy (GTK signal timing) ───────────────────────────────
 
 /// Proves that GTK property-change signals fire SYNCHRONOUSLY in the same
@@ -757,6 +771,36 @@ fn terminal_widget_wraps_vte_in_scrolled_window() {
         scroller.child(),
         Some(term.vte().clone().upcast::<gtk4::Widget>()),
         "ScrolledWindow should own the VTE child",
+    );
+}
+
+/// Prevent regression: pane titles are a focus target only for now, so
+/// double-clicking the title must not create an inline Entry editor.
+#[test]
+fn terminal_title_double_click_does_not_start_inline_editing() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    let header = term
+        .title_label()
+        .parent()
+        .and_then(|parent| parent.downcast::<gtk4::Box>().ok())
+        .expect("title label should be parented to the terminal header box");
+
+    emit_left_click(term.title_label().upcast_ref::<gtk4::Widget>(), 2);
+    pump_events(50);
+
+    let mut child = header.first_child();
+    while let Some(widget) = child {
+        assert!(
+            widget.downcast_ref::<gtk4::Entry>().is_none(),
+            "double-clicking the title should not create an inline title editor"
+        );
+        child = widget.next_sibling();
+    }
+    assert!(
+        term.title_label().is_visible(),
+        "title label should remain visible after double-click"
     );
 }
 

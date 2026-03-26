@@ -40,7 +40,7 @@ flatpak install --user ./rttx.flatpak
 
 ### Session recovery
 
-- Layout, split sizes, working directories, and custom titles persist automatically
+- Layout, split sizes, and working directories persist automatically
 - Bookmark-driven panes restore as explicit targets (local folder, SSH, tmux, or combined)
 - Failed SSH/tmux connections offer in-pane retry — no modal dialogs
 - tmux recovery reattaches to existing sessions, never creates new ones silently
