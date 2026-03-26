@@ -575,8 +575,10 @@ async fn handle_client(
                         let s = server.lock().await;
                         let snapshot = s.build_snapshot();
                         let state_path = default_state_path(&s.os.cache_dir());
+                        let pid_path = s.os.runtime_dir().join("rttx-server.pid");
                         drop(s);
                         let _ = write_state_atomic(&snapshot, &state_path);
+                        let _ = std::fs::remove_file(&pid_path);
                         std::process::exit(0);
                     }
 

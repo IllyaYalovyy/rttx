@@ -40,22 +40,42 @@ fn print_usage() {
 }
 
 fn start(foreground: bool) -> anyhow::Result<()> {
-    pretty_env_logger::init();
-
     let os = UnixOs;
-    let socket_path = os.runtime_dir().join("rttx-server.sock");
+    let runtime_dir = os.runtime_dir();
+    let pid_path = runtime_dir.join("rttx-server.pid");
 
-    let rt = tokio::runtime::Runtime::new()?;
-    if rt.block_on(ipc::is_server_running(&socket_path)) {
+    // Check if already running via PID file.
+    if is_running_via_pid(&pid_path) {
         eprintln!("rttx-server is already running");
         std::process::exit(1);
     }
 
     if !foreground {
-        daemonize();
+        // Daemonize before creating the tokio runtime.
+        std::fs::create_dir_all(&runtime_dir)?;
+        let daemon = daemonize::Daemonize::new().pid_file(&pid_path).working_directory(".");
+
+        match daemon.start() {
+            Ok(()) => {
+                // We are now the daemon child process.
+            }
+            Err(e) => {
+                eprintln!("Failed to daemonize: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
-    rt.block_on(async {
+    pretty_env_logger::init();
+
+    // Write PID file in foreground mode too (daemonize writes it in daemon mode).
+    if foreground {
+        std::fs::create_dir_all(&runtime_dir)?;
+        std::fs::write(&pid_path, std::process::id().to_string())?;
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(async {
         let server = Arc::new(Mutex::new(Server::new(Box::new(os))));
 
         {
@@ -67,12 +87,17 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         Server::reconstruct_sessions(&server).await;
 
         let sig_server = Arc::clone(&server);
+        let sig_pid_path = pid_path.clone();
         tokio::spawn(async move {
-            handle_signals(sig_server).await;
+            handle_signals(sig_server, &sig_pid_path).await;
         });
 
         rttx_server::server::run(server).await
-    })
+    });
+
+    // Cleanup PID file on normal exit.
+    let _ = std::fs::remove_file(&pid_path);
+    result
 }
 
 fn stop() -> anyhow::Result<()> {
@@ -98,12 +123,19 @@ fn stop() -> anyhow::Result<()> {
     })
 }
 
-fn daemonize() {
-    // Daemon mode requires fork which is unsafe. For now, run in foreground.
-    log::warn!("Daemon mode not yet implemented, running in foreground");
+/// Check if a daemon is running by reading the PID file and probing the process.
+fn is_running_via_pid(pid_path: &std::path::Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(pid_path) else {
+        return false;
+    };
+    let Ok(pid) = contents.trim().parse::<i32>() else {
+        return false;
+    };
+    // Check if the process exists by sending signal 0.
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }
 
-async fn handle_signals(server: Arc<Mutex<Server>>) {
+async fn handle_signals(server: Arc<Mutex<Server>>, pid_path: &std::path::Path) {
     use signal_hook::consts::{SIGINT, SIGTERM};
     use signal_hook_tokio::Signals;
     use tokio_stream::StreamExt;
@@ -120,6 +152,7 @@ async fn handle_signals(server: Arc<Mutex<Server>>) {
         let state_path = default_state_path(&s.os.cache_dir());
         drop(s);
         let _ = write_state_atomic(&snapshot, &state_path);
+        let _ = std::fs::remove_file(pid_path);
         log::info!("State saved, exiting");
         std::process::exit(0);
     }
