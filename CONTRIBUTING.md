@@ -115,6 +115,17 @@ cargo build
 The build runs `rustfmt` and Clippy automatically via a build script. A build that does not pass
 Clippy is not a valid build.
 
+For development mode (separate config, debug logging, devel icon):
+```bash
+RTTX_DEV_MODE=1 cargo run
+```
+
+Debug logging is enabled automatically in dev mode. Override with `RUST_LOG` for finer control:
+```bash
+RTTX_DEV_MODE=1 RUST_LOG=trace cargo run   # trace-level (everything)
+RTTX_DEV_MODE=1 RUST_LOG=rttx=debug cargo run  # debug only for rttx, not GTK
+```
+
 For a release build:
 ```bash
 cargo build --release
