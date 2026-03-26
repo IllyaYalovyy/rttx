@@ -1,12 +1,9 @@
-//! Engine abstraction for pane process management.
+//! Engine for pane process management.
 //!
-//! The `Engine` trait defines the contract for spawning and managing pane
-//! processes. Two implementations are planned:
-//! - `NativeEngine` — owns PTYs directly (ships first)
-//! - `TmuxEngine` — delegates to tmux control mode (ships second)
+//! `NativeEngine` owns PTYs directly, spawning shell processes and managing
+//! their lifecycle.
 
 pub mod native;
-pub mod tmux;
 
 use crate::pty::Pty;
 use uuid::Uuid;
