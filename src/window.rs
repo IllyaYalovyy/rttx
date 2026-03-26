@@ -994,16 +994,11 @@ impl Window {
         if *self.imp().restored_daemon_sessions.borrow() {
             return;
         }
-
-        let socket_path = default_socket_path();
-        if !socket_path.exists() {
-            return;
-        }
+        self.imp().restored_daemon_sessions.replace(true);
 
         if let Err(e) = self.restore_persistent_sessions_impl() {
             log::info!("No persistent sessions to restore: {e}");
         }
-        self.imp().restored_daemon_sessions.replace(true);
     }
 
     fn restore_persistent_sessions_impl(&self) -> Result<(), crate::daemon::DaemonError> {
@@ -1020,12 +1015,40 @@ impl Window {
             return Ok(());
         }
 
+        // Collect names of persistent sessions already in the sidebar
+        // (from sessions.json or a previous restore in this run).
+        let existing_names: std::collections::HashSet<String> = self
+            .imp()
+            .state
+            .borrow()
+            .sessions
+            .iter()
+            .filter(|s| s.name.starts_with('⏻'))
+            .map(|s| s.name.clone())
+            .collect();
+
         let mut restored = 0;
         for info in &sessions {
             let session_id =
                 rttx_proto::bytes_to_uuid(&info.id).map_err(crate::daemon::DaemonError::Frame)?;
 
+            let restore_name = format!("⏻ {}", info.name);
+
+            // Skip if we already have a sidebar entry with this name.
+            if existing_names.contains(&restore_name) {
+                // Still attach so we receive deltas.
+                let _ = bridge.run(conn.attach_session(session_id));
+                continue;
+            }
+
             let snapshot = bridge.run(conn.attach_session(session_id))?;
+
+            // Skip sessions with no panes or only empty panes.
+            let has_content =
+                snapshot.panes.iter().any(|p| !p.scrollback.is_empty() || p.exit_status.is_none());
+            if snapshot.panes.is_empty() || !has_content {
+                continue;
+            }
 
             let session_state = SessionState::new(format!("⏻ {}", info.name));
             let session_uuid = session_state.uuid.clone();
