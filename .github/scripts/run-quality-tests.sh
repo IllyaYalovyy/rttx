@@ -5,6 +5,11 @@ export GTK_A11Y="${GTK_A11Y:-none}"
 
 broadway_cmd=""
 broadway_pid=""
+readonly LIBRARY_SKIP_PATTERNS=(
+    "window::tests::"
+    "sidebar::tests::"
+    "session::tests::apply_initial_paned_ratios_restores_nested_non_sentinel_positions"
+)
 
 cleanup() {
     if [[ -n "${broadway_pid}" ]]; then
@@ -46,7 +51,7 @@ known_teardown_sigsegv() {
         ! grep -q "^failures:$" "${logfile}"
 }
 
-run_cargo_target() {
+run_logged_command() {
     local label=$1
     shift
 
@@ -56,7 +61,7 @@ run_cargo_target() {
     echo "::group::${label}"
 
     set +e
-    cargo test "$@" -- --nocapture 2>&1 | tee "${logfile}"
+    "$@" 2>&1 | tee "${logfile}"
     local status=${PIPESTATUS[0]}
     set -e
 
@@ -77,15 +82,45 @@ run_cargo_target() {
     return "${status}"
 }
 
+list_isolated_library_tests() {
+    cargo test --lib -- --list |
+        awk -F': test' '
+            /^(window::tests::|sidebar::tests::|session::tests::apply_initial_paned_ratios_restores_nested_non_sentinel_positions)/ {
+                print $1
+            }
+        '
+}
+
+run_library_tests() {
+    local stable_args=(
+        cargo test --lib -- --nocapture
+    )
+    local isolated_test
+
+    for skip_pattern in "${LIBRARY_SKIP_PATTERNS[@]}"; do
+        stable_args+=(--skip "${skip_pattern}")
+    done
+
+    run_logged_command "Library tests (stable subset)" "${stable_args[@]}"
+
+    while IFS= read -r isolated_test; do
+        [[ -n "${isolated_test}" ]] || continue
+        run_logged_command \
+            "Library test ${isolated_test}" \
+            cargo test --lib "${isolated_test}" -- --exact --nocapture
+    done < <(list_isolated_library_tests)
+}
+
 trap cleanup EXIT
 
 start_broadway_if_available
 
-run_cargo_target "Library tests" --lib
-run_cargo_target "Binary tests" --bins
+run_library_tests
+run_logged_command "Binary tests" cargo test --bins -- --nocapture
 
 while IFS= read -r integration_test; do
-    run_cargo_target "Integration test ${integration_test}" --test "${integration_test}"
+    run_logged_command "Integration test ${integration_test}" \
+        cargo test --test "${integration_test}" -- --nocapture
 done < <(find tests -maxdepth 1 -type f -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort)
 
-run_cargo_target "Doc tests" --doc
+run_logged_command "Doc tests" cargo test --doc -- --nocapture

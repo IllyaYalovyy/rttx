@@ -15,7 +15,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,7 +35,7 @@ jobs:
             git gcc pkg-config rustup \
             gtk4-devel libadwaita-devel vte291-gtk4-devel
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         env:
@@ -62,7 +62,7 @@ jobs:
             git gcc pkg-config rustup \
             gtk4-devel libadwaita-devel vte291-gtk4-devel
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         env:
@@ -82,7 +82,7 @@ jobs:
     name: Flatpak manifest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate Flatpak manifest JSON
         run: python3 -m json.tool io.github.IllyaYalovyy.rttx.json > /dev/null
