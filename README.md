@@ -1,9 +1,20 @@
 # rttxd
 
-Persistent session daemon for the [rttx](https://github.com/IllyaYalovyy/rttx) tiling terminal emulator.
+Daemon runtime service for the [rttx](https://github.com/IllyaYalovyy/rttx) tiling terminal emulator.
 
-`rttx-server` decouples session lifetime from GUI lifetime. Sessions survive GUI crashes,
-sleep/wake cycles, network drops, and local reboots.
+`rttx-server` decouples runtime lifetime from GUI lifetime. rttx workspaces attach and detach
+freely while runtimes continue according to their policy and endpoint availability.
+
+## Terminology
+
+- **Workspace** — the top-level GUI object in rttx
+- **Runtime** — the daemon-owned live backend object attached to one workspace
+- **Pane** — one terminal tile inside a workspace/runtime
+- **Endpoint** — the local daemon or one remote host daemon
+- **Policy** — `ephemeral` or `persistent`; both are daemon-backed
+
+Current Rust code in rttx still uses `Session*` names in some places. Product docs use
+`Workspace` and `Runtime`.
 
 ## Architecture
 
@@ -18,17 +29,23 @@ rttx (GTK GUI)                         rttx-server (daemon)
     |--- SSH tunnel -------->(protocol)    |--- scrollback/*.log
 ```
 
-The daemon owns all PTYs and terminal state. The GUI is a thin client that attaches/detaches
-freely. One daemon per host, serving multiple sessions and clients.
+The daemon owns all PTYs and runtime state. The GUI owns workspace layout and presentation.
+Bindings map workspace panes to daemon pane ids. One daemon per host serves multiple runtimes and
+clients.
 
-Sessions are persistent by default in rttx. The daemon auto-starts on first use and sessions
-survive GUI restarts, sleep/wake, and local reboots. Direct (non-persistent) VTE sessions are
-a fallback when the daemon is unavailable.
+rttx is converging on one managed execution model for both local and remote endpoints. A workspace
+selects a runtime policy:
+
+- **Ephemeral** — disposable, but still daemon-backed
+- **Persistent** — survives detach, reconnect, and daemon reconstruction after restart
+
+There is no implicit fallback to a separate direct-terminal model when the daemon is unavailable.
+Instead the GUI shows explicit connection state and retries transient failures automatically.
 
 ### Crates
 
 - **`rttx-proto`** — shared protobuf wire protocol (message types, length-prefixed framing, UUID helpers)
-- **`rttx-server`** — the daemon binary (PTY management, session lifecycle, IPC, serialization)
+- **`rttx-server`** — the daemon binary (PTY management, runtime lifecycle, IPC, serialization)
 
 ## Building
 
@@ -73,6 +90,25 @@ ssh <host> rttx-server attach-stdio
 This speaks the same protocol over the SSH subprocess's stdin/stdout. No port forwarding needed —
 just `rttx-server` in `$PATH` on the remote host.
 
+## Runtime model
+
+- One workspace binds to one endpoint and one policy.
+- A single rttx window may contain multiple workspaces that target different endpoints and
+  policies.
+- Multiple windows may connect to the same endpoint.
+- A specific runtime has one writer by default; multi-attach should be explicit if supported.
+
+## Reconciliation contract
+
+The daemon owns runtimes, panes, PTYs, scrollback, CWD, runtime titles, and process lifetime.
+rttx owns workspace layout, pane arrangement, selection, focus, and presentation state.
+
+Reconciliation between the GUI and daemon must be non-destructive:
+
+- If a runtime exists without GUI metadata, rttx should recover a workspace for it.
+- If GUI metadata exists without a live runtime, rttx should keep a disconnected placeholder.
+- Missing GUI state must never implicitly delete a daemon runtime or pane.
+
 ## Dev mode
 
 Set `RTTX_DEV_MODE=1` to run a development daemon alongside a stable production instance.
@@ -106,9 +142,9 @@ cargo test -p rttx-server --tests   # Integration tests
 
 Integration tests cover:
 - PTY spawn, I/O, resize, exit status (`pty_basic`, `pty_io`)
-- Session create/attach/detach/pane CRUD (`session_lifecycle`)
+- Runtime create/attach/detach/pane CRUD (`session_lifecycle`)
 - Client reconnect after disconnect (`reconnect`)
-- State serialization and session reconstruction after restart (`serialization`, `reconstruction`)
+- State serialization and runtime reconstruction after restart (`serialization`, `reconstruction`)
 - Scrollback persistence to disk (`scrollback`)
 - SSH stdio transport protocol (`stdio_transport`)
 
@@ -116,12 +152,15 @@ Integration tests cover:
 
 State is written to disk continuously, not just on shutdown:
 
-- **`state.json`** (every 1 second, atomic write) — session metadata, pane CWD/title/dimensions
+- **`state.json`** (every 1 second, atomic write) — runtime metadata, pane CWD/title/dimensions
 - **`scrollback/<session>/<pane>.log`** (every 1 second, append-only) — raw terminal bytes
 
 On daemon restart: metadata is loaded, scrollback logs are replayed into pane screens, fresh
 shells are spawned in saved working directories. Clients attaching after restart receive a
 snapshot containing the replayed scrollback plus live output from the new shell.
+
+Ephemeral and persistent runtimes share the same backend mechanics. The policy decides retention
+semantics, not protocol or transport.
 
 ## Wire protocol
 
