@@ -387,6 +387,35 @@ fn pump_events(max_ms: u64) {
     }
 }
 
+fn wait_until(max_ms: u64, condition: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
+    while std::time::Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        pump_events(10);
+    }
+    condition()
+}
+
+fn present_widget(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) -> gtk4::Window {
+    let window = gtk4::Window::new();
+    window.set_default_size(800, 500);
+    window.set_child(Some(widget));
+    window.present();
+    pump_events(100);
+    window
+}
+
+fn clipboard_text() -> Option<String> {
+    let display = gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+    let clipboard = display.clipboard();
+    let ctx = gtk4::glib::MainContext::default();
+    ctx.block_on(clipboard.read_text_future())
+        .expect("clipboard text read should succeed")
+        .map(|text| text.to_string())
+}
+
 fn emit_left_click(widget: &gtk4::Widget, n_press: i32) {
     let controllers = widget.observe_controllers();
     for index in 0..controllers.n_items() {
@@ -859,6 +888,118 @@ fn find_popover_child(widget: &gtk4::Widget) -> Option<gtk4::PopoverMenu> {
         child = c.next_sibling();
     }
     None
+}
+
+// ── TerminalHandle tests ────────────────────────────────────────
+
+#[test]
+fn terminal_handle_reports_titles_and_managed_current_directory() {
+    require_display!();
+
+    let direct = rttx::terminal::widget::TerminalWidget::new("direct-1", None);
+    direct.set_title("Direct Title");
+    let direct_handle = rttx::terminal::handle::TerminalHandle::Direct(direct);
+    assert_eq!(direct_handle.title(), "Direct Title");
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
+    managed.set_title("Managed Title");
+    managed.set_current_directory(Some("/tmp/managed-cwd"));
+    let managed_handle = rttx::terminal::handle::TerminalHandle::Managed(managed);
+    assert_eq!(managed_handle.title(), "Managed Title");
+    assert_eq!(managed_handle.current_directory().as_deref(), Some("/tmp/managed-cwd"));
+}
+
+#[test]
+fn terminal_handle_set_active_updates_both_direct_and_managed_panes() {
+    require_display!();
+
+    let direct = rttx::terminal::widget::TerminalWidget::new("direct-1", None);
+    let direct_handle = rttx::terminal::handle::TerminalHandle::Direct(direct.clone());
+    direct_handle.set_active(true);
+    assert!(direct.has_css_class("terminal-pane-active"));
+    direct_handle.set_active(false);
+    assert!(!direct.has_css_class("terminal-pane-active"));
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
+    let managed_handle = rttx::terminal::handle::TerminalHandle::Managed(managed.clone());
+    managed_handle.set_active(true);
+    assert!(managed.has_css_class("terminal-pane-active"));
+    managed_handle.set_active(false);
+    assert!(!managed.has_css_class("terminal-pane-active"));
+}
+
+#[test]
+fn terminal_handle_grab_focus_targets_direct_terminal_vte() {
+    require_display!();
+
+    let direct = rttx::terminal::widget::TerminalWidget::new("direct-1", None);
+    let window = present_widget(&direct);
+    let handle = rttx::terminal::handle::TerminalHandle::Direct(direct.clone());
+
+    assert!(handle.grab_focus(), "direct handle should request focus successfully");
+    assert!(wait_until(1000, || direct.vte().has_focus()));
+
+    window.close();
+}
+
+#[test]
+fn terminal_handle_grab_focus_targets_managed_terminal_vte() {
+    require_display!();
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
+    let window = present_widget(&managed);
+    let handle = rttx::terminal::handle::TerminalHandle::Managed(managed.clone());
+
+    assert!(handle.grab_focus(), "managed handle should request focus successfully");
+    assert!(wait_until(1000, || managed.vte().has_focus()));
+
+    window.close();
+}
+
+#[test]
+fn terminal_handle_copy_clipboard_uses_direct_terminal_selection() {
+    require_display!();
+
+    let display = gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+    display.clipboard().set_text("");
+
+    let direct = rttx::terminal::widget::TerminalWidget::new("direct-1", None);
+    let window = present_widget(&direct);
+    direct.vte().feed(b"direct copied text\r\n");
+    pump_events(50);
+    direct.vte().select_all();
+
+    let handle = rttx::terminal::handle::TerminalHandle::Direct(direct);
+    handle.copy_clipboard();
+    assert!(wait_until(1000, || {
+        clipboard_text().is_some_and(|text| text.contains("direct copied text"))
+    }));
+    window.close();
+}
+
+#[test]
+fn terminal_handle_copy_clipboard_uses_managed_terminal_selection() {
+    require_display!();
+
+    let display = gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+    display.clipboard().set_text("");
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
+    let window = present_widget(&managed);
+    managed.feed_output(b"managed copied text\r\n");
+    pump_events(50);
+    managed.vte().select_all();
+
+    let handle = rttx::terminal::handle::TerminalHandle::Managed(managed);
+    handle.copy_clipboard();
+    assert!(wait_until(1000, || {
+        clipboard_text().is_some_and(|text| text.contains("managed copied text"))
+    }));
+    window.close();
 }
 
 // ── PersistentPaneView tests ─────────────────────────────────────

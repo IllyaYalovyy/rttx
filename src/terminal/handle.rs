@@ -10,6 +10,13 @@ pub enum TerminalHandle {
 }
 
 impl TerminalHandle {
+    fn vte(&self) -> &vte4::Terminal {
+        match self {
+            Self::Direct(terminal) => terminal.vte(),
+            Self::Managed(pane) => pane.vte(),
+        }
+    }
+
     /// Human-readable title for notifications and UI actions.
     #[must_use]
     pub fn title(&self) -> String {
@@ -29,10 +36,7 @@ impl TerminalHandle {
 
     /// Apply a font zoom delta to the pane.
     pub fn zoom(&self, direction: i32) {
-        let vte = match self {
-            Self::Direct(terminal) => terminal.vte(),
-            Self::Managed(pane) => pane.vte(),
-        };
+        let vte = self.vte();
 
         match direction {
             1 => {
@@ -54,5 +58,29 @@ impl TerminalHandle {
             Self::Direct(terminal) => terminal.current_directory(),
             Self::Managed(pane) => pane.current_directory(),
         }
+    }
+
+    /// Copy the current terminal selection to the clipboard.
+    pub fn copy_clipboard(&self) {
+        self.vte().copy_clipboard_format(vte4::Format::Text);
+    }
+
+    /// Paste clipboard contents into the terminal.
+    pub fn paste_clipboard(&self) {
+        self.vte().paste_clipboard();
+    }
+
+    /// Mark the pane as active or inactive in the UI.
+    pub fn set_active(&self, active: bool) {
+        match self {
+            Self::Direct(terminal) => terminal.set_active(active),
+            Self::Managed(pane) => pane.set_active(active),
+        }
+    }
+
+    /// Focus the terminal widget backing this pane.
+    #[must_use]
+    pub fn grab_focus(&self) -> bool {
+        self.vte().grab_focus()
     }
 }

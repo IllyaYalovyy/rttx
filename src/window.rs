@@ -1532,25 +1532,16 @@ impl Window {
             let Some(preferred_uuid) = preferred_uuid else {
                 return;
             };
-
-            if let Some(term) = self.imp().terminals.borrow().get(&preferred_uuid).cloned() {
-                Some((preferred_uuid, term.vte().clone()))
-            } else {
-                self.imp()
-                    .persistent_terminals
-                    .borrow()
-                    .get(&preferred_uuid)
-                    .cloned()
-                    .map(|pane| (preferred_uuid, pane.vte().clone()))
-            }
+            drop(state);
+            self.terminal_handle(&preferred_uuid).map(|terminal| (preferred_uuid, terminal))
         };
 
-        let Some((target_uuid, vte)) = target else {
+        let Some((target_uuid, terminal)) = target else {
             return;
         };
         let win = self.clone();
         glib::idle_add_local_once(move || {
-            if vte.grab_focus() {
+            if terminal.grab_focus() {
                 win.set_focused_terminal(Some(&target_uuid));
             }
         });
@@ -1814,16 +1805,25 @@ impl Window {
     }
 
     fn send_input_to_terminal(&self, terminal_uuid: &str, input: &str) {
-        if let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() {
-            term.queue_input_for_shell(input.to_string());
-            let _ = term.vte().grab_focus();
-            self.set_focused_terminal(Some(&term.uuid()));
-            return;
-        }
+        let sent = self.imp().terminals.borrow().get(terminal_uuid).cloned().map_or_else(
+            || {
+                if self.imp().persistent_terminals.borrow().contains_key(terminal_uuid) {
+                    self.send_managed_terminal_input(terminal_uuid, input.as_bytes().to_vec());
+                    true
+                } else {
+                    false
+                }
+            },
+            |term| {
+                term.queue_input_for_shell(input.to_string());
+                true
+            },
+        );
 
-        if let Some(pane) = self.imp().persistent_terminals.borrow().get(terminal_uuid).cloned() {
-            self.send_managed_terminal_input(terminal_uuid, input.as_bytes().to_vec());
-            let _ = pane.vte().grab_focus();
+        if sent
+            && let Some(terminal) = self.terminal_handle(terminal_uuid)
+            && terminal.grab_focus()
+        {
             self.set_focused_terminal(Some(terminal_uuid));
         }
     }
@@ -2538,32 +2538,16 @@ impl Window {
     fn set_focused_terminal(&self, terminal_uuid: Option<&str>) {
         let next = terminal_uuid.map(str::to_string);
         let previous = self.imp().focused_terminal_uuid.replace(next.clone());
-        let (previous_term, next_term, previous_pane, next_pane) = {
-            let terminals = self.imp().terminals.borrow();
-            let panes = self.imp().persistent_terminals.borrow();
-            (
-                previous.as_deref().and_then(|uuid| terminals.get(uuid)).cloned(),
-                next.as_deref().and_then(|uuid| terminals.get(uuid)).cloned(),
-                previous.as_deref().and_then(|uuid| panes.get(uuid)).cloned(),
-                next.as_deref().and_then(|uuid| panes.get(uuid)).cloned(),
-            )
-        };
+        let previous_terminal = previous.as_deref().and_then(|uuid| self.terminal_handle(uuid));
+        let next_terminal = next.as_deref().and_then(|uuid| self.terminal_handle(uuid));
 
-        if let Some(term) = previous_term
+        if let Some(terminal) = previous_terminal
             && previous != next
         {
-            term.set_active(false);
+            terminal.set_active(false);
         }
-        if let Some(term) = next_term {
-            term.set_active(true);
-        }
-        if let Some(pane) = previous_pane
-            && previous != next
-        {
-            pane.set_active(false);
-        }
-        if let Some(pane) = next_pane {
-            pane.set_active(true);
+        if let Some(terminal) = next_terminal {
+            terminal.set_active(true);
         }
     }
 
@@ -2716,22 +2700,18 @@ impl Window {
     }
 
     fn clipboard_copy(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.vte().copy_clipboard_format(vte4::Format::Text);
-            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
-                pane.vte().copy_clipboard_format(vte4::Format::Text);
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(terminal) = self.terminal_handle(&uuid)
+        {
+            terminal.copy_clipboard();
         }
     }
 
     fn clipboard_paste(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid() {
-            if let Some(term) = self.imp().terminals.borrow().get(&uuid) {
-                term.vte().paste_clipboard();
-            } else if let Some(pane) = self.imp().persistent_terminals.borrow().get(&uuid) {
-                pane.vte().paste_clipboard();
-            }
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(terminal) = self.terminal_handle(&uuid)
+        {
+            terminal.paste_clipboard();
         }
     }
 }
