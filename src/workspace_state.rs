@@ -161,9 +161,8 @@ impl WindowState {
         } else {
             let mut placeholders = reconciliation.disconnected_layout_panes.clone();
             if let Some(initial_terminal_uuid) = layout_terminal_uuids.first() {
-                placeholders.retain(|layout_terminal_uuid| {
-                    layout_terminal_uuid != initial_terminal_uuid
-                });
+                placeholders
+                    .retain(|layout_terminal_uuid| layout_terminal_uuid != initial_terminal_uuid);
             }
             placeholders
         };
@@ -225,9 +224,7 @@ impl WindowState {
 }
 
 fn snapshot_pane_id(pane_snapshot: &proto::PaneSnapshot) -> Option<String> {
-    rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id)
-        .ok()
-        .map(|uuid| uuid.to_string())
+    rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id).ok().map(|uuid| uuid.to_string())
 }
 
 #[cfg(test)]
@@ -321,7 +318,8 @@ mod tests {
 
     #[test]
     fn apply_managed_pane_created_binds_runtime_and_clears_pending_placeholder() {
-        let mut state = window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
 
         assert!(state.apply_managed_pane_created(
             "workspace-1",
@@ -340,15 +338,13 @@ mod tests {
             Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
         );
         assert!(!session.runtime.is_layout_pane_pending("pane-1"));
-        assert_eq!(
-            session.mode.daemon_session_id(),
-            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
-        );
+        assert_eq!(session.mode.daemon_session_id(), Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),);
     }
 
     #[test]
     fn apply_managed_pane_created_rejects_unknown_layout_terminal() {
-        let mut state = window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
         let before = state.clone();
 
         assert!(!state.apply_managed_pane_created(
