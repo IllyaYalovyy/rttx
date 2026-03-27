@@ -684,6 +684,9 @@ impl EndpointActor {
                 }
             }
             EndpointCommand::Reconnect => {
+                if self.connection.is_some() {
+                    return;
+                }
                 let workspaces: Vec<_> = self.tracked_workspaces.keys().cloned().collect();
                 if workspaces.is_empty() {
                     return;
@@ -691,7 +694,8 @@ impl EndpointActor {
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
                     if problem.is_transient() {
-                        self.schedule_reconnect();
+                        let delay_secs = self.next_reconnect_delay_secs();
+                        self.schedule_reconnect(delay_secs);
                     }
                     return;
                 }
@@ -732,13 +736,22 @@ impl EndpointActor {
             }
             Err(error) => {
                 let problem = classify_connection_problem(&error);
-                let status = advance_connection_status(
-                    &ConnectionStatus::Connecting,
-                    ConnectionEvent::Failed(problem.clone()),
-                );
-                self.emit_status(workspace_id, status);
                 if problem.is_transient() {
-                    self.schedule_reconnect();
+                    let attempt = self.next_reconnect_attempt();
+                    let delay_secs = self.next_reconnect_delay_secs();
+                    let status = advance_connection_status(
+                        &ConnectionStatus::Connecting,
+                        ConnectionEvent::RetryScheduled { attempt, retry_in_secs: delay_secs },
+                    );
+                    self.emit_status(workspace_id, ConnectionStatus::Disconnected);
+                    self.emit_status(workspace_id, status);
+                    self.schedule_reconnect(delay_secs);
+                } else {
+                    let status = advance_connection_status(
+                        &ConnectionStatus::Connecting,
+                        ConnectionEvent::Failed(problem.clone()),
+                    );
+                    self.emit_status(workspace_id, status);
                 }
                 Err(problem)
             }
@@ -861,22 +874,30 @@ impl EndpointActor {
         if self.tracked_workspaces.is_empty() {
             return;
         }
+        let attempt = self.next_reconnect_attempt();
+        let delay_secs = self.next_reconnect_delay_secs();
         for workspace_id in self.tracked_workspaces.keys() {
             self.emit_status(workspace_id, ConnectionStatus::Disconnected);
             self.emit_status(
                 workspace_id,
-                ConnectionStatus::Reconnecting {
-                    attempt: self.reconnect_attempt.saturating_add(1),
-                },
+                ConnectionStatus::Reconnecting { attempt, retry_in_secs: delay_secs },
             );
         }
-        self.schedule_reconnect();
+        self.schedule_reconnect(delay_secs);
     }
 
-    fn schedule_reconnect(&mut self) {
+    const fn next_reconnect_attempt(&self) -> u32 {
+        self.reconnect_attempt.saturating_add(1)
+    }
+
+    fn next_reconnect_delay_secs(&self) -> u32 {
+        self.next_reconnect_attempt().min(5)
+    }
+
+    fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
         let self_tx = self.self_tx.clone();
-        let delay = Duration::from_secs(self.reconnect_attempt.min(5) as u64);
+        let delay = Duration::from_secs(u64::from(delay_secs));
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             let _ = self_tx.send(EndpointCommand::Reconnect);

@@ -144,7 +144,7 @@ pub enum ConnectionStatus {
     Starting,
     Connecting,
     Connected,
-    Reconnecting { attempt: u32 },
+    Reconnecting { attempt: u32, retry_in_secs: u32 },
     Blocked(ConnectionProblem),
     Disconnected,
     Recovered,
@@ -158,8 +158,30 @@ impl ConnectionStatus {
             Self::Starting => "Starting".into(),
             Self::Connecting => "Connecting".into(),
             Self::Connected => "Connected".into(),
-            Self::Reconnecting { attempt } => format!("Reconnecting ({attempt})"),
+            Self::Reconnecting { attempt, retry_in_secs } => {
+                format!("Reconnecting in {retry_in_secs}s (attempt {attempt})")
+            }
             Self::Blocked(problem) => format!("Action Required: {}", problem.label()),
+            Self::Disconnected => "Disconnected".into(),
+            Self::Recovered => "Recovered".into(),
+        }
+    }
+
+    /// Whether terminal input should be enabled for this state.
+    #[must_use]
+    pub const fn accepts_input(&self) -> bool {
+        matches!(self, Self::Connected | Self::Recovered)
+    }
+
+    /// Short label suitable for compact pane headers.
+    #[must_use]
+    pub fn short_label(&self) -> String {
+        match self {
+            Self::Starting => "Starting".into(),
+            Self::Connecting => "Connecting".into(),
+            Self::Connected => "Connected".into(),
+            Self::Reconnecting { retry_in_secs, .. } => format!("Retry {retry_in_secs}s"),
+            Self::Blocked(_) => "Action Required".into(),
             Self::Disconnected => "Disconnected".into(),
             Self::Recovered => "Recovered".into(),
         }
@@ -227,7 +249,7 @@ pub enum ConnectionEvent {
     Started,
     Connected,
     Lost,
-    RetryScheduled { attempt: u32 },
+    RetryScheduled { attempt: u32, retry_in_secs: u32 },
     Failed(ConnectionProblem),
     Recovered,
 }
@@ -235,22 +257,100 @@ pub enum ConnectionEvent {
 /// Advance a connection status without involving GTK or daemon I/O.
 #[must_use]
 pub fn advance_connection_status(
-    current: &ConnectionStatus,
+    _current: &ConnectionStatus,
     event: ConnectionEvent,
 ) -> ConnectionStatus {
     match event {
         ConnectionEvent::Started => ConnectionStatus::Starting,
         ConnectionEvent::Connected => ConnectionStatus::Connected,
         ConnectionEvent::Lost => ConnectionStatus::Disconnected,
-        ConnectionEvent::RetryScheduled { attempt } => ConnectionStatus::Reconnecting { attempt },
+        ConnectionEvent::RetryScheduled { attempt, retry_in_secs } => {
+            ConnectionStatus::Reconnecting { attempt, retry_in_secs }
+        }
         ConnectionEvent::Recovered => ConnectionStatus::Recovered,
-        ConnectionEvent::Failed(problem) if problem.is_transient() => match current {
-            ConnectionStatus::Reconnecting { attempt } => {
-                ConnectionStatus::Reconnecting { attempt: attempt.saturating_add(1) }
-            }
-            _ => ConnectionStatus::Reconnecting { attempt: 1 },
-        },
         ConnectionEvent::Failed(problem) => ConnectionStatus::Blocked(problem),
+    }
+}
+
+/// UI-facing connection banner configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionPresentation {
+    pub header_label: String,
+    pub banner_title: String,
+    pub banner_body: String,
+    pub banner_visible: bool,
+    pub show_retry: bool,
+    pub show_close: bool,
+    pub show_edit_connection: bool,
+    pub input_enabled: bool,
+}
+
+/// Render a connection state into user-facing copy and control visibility.
+#[must_use]
+pub fn present_connection_status(
+    endpoint: &RuntimeEndpoint,
+    status: &ConnectionStatus,
+) -> ConnectionPresentation {
+    let endpoint_label = match endpoint {
+        RuntimeEndpoint::Local => "local daemon".to_string(),
+        RuntimeEndpoint::Remote { host } => host.clone(),
+    };
+    let show_edit_connection = matches!(endpoint, RuntimeEndpoint::Remote { .. })
+        && matches!(status, ConnectionStatus::Blocked(_));
+
+    let (banner_title, banner_body, banner_visible, show_retry, show_close) = match status {
+        ConnectionStatus::Starting => (
+            "Starting local daemon".into(),
+            "This workspace is waiting for the local daemon to come online.".into(),
+            true,
+            false,
+            true,
+        ),
+        ConnectionStatus::Connecting => (
+            format!("Connecting to {endpoint_label}"),
+            "This workspace is attaching to its runtime.".into(),
+            true,
+            false,
+            true,
+        ),
+        ConnectionStatus::Connected => (String::new(), String::new(), false, false, false),
+        ConnectionStatus::Reconnecting { attempt, retry_in_secs } => (
+            format!("Reconnecting in {retry_in_secs}s"),
+            format!(
+                "The runtime connection dropped. rttx will retry automatically (attempt {attempt})."
+            ),
+            true,
+            true,
+            true,
+        ),
+        ConnectionStatus::Blocked(problem) => {
+            (format!("Action required for {endpoint_label}"), problem.label(), true, true, true)
+        }
+        ConnectionStatus::Disconnected => (
+            format!("Disconnected from {endpoint_label}"),
+            "The runtime is unavailable right now.".into(),
+            true,
+            true,
+            true,
+        ),
+        ConnectionStatus::Recovered => (
+            "Connection restored".into(),
+            format!("The workspace is connected to {endpoint_label} again."),
+            true,
+            false,
+            false,
+        ),
+    };
+
+    ConnectionPresentation {
+        header_label: status.short_label(),
+        banner_title,
+        banner_body,
+        banner_visible,
+        show_retry,
+        show_close,
+        show_edit_connection,
+        input_enabled: status.accepts_input(),
     }
 }
 
@@ -380,14 +480,55 @@ mod tests {
     fn connection_state_machine_distinguishes_retryable_and_blocked_failures() {
         let reconnecting = advance_connection_status(
             &ConnectionStatus::Connecting,
-            ConnectionEvent::Failed(ConnectionProblem::DaemonUnavailable),
+            ConnectionEvent::RetryScheduled { attempt: 1, retry_in_secs: 3 },
         );
-        assert_eq!(reconnecting, ConnectionStatus::Reconnecting { attempt: 1 });
+        assert_eq!(reconnecting, ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 });
 
         let blocked = advance_connection_status(
             &ConnectionStatus::Connecting,
             ConnectionEvent::Failed(ConnectionProblem::OwnershipConflict),
         );
         assert_eq!(blocked, ConnectionStatus::Blocked(ConnectionProblem::OwnershipConflict));
+    }
+
+    #[test]
+    fn connection_presentation_hides_banner_only_when_connected() {
+        let presentation =
+            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+        assert!(!presentation.banner_visible);
+        assert!(presentation.input_enabled);
+        assert!(!presentation.show_retry);
+    }
+
+    #[test]
+    fn connection_presentation_for_reconnecting_remote_shows_countdown_and_controls() {
+        let presentation = present_connection_status(
+            &RuntimeEndpoint::Remote { host: "builder.example".into() },
+            &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
+        );
+
+        assert_eq!(presentation.header_label, "Retry 4s");
+        assert_eq!(presentation.banner_title, "Reconnecting in 4s");
+        assert!(presentation.banner_body.contains("attempt 2"));
+        assert!(presentation.banner_visible);
+        assert!(presentation.show_retry);
+        assert!(presentation.show_close);
+        assert!(!presentation.show_edit_connection);
+        assert!(!presentation.input_enabled);
+    }
+
+    #[test]
+    fn connection_presentation_for_blocked_remote_allows_editing() {
+        let presentation = present_connection_status(
+            &RuntimeEndpoint::Remote { host: "builder.example".into() },
+            &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
+        );
+
+        assert!(presentation.banner_visible);
+        assert!(presentation.show_retry);
+        assert!(presentation.show_close);
+        assert!(presentation.show_edit_connection);
+        assert!(!presentation.input_enabled);
+        assert!(presentation.banner_body.contains("Permission denied"));
     }
 }

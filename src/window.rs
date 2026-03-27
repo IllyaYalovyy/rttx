@@ -12,7 +12,10 @@ use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::preferences::{self, Preferences};
-use crate::runtime::{ConnectionStatus, WorkspacePolicy};
+use crate::runtime::{
+    ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspacePolicy,
+    present_connection_status,
+};
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
     SplitOrientation, StartupStep, WindowState,
@@ -50,6 +53,7 @@ mod imp {
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
         pub connection_manager: RefCell<Option<crate::daemon_bridge::EndpointConnectionManager>>,
         pub workspace_connection_status: RefCell<HashMap<String, ConnectionStatus>>,
+        pub workspace_reconnect_sources: RefCell<HashMap<String, glib::SourceId>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
@@ -1030,6 +1034,7 @@ impl Window {
     }
 
     fn connect_managed_pane(&self, session_state: &SessionState, pane_view: &PersistentPaneView) {
+        let workspace_id = session_state.uuid.clone();
         let terminal_uuid = pane_view.uuid();
         let status = self
             .imp()
@@ -1038,7 +1043,27 @@ impl Window {
             .get(&session_state.uuid)
             .cloned()
             .unwrap_or(ConnectionStatus::Connecting);
-        pane_view.set_connection_status(&status);
+        let presentation = self
+            .connection_presentation_for_workspace(&session_state.runtime.endpoint, &status);
+        pane_view.set_connection_presentation(&status, &presentation);
+
+        let win = self.clone();
+        let retry_workspace_id = workspace_id.clone();
+        pane_view.connect_retry_requested(move || {
+            win.retry_workspace_connection(&retry_workspace_id);
+        });
+
+        let win = self.clone();
+        let close_workspace_id = workspace_id.clone();
+        pane_view.connect_close_workspace_requested(move || {
+            win.confirm_close_session(&close_workspace_id);
+        });
+
+        let win = self.clone();
+        let edit_workspace_id = workspace_id;
+        pane_view.connect_edit_connection_requested(move || {
+            win.show_edit_workspace_connection_dialog(&edit_workspace_id);
+        });
 
         let win = self.clone();
         let input_terminal_uuid = terminal_uuid.clone();
@@ -1063,6 +1088,18 @@ impl Window {
         pane_view.vte().connect_bell(move |_| {
             bell_pane.flash_bell();
         });
+    }
+
+    fn retry_workspace_connection(&self, workspace_id: &str) {
+        let session_state = {
+            let state = self.imp().state.borrow();
+            state.sessions.iter().find(|session| session.uuid == workspace_id).cloned()
+        };
+        let Some(session_state) = session_state else {
+            return;
+        };
+        self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
+        self.connect_managed_workspace(&session_state);
     }
 
     fn send_managed_terminal_input(&self, terminal_uuid: &str, data: Vec<u8>) {
@@ -1250,13 +1287,84 @@ impl Window {
         }
     }
 
-    fn set_workspace_connection_status(&self, workspace_id: &str, status: &ConnectionStatus) {
+    fn replace_workspace_connection_status(&self, workspace_id: &str, status: &ConnectionStatus) {
         self.imp()
             .workspace_connection_status
             .borrow_mut()
             .insert(workspace_id.to_string(), status.clone());
         self.refresh_workspace_row_status(workspace_id, status);
         self.refresh_workspace_pane_statuses(workspace_id, status);
+    }
+
+    fn clear_workspace_reconnect_countdown(&self, workspace_id: &str) {
+        if let Some(source_id) =
+            self.imp().workspace_reconnect_sources.borrow_mut().remove(workspace_id)
+        {
+            source_id.remove();
+        }
+    }
+
+    fn start_workspace_reconnect_countdown(
+        &self,
+        workspace_id: &str,
+        attempt: u32,
+        retry_in_secs: u32,
+    ) {
+        if retry_in_secs <= 1 {
+            return;
+        }
+
+        let win = self.clone();
+        let workspace_id = workspace_id.to_string();
+        let timer_workspace_id = workspace_id.clone();
+        let mut remaining = retry_in_secs;
+        let source_id = glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+            let current =
+                win.imp().workspace_connection_status.borrow().get(&timer_workspace_id).cloned();
+            let Some(ConnectionStatus::Reconnecting { attempt: current_attempt, .. }) = current
+            else {
+                win.imp().workspace_reconnect_sources.borrow_mut().remove(&timer_workspace_id);
+                return glib::ControlFlow::Break;
+            };
+            if current_attempt != attempt {
+                win.imp().workspace_reconnect_sources.borrow_mut().remove(&timer_workspace_id);
+                return glib::ControlFlow::Break;
+            }
+            if remaining <= 1 {
+                win.imp().workspace_reconnect_sources.borrow_mut().remove(&timer_workspace_id);
+                return glib::ControlFlow::Break;
+            }
+
+            remaining -= 1;
+            win.replace_workspace_connection_status(
+                &timer_workspace_id,
+                &ConnectionStatus::Reconnecting { attempt, retry_in_secs: remaining },
+            );
+
+            if remaining > 1 {
+                glib::ControlFlow::Continue
+            } else {
+                win.imp().workspace_reconnect_sources.borrow_mut().remove(&timer_workspace_id);
+                glib::ControlFlow::Break
+            }
+        });
+        self.imp().workspace_reconnect_sources.borrow_mut().insert(workspace_id, source_id);
+    }
+
+    fn set_workspace_connection_status(&self, workspace_id: &str, status: &ConnectionStatus) {
+        self.clear_workspace_reconnect_countdown(workspace_id);
+        self.replace_workspace_connection_status(workspace_id, status);
+        if let ConnectionStatus::Reconnecting { attempt, retry_in_secs } = status {
+            self.start_workspace_reconnect_countdown(workspace_id, *attempt, *retry_in_secs);
+        }
+    }
+
+    fn connection_presentation_for_workspace(
+        &self,
+        endpoint: &RuntimeEndpoint,
+        status: &ConnectionStatus,
+    ) -> ConnectionPresentation {
+        present_connection_status(endpoint, status)
     }
 
     fn refresh_workspace_row_status(&self, workspace_id: &str, status: &ConnectionStatus) {
@@ -1266,10 +1374,10 @@ impl Window {
             return;
         };
         let summary = match &session.runtime.endpoint {
-            crate::runtime::RuntimeEndpoint::Local => {
+            RuntimeEndpoint::Local => {
                 format!("{} · Local · {}", session.runtime.policy.label(), status.label())
             }
-            crate::runtime::RuntimeEndpoint::Remote { host } => {
+            RuntimeEndpoint::Remote { host } => {
                 format!("{} · {} · {}", session.runtime.policy.label(), host, status.label())
             }
         };
@@ -1290,19 +1398,20 @@ impl Window {
     }
 
     fn refresh_workspace_pane_statuses(&self, workspace_id: &str, status: &ConnectionStatus) {
-        let terminal_uuids = {
+        let (endpoint, terminal_uuids) = {
             let state = self.imp().state.borrow();
             let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };
-            session.layout.terminal_uuids()
+            (session.runtime.endpoint.clone(), session.layout.terminal_uuids())
         };
+        let presentation = self.connection_presentation_for_workspace(&endpoint, status);
 
         let panes = self.imp().persistent_terminals.borrow();
         for terminal_uuid in terminal_uuids {
             if let Some(pane) = panes.get(&terminal_uuid) {
-                pane.set_connection_status(status);
+                pane.set_connection_presentation(status, &presentation);
             }
         }
     }
@@ -1949,6 +2058,86 @@ impl Window {
         alert.present(Some(self));
     }
 
+    fn show_edit_workspace_connection_dialog(&self, workspace_id: &str) {
+        let current_host = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
+            else {
+                return;
+            };
+            let RuntimeEndpoint::Remote { host } = &session.runtime.endpoint else {
+                return;
+            };
+            host.clone()
+        };
+
+        let dialog = adw::Dialog::builder().title("Edit Connection").content_width(440).build();
+        let header = adw::HeaderBar::new();
+        let save_button = gtk4::Button::with_label("Save");
+        save_button.add_css_class("suggested-action");
+        header.pack_end(&save_button);
+
+        let host_row = adw::EntryRow::builder().title("SSH target / args").build();
+        host_row.set_text(&current_host);
+
+        let status_label = gtk4::Label::new(None);
+        status_label.set_xalign(0.0);
+        status_label.add_css_class("dim-label");
+
+        let group = adw::PreferencesGroup::new();
+        group.add(&host_row);
+
+        let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content_box.set_margin_start(18);
+        content_box.set_margin_end(18);
+        content_box.set_margin_top(18);
+        content_box.set_margin_bottom(18);
+        content_box.append(&group);
+        content_box.append(&status_label);
+
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
+        toolbar_view.set_content(Some(&content_box));
+        dialog.set_child(Some(&toolbar_view));
+
+        let dialog_for_save = dialog.clone();
+        let win = self.clone();
+        let workspace_id = workspace_id.to_string();
+        save_button.connect_clicked(move |_| {
+            let host = host_row.text().trim().to_string();
+            if host.is_empty() {
+                status_label.set_text("SSH target / args is required");
+                return;
+            }
+            win.update_workspace_endpoint(&workspace_id, host);
+            dialog_for_save.close();
+        });
+
+        dialog.present(Some(self));
+    }
+
+    fn update_workspace_endpoint(&self, workspace_id: &str, host: String) {
+        let (session_state, previous_endpoint) = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) =
+                state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+            else {
+                return;
+            };
+            let previous_endpoint = session.runtime.endpoint.clone();
+            session.runtime.endpoint = RuntimeEndpoint::Remote { host };
+            session.sync_legacy_mode_from_runtime();
+            (session.clone(), previous_endpoint)
+        };
+
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.forget_workspace(&previous_endpoint, workspace_id);
+        }
+
+        self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
+        self.connect_managed_workspace(&session_state);
+    }
+
     fn confirm_delete_bookmark(&self, uuid: String) {
         let win = self.clone();
         self.confirm_delete(
@@ -2077,6 +2266,7 @@ impl Window {
             manager.forget_workspace(&endpoint, session_uuid);
             imp.workspace_connection_status.borrow_mut().remove(session_uuid);
         }
+        self.clear_workspace_reconnect_countdown(session_uuid);
 
         if let Some(child) = imp.session_stack.child_by_name(session_uuid) {
             imp.session_stack.remove(&child);
@@ -5272,6 +5462,103 @@ mod tests {
                 "new TerminalWidget should receive inherited CWD"
             );
         }
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn blocked_remote_workspace_shows_edit_retry_and_disables_input() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.managed-blocked-workspace-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_state = crate::test_helpers::managed_session_with_runtime(
+            "workspace-remote",
+            "Remote Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            None,
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.set_workspace_connection_status(
+            &session_state.uuid,
+            &ConnectionStatus::Blocked(crate::runtime::ConnectionProblem::PermissionDenied),
+        );
+
+        let pane = window
+            .imp()
+            .persistent_terminals
+            .borrow()
+            .get("managed-pane")
+            .cloned()
+            .expect("managed pane should be present");
+
+        assert!(pane.connection_banner_visible_for_test());
+        assert!(pane.retry_button_visible_for_test());
+        assert!(pane.edit_connection_button_visible_for_test());
+        assert!(pane.close_workspace_button_visible_for_test());
+        assert!(!pane.input_enabled_for_test());
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn managed_workspace_reconnect_countdown_updates_live_pane_status() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.managed-reconnect-countdown-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_state = crate::test_helpers::managed_session(
+            "workspace-local",
+            "Local Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.set_workspace_connection_status(
+            &session_state.uuid,
+            &ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 },
+        );
+
+        let pane = window
+            .imp()
+            .persistent_terminals
+            .borrow()
+            .get("managed-pane")
+            .cloned()
+            .expect("managed pane should be present");
+        assert_eq!(pane.status_label_text_for_test(), "Retry 3s");
+
+        assert!(
+            wait_until(2_500, || pane.status_label_text_for_test() == "Retry 1s"),
+            "local reconnect countdown should tick down on the live pane status"
+        );
+        assert_eq!(
+            window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
+            Some(&ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 })
+        );
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
