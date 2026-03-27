@@ -1043,8 +1043,8 @@ impl Window {
             .get(&session_state.uuid)
             .cloned()
             .unwrap_or(ConnectionStatus::Connecting);
-        let presentation = self
-            .connection_presentation_for_workspace(&session_state.runtime.endpoint, &status);
+        let presentation =
+            self.connection_presentation_for_workspace(&session_state.runtime.endpoint, &status);
         pane_view.set_connection_presentation(&status, &presentation);
 
         let win = self.clone();
