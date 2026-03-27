@@ -154,6 +154,8 @@ fn contract_any_constructible_state_roundtrips() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
+                mode: Default::default(),
+                runtime: Default::default(),
             }],
             width: 1,
             height: 1,
@@ -168,6 +170,8 @@ fn contract_any_constructible_state_roundtrips() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: true,
+                mode: Default::default(),
+                runtime: Default::default(),
             }],
             ..WindowState::default()
         },
@@ -185,6 +189,8 @@ fn contract_any_constructible_state_roundtrips() {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: false,
+                    mode: Default::default(),
+                    runtime: Default::default(),
                 }],
                 ..WindowState::default()
             }
@@ -199,6 +205,8 @@ fn contract_any_constructible_state_roundtrips() {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: i % 2 == 0,
+                    mode: Default::default(),
+                    runtime: Default::default(),
                 })
                 .collect();
             WindowState {

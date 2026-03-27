@@ -15,6 +15,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use uuid::Uuid;
 
+use crate::runtime::WorkspacePolicy;
+
 /// Default socket path for the local rttxd instance.
 ///
 /// In dev mode (`RTTX_DEV_MODE=1`), uses `rttxd-devel` instead of
@@ -68,9 +70,20 @@ pub enum DaemonError {
     #[error("unexpected message from server")]
     UnexpectedMessage,
 
+    /// Attach was blocked because another client already owns the runtime.
+    #[error("runtime attach blocked")]
+    AttachBlocked(proto::AttachBlocked),
+
     /// Connection was closed by the server.
     #[error("connection closed")]
     Disconnected,
+}
+
+/// Successful detach outcome from the daemon.
+#[derive(Debug, Clone)]
+pub enum DetachResponse {
+    Detached(proto::SessionDetached),
+    Terminated(proto::SessionTerminated),
 }
 
 /// A connection to a running rttxd instance (pre-split).
@@ -151,7 +164,7 @@ impl DaemonConnection {
     }
 
     /// Send a client message to the daemon.
-    async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+    pub(crate) async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.writer.write_all(&buf).await?;
@@ -220,10 +233,15 @@ impl DaemonConnection {
     }
 
     /// Create a new session and return its UUID.
-    pub async fn create_session(&mut self, name: &str) -> Result<Uuid, DaemonError> {
+    pub async fn create_session(
+        &mut self,
+        name: &str,
+        policy: WorkspacePolicy,
+    ) -> Result<Uuid, DaemonError> {
         let msg = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: name.to_string(),
+                policy: policy.as_proto(),
             })),
         };
         self.send(&msg).await?;
@@ -244,10 +262,12 @@ impl DaemonConnection {
     pub async fn attach_session(
         &mut self,
         session_id: Uuid,
+        attach_mode: proto::RuntimeAttachMode,
     ) -> Result<proto::Snapshot, DaemonError> {
         let msg = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: uuid_to_bytes(session_id),
+                attach_mode: attach_mode as i32,
             })),
         };
         self.send(&msg).await?;
@@ -255,6 +275,9 @@ impl DaemonConnection {
         let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
         match response.msg {
             Some(proto::server_message::Msg::Snapshot(snapshot)) => Ok(snapshot),
+            Some(proto::server_message::Msg::AttachBlocked(blocked)) => {
+                Err(DaemonError::AttachBlocked(blocked))
+            }
             Some(proto::server_message::Msg::Error(e)) => {
                 Err(DaemonError::ServerError { code: e.code, message: e.message })
             }
@@ -276,6 +299,79 @@ impl DaemonConnection {
             Some(proto::server_message::Msg::PaneCreated(created)) => {
                 bytes_to_uuid(&created.pane_id).map_err(DaemonError::Frame)
             }
+            Some(proto::server_message::Msg::Error(e)) => {
+                Err(DaemonError::ServerError { code: e.code, message: e.message })
+            }
+            _ => Err(DaemonError::UnexpectedMessage),
+        }
+    }
+
+    /// Close a pane in a session and return the acknowledgement.
+    pub async fn close_pane(
+        &mut self,
+        session_id: Uuid,
+        pane_id: Uuid,
+    ) -> Result<proto::PaneClosed, DaemonError> {
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+                session_id: uuid_to_bytes(session_id),
+                pane_id: uuid_to_bytes(pane_id),
+            })),
+        };
+        self.send(&msg).await?;
+
+        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
+        match response.msg {
+            Some(proto::server_message::Msg::PaneClosed(closed)) => Ok(closed),
+            Some(proto::server_message::Msg::Error(e)) => {
+                Err(DaemonError::ServerError { code: e.code, message: e.message })
+            }
+            _ => Err(DaemonError::UnexpectedMessage),
+        }
+    }
+
+    /// Detach from a runtime explicitly.
+    pub async fn detach_session(
+        &mut self,
+        session_id: Uuid,
+    ) -> Result<DetachResponse, DaemonError> {
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                session_id: uuid_to_bytes(session_id),
+            })),
+        };
+        self.send(&msg).await?;
+
+        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
+        match response.msg {
+            Some(proto::server_message::Msg::SessionDetached(detached)) => {
+                Ok(DetachResponse::Detached(detached))
+            }
+            Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
+                Ok(DetachResponse::Terminated(terminated))
+            }
+            Some(proto::server_message::Msg::Error(e)) => {
+                Err(DaemonError::ServerError { code: e.code, message: e.message })
+            }
+            _ => Err(DaemonError::UnexpectedMessage),
+        }
+    }
+
+    /// Terminate a runtime explicitly.
+    pub async fn terminate_session(
+        &mut self,
+        session_id: Uuid,
+    ) -> Result<proto::SessionTerminated, DaemonError> {
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
+                session_id: uuid_to_bytes(session_id),
+            })),
+        };
+        self.send(&msg).await?;
+
+        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
+        match response.msg {
+            Some(proto::server_message::Msg::SessionTerminated(terminated)) => Ok(terminated),
             Some(proto::server_message::Msg::Error(e)) => {
                 Err(DaemonError::ServerError { code: e.code, message: e.message })
             }
@@ -423,10 +519,14 @@ pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
         Msg::TitleChanged(m) => &m.pane_id,
         Msg::CwdChanged(m) => &m.pane_id,
         Msg::Bell(m) => &m.pane_id,
+        Msg::PaneResized(m) => &m.pane_id,
         Msg::HelloAck(_)
         | Msg::SessionList(_)
         | Msg::SessionCreated(_)
         | Msg::Snapshot(_)
+        | Msg::AttachBlocked(_)
+        | Msg::SessionDetached(_)
+        | Msg::SessionTerminated(_)
         | Msg::Error(_) => return None,
     };
     bytes_to_uuid(bytes).ok()

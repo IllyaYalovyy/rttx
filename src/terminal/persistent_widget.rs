@@ -11,6 +11,7 @@ use gtk4::subclass::prelude::*;
 use vte4::prelude::*;
 
 use crate::color_scheme;
+use crate::runtime::ConnectionStatus;
 
 mod imp {
     use super::*;
@@ -22,6 +23,7 @@ mod imp {
         pub uuid: RefCell<String>,
         pub session_id: RefCell<String>,
         pub custom_title: RefCell<Option<String>>,
+        pub current_directory: RefCell<Option<String>>,
         pub smart_clipboard: Rc<Cell<bool>>,
         pub visual_bell: Cell<bool>,
         pub connected: Cell<bool>,
@@ -33,6 +35,8 @@ mod imp {
         pub split_h_button: gtk4::Button,
         pub split_v_button: gtk4::Button,
         pub status_label: gtk4::Label,
+        pub search_bar: gtk4::SearchBar,
+        pub search_entry: gtk4::SearchEntry,
     }
 
     impl Default for PersistentPaneView {
@@ -41,6 +45,7 @@ mod imp {
                 uuid: RefCell::default(),
                 session_id: RefCell::default(),
                 custom_title: RefCell::default(),
+                current_directory: RefCell::default(),
                 smart_clipboard: Rc::new(Cell::new(false)),
                 visual_bell: Cell::default(),
                 connected: Cell::default(),
@@ -52,6 +57,8 @@ mod imp {
                 split_h_button: gtk4::Button::default(),
                 split_v_button: gtk4::Button::default(),
                 status_label: gtk4::Label::default(),
+                search_bar: gtk4::SearchBar::default(),
+                search_entry: gtk4::SearchEntry::default(),
             }
         }
     }
@@ -115,6 +122,10 @@ mod imp {
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
 
+            self.search_entry.set_hexpand(true);
+            self.search_bar.set_child(Some(&self.search_entry));
+            self.search_bar.set_show_close_button(true);
+
             self.terminal_scroller.set_hscrollbar_policy(gtk4::PolicyType::Never);
             self.terminal_scroller.set_vscrollbar_policy(gtk4::PolicyType::Automatic);
             self.terminal_scroller.set_hexpand(true);
@@ -123,6 +134,7 @@ mod imp {
             self.terminal_scroller.set_child(Some(&self.vte));
 
             obj.append(&self.header);
+            obj.append(&self.search_bar);
             obj.append(&self.terminal_scroller);
 
             // Smart clipboard: Ctrl+C copies if selection exists, Ctrl+V pastes.
@@ -225,6 +237,11 @@ impl PersistentPaneView {
         self.imp().session_id.borrow().clone()
     }
 
+    /// Update the runtime UUID this pane currently belongs to.
+    pub fn set_session_id(&self, session_id: &str) {
+        self.imp().session_id.replace(session_id.to_string());
+    }
+
     /// The underlying VTE terminal widget.
     #[must_use]
     pub fn vte(&self) -> &vte4::Terminal {
@@ -280,6 +297,26 @@ impl PersistentPaneView {
         self.imp().custom_title.borrow().clone()
     }
 
+    /// Toggle the inline search UI.
+    pub fn toggle_search(&self) {
+        let bar = &self.imp().search_bar;
+        bar.set_search_mode(!bar.is_search_mode());
+        if bar.is_search_mode() {
+            self.imp().search_entry.grab_focus();
+        }
+    }
+
+    /// Current working directory reported by the runtime.
+    #[must_use]
+    pub fn current_directory(&self) -> Option<String> {
+        self.imp().current_directory.borrow().clone()
+    }
+
+    /// Update the current working directory reported by the runtime.
+    pub fn set_current_directory(&self, cwd: Option<&str>) {
+        self.imp().current_directory.replace(cwd.map(str::to_string));
+    }
+
     /// Feed raw terminal output bytes into VTE for rendering.
     ///
     /// Called when a `Delta` message arrives from the daemon.
@@ -297,10 +334,28 @@ impl PersistentPaneView {
     /// Update the connection status indicator.
     pub fn set_connected(&self, connected: bool) {
         self.imp().connected.set(connected);
-        let label = if connected { "⏻" } else { "⏼" };
+        let label = if connected { "Connected" } else { "Disconnected" };
         self.imp().status_label.set_label(label);
         let tooltip = if connected { "Connected to daemon" } else { "Disconnected from daemon" };
         self.imp().status_label.set_tooltip_text(Some(tooltip));
+    }
+
+    /// Render a richer connection state in the pane header.
+    pub fn set_connection_status(&self, status: &ConnectionStatus) {
+        self.imp()
+            .connected
+            .set(matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered));
+        let label = match status {
+            ConnectionStatus::Starting => "Starting".to_string(),
+            ConnectionStatus::Connecting => "Connecting".to_string(),
+            ConnectionStatus::Connected => "Connected".to_string(),
+            ConnectionStatus::Reconnecting { attempt } => format!("Retry {attempt}"),
+            ConnectionStatus::Blocked(problem) => format!("Blocked: {}", problem.label()),
+            ConnectionStatus::Disconnected => "Disconnected".to_string(),
+            ConnectionStatus::Recovered => "Recovered".to_string(),
+        };
+        self.imp().status_label.set_label(&label);
+        self.imp().status_label.set_tooltip_text(Some(&status.label()));
     }
 
     /// Mark this pane as active (focused).

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
+
 pub const MAX_SPLIT_DEPTH: usize = 5;
 
 /// Represents the layout tree of terminals within a session.
@@ -558,6 +560,9 @@ pub struct SessionState {
     /// How this session's terminals are backed.
     #[serde(default)]
     pub mode: SessionMode,
+    /// Managed runtime metadata and pane bindings.
+    #[serde(default)]
+    pub runtime: WorkspaceRuntime,
 }
 
 impl SessionState {
@@ -587,7 +592,22 @@ impl SessionState {
             active_terminal_uuid,
             input_sync: false,
             mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         }
+    }
+
+    /// Create a daemon-managed local workspace.
+    #[must_use]
+    pub fn new_managed_local(
+        name: String,
+        policy: WorkspacePolicy,
+        initial_cwd: Option<String>,
+    ) -> Self {
+        let mut session = Self::new_with_initial_cwd(name, initial_cwd);
+        let layout_terminal_uuids = session.layout.terminal_uuids();
+        session.runtime = WorkspaceRuntime::managed_local(policy, &layout_terminal_uuids);
+        session.sync_legacy_mode_from_runtime();
+        session
     }
 
     #[cfg(test)]
@@ -603,11 +623,62 @@ impl SessionState {
             active_terminal_uuid: Some("test-terminal-uuid".to_string()),
             input_sync: false,
             mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         }
     }
 }
 
 impl SessionState {
+    /// Whether this workspace should use the daemon-backed terminal path.
+    #[must_use]
+    pub const fn uses_managed_runtime(&self) -> bool {
+        self.runtime.is_managed() || self.mode.is_persistent()
+    }
+
+    /// Normalize runtime metadata after loading legacy persisted state.
+    pub fn normalize_runtime_metadata(&mut self) {
+        if !self.runtime.is_managed() {
+            match &self.mode {
+                SessionMode::Direct => {}
+                SessionMode::Persistent { daemon_session_id } => {
+                    self.runtime.managed = true;
+                    self.runtime.endpoint = RuntimeEndpoint::Local;
+                    self.runtime.policy = WorkspacePolicy::Persistent;
+                    if !daemon_session_id.is_empty() {
+                        self.runtime.runtime_id = Some(daemon_session_id.clone());
+                    }
+                }
+                SessionMode::RemotePersistent { host, daemon_session_id } => {
+                    self.runtime.managed = true;
+                    self.runtime.endpoint = RuntimeEndpoint::Remote { host: host.clone() };
+                    self.runtime.policy = WorkspacePolicy::Persistent;
+                    if !daemon_session_id.is_empty() {
+                        self.runtime.runtime_id = Some(daemon_session_id.clone());
+                    }
+                }
+            }
+        }
+
+        self.runtime.ensure_placeholder_bindings(&self.layout.terminal_uuids());
+        self.sync_legacy_mode_from_runtime();
+    }
+
+    /// Keep the legacy `SessionMode` field aligned with runtime metadata while
+    /// the codebase still carries both representations.
+    pub fn sync_legacy_mode_from_runtime(&mut self) {
+        self.mode = if self.runtime.is_managed() {
+            let daemon_session_id = self.runtime.runtime_id.clone().unwrap_or_default();
+            match &self.runtime.endpoint {
+                RuntimeEndpoint::Local => SessionMode::Persistent { daemon_session_id },
+                RuntimeEndpoint::Remote { host } => {
+                    SessionMode::RemotePersistent { host: host.clone(), daemon_session_id }
+                }
+            }
+        } else {
+            SessionMode::Direct
+        };
+    }
+
     pub fn set_recovery(&mut self, terminal_uuid: &str, recovery: PaneRecovery) {
         self.terminal_recovery.insert(terminal_uuid.to_string(), recovery);
     }
@@ -641,6 +712,8 @@ impl SessionState {
         if let Some(recovery) = self.terminal_recovery.remove(old_uuid) {
             self.terminal_recovery.insert(new_uuid.to_string(), recovery);
         }
+
+        self.runtime.replace_layout_terminal_uuid(old_uuid, new_uuid);
 
         if self.active_terminal_uuid.as_deref() == Some(old_uuid) {
             self.active_terminal_uuid = Some(new_uuid.to_string());
@@ -704,6 +777,7 @@ impl WindowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{RuntimeEndpoint, WorkspacePolicy};
     use crate::test_helpers::{hsplit, split_ratio, term};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
@@ -948,6 +1022,7 @@ mod tests {
             active_terminal_uuid: Some("t2".into()),
             input_sync: true,
             mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -1001,6 +1076,7 @@ mod tests {
         assert!(!session.mode.is_persistent());
         assert!(session.mode.daemon_session_id().is_none());
         assert!(session.mode.host().is_none());
+        assert!(!session.uses_managed_runtime());
     }
 
     #[test]
@@ -1059,6 +1135,7 @@ mod tests {
     fn persistent_session_in_window_state_roundtrips() {
         let mut session = SessionState::new("Persistent".into());
         session.mode = SessionMode::Persistent { daemon_session_id: "ds-1".into() };
+        session.normalize_runtime_metadata();
 
         let state = WindowState {
             sessions: vec![SessionState::new("Direct".into()), session],
@@ -1075,6 +1152,41 @@ mod tests {
             restored.sessions[1].mode,
             SessionMode::Persistent { daemon_session_id: "ds-1".into() }
         );
+        assert!(restored.sessions[1].runtime.is_managed());
+        assert_eq!(restored.sessions[1].runtime.runtime_id.as_deref(), Some("ds-1"));
+    }
+
+    #[test]
+    fn new_managed_local_session_sets_runtime_metadata() {
+        let session =
+            SessionState::new_managed_local("Workspace".into(), WorkspacePolicy::Ephemeral, None);
+
+        assert!(session.uses_managed_runtime());
+        assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
+        assert_eq!(session.runtime.policy, WorkspacePolicy::Ephemeral);
+        assert_eq!(session.runtime.pane_bindings.len(), 1);
+        let only_binding = session.runtime.pane_bindings.iter().next().unwrap();
+        assert_eq!(only_binding.0, only_binding.1);
+    }
+
+    #[test]
+    fn normalize_runtime_metadata_migrates_remote_legacy_mode() {
+        let mut session = SessionState::new("Remote".into());
+        session.mode = SessionMode::RemotePersistent {
+            host: "deploy@example.com".into(),
+            daemon_session_id: "runtime-1".into(),
+        };
+
+        session.normalize_runtime_metadata();
+
+        assert!(session.runtime.is_managed());
+        assert_eq!(
+            session.runtime.endpoint,
+            RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
+        );
+        assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
+        assert_eq!(session.runtime.runtime_id.as_deref(), Some("runtime-1"));
+        assert_eq!(session.runtime.pane_bindings.len(), 1);
     }
 
     #[test]
@@ -1379,6 +1491,7 @@ mod tests {
             active_terminal_uuid: Some("t1".into()),
             input_sync: false,
             mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -1438,6 +1551,7 @@ mod tests {
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
             mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         };
 
         session.layout = session.layout.remove_terminal("t2").unwrap();
@@ -1458,6 +1572,7 @@ mod tests {
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
             mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         };
 
         session.normalize_active_terminal();

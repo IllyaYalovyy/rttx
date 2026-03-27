@@ -38,7 +38,14 @@ pub fn load_window_state() -> WindowState {
     path.push("sessions.json");
     fs::read_to_string(path).map_or_else(
         |_| WindowState::default(),
-        |json| serde_json::from_str(&json).unwrap_or_default(),
+        |json| {
+            let mut state = serde_json::from_str::<WindowState>(&json).unwrap_or_default();
+            for session in &mut state.sessions {
+                session.normalize_runtime_metadata();
+                session.normalize_active_terminal();
+            }
+            state
+        },
     )
 }
 

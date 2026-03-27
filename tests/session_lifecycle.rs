@@ -71,6 +71,8 @@ fn workflow_multi_session_state() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
         },
         SessionState {
             uuid: "s2".into(),
@@ -79,6 +81,8 @@ fn workflow_multi_session_state() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
         },
         SessionState {
             uuid: "s3".into(),
@@ -87,6 +91,8 @@ fn workflow_multi_session_state() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
         },
     ];
 
@@ -141,6 +147,8 @@ fn workflow_persist_and_restore_with_cwds() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
         }],
         active_session_index: 0,
         width: 1200,
@@ -224,6 +232,8 @@ fn empty_session_name_is_valid() {
         terminal_recovery: Default::default(),
         active_terminal_uuid: None,
         input_sync: false,
+        mode: Default::default(),
+        runtime: Default::default(),
     };
     let json = serde_json::to_string(&session).unwrap();
     let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -241,6 +251,8 @@ fn session_order_persists_through_serialization() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
+                mode: Default::default(),
+                runtime: Default::default(),
             },
             SessionState {
                 uuid: "s1".into(),
@@ -249,6 +261,8 @@ fn session_order_persists_through_serialization() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
+                mode: Default::default(),
+                runtime: Default::default(),
             },
             SessionState {
                 uuid: "s2".into(),
@@ -257,6 +271,8 @@ fn session_order_persists_through_serialization() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
+                mode: Default::default(),
+                runtime: Default::default(),
             },
         ],
         active_session_index: 1,

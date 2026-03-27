@@ -63,6 +63,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
         active_terminal_uuid: None,
         input_sync: false,
         mode: Default::default(),
+        runtime: Default::default(),
     }
 }
 

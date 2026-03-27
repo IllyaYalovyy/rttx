@@ -12,11 +12,13 @@ use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::preferences::{self, Preferences};
+use crate::runtime::{ConnectionStatus, WorkspacePolicy, reconcile_bindings};
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
     SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
+use crate::terminal::handle::TerminalHandle;
 use crate::terminal::persistent_widget::PersistentPaneView;
 use crate::terminal::widget::TerminalWidget;
 use std::collections::HashMap;
@@ -46,7 +48,8 @@ mod imp {
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
-        pub daemon_bridge: RefCell<Option<crate::daemon_bridge::DaemonBridge>>,
+        pub connection_manager: RefCell<Option<crate::daemon_bridge::EndpointConnectionManager>>,
+        pub workspace_connection_status: RefCell<HashMap<String, ConnectionStatus>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
     }
 
@@ -74,7 +77,7 @@ mod imp {
             header.pack_start(&toggle_sidebar);
 
             self.add_session_button.set_icon_name("list-add-symbolic");
-            self.add_session_button.set_tooltip_text(Some("New session"));
+            self.add_session_button.set_tooltip_text(Some("New persistent workspace"));
             header.pack_start(&self.add_session_button);
 
             if let Some(label) = config::badge_label() {
@@ -97,6 +100,8 @@ mod imp {
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
+            menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
+            menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Session"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -361,6 +366,7 @@ impl Window {
             }
             session.prune_recovery();
             session.normalize_active_terminal();
+            session.sync_legacy_mode_from_runtime();
         }
 
         {
@@ -370,6 +376,18 @@ impl Window {
                     if let Some(term) = terminals.get(&node_uuid) {
                         session.layout.set_terminal_cwd(&node_uuid, term.current_directory());
                         session.layout.set_terminal_custom_title(&node_uuid, term.custom_title());
+                    }
+                }
+            }
+        }
+
+        {
+            let panes = imp.persistent_terminals.borrow();
+            for session in &mut state.sessions {
+                for node_uuid in session.layout.terminal_uuids() {
+                    if let Some(pane) = panes.get(&node_uuid) {
+                        session.layout.set_terminal_cwd(&node_uuid, pane.current_directory());
+                        session.layout.set_terminal_custom_title(&node_uuid, pane.custom_title());
                     }
                 }
             }
@@ -410,6 +428,7 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
+            ("new-ephemeral-workspace", &["<Ctrl><Shift><Alt>T"], Self::add_ephemeral_session),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
@@ -626,7 +645,7 @@ impl Window {
         }
     }
 
-    fn build_session(&self, session_state: &SessionState, auto_connect_persistent: bool) {
+    fn build_session(&self, session_state: &SessionState, auto_connect_managed: bool) {
         let imp = self.imp();
         self.append_session_row(session_state);
 
@@ -637,9 +656,8 @@ impl Window {
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
         self.renumber_session_rows();
 
-        // If this is a persistent session, connect its panes to the daemon.
-        if auto_connect_persistent && session_state.mode.is_persistent() {
-            self.connect_persistent_session(session_state);
+        if auto_connect_managed && session_state.uses_managed_runtime() {
+            self.connect_managed_workspace(session_state);
         }
     }
 
@@ -657,8 +675,7 @@ impl Window {
         cwd: Option<&str>,
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
-        // Persistent sessions use PersistentPaneView for all panes.
-        if session_state.mode.is_persistent() {
+        if session_state.uses_managed_runtime() {
             return self.materialize_persistent_terminal(session_state, uuid, custom_title);
         }
 
@@ -701,12 +718,13 @@ impl Window {
             return existing.upcast();
         }
 
-        let daemon_session_id = session_state.mode.daemon_session_id().unwrap_or_default();
+        let daemon_session_id = session_state.runtime.runtime_id.as_deref().unwrap_or_default();
         let pane_view = PersistentPaneView::new(uuid, daemon_session_id);
         if let Some(title) = custom_title {
             pane_view.set_custom_title(Some(title));
         }
         self.apply_preferences_to_persistent_pane(&pane_view);
+        self.connect_managed_pane(session_state, &pane_view);
         self.imp().persistent_terminals.borrow_mut().insert(uuid.to_string(), pane_view.clone());
         pane_view.upcast()
     }
@@ -949,25 +967,23 @@ impl Window {
     }
 
     pub fn add_session(&self) {
-        // Try to create a persistent session. Fall back to direct if daemon unavailable.
-        match self.create_persistent_session() {
-            Ok(()) => {}
-            Err(e) => {
-                log::info!("Persistent session unavailable ({e}), using direct mode");
-                self.add_direct_session();
-            }
-        }
+        self.add_managed_session(WorkspacePolicy::Persistent);
     }
 
-    /// Create a direct (non-persistent) session.
-    fn add_direct_session(&self) {
+    fn add_ephemeral_session(&self) {
+        self.add_managed_session(WorkspacePolicy::Ephemeral);
+    }
+
+    fn add_managed_session(&self, policy: WorkspacePolicy) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();
         let session_state =
-            SessionState::new_with_initial_cwd(format!("Session {count}"), initial_cwd);
+            SessionState::new_managed_local(format!("Workspace {count}"), policy, initial_cwd);
         imp.state.borrow_mut().sessions.push(session_state.clone());
-        self.build_session(&session_state, true);
+        self.build_session(&session_state, false);
+        self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
+        self.connect_managed_workspace(&session_state);
 
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
@@ -975,300 +991,537 @@ impl Window {
         }
     }
 
-    /// Create a persistent session backed by the local daemon.
-    fn create_persistent_session(&self) -> Result<(), crate::daemon::DaemonError> {
-        use crate::daemon::default_socket_path;
-        use crate::daemon_bridge::DaemonBridge;
-        use crate::session::SessionMode;
+    fn ensure_connection_manager(&self) -> bool {
+        if self.imp().connection_manager.borrow().is_some() {
+            return true;
+        }
 
-        // Ensure bridge exists.
-        if self.imp().daemon_bridge.borrow().is_none() {
-            let socket_path = default_socket_path();
-
-            // Auto-start daemon if socket doesn't exist.
-            if !socket_path.exists() {
-                log::info!("Starting rttx-server daemon");
-                let mut cmd = std::process::Command::new("rttx-server");
-                cmd.arg("start")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                if crate::config::is_development() {
-                    cmd.env("RTTX_DEV_MODE", "1");
-                }
-                if let Ok(mut child) = cmd.spawn() {
-                    let _ = child.wait();
-                    for _ in 0..30 {
-                        if socket_path.exists() {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
+        match crate::daemon_bridge::EndpointConnectionManager::new() {
+            Ok((manager, rx)) => {
+                self.start_endpoint_event_poller(rx);
+                self.imp().connection_manager.replace(Some(manager));
+                true
             }
-
-            let bridge = DaemonBridge::new()?;
-            self.imp().daemon_bridge.replace(Some(bridge));
+            Err(error) => {
+                log::error!("Failed to create endpoint connection manager: {error}");
+                self.show_toast("Failed to initialize runtime connection manager");
+                false
+            }
         }
-
-        let bridge = self.imp().daemon_bridge.borrow();
-        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
-
-        let socket_path = default_socket_path();
-        let mut conn = bridge.connect(&socket_path)?;
-
-        let count = self.imp().state.borrow().sessions.len() + 1;
-        let daemon_session_id = bridge.run(conn.create_session(&format!("Session {count}")))?;
-        let _snapshot = bridge.run(conn.attach_session(daemon_session_id))?;
-        let daemon_pane_id = bridge.run(conn.create_pane(daemon_session_id))?;
-
-        // Install connection for delta streaming.
-        let msg_rx = bridge.install_connection(conn);
-        let _ = bridge;
-
-        // Create session state with persistent mode.
-        let mut session_state = SessionState::new(format!("Session {count}"));
-        session_state.mode =
-            SessionMode::Persistent { daemon_session_id: daemon_session_id.to_string() };
-
-        // Use the daemon pane ID as the session's terminal UUID so runtime
-        // lookups and persisted state agree on the same pane identity.
-        let placeholder_uuid =
-            session_state.layout.terminal_uuids().into_iter().next().unwrap_or_default();
-        let terminal_uuid = daemon_pane_id.to_string();
-        session_state.replace_terminal_uuid(&placeholder_uuid, &terminal_uuid);
-
-        self.imp().state.borrow_mut().sessions.push(session_state.clone());
-        self.build_session(&session_state, false);
-
-        // Wire input/resize/delta for the persistent pane.
-        self.wire_persistent_pane(&terminal_uuid, daemon_session_id, daemon_pane_id);
-
-        // Start polling daemon messages.
-        self.start_message_poller(msg_rx);
-
-        let index = self.imp().state.borrow().sessions.len() as i32 - 1;
-        if let Some(row) = self.imp().sidebar_list.row_at_index(index) {
-            self.imp().sidebar_list.select_row(Some(&row));
-        }
-
-        Ok(())
     }
 
-    /// Connect a persistent session's panes to the daemon on startup.
-    ///
-    /// Called when loading a saved session with `SessionMode::Persistent`.
-    /// Connects to the daemon, attaches to the session, feeds snapshot
-    /// scrollback into each pane, and wires input/resize/delta routing.
-    fn connect_persistent_session(&self, session_state: &SessionState) {
-        use crate::daemon::default_socket_path;
-        use crate::daemon_bridge::DaemonBridge;
-
-        let Some(daemon_session_id_str) = session_state.mode.daemon_session_id() else {
+    fn connect_managed_workspace(&self, session_state: &SessionState) {
+        if !session_state.uses_managed_runtime() || !self.ensure_connection_manager() {
             return;
-        };
-        let Ok(daemon_session_id) = uuid::Uuid::parse_str(daemon_session_id_str) else {
-            log::error!("Invalid daemon session ID: {daemon_session_id_str}");
-            return;
-        };
-
-        // Ensure bridge exists (don't auto-start daemon for restore — if it's
-        // not running, the sessions will show as disconnected).
-        if self.imp().daemon_bridge.borrow().is_none() {
-            let socket_path = default_socket_path();
-            if !socket_path.exists() {
-                log::info!("Daemon not running, persistent sessions will show as disconnected");
-                return;
-            }
-            match DaemonBridge::new() {
-                Ok(bridge) => {
-                    self.imp().daemon_bridge.replace(Some(bridge));
-                }
-                Err(e) => {
-                    log::error!("Failed to create daemon bridge: {e}");
-                    return;
-                }
-            }
         }
 
-        let bridge = self.imp().daemon_bridge.borrow();
-        let Some(bridge) = bridge.as_ref() else { return };
-
-        let socket_path = default_socket_path();
-        let Ok(mut conn) = bridge.connect(&socket_path) else {
-            log::error!("Failed to connect to daemon for session restore");
-            return;
-        };
-
-        // Attach and get snapshot.
-        let Ok(snapshot) = bridge.run(conn.attach_session(daemon_session_id)) else {
-            log::error!("Failed to attach to daemon session {daemon_session_id}");
-            return;
-        };
-
-        // Feed snapshot scrollback into panes and wire I/O.
-        for pane_snap in &snapshot.panes {
-            let Ok(daemon_pane_id) = rttx_proto::bytes_to_uuid(&pane_snap.pane_id) else {
-                continue;
-            };
-            let daemon_pane_uuid = daemon_pane_id.to_string();
-
-            // Find the GUI terminal UUID that corresponds to this daemon pane.
-            // Older saved sessions may still contain placeholder GUI UUIDs, so
-            // match by position and then rebind the in-memory session/runtime
-            // state to the real daemon pane UUID.
-            let terminal_uuids = session_state.layout.terminal_uuids();
-            let pane_index = snapshot.panes.iter().position(|p| p.pane_id == pane_snap.pane_id);
-            let Some(terminal_uuid) = pane_index.and_then(|i| terminal_uuids.get(i)).cloned()
-            else {
-                continue;
-            };
-            self.rebind_persistent_terminal_uuid(
+        let placeholder_terminal_uuid = session_state.layout.terminal_uuids().into_iter().next();
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.open_workspace(
                 &session_state.uuid,
-                &terminal_uuid,
-                &daemon_pane_uuid,
+                &session_state.runtime.endpoint,
+                &session_state.name,
+                session_state.runtime.policy,
+                session_state.runtime.runtime_id.as_deref(),
+                placeholder_terminal_uuid.as_deref(),
             );
-
-            let panes = self.imp().persistent_terminals.borrow();
-            if let Some(pane_view) = panes.get(&daemon_pane_uuid) {
-                pane_view.feed_snapshot(&pane_snap.scrollback);
-                if !pane_snap.title.is_empty() {
-                    pane_view.set_title(&pane_snap.title);
-                }
-            }
-            drop(panes);
-
-            self.wire_persistent_pane(&daemon_pane_uuid, daemon_session_id, daemon_pane_id);
-        }
-
-        // Install connection for delta streaming.
-        let msg_rx = bridge.install_connection(conn);
-        let _ = bridge;
-        self.start_message_poller(msg_rx);
-    }
-
-    fn rebind_persistent_terminal_uuid(&self, session_uuid: &str, old_uuid: &str, new_uuid: &str) {
-        if old_uuid == new_uuid {
-            return;
-        }
-
-        {
-            let mut state = self.imp().state.borrow_mut();
-            let Some(session) =
-                state.sessions.iter_mut().find(|session| session.uuid == session_uuid)
-            else {
-                return;
-            };
-            if !session.replace_terminal_uuid(old_uuid, new_uuid) {
-                return;
-            }
-        }
-
-        let pane = {
-            let mut panes = self.imp().persistent_terminals.borrow_mut();
-            panes.remove(old_uuid)
-        };
-        if let Some(pane) = pane {
-            pane.set_uuid(new_uuid);
-            self.imp().persistent_terminals.borrow_mut().insert(new_uuid.to_string(), pane);
-        }
-
-        if self.focused_terminal_uuid().as_deref() == Some(old_uuid) {
-            self.set_focused_terminal(Some(new_uuid));
+            manager.refresh_inventory(&session_state.runtime.endpoint);
         }
     }
 
-    fn wire_persistent_pane(
-        &self,
-        terminal_uuid: &str,
-        daemon_session_id: uuid::Uuid,
-        daemon_pane_id: uuid::Uuid,
-    ) {
-        let panes = self.imp().persistent_terminals.borrow();
-        let Some(pane_view) = panes.get(terminal_uuid) else {
-            return;
-        };
+    fn connect_managed_pane(&self, session_state: &SessionState, pane_view: &PersistentPaneView) {
+        let terminal_uuid = pane_view.uuid();
+        let status = self
+            .imp()
+            .workspace_connection_status
+            .borrow()
+            .get(&session_state.uuid)
+            .cloned()
+            .unwrap_or(ConnectionStatus::Connecting);
+        pane_view.set_connection_status(&status);
 
-        pane_view.set_connected(true);
-
-        // Forward keyboard input to daemon.
         let win = self.clone();
+        let input_terminal_uuid = terminal_uuid.clone();
         pane_view.connect_input(move |text| {
-            let data = text.as_bytes().to_vec();
-            if let Some(ref bridge) = *win.imp().daemon_bridge.borrow() {
-                bridge.send_input(daemon_session_id, daemon_pane_id, data);
-            }
+            win.send_managed_terminal_input(&input_terminal_uuid, text.as_bytes().to_vec());
         });
 
-        // Forward resize to daemon.
         let win = self.clone();
+        let resize_terminal_uuid = terminal_uuid.clone();
         pane_view.connect_resize(move |cols, rows| {
-            if let Some(ref bridge) = *win.imp().daemon_bridge.borrow() {
-                bridge.send_resize(daemon_session_id, daemon_pane_id, cols, rows);
-            }
+            win.send_managed_terminal_resize(&resize_terminal_uuid, cols, rows);
         });
 
-        // Focus tracking.
         let win = self.clone();
-        let uuid = terminal_uuid.to_string();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
-            win.set_focused_terminal(Some(&uuid));
+            win.set_focused_terminal(Some(&terminal_uuid));
         });
         pane_view.vte().add_controller(focus_controller);
 
-        // Bell.
         let bell_pane = pane_view.clone();
         pane_view.vte().connect_bell(move |_| {
             bell_pane.flash_bell();
         });
     }
 
-    /// Poll daemon messages and dispatch to persistent panes.
-    fn start_message_poller(
+    fn send_managed_terminal_input(&self, terminal_uuid: &str, data: Vec<u8>) {
+        let Some((workspace_id, endpoint, runtime_id, runtime_pane_id)) =
+            self.managed_binding_for_terminal(terminal_uuid)
+        else {
+            return;
+        };
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.send_input(&workspace_id, &endpoint, &runtime_id, &runtime_pane_id, data);
+        }
+    }
+
+    fn send_managed_terminal_resize(&self, terminal_uuid: &str, cols: u16, rows: u16) {
+        let Some((workspace_id, endpoint, runtime_id, runtime_pane_id)) =
+            self.managed_binding_for_terminal(terminal_uuid)
+        else {
+            return;
+        };
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.resize_pane(
+                &workspace_id,
+                &endpoint,
+                &runtime_id,
+                &runtime_pane_id,
+                cols,
+                rows,
+            );
+        }
+    }
+
+    fn managed_binding_for_terminal(
         &self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<rttx_proto::proto::ServerMessage>,
+        terminal_uuid: &str,
+    ) -> Option<(String, crate::runtime::RuntimeEndpoint, String, String)> {
+        let state = self.imp().state.borrow();
+        let session = state.sessions.iter().find(|session| {
+            session.uses_managed_runtime() && session.layout.contains_terminal(terminal_uuid)
+        })?;
+        let runtime_id = session.runtime.runtime_id.clone()?;
+        let runtime_pane_id = session.runtime.pane_bindings.get(terminal_uuid)?.clone();
+        if session.runtime.is_layout_pane_pending(terminal_uuid) {
+            return None;
+        }
+        Some((session.uuid.clone(), session.runtime.endpoint.clone(), runtime_id, runtime_pane_id))
+    }
+
+    fn start_endpoint_event_poller(
+        &self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::daemon_bridge::EndpointEvent>,
     ) {
         let win = self.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(4), move || {
-            while let Ok(msg) = rx.try_recv() {
-                win.dispatch_daemon_message(&msg);
+        glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
+            while let Ok(event) = rx.try_recv() {
+                win.handle_endpoint_event(event);
             }
             glib::ControlFlow::Continue
         });
     }
 
-    /// Route a daemon message to the correct persistent pane by `pane_id`.
-    fn dispatch_daemon_message(&self, msg: &rttx_proto::proto::ServerMessage) {
-        use rttx_proto::proto::server_message::Msg;
+    fn handle_endpoint_event(&self, event: crate::daemon_bridge::EndpointEvent) {
+        use crate::daemon_bridge::EndpointEvent;
 
-        let Some(ref inner) = msg.msg else { return };
-
-        let Some(pane_id) = crate::daemon::extract_pane_id(msg) else {
-            if let Msg::Error(e) = inner {
-                log::error!("Daemon error: {} (code {})", e.message, e.code);
+        match event {
+            EndpointEvent::WorkspaceConnectionChanged { workspace_id, status } => {
+                self.set_workspace_connection_status(&workspace_id, &status);
             }
-            return;
-        };
-
-        let pane_uuid = pane_id.to_string();
-        let panes = self.imp().persistent_terminals.borrow();
-        let Some(pane) = panes.get(&pane_uuid) else {
-            return;
-        };
-
-        match inner {
-            Msg::Delta(delta) => pane.feed_output(&delta.data),
-            Msg::TitleChanged(tc) => {
-                if pane.custom_title().is_none() {
-                    pane.set_title(&tc.title);
+            EndpointEvent::WorkspaceOpened { workspace_id, runtime_id, snapshot } => {
+                self.handle_workspace_opened(&workspace_id, &runtime_id, &snapshot);
+            }
+            EndpointEvent::PaneCreated {
+                workspace_id,
+                layout_terminal_uuid,
+                runtime_id,
+                runtime_pane_id,
+            } => {
+                {
+                    let mut state = self.imp().state.borrow_mut();
+                    let Some(session) =
+                        state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+                    else {
+                        return;
+                    };
+                    session.runtime.runtime_id = Some(runtime_id);
+                    session.runtime.bind_runtime_pane(&layout_terminal_uuid, &runtime_pane_id);
+                    session.sync_legacy_mode_from_runtime();
+                }
+                if let Some(pane) =
+                    self.imp().persistent_terminals.borrow().get(&layout_terminal_uuid).cloned()
+                {
+                    pane.set_connected(true);
+                    let (cols, rows) = pane.terminal_size();
+                    if cols > 0 && rows > 0 {
+                        self.send_managed_terminal_resize(&layout_terminal_uuid, cols, rows);
+                    }
+                }
+                self.trigger_managed_recovery_for_terminal(&layout_terminal_uuid);
+                self.set_workspace_connection_status(&workspace_id, &ConnectionStatus::Connected);
+            }
+            EndpointEvent::PaneClosed { workspace_id, layout_terminal_uuid, .. } => {
+                self.apply_managed_pane_closed(&workspace_id, &layout_terminal_uuid);
+            }
+            EndpointEvent::WorkspaceDetached { workspace_id, .. } => {
+                self.set_workspace_connection_status(
+                    &workspace_id,
+                    &ConnectionStatus::Disconnected,
+                );
+            }
+            EndpointEvent::RuntimeTerminated { workspace_id, .. } => {
+                {
+                    let mut state = self.imp().state.borrow_mut();
+                    if let Some(session) =
+                        state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+                    {
+                        session.runtime.runtime_id = None;
+                        session.sync_legacy_mode_from_runtime();
+                    }
+                }
+                self.set_workspace_connection_status(
+                    &workspace_id,
+                    &ConnectionStatus::Disconnected,
+                );
+            }
+            EndpointEvent::InventoryLoaded { .. } => {}
+            EndpointEvent::RuntimeMessage { endpoint, message } => {
+                self.dispatch_managed_runtime_message(&endpoint, &message);
+            }
+            EndpointEvent::WorkspaceError { workspace_id, detail, .. } => {
+                log::warn!("Workspace {workspace_id} runtime error: {detail}");
+                if !workspace_id.starts_with("inventory:") {
+                    self.show_toast(&detail);
                 }
             }
+        }
+    }
+
+    fn handle_workspace_opened(
+        &self,
+        workspace_id: &str,
+        runtime_id: &str,
+        snapshot: &rttx_proto::proto::Snapshot,
+    ) {
+        let (session_state, pane_bindings, missing_runtime_placeholders) = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) =
+                state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+            else {
+                return;
+            };
+
+            let had_runtime_id = session.runtime.runtime_id.is_some();
+            session.runtime.runtime_id = Some(runtime_id.to_string());
+            session.sync_legacy_mode_from_runtime();
+            let layout_terminal_uuids = session.layout.terminal_uuids();
+            let runtime_pane_uuids = snapshot
+                .panes
+                .iter()
+                .filter_map(|pane| rttx_proto::bytes_to_uuid(&pane.pane_id).ok())
+                .map(|uuid| uuid.to_string())
+                .collect::<Vec<_>>();
+            let reconciliation = reconcile_bindings(
+                &layout_terminal_uuids,
+                &session.runtime.pane_bindings,
+                &runtime_pane_uuids,
+            );
+            session.runtime.pane_bindings = reconciliation.bindings;
+            session.runtime.pending_layout_panes =
+                reconciliation.disconnected_layout_panes.iter().cloned().collect();
+            let missing_runtime_placeholders = if had_runtime_id {
+                Vec::new()
+            } else {
+                let mut placeholders = reconciliation.disconnected_layout_panes.clone();
+                if let Some(initial_terminal_uuid) = layout_terminal_uuids.first() {
+                    placeholders.retain(|layout_terminal_uuid| {
+                        layout_terminal_uuid != initial_terminal_uuid
+                    });
+                }
+                placeholders
+            };
+
+            for runtime_pane_id in reconciliation.recovered_runtime_panes {
+                let Some(anchor_uuid) = session.layout.terminal_uuids().last().cloned() else {
+                    continue;
+                };
+                let anchor_cwd = session.layout.terminal_cwd(&anchor_uuid);
+                let Some((mut new_layout, new_terminal_uuid)) = session
+                    .layout
+                    .split_terminal_with_new_uuid(&anchor_uuid, SplitOrientation::Horizontal)
+                else {
+                    log::warn!(
+                        "Failed to recover runtime pane {runtime_pane_id}: split depth limit"
+                    );
+                    continue;
+                };
+                if let Some(cwd) = anchor_cwd {
+                    new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd));
+                }
+                session.layout = new_layout;
+                session.set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
+                session.runtime.bind_runtime_pane(&new_terminal_uuid, &runtime_pane_id);
+                session.normalize_active_terminal();
+            }
+
+            (session.clone(), session.runtime.pane_bindings.clone(), missing_runtime_placeholders)
+        };
+
+        self.rebuild_session_content(workspace_id, &session_state);
+
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            for layout_terminal_uuid in &missing_runtime_placeholders {
+                if session_state.runtime.pane_bindings.get(layout_terminal_uuid).is_some_and(
+                    |bound_runtime_pane_id| bound_runtime_pane_id == layout_terminal_uuid,
+                ) {
+                    manager.create_pane(
+                        workspace_id,
+                        &session_state.runtime.endpoint,
+                        runtime_id,
+                        layout_terminal_uuid,
+                    );
+                }
+            }
+        }
+
+        for pane_snapshot in &snapshot.panes {
+            let Ok(runtime_pane_id) = rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id) else {
+                continue;
+            };
+            let runtime_pane_id = runtime_pane_id.to_string();
+            let Some(layout_terminal_uuid) = pane_bindings
+                .iter()
+                .find(|(_, bound_runtime_pane_id)| **bound_runtime_pane_id == runtime_pane_id)
+                .map(|(layout_terminal_uuid, _)| layout_terminal_uuid.clone())
+            else {
+                continue;
+            };
+
+            let pane = {
+                let panes = self.imp().persistent_terminals.borrow();
+                panes.get(&layout_terminal_uuid).cloned()
+            };
+            let Some(pane) = pane else { continue };
+
+            pane.vte().reset(true, true);
+            pane.feed_snapshot(&pane_snapshot.scrollback);
+            pane.set_current_directory(Some(&pane_snapshot.cwd));
+            if !pane_snapshot.title.is_empty() && pane.custom_title().is_none() {
+                pane.set_title(&pane_snapshot.title);
+            }
+            pane.set_connected(true);
+
+            let (cols, rows) = pane.terminal_size();
+            if cols > 0 && rows > 0 {
+                self.send_managed_terminal_resize(&layout_terminal_uuid, cols, rows);
+            }
+        }
+    }
+
+    fn set_workspace_connection_status(&self, workspace_id: &str, status: &ConnectionStatus) {
+        self.imp()
+            .workspace_connection_status
+            .borrow_mut()
+            .insert(workspace_id.to_string(), status.clone());
+        self.refresh_workspace_row_status(workspace_id, status);
+        self.refresh_workspace_pane_statuses(workspace_id, status);
+    }
+
+    fn refresh_workspace_row_status(&self, workspace_id: &str, status: &ConnectionStatus) {
+        let state = self.imp().state.borrow();
+        let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
+        else {
+            return;
+        };
+        let summary = match &session.runtime.endpoint {
+            crate::runtime::RuntimeEndpoint::Local => {
+                format!("{} · Local · {}", session.runtime.policy.label(), status.label())
+            }
+            crate::runtime::RuntimeEndpoint::Remote { host } => {
+                format!("{} · {} · {}", session.runtime.policy.label(), host, status.label())
+            }
+        };
+        drop(state);
+
+        let list = &self.imp().sidebar_list;
+        let mut idx = 0;
+        while let Some(row) = list.row_at_index(idx) {
+            if let Some(session_row) =
+                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                && session_row.uuid() == workspace_id
+            {
+                session_row.set_subtitle(&summary);
+                break;
+            }
+            idx += 1;
+        }
+    }
+
+    fn refresh_workspace_pane_statuses(&self, workspace_id: &str, status: &ConnectionStatus) {
+        let terminal_uuids = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
+            else {
+                return;
+            };
+            session.layout.terminal_uuids()
+        };
+
+        let panes = self.imp().persistent_terminals.borrow();
+        for terminal_uuid in terminal_uuids {
+            if let Some(pane) = panes.get(&terminal_uuid) {
+                pane.set_connection_status(status);
+            }
+        }
+    }
+
+    fn apply_managed_pane_closed(&self, workspace_id: &str, layout_terminal_uuid: &str) {
+        let session_state = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) =
+                state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+            else {
+                return;
+            };
+            session.runtime.pane_bindings.remove(layout_terminal_uuid);
+            if let Some(new_layout) = session.layout.remove_terminal(layout_terminal_uuid) {
+                session.layout = new_layout;
+                let layout_terminal_uuids = session.layout.terminal_uuids();
+                session.runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
+                session.prune_recovery();
+                session.normalize_active_terminal();
+                Some(session.clone())
+            } else {
+                None
+            }
+        };
+
+        self.imp().persistent_terminals.borrow_mut().remove(layout_terminal_uuid);
+        if let Some(session_state) = session_state {
+            self.rebuild_session_content(workspace_id, &session_state);
+        }
+    }
+
+    fn dispatch_managed_runtime_message(
+        &self,
+        endpoint: &crate::runtime::RuntimeEndpoint,
+        msg: &rttx_proto::proto::ServerMessage,
+    ) {
+        use rttx_proto::proto::server_message::Msg;
+
+        let Some(inner) = msg.msg.as_ref() else {
+            return;
+        };
+
+        if let Msg::Error(error) = inner {
+            log::error!("Daemon error: {} (code {})", error.message, error.code);
+            return;
+        }
+
+        if let Msg::SessionTerminated(terminated) = inner {
+            let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id) else {
+                return;
+            };
+            let runtime_id = runtime_id.to_string();
+            let workspace_id = {
+                let state = self.imp().state.borrow();
+                state
+                    .sessions
+                    .iter()
+                    .find(|session| {
+                        session.uses_managed_runtime()
+                            && &session.runtime.endpoint == endpoint
+                            && session.runtime.runtime_id.as_deref() == Some(runtime_id.as_str())
+                    })
+                    .map(|session| session.uuid.clone())
+            };
+            if let Some(workspace_id) = workspace_id {
+                self.set_workspace_connection_status(
+                    &workspace_id,
+                    &ConnectionStatus::Disconnected,
+                );
+            }
+            return;
+        }
+
+        let Some(pane_id) = crate::daemon::extract_pane_id(msg) else {
+            return;
+        };
+        let runtime_pane_id = pane_id.to_string();
+        let (workspace_id, layout_terminal_uuid) = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.sessions.iter().find(|session| {
+                session.uses_managed_runtime()
+                    && &session.runtime.endpoint == endpoint
+                    && session
+                        .runtime
+                        .pane_bindings
+                        .values()
+                        .any(|bound_runtime_pane_id| bound_runtime_pane_id == &runtime_pane_id)
+            }) else {
+                return;
+            };
+            let Some(layout_terminal_uuid) = session
+                .runtime
+                .pane_bindings
+                .iter()
+                .find(|(_, bound_runtime_pane_id)| **bound_runtime_pane_id == runtime_pane_id)
+                .map(|(layout_terminal_uuid, _)| layout_terminal_uuid.clone())
+            else {
+                return;
+            };
+            (session.uuid.clone(), layout_terminal_uuid)
+        };
+
+        let pane = {
+            let panes = self.imp().persistent_terminals.borrow();
+            panes.get(&layout_terminal_uuid).cloned()
+        };
+        let Some(pane) = pane else { return };
+
+        match inner {
+            Msg::Delta(delta) => {
+                pane.feed_output(&delta.data);
+                self.mark_session_activity(&layout_terminal_uuid);
+            }
+            Msg::TitleChanged(title_changed) => {
+                if pane.custom_title().is_none() {
+                    pane.set_title(&title_changed.title);
+                }
+            }
+            Msg::CwdChanged(cwd_changed) => {
+                pane.set_current_directory(Some(&cwd_changed.cwd));
+            }
             Msg::PaneExited(exited) => {
-                log::info!("Persistent pane {pane_uuid} exited with status {}", exited.status);
+                let visible_session = self.imp().session_stack.visible_child_name();
+                let state = self.imp().state.borrow();
+                let in_background = terminal_is_in_background_session(
+                    &layout_terminal_uuid,
+                    visible_session.as_deref(),
+                    &state,
+                );
+                drop(state);
+                if in_background {
+                    self.notify_process_completed(&layout_terminal_uuid, exited.status);
+                }
             }
             Msg::Bell(_) => pane.flash_bell(),
-            _ => {}
+            Msg::PaneResized(_)
+            | Msg::PaneCreated(_)
+            | Msg::PaneClosed(_)
+            | Msg::HelloAck(_)
+            | Msg::SessionList(_)
+            | Msg::SessionCreated(_)
+            | Msg::Snapshot(_)
+            | Msg::AttachBlocked(_)
+            | Msg::SessionDetached(_)
+            | Msg::SessionTerminated(_)
+            | Msg::Error(_) => {}
         }
+
+        let _ = workspace_id;
     }
 
     fn resolve_default_session_folder(&self) -> Option<String> {
@@ -1287,11 +1540,7 @@ impl Window {
                     })
                 };
                 terminal_uuid.and_then(|uuid| {
-                    self.imp()
-                        .terminals
-                        .borrow()
-                        .get(&uuid)
-                        .and_then(super::terminal::widget::TerminalWidget::current_directory)
+                    self.terminal_handle(&uuid).and_then(|terminal| terminal.current_directory())
                 })
             }
             preferences::DefaultSessionFolder::Custom(ref path) => {
@@ -1329,7 +1578,7 @@ impl Window {
     }
 
     pub(crate) fn execute_bookmark(&self, bookmark: &Bookmark) {
-        let Some(term) = self.command_target_terminal() else {
+        let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
             return;
         };
 
@@ -1337,14 +1586,14 @@ impl Window {
             return;
         };
         self.set_terminal_recovery(
-            &term.uuid(),
+            &terminal_uuid,
             PaneRecovery {
                 source: PaneSource::Bookmark { name: bookmark.name.clone() },
                 target: None,
                 startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
             },
         );
-        self.send_input_to_terminal(&term.uuid(), &format!("{command}\n"));
+        self.send_input_to_terminal(&terminal_uuid, &format!("{command}\n"));
     }
 
     fn switch_to_session(&self, index: usize) {
@@ -1394,34 +1643,40 @@ impl Window {
                 return;
             };
 
-            self.imp().terminals.borrow().get(&preferred_uuid).cloned()
+            if let Some(term) = self.imp().terminals.borrow().get(&preferred_uuid).cloned() {
+                Some((preferred_uuid, term.vte().clone()))
+            } else {
+                self.imp()
+                    .persistent_terminals
+                    .borrow()
+                    .get(&preferred_uuid)
+                    .cloned()
+                    .map(|pane| (preferred_uuid, pane.vte().clone()))
+            }
         };
 
-        let Some(term) = target else {
+        let Some((target_uuid, vte)) = target else {
             return;
         };
         let win = self.clone();
-        let target_uuid = term.uuid();
         glib::idle_add_local_once(move || {
-            if term.vte().grab_focus() {
+            if vte.grab_focus() {
                 win.set_focused_terminal(Some(&target_uuid));
             }
         });
     }
 
-    fn command_target_terminal(&self) -> Option<TerminalWidget> {
+    fn command_target_terminal_uuid(&self) -> Option<String> {
         let visible_session_uuid =
             self.imp().session_stack.visible_child_name().map(|name| name.to_string());
-        let target_uuid = {
+        {
             let state = self.imp().state.borrow();
             preferred_command_target_uuid(
                 self.focused_terminal_uuid().as_deref(),
                 visible_session_uuid.as_deref(),
                 &state,
             )
-        }?;
-
-        self.imp().terminals.borrow().get(&target_uuid).cloned()
+        }
     }
 
     pub(crate) fn refresh_bookmark_sidebar(&self) {
@@ -1611,12 +1866,12 @@ impl Window {
     }
 
     pub(crate) fn execute_saved_command(&self, command: &SavedCommand, run_mode: CommandRunMode) {
-        let Some(term) = self.command_target_terminal() else {
+        let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
             return;
         };
 
         self.set_terminal_recovery(
-            &term.uuid(),
+            &terminal_uuid,
             PaneRecovery {
                 source: PaneSource::Command { title: command.title.clone() },
                 target: None,
@@ -1626,7 +1881,7 @@ impl Window {
                 }],
             },
         );
-        self.send_input_to_terminal(&term.uuid(), &command.input_for(run_mode));
+        self.send_input_to_terminal(&terminal_uuid, &command.input_for(run_mode));
     }
 
     fn setup_bookmark_terminal(&self, terminal_uuid: &str, bookmark: &Bookmark) {
@@ -1651,13 +1906,36 @@ impl Window {
         }
     }
 
-    fn send_input_to_terminal(&self, terminal_uuid: &str, input: &str) {
-        let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() else {
+    fn trigger_managed_recovery_for_terminal(&self, terminal_uuid: &str) {
+        let Some(recovery) = self.recovery_for_terminal(terminal_uuid) else {
             return;
         };
-        term.queue_input_for_shell(input.to_string());
-        let _ = term.vte().grab_focus();
-        self.set_focused_terminal(Some(&term.uuid()));
+
+        if let Some(target) = recovery.target.as_ref()
+            && let Some(startup_input) = target.managed_startup_input()
+        {
+            self.send_input_to_terminal(terminal_uuid, &startup_input);
+            return;
+        }
+
+        for step in recovery.startup {
+            self.send_input_to_terminal(terminal_uuid, &step.terminal_input());
+        }
+    }
+
+    fn send_input_to_terminal(&self, terminal_uuid: &str, input: &str) {
+        if let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() {
+            term.queue_input_for_shell(input.to_string());
+            let _ = term.vte().grab_focus();
+            self.set_focused_terminal(Some(&term.uuid()));
+            return;
+        }
+
+        if let Some(pane) = self.imp().persistent_terminals.borrow().get(terminal_uuid).cloned() {
+            self.send_managed_terminal_input(terminal_uuid, input.as_bytes().to_vec());
+            let _ = pane.vte().grab_focus();
+            self.set_focused_terminal(Some(terminal_uuid));
+        }
     }
 
     fn set_terminal_recovery(&self, terminal_uuid: &str, recovery: PaneRecovery) {
@@ -1857,7 +2135,7 @@ impl Window {
     fn close_session(&self, session_uuid: &str) {
         let imp = self.imp();
 
-        let (terminal_uuids, new_index) = {
+        let (terminal_uuids, new_index, managed_runtime) = {
             let mut state = imp.state.borrow_mut();
             if state.sessions.len() <= 1 {
                 return;
@@ -1867,9 +2145,14 @@ impl Window {
             };
             let session = state.sessions.remove(pos);
             let uuids = session.layout.terminal_uuids();
+            let managed_runtime = if session.uses_managed_runtime() {
+                Some((session.runtime.endpoint.clone(), session.runtime.runtime_id))
+            } else {
+                None
+            };
             let new_index = pos.min(state.sessions.len() - 1);
             state.active_session_index = new_index;
-            (uuids, new_index)
+            (uuids, new_index, managed_runtime)
         };
 
         {
@@ -1886,6 +2169,23 @@ impl Window {
             for uuid in &terminal_uuids {
                 terminals.remove(uuid);
             }
+        }
+
+        {
+            let mut panes = imp.persistent_terminals.borrow_mut();
+            for uuid in &terminal_uuids {
+                panes.remove(uuid);
+            }
+        }
+
+        if let Some((endpoint, runtime_id)) = managed_runtime
+            && let Some(manager) = imp.connection_manager.borrow().as_ref()
+        {
+            if let Some(runtime_id) = runtime_id {
+                manager.detach_runtime(session_uuid, &endpoint, &runtime_id);
+            }
+            manager.forget_workspace(&endpoint, session_uuid);
+            imp.workspace_connection_status.borrow_mut().remove(session_uuid);
         }
 
         if let Some(child) = imp.session_stack.child_by_name(session_uuid) {
@@ -1919,12 +2219,8 @@ impl Window {
     fn split_terminal(&self, terminal_uuid: &str, orientation: SplitOrientation) {
         let imp = self.imp();
 
-        // Read the source terminal's CWD before borrowing state mutably.
-        let source_cwd = imp
-            .terminals
-            .borrow()
-            .get(terminal_uuid)
-            .and_then(super::terminal::widget::TerminalWidget::current_directory);
+        let source_cwd =
+            self.terminal_handle(terminal_uuid).and_then(|terminal| terminal.current_directory());
 
         let mut state = imp.state.borrow_mut();
 
@@ -1954,6 +2250,8 @@ impl Window {
                 }
                 state.sessions[idx].layout = new_layout;
                 state.sessions[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
+                let layout_terminal_uuids = state.sessions[idx].layout.terminal_uuids();
+                state.sessions[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
                 state.sessions[idx].normalize_active_terminal();
                 let session_uuid = state.sessions[idx].uuid.clone();
                 let session_state = state.sessions[idx].clone();
@@ -1967,6 +2265,18 @@ impl Window {
                     self.update_sidebar_count(&session_uuid, session_state.layout.terminal_count());
                 } else {
                     self.rebuild_session_content(&session_uuid, &session_state);
+                }
+
+                if session_state.uses_managed_runtime()
+                    && let Some(runtime_id) = session_state.runtime.runtime_id.as_deref()
+                    && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
+                {
+                    manager.create_pane(
+                        &session_uuid,
+                        &session_state.runtime.endpoint,
+                        runtime_id,
+                        &new_terminal_uuid,
+                    );
                 }
             }
         }
@@ -1989,12 +2299,36 @@ impl Window {
                 .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
             let Some(idx) = session_idx else { return };
 
+            if state.sessions[idx].uses_managed_runtime()
+                && state.sessions[idx].layout.terminal_count() > 1
+                && let Some(runtime_id) = state.sessions[idx].runtime.runtime_id.clone()
+                && let Some(runtime_pane_id) =
+                    state.sessions[idx].runtime.pane_bindings.get(terminal_uuid).cloned()
+                && runtime_pane_id != terminal_uuid
+            {
+                let workspace_id = state.sessions[idx].uuid.clone();
+                let endpoint = state.sessions[idx].runtime.endpoint.clone();
+                drop(state);
+                if let Some(manager) = imp.connection_manager.borrow().as_ref() {
+                    manager.close_pane(
+                        &workspace_id,
+                        &endpoint,
+                        &runtime_id,
+                        terminal_uuid,
+                        &runtime_pane_id,
+                    );
+                }
+                return;
+            }
+
             if state.sessions[idx].layout.terminal_count() <= 1 {
                 Action::CloseSession(state.sessions[idx].uuid.clone())
             } else if let Some(new_layout) =
                 state.sessions[idx].layout.remove_terminal(terminal_uuid)
             {
                 state.sessions[idx].layout = new_layout;
+                let layout_terminal_uuids = state.sessions[idx].layout.terminal_uuids();
+                state.sessions[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
                 state.sessions[idx].normalize_active_terminal();
                 Action::Rebuild {
                     session_uuid: state.sessions[idx].uuid.clone(),
@@ -2299,14 +2633,29 @@ impl Window {
         self.imp().focused_terminal_uuid.borrow().clone()
     }
 
+    fn terminal_handle(&self, terminal_uuid: &str) -> Option<TerminalHandle> {
+        if let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() {
+            return Some(TerminalHandle::Direct(term));
+        }
+        self.imp()
+            .persistent_terminals
+            .borrow()
+            .get(terminal_uuid)
+            .cloned()
+            .map(TerminalHandle::Managed)
+    }
+
     fn set_focused_terminal(&self, terminal_uuid: Option<&str>) {
         let next = terminal_uuid.map(str::to_string);
         let previous = self.imp().focused_terminal_uuid.replace(next.clone());
-        let (previous_term, next_term) = {
+        let (previous_term, next_term, previous_pane, next_pane) = {
             let terminals = self.imp().terminals.borrow();
+            let panes = self.imp().persistent_terminals.borrow();
             (
                 previous.as_deref().and_then(|uuid| terminals.get(uuid)).cloned(),
                 next.as_deref().and_then(|uuid| terminals.get(uuid)).cloned(),
+                previous.as_deref().and_then(|uuid| panes.get(uuid)).cloned(),
+                next.as_deref().and_then(|uuid| panes.get(uuid)).cloned(),
             )
         };
 
@@ -2317,6 +2666,14 @@ impl Window {
         }
         if let Some(term) = next_term {
             term.set_active(true);
+        }
+        if let Some(pane) = previous_pane
+            && previous != next
+        {
+            pane.set_active(false);
+        }
+        if let Some(pane) = next_pane {
+            pane.set_active(true);
         }
     }
 
@@ -2338,9 +2695,9 @@ impl Window {
 
     fn toggle_focused_search(&self) {
         if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+            && let Some(terminal) = self.terminal_handle(&uuid)
         {
-            term.toggle_search();
+            terminal.toggle_search();
         }
     }
 
@@ -2386,20 +2743,9 @@ impl Window {
 
     fn zoom_focused(&self, direction: i32) {
         if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(term) = self.imp().terminals.borrow().get(&uuid)
+            && let Some(terminal) = self.terminal_handle(&uuid)
         {
-            let vte = term.vte();
-            match direction {
-                1 => {
-                    let s = vte.font_scale();
-                    vte.set_font_scale(s * 1.1);
-                }
-                -1 => {
-                    let s = vte.font_scale();
-                    vte.set_font_scale(s / 1.1);
-                }
-                _ => vte.set_font_scale(1.0),
-            }
+            terminal.zoom(direction);
         }
     }
 
@@ -2432,11 +2778,8 @@ impl Window {
 
     fn notify_process_completed(&self, terminal_uuid: &str, status: i32) {
         let title = self
-            .imp()
-            .terminals
-            .borrow()
-            .get(terminal_uuid)
-            .map_or_else(|| "Terminal".into(), |t| t.title_label().label().to_string());
+            .terminal_handle(terminal_uuid)
+            .map_or_else(|| "Terminal".into(), |terminal| terminal.title());
 
         let body = if status == 0 {
             format!("\"{title}\" completed successfully")
@@ -2458,8 +2801,7 @@ impl Window {
         let session_name = session.name.clone();
         drop(state);
 
-        let cwd =
-            self.imp().terminals.borrow().get(&uuid).and_then(TerminalWidget::current_directory);
+        let cwd = self.terminal_handle(&uuid).and_then(|terminal| terminal.current_directory());
 
         let mut bookmark = Bookmark::new(session_name);
         bookmark.directory = cwd;
@@ -2614,6 +2956,7 @@ mod tests {
                     active_terminal_uuid: None,
                     input_sync: false,
                     mode: Default::default(),
+                    runtime: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2623,6 +2966,7 @@ mod tests {
                     active_terminal_uuid: None,
                     input_sync: false,
                     mode: Default::default(),
+                    runtime: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -2663,6 +3007,7 @@ mod tests {
                 active_terminal_uuid: None,
                 input_sync: false,
                 mode: Default::default(),
+                runtime: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2697,6 +3042,7 @@ mod tests {
                 active_terminal_uuid: None,
                 input_sync: false,
                 mode: Default::default(),
+                runtime: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2720,6 +3066,7 @@ mod tests {
                     active_terminal_uuid: None,
                     input_sync: false,
                     mode: Default::default(),
+                    runtime: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2734,6 +3081,7 @@ mod tests {
                     active_terminal_uuid: None,
                     input_sync: false,
                     mode: Default::default(),
+                    runtime: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -2802,7 +3150,7 @@ mod tests {
     }
 
     #[test]
-    fn rebind_persistent_terminal_uuid_updates_runtime_lookup_and_focus() {
+    fn managed_binding_for_terminal_ignores_placeholders_and_uses_explicit_runtime_bindings() {
         require_display!();
 
         let tmp = tempfile::TempDir::new().unwrap();
@@ -2810,43 +3158,40 @@ mod tests {
         crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
         let app = adw::Application::builder()
-            .application_id("com.illya.rttx.persistent-rebind-tests")
+            .application_id("com.illya.rttx.runtime-binding-tests")
             .build();
         app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
         let window = Window::new(&app);
-        let mut session = SessionState::new("Persistent".into());
-        session.mode =
-            crate::session::SessionMode::Persistent { daemon_session_id: "daemon-session".into() };
-        let old_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-        let session_uuid = session.uuid.clone();
-        let pane = PersistentPaneView::new(&old_uuid, "daemon-session");
+        let mut session =
+            SessionState::new_managed_local("Persistent".into(), WorkspacePolicy::Persistent, None);
+        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let runtime_pane_id = uuid::Uuid::new_v4().to_string();
+        session.runtime.runtime_id = Some(runtime_id.clone());
 
         window.imp().state.borrow_mut().sessions.push(session);
-        window.imp().persistent_terminals.borrow_mut().insert(old_uuid.clone(), pane.clone());
-        window.set_focused_terminal(Some(&old_uuid));
 
-        window.rebind_persistent_terminal_uuid(&session_uuid, &old_uuid, "daemon-pane");
+        assert!(
+            window.managed_binding_for_terminal(&terminal_uuid).is_none(),
+            "self-bindings are placeholders until the daemon assigns a pane UUID"
+        );
 
-        let state = window.imp().state.borrow();
-        let rebound_session = state
-            .sessions
-            .iter()
-            .find(|session| session.uuid == session_uuid)
-            .expect("rebound session should still exist");
-        assert_eq!(rebound_session.layout.terminal_uuids(), vec!["daemon-pane"]);
-        assert_eq!(rebound_session.active_terminal_uuid.as_deref(), Some("daemon-pane"));
-        assert!(rebound_session.recovery_for("daemon-pane").is_some());
-        assert!(rebound_session.recovery_for(&old_uuid).is_none());
-        drop(state);
+        {
+            let mut state = window.imp().state.borrow_mut();
+            let session = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.layout.contains_terminal(&terminal_uuid))
+                .unwrap();
+            session.runtime.bind_runtime_pane(&terminal_uuid, &runtime_pane_id);
+        }
 
-        let panes = window.imp().persistent_terminals.borrow();
-        assert!(panes.get(&old_uuid).is_none());
-        assert!(panes.get("daemon-pane").is_some());
-        drop(panes);
-
-        assert_eq!(pane.uuid(), "daemon-pane");
-        assert_eq!(window.focused_terminal_uuid().as_deref(), Some("daemon-pane"));
+        let binding = window
+            .managed_binding_for_terminal(&terminal_uuid)
+            .expect("explicit runtime bindings should be routable");
+        assert_eq!(binding.2, runtime_id);
+        assert_eq!(binding.3, runtime_pane_id);
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -3350,6 +3695,7 @@ mod tests {
                 active_terminal_uuid: Some(terminal_uuid.clone()),
                 input_sync: false,
                 mode: Default::default(),
+                runtime: Default::default(),
             }],
             ..WindowState::default()
         };

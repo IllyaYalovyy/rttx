@@ -7,6 +7,7 @@ pub mod config;
 pub mod daemon;
 pub mod daemon_bridge;
 pub mod preferences;
+pub mod runtime;
 pub mod session;
 
 pub mod application;

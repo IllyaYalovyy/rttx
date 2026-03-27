@@ -88,6 +88,8 @@ fn preferences_input_sync_persists_in_session_state() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
         }],
         ..WindowState::default()
     };
@@ -140,6 +142,8 @@ fn custom_title_persists_in_layout() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
         }],
         ..WindowState::default()
     };
