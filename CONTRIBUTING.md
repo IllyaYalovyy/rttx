@@ -161,6 +161,74 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor"
 update-desktop-database "$HOME/.local/share/applications"
 ```
 
+### Persistent session daemon (rttxd)
+
+rttx uses a companion daemon (`rttx-server`) for persistent sessions. The daemon lives in a
+separate repository: [IllyaYalovyy/rttxd](https://github.com/IllyaYalovyy/rttxd).
+
+**Building the daemon:**
+```bash
+cd ../rttxd
+cargo build
+sudo cp target/debug/rttx-server /usr/local/bin/
+```
+
+The daemon must be on `$PATH` for rttx to auto-start it. Without it, rttx falls back to
+non-persistent direct VTE sessions.
+
+**Dev mode** uses completely separate paths so you can develop alongside a stable production
+instance:
+
+| | Production | Development |
+|---|---|---|
+| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttxd-devel/v1/` |
+| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttxd-devel/` |
+| Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
+
+**Managing the daemon:**
+```bash
+# Check if running
+ps aux | grep rttx-server
+
+# Start manually (dev mode, foreground with debug logging)
+RTTX_DEV_MODE=1 rttx-server start --foreground
+
+# Stop
+RTTX_DEV_MODE=1 rttx-server stop
+
+# Stop all instances (production + dev)
+pkill -f "rttx-server.*start"
+```
+
+**Clearing state for a clean test:**
+```bash
+# Kill daemon, remove all dev state (sessions, scrollback, socket, PID file)
+pkill -f "rttx-server"
+rm -rf ~/.cache/rttxd-devel/ $XDG_RUNTIME_DIR/rttxd-devel/
+
+# Also clear GUI session state (sidebar tabs, layout)
+rm -f ~/.config/rttx-devel/sessions.json
+
+# Then rebuild and run
+cargo build --no-default-features --features vte-0_76
+RTTX_DEV_MODE=1 ./target/debug/rttx
+```
+
+**Clearing production state** (use with caution — kills real sessions):
+```bash
+pkill -f "rttx-server"
+rm -rf ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
+rm -f ~/.config/rttx/sessions.json
+```
+
+**Running daemon tests:**
+```bash
+cd ../rttxd
+cargo test                          # all 61 tests
+cargo test --test make_pane_persistent  # GUI flow simulation
+cargo test --test stdio_transport   # SSH transport
+```
+
 ---
 
 ## Code standards
