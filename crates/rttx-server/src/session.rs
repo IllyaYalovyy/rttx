@@ -4,10 +4,33 @@
 //! persist across GUI disconnects and can be serialized to disk.
 
 use crate::pane::{HistoryEntry, Pane, PersistedPane};
+use rttx_proto::proto;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use uuid::Uuid;
+
+/// Runtime retention policy for a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePolicy {
+    /// Keep the runtime alive across detach and reconnect.
+    #[default]
+    Persistent,
+    /// Allow the runtime to be discarded when no clients remain attached.
+    Ephemeral,
+}
+
+impl RuntimePolicy {
+    /// Convert to the protocol enum value used on the wire.
+    #[must_use]
+    pub const fn as_proto(self) -> proto::RuntimePolicy {
+        match self {
+            Self::Persistent => proto::RuntimePolicy::Persistent,
+            Self::Ephemeral => proto::RuntimePolicy::Ephemeral,
+        }
+    }
+}
 
 /// Runtime state of a single session.
 pub struct Session {
@@ -21,6 +44,10 @@ pub struct Session {
     pub active_pane_id: Option<Uuid>,
     /// Per-session command history.
     pub command_history: Vec<HistoryEntry>,
+    /// Runtime retention policy.
+    pub policy: RuntimePolicy,
+    /// Whether this session was resurrected from persisted state.
+    pub reconstructed: bool,
     /// When this session was created.
     pub created_at: SystemTime,
     /// When this session was last active.
@@ -40,6 +67,8 @@ impl Session {
             panes: HashMap::new(),
             active_pane_id: None,
             command_history: Vec::new(),
+            policy: RuntimePolicy::Persistent,
+            reconstructed: false,
             created_at: now,
             last_active_at: now,
             attached_clients: Vec::new(),
@@ -57,6 +86,7 @@ impl Session {
                 pane.cwd.clone_from(&pp.cwd);
                 pane.title.clone_from(&pp.title);
                 pane.exit_status = pp.exit_status;
+                pane.reconstructed = true;
                 pane.scrollback_log_path = Some(pp.scrollback_log_path.clone());
                 (pp.id, pane)
             })
@@ -67,6 +97,8 @@ impl Session {
             name: persisted.name.clone(),
             active_pane_id: persisted.active_pane_id,
             command_history: persisted.command_history.clone(),
+            policy: persisted.policy,
+            reconstructed: true,
             created_at: persisted.created_at,
             last_active_at: persisted.last_active_at,
             attached_clients: Vec::new(),
@@ -120,6 +152,7 @@ impl Session {
             panes: self.panes.values().map(Pane::to_persisted).collect(),
             active_pane_id: self.active_pane_id,
             command_history: self.command_history.clone(),
+            policy: self.policy,
             created_at: self.created_at,
             last_active_at: self.last_active_at,
         }
@@ -139,6 +172,9 @@ pub struct PersistedSession {
     pub active_pane_id: Option<Uuid>,
     /// Per-session command history.
     pub command_history: Vec<HistoryEntry>,
+    /// Runtime retention policy.
+    #[serde(default)]
+    pub policy: RuntimePolicy,
     /// When the session was created.
     pub created_at: SystemTime,
     /// When the session was last active.
@@ -154,6 +190,8 @@ mod tests {
         let session = Session::new("test".into());
         assert!(session.panes.is_empty());
         assert!(session.active_pane_id.is_none());
+        assert_eq!(session.policy, RuntimePolicy::Persistent);
+        assert!(!session.reconstructed);
     }
 
     #[test]
@@ -212,8 +250,11 @@ mod tests {
 
         let restored = Session::from_persisted(&persisted);
         assert_eq!(restored.id, session.id);
+        assert_eq!(restored.policy, RuntimePolicy::Persistent);
+        assert!(restored.reconstructed);
         assert!(restored.panes.contains_key(&pane_id));
         assert_eq!(restored.panes[&pane_id].cols, 120);
+        assert!(restored.panes[&pane_id].reconstructed);
     }
 
     #[test]
@@ -223,5 +264,33 @@ mod tests {
         session.attach_client(client);
         session.attach_client(client);
         assert_eq!(session.attached_clients.len(), 1);
+    }
+
+    #[test]
+    fn persisted_policy_roundtrip() {
+        let mut session = Session::new("test".into());
+        session.policy = RuntimePolicy::Ephemeral;
+        let persisted = session.to_persisted();
+        let json = serde_json::to_string(&persisted).unwrap();
+        let recovered: PersistedSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered.policy, RuntimePolicy::Ephemeral);
+    }
+
+    #[test]
+    fn persisted_session_defaults_policy_for_legacy_state() {
+        let persisted: PersistedSession = serde_json::from_str(
+            r#"{
+                "id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "name":"legacy",
+                "panes":[],
+                "active_pane_id":null,
+                "command_history":[],
+                "created_at":{"secs_since_epoch":1,"nanos_since_epoch":0},
+                "last_active_at":{"secs_since_epoch":2,"nanos_since_epoch":0}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(persisted.policy, RuntimePolicy::Persistent);
     }
 }

@@ -222,16 +222,7 @@ impl Server {
 
             proto::client_message::Msg::ListSessions(_) => {
                 let s = server.lock().await;
-                let infos: Vec<proto::SessionInfo> = s
-                    .sessions
-                    .values()
-                    .map(|session| proto::SessionInfo {
-                        id: uuid_to_bytes(session.id),
-                        name: session.name.clone(),
-                        pane_count: session.panes.len() as u32,
-                        has_attached_client: session.has_attached_clients(),
-                    })
-                    .collect();
+                let infos = protocol::session_inventory(s.sessions.values());
                 Some(protocol::session_list(infos))
             }
 

@@ -80,7 +80,7 @@ pub fn scrollback_log_path(
 mod tests {
     use super::*;
     use crate::pane::PersistedPane;
-    use crate::session::PersistedSession;
+    use crate::session::{PersistedSession, RuntimePolicy};
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -101,6 +101,7 @@ mod tests {
                 }],
                 active_pane_id: None,
                 command_history: Vec::new(),
+                policy: RuntimePolicy::Persistent,
                 created_at: SystemTime::now(),
                 last_active_at: SystemTime::now(),
             }],

@@ -2,7 +2,7 @@
 
 use rttx_server::pane::PersistedPane;
 use rttx_server::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
-use rttx_server::session::{PersistedSession, Session};
+use rttx_server::session::{PersistedSession, RuntimePolicy, Session};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
@@ -28,6 +28,7 @@ fn serialize_and_resurrect_session() {
             }],
             active_pane_id: None,
             command_history: Vec::new(),
+            policy: RuntimePolicy::Persistent,
             created_at: SystemTime::now(),
             last_active_at: SystemTime::now(),
         }],

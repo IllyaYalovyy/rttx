@@ -30,6 +30,8 @@ pub struct Pane {
     pub rows: u16,
     /// Exit status if the pane process has exited.
     pub exit_status: Option<i32>,
+    /// Whether this pane was resurrected from persisted state.
+    pub reconstructed: bool,
     /// Path to the scrollback log file.
     pub scrollback_log_path: Option<PathBuf>,
     /// Bytes received since last flush to disk.
@@ -48,6 +50,7 @@ impl Pane {
             cols,
             rows,
             exit_status: None,
+            reconstructed: false,
             scrollback_log_path: None,
             pending_flush: Vec::new(),
         }
@@ -159,6 +162,7 @@ mod tests {
     fn new_pane_is_not_exited() {
         let pane = Pane::new(Uuid::new_v4(), 80, 24);
         assert!(!pane.is_exited());
+        assert!(!pane.reconstructed);
     }
 
     #[test]

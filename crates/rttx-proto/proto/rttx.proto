@@ -63,11 +63,32 @@ message SessionList {
     repeated SessionInfo sessions = 1;
 }
 
+enum RuntimePolicy {
+    RUNTIME_POLICY_UNSPECIFIED = 0;
+    RUNTIME_POLICY_PERSISTENT = 1;
+    RUNTIME_POLICY_EPHEMERAL = 2;
+}
+
+message PaneInfo {
+    bytes id = 1;
+    string title = 2;
+    string cwd = 3;
+    uint32 cols = 4;
+    uint32 rows = 5;
+    optional int32 exit_status = 6;
+    bool reconstructed = 7;
+}
+
 message SessionInfo {
     bytes id = 1;
     string name = 2;
     uint32 pane_count = 3;
     bool has_attached_client = 4;
+    optional bytes active_pane_id = 5;
+    repeated PaneInfo panes = 6;
+    RuntimePolicy policy = 7;
+    uint32 attached_client_count = 8;
+    bool reconstructed = 9;
 }
 
 message SessionCreated {

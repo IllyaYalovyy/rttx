@@ -189,6 +189,29 @@ mod tests {
                 })),
             },
             proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::SessionList(proto::SessionList {
+                    sessions: vec![proto::SessionInfo {
+                        id: session_id.clone(),
+                        name: "inventory-test".into(),
+                        pane_count: 1,
+                        has_attached_client: true,
+                        active_pane_id: Some(pane_id.clone()),
+                        panes: vec![proto::PaneInfo {
+                            id: pane_id.clone(),
+                            title: "pane-title".into(),
+                            cwd: "/tmp/project".into(),
+                            cols: 120,
+                            rows: 40,
+                            exit_status: None,
+                            reconstructed: true,
+                        }],
+                        policy: proto::RuntimePolicy::Persistent as i32,
+                        attached_client_count: 1,
+                        reconstructed: true,
+                    }],
+                })),
+            },
+            proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::Delta(proto::Delta {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
