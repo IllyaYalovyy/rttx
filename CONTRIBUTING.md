@@ -9,6 +9,7 @@ process. Read it fully before opening a pull request.
 ## Table of Contents
 
 - [Project philosophy](#project-philosophy)
+- [Terminology](#terminology)
 - [What belongs in rttx](#what-belongs-in-rttx)
 - [Development environment](#development-environment)
 - [Building and running](#building-and-running)
@@ -47,18 +48,38 @@ quality.
 
 ---
 
+## Terminology
+
+Product and architecture docs use these terms consistently:
+
+- **Workspace** — the top-level GUI object in the sidebar
+- **Runtime** — the live daemon-owned backend object attached to a workspace
+- **Pane** — one terminal tile inside a workspace/runtime
+- **Layout** — the pane arrangement inside a workspace
+- **Endpoint** — the local daemon or one remote host daemon
+- **Policy** — `ephemeral` or `persistent`; both are daemon-backed
+
+Current Rust code still uses `Session*` names in several modules and persisted types. When writing
+issues, RFCs, or commit messages, prefer the product terms above unless you are pointing at a
+specific code type such as `SessionState`.
+
+---
+
 ## What belongs in rttx
 
 **In scope:**
 - Features that serve developers and sysadmins who live in a GNOME terminal all day
-- Improvements to session recovery, split management, and bookmark/command workflows
+- Improvements to workspace recovery, split management, and bookmark/command workflows
+- Improvements to daemon-backed runtime lifecycle, endpoint connection management, and safe
+  workspace/runtime reconciliation
 - GNOME HIG compliance and Libadwaita integration
 - Test coverage for existing or new crash categories (see `designs/RFC-003-testing-strategy.md`)
 - Bug fixes with regression tests
 
 **Permanently out of scope:**
 - Quake/drop-down mode
-- Client/server or daemon architecture
+- A product-level direct terminal path that bypasses the daemon for managed workspaces
+- Implicit fallback from daemon-backed execution to a different terminal model
 - Custom scripting or macro language
 - Cross-platform support (Windows, macOS)
 - Remote GUI or web interface
@@ -268,7 +289,7 @@ main thread and `OnceLock` can allow cross-thread dispatch.
 ### Branches
 
 - Base all work on `mainline`.
-- Use short descriptive branch names: `feat/session-templates`, `fix/paned-ratio-restore`,
+- Use short descriptive branch names: `feat/workspace-templates`, `fix/paned-ratio-restore`,
   `refactor/pane-source-module`.
 
 ### Commit messages
@@ -296,7 +317,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 **Examples:**
 ```
-feat: resizable session and tools sidebars via GtkPaned
+feat: resizable workspace and tools sidebars via GtkPaned
 
 Replace OverlaySplitView and Revealer with Paned widgets so users can
 drag either divider to their preferred width. Widths persist across

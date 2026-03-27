@@ -1,6 +1,6 @@
 # rttx
 
-A tiling terminal emulator for GNOME, built with Rust, GTK4, and Libadwaita.
+A tiling terminal emulator for GNOME, built with Rust, GTK4, and Libadwaita, organized around named workspaces and split panes.
 
 Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from scratch for the modern GNOME desktop.
 
@@ -23,27 +23,51 @@ flatpak install --user ./rttx.flatpak
 
 **From source** — see [INSTALL.md](INSTALL.md) for full instructions.
 
+## Terminology
+
+- **Window** — one rttx application window.
+- **Tab** — not a separate rttx object. In most places where other terminal apps would say "tab", rttx uses a workspace.
+- **Workspace** — the top-level GUI object listed in the left sidebar. A workspace contains panes, a layout, and user-facing presentation state.
+- **Runtime** — the live backend object owned by `rttx-server` for a daemon-backed workspace. It owns PTYs, scrollback, CWD, runtime titles, and process lifetime independently from the GUI.
+- **Pane** — one terminal pane inside a workspace.
+- **Layout** — the arrangement of panes and split ratios inside a workspace.
+- **Endpoint** — the local daemon or one remote host daemon that serves runtimes.
+- **Policy** — the runtime retention model for a workspace: `ephemeral` or `persistent`. Both policies are daemon-backed.
+- **Bookmark** — a saved launch target such as a folder, SSH host, tmux session, or a combination of them.
+- **Command** — a saved command snippet you can run or insert into a pane.
+
+Current Rust modules and persisted types still use `Session*` names in places. In product docs and UI discussions, `Workspace` and `Runtime` are the preferred terms.
+
+## Architecture Direction
+
+- Managed local and remote execution is daemon-backed through `rttx-server`.
+- A workspace chooses a runtime policy: `ephemeral` or `persistent`.
+- rttx does not silently fall back to a different execution model when a daemon or SSH connection is unavailable.
+- Transient endpoint failures should reconnect automatically; failures that need user action stay explicit in the workspace UI.
+- GUI state and daemon state reconcile non-destructively. Missing GUI metadata must never delete a daemon runtime or pane automatically.
+
 ## Features
 
-### Tiling and sessions
+### Workspaces and layouts
 
-- Split terminals horizontally or vertically, up to 5 levels deep
-- Organize work into named sessions in the left sidebar
-- Drag terminal headers to rearrange your layout
-- Broadcast keystrokes to all terminals in a session (input sync)
+- Create named workspaces in the left sidebar for separate work contexts
+- Split a workspace into panes horizontally or vertically, up to 5 levels deep
+- Drag pane headers to rearrange a workspace layout
+- Broadcast keystrokes to all panes in a workspace (input sync)
 
 ### Bookmarks and commands
 
 - Save folder, SSH, tmux, or combined bookmarks for quick access
-- Run bookmarks in the current pane or open them as new sessions
+- Run bookmarks in the current pane or open them as new workspaces
 - Save and search reusable commands in the right sidebar
 
-### Session recovery
+### Recovery and reconnect
 
-- Layout, split sizes, and working directories persist automatically
+- Workspace layouts, split sizes, and working directories persist automatically
 - Bookmark-driven panes restore as explicit targets (local folder, SSH, tmux, or combined)
-- Failed SSH/tmux connections offer in-pane retry — no modal dialogs
+- Failed SSH/tmux pane recovery offers in-pane retry — no modal dialogs
 - tmux recovery reattaches to existing sessions, never creates new ones silently
+- Daemon-backed workspaces are expected to reconnect explicitly instead of silently degrading to a different execution path
 
 ### Terminal
 
@@ -56,16 +80,16 @@ flatpak install --user ./rttx.flatpak
 
 | Action | Shortcut |
 |---|---|
-| New session | Ctrl+Shift+T |
-| Close terminal | Ctrl+Shift+W |
+| New workspace | Ctrl+Shift+T |
+| Close pane | Ctrl+Shift+W |
 | Split horizontal | Ctrl+Shift+E |
 | Split vertical | Ctrl+Shift+O |
-| Toggle session sidebar | Ctrl+Shift+N |
+| Toggle workspace sidebar | Ctrl+Shift+N |
 | Toggle tools sidebar | Ctrl+Shift+B |
 | Copy / Paste | Ctrl+Shift+C / Ctrl+Shift+V |
 | Input sync toggle | Ctrl+Shift+I |
-| Next / previous session | Ctrl+Tab / Ctrl+Shift+Tab |
-| Jump to session 1–9 | Alt+1 through Alt+9 |
+| Next / previous workspace | Ctrl+Tab / Ctrl+Shift+Tab |
+| Jump to workspace 1–9 | Alt+1 through Alt+9 |
 | Zoom in / out / reset | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |

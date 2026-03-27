@@ -9,6 +9,11 @@
 
 ---
 
+> Historical note (2026-03): RFC-013 now defines the daemon-backed runtime architecture for rttx.
+> This RFC remains relevant for packaging and host-integration constraints, but any language here
+> that assumes direct VTE sessions are the long-term primary execution path is superseded by
+> RFC-013.
+
 ## Summary
 
 Ship `rttx` as a carefully designed Flatpak that uses current GNOME runtime libraries while
@@ -42,8 +47,7 @@ distribution format, but as a first-class product surface for a terminal emulato
 
 - **NG1** — Do not preserve a strict sandbox at the expense of terminal usability
 - **NG2** — Do not mirror every host customization automatically through blanket filesystem access
-- **NG3** — Do not introduce a large helper daemon unless the first shipping design proves
-  insufficient
+- **NG3** — Do not broaden Flatpak permissions just to preserve legacy direct-terminal behavior
 - **NG4** — Do not maintain parallel packaging logic inside the app code for every distro
 
 ---
@@ -81,10 +85,10 @@ afterthought.
 
 ## Current App Behavior Relevant to Flatpak
 
-The current codebase is a good base for this design:
+The current codebase is still a good base for this design:
 
-- [`src/terminal/widget.rs`](../src/terminal/widget.rs) spawns the shell in one place via
-  `vte.spawn_async()`
+- daemon-backed execution centralizes process ownership outside the sandboxed GUI, which fits
+  Flatpak better than ad hoc host process spawning
 - bookmark/session recovery already feeds ordinary shell commands such as `ssh` and `tmux` into the
   terminal rather than depending on custom IPC
 - clickable paths and links open through

@@ -9,6 +9,11 @@
 
 ---
 
+> Historical note (2026-03): RFC-013 is now the authoritative architecture RFC for daemon-backed
+> execution. This RFC still defines recipe-based recovery metadata and retry UX. Older uses of
+> `session` in this document map to the current product term `workspace` unless the text is
+> explicitly referring to current code types such as `SessionState`.
+
 ## Summary
 
 rttx persists more than layout geometry. Each pane carries a recovery recipe — a structured
@@ -16,15 +21,15 @@ description of how the pane was created and what it was for. On restart, rttx re
 recipes to reconstruct working context: local folders, SSH connections, tmux sessions, or any
 combination. The goal is honest recovery, not fake state serialization.
 
-The session is the user-facing recovery unit: users restore, retry, and manage whole sessions.
-The pane is the execution unit: each pane has its own recoverable target and may succeed or fail
-independently.
+The workspace is the user-facing recovery unit: users restore, retry, and manage whole
+workspaces. The pane is the execution unit: each pane has its own recoverable target and may
+succeed or fail independently.
 
 ---
 
 ## Goals
 
-- **G1** — Restarting the app restores the split layout, active session, and active pane
+- **G1** — Restarting the app restores the split layout, active workspace, and active pane
 - **G2** — Each pane replays its startup recipe or reconnect target (local folder, SSH, tmux attach) on restore
 - **G3** — Pane origin is tracked (empty shell, bookmark, command) and survives restart
 - **G4** — Recovery is honest: rttx only promises what it can actually deliver
@@ -173,7 +178,7 @@ long-term design prefers structured targets over raw shell text for SSH/tmux flo
 
 | Level | What is restored | Status |
 | --- | --- | --- |
-| L1 — UI | Layout, splits, active session, active pane | Implemented |
+| L1 — UI | Layout, splits, active workspace, active pane | Implemented |
 | L2 — Context | CWD, custom title, pane origin, startup recipe replay | Implemented |
 | L3 — Reconnect | SSH reconnect, tmux reattach, `ssh → tmux` chains, retry UX | Roadmap |
 | L4 — True persistence | PTY processes kept alive; UI reconnects to live shells | Future |
@@ -208,11 +213,11 @@ look like success while actually losing context.
 The same recovery mechanism is used after restart and for later manual retry. A temporary network
 failure should not kill the pane or the session.
 
-### Session vs pane responsibilities
+### Workspace vs pane responsibilities
 
-- Session owns layout, aggregate status, and the user-facing restore/retry workflow
+- Workspace owns layout, aggregate status, and the user-facing restore/retry workflow
 - Pane owns the concrete recovery target and execution attempt
-- A session may be partially restored: one pane can be ready while another is failed and waiting
+- A workspace may be partially restored: one pane can be ready while another is failed and waiting
   for retry
 
 ### Failure UX
@@ -224,7 +229,7 @@ If a pane fails to recover:
 - the pane remains open
 - the terminal widget remains available
 - the pane shows a compact in-pane recovery strip with short error text and `Retry`
-- the session may also surface degraded state in the session row, but the primary control lives in
+- the workspace may also surface degraded state in the workspace row, but the primary control lives in
   the pane itself
 
 ### Honest promise
