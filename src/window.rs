@@ -305,7 +305,7 @@ impl Window {
         self.imp().state.replace(state.clone());
 
         for session in &state.sessions {
-            self.build_session(session);
+            self.build_session(session, true);
         }
 
         if is_maximized {
@@ -626,7 +626,7 @@ impl Window {
         }
     }
 
-    fn build_session(&self, session_state: &SessionState) {
+    fn build_session(&self, session_state: &SessionState, auto_connect_persistent: bool) {
         let imp = self.imp();
         self.append_session_row(session_state);
 
@@ -638,7 +638,7 @@ impl Window {
         self.renumber_session_rows();
 
         // If this is a persistent session, connect its panes to the daemon.
-        if session_state.mode.is_persistent() {
+        if auto_connect_persistent && session_state.mode.is_persistent() {
             self.connect_persistent_session(session_state);
         }
     }
@@ -967,7 +967,7 @@ impl Window {
         let session_state =
             SessionState::new_with_initial_cwd(format!("Session {count}"), initial_cwd);
         imp.state.borrow_mut().sessions.push(session_state.clone());
-        self.build_session(&session_state);
+        self.build_session(&session_state, true);
 
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
@@ -1030,13 +1030,15 @@ impl Window {
         session_state.mode =
             SessionMode::Persistent { daemon_session_id: daemon_session_id.to_string() };
 
-        // Override the layout terminal UUID to match the daemon pane ID
-        // so materialize_persistent_terminal can map it.
-        let terminal_uuid =
+        // Use the daemon pane ID as the session's terminal UUID so runtime
+        // lookups and persisted state agree on the same pane identity.
+        let placeholder_uuid =
             session_state.layout.terminal_uuids().into_iter().next().unwrap_or_default();
+        let terminal_uuid = daemon_pane_id.to_string();
+        session_state.replace_terminal_uuid(&placeholder_uuid, &terminal_uuid);
 
         self.imp().state.borrow_mut().sessions.push(session_state.clone());
-        self.build_session(&session_state);
+        self.build_session(&session_state, false);
 
         // Wire input/resize/delta for the persistent pane.
         self.wire_persistent_pane(&terminal_uuid, daemon_session_id, daemon_pane_id);
@@ -1108,17 +1110,26 @@ impl Window {
             let Ok(daemon_pane_id) = rttx_proto::bytes_to_uuid(&pane_snap.pane_id) else {
                 continue;
             };
+            let daemon_pane_uuid = daemon_pane_id.to_string();
 
             // Find the GUI terminal UUID that corresponds to this daemon pane.
-            // For now, match by position in the layout tree.
+            // Older saved sessions may still contain placeholder GUI UUIDs, so
+            // match by position and then rebind the in-memory session/runtime
+            // state to the real daemon pane UUID.
             let terminal_uuids = session_state.layout.terminal_uuids();
             let pane_index = snapshot.panes.iter().position(|p| p.pane_id == pane_snap.pane_id);
-            let Some(terminal_uuid) = pane_index.and_then(|i| terminal_uuids.get(i)) else {
+            let Some(terminal_uuid) = pane_index.and_then(|i| terminal_uuids.get(i)).cloned()
+            else {
                 continue;
             };
+            self.rebind_persistent_terminal_uuid(
+                &session_state.uuid,
+                &terminal_uuid,
+                &daemon_pane_uuid,
+            );
 
             let panes = self.imp().persistent_terminals.borrow();
-            if let Some(pane_view) = panes.get(terminal_uuid) {
+            if let Some(pane_view) = panes.get(&daemon_pane_uuid) {
                 pane_view.feed_snapshot(&pane_snap.scrollback);
                 if !pane_snap.title.is_empty() {
                     pane_view.set_title(&pane_snap.title);
@@ -1126,13 +1137,44 @@ impl Window {
             }
             drop(panes);
 
-            self.wire_persistent_pane(terminal_uuid, daemon_session_id, daemon_pane_id);
+            self.wire_persistent_pane(&daemon_pane_uuid, daemon_session_id, daemon_pane_id);
         }
 
         // Install connection for delta streaming.
         let msg_rx = bridge.install_connection(conn);
         let _ = bridge;
         self.start_message_poller(msg_rx);
+    }
+
+    fn rebind_persistent_terminal_uuid(&self, session_uuid: &str, old_uuid: &str, new_uuid: &str) {
+        if old_uuid == new_uuid {
+            return;
+        }
+
+        {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) =
+                state.sessions.iter_mut().find(|session| session.uuid == session_uuid)
+            else {
+                return;
+            };
+            if !session.replace_terminal_uuid(old_uuid, new_uuid) {
+                return;
+            }
+        }
+
+        let pane = {
+            let mut panes = self.imp().persistent_terminals.borrow_mut();
+            panes.remove(old_uuid)
+        };
+        if let Some(pane) = pane {
+            pane.set_uuid(new_uuid);
+            self.imp().persistent_terminals.borrow_mut().insert(new_uuid.to_string(), pane);
+        }
+
+        if self.focused_terminal_uuid().as_deref() == Some(old_uuid) {
+            self.set_focused_terminal(Some(new_uuid));
+        }
     }
 
     fn wire_persistent_pane(
@@ -1275,7 +1317,7 @@ impl Window {
         let session_uuid = session_state.uuid.clone();
         let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
         imp.state.borrow_mut().sessions.push(session_state.clone());
-        self.build_session(&session_state);
+        self.build_session(&session_state, true);
 
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
@@ -2754,6 +2796,57 @@ mod tests {
 
         let spawned = wait_until(1000, || term.shell_spawned_for_test());
         assert!(spawned, "presenting the window should trigger delayed shell startup");
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn rebind_persistent_terminal_uuid_updates_runtime_lookup_and_focus() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.persistent-rebind-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let mut session = SessionState::new("Persistent".into());
+        session.mode =
+            crate::session::SessionMode::Persistent { daemon_session_id: "daemon-session".into() };
+        let old_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
+        let session_uuid = session.uuid.clone();
+        let pane = PersistentPaneView::new(&old_uuid, "daemon-session");
+
+        window.imp().state.borrow_mut().sessions.push(session);
+        window.imp().persistent_terminals.borrow_mut().insert(old_uuid.clone(), pane.clone());
+        window.set_focused_terminal(Some(&old_uuid));
+
+        window.rebind_persistent_terminal_uuid(&session_uuid, &old_uuid, "daemon-pane");
+
+        let state = window.imp().state.borrow();
+        let rebound_session = state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == session_uuid)
+            .expect("rebound session should still exist");
+        assert_eq!(rebound_session.layout.terminal_uuids(), vec!["daemon-pane"]);
+        assert_eq!(rebound_session.active_terminal_uuid.as_deref(), Some("daemon-pane"));
+        assert!(rebound_session.recovery_for("daemon-pane").is_some());
+        assert!(rebound_session.recovery_for(&old_uuid).is_none());
+        drop(state);
+
+        let panes = window.imp().persistent_terminals.borrow();
+        assert!(panes.get(&old_uuid).is_none());
+        assert!(panes.get("daemon-pane").is_some());
+        drop(panes);
+
+        assert_eq!(pane.uuid(), "daemon-pane");
+        assert_eq!(window.focused_terminal_uuid().as_deref(), Some("daemon-pane"));
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

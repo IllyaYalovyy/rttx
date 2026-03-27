@@ -227,6 +227,23 @@ impl LayoutNode {
         }
     }
 
+    pub fn replace_terminal_uuid(&mut self, old_uuid: &str, new_uuid: &str) -> bool {
+        match self {
+            Self::Terminal { uuid, .. } => {
+                if uuid == old_uuid {
+                    *uuid = new_uuid.to_string();
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Split { first, second, .. } => {
+                first.replace_terminal_uuid(old_uuid, new_uuid)
+                    || second.replace_terminal_uuid(old_uuid, new_uuid)
+            }
+        }
+    }
+
     #[must_use]
     pub fn split_terminal(&self, target_uuid: &str, orientation: SplitOrientation) -> Option<Self> {
         match self {
@@ -615,6 +632,22 @@ impl SessionState {
         }
         self.active_terminal_uuid = self.layout.terminal_uuids().into_iter().next();
     }
+
+    pub fn replace_terminal_uuid(&mut self, old_uuid: &str, new_uuid: &str) -> bool {
+        if old_uuid == new_uuid || !self.layout.replace_terminal_uuid(old_uuid, new_uuid) {
+            return false;
+        }
+
+        if let Some(recovery) = self.terminal_recovery.remove(old_uuid) {
+            self.terminal_recovery.insert(new_uuid.to_string(), recovery);
+        }
+
+        if self.active_terminal_uuid.as_deref() == Some(old_uuid) {
+            self.active_terminal_uuid = Some(new_uuid.to_string());
+        }
+
+        true
+    }
 }
 
 const fn default_left_sidebar_width() -> i32 {
@@ -730,6 +763,16 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(uuids.len(), unique.len());
+    }
+
+    #[test]
+    fn replace_terminal_uuid_updates_nested_layout() {
+        let mut layout = hsplit(term("t1"), term("t2"));
+
+        assert!(layout.replace_terminal_uuid("t2", "daemon-pane"));
+        assert_eq!(layout.terminal_uuids(), vec!["t1", "daemon-pane"]);
+        assert!(!layout.contains_terminal("t2"));
+        assert!(layout.contains_terminal("daemon-pane"));
     }
 
     #[test]
@@ -909,6 +952,31 @@ mod tests {
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
         assert_eq!(session, restored);
+    }
+
+    #[test]
+    fn session_replace_terminal_uuid_updates_recovery_and_focus() {
+        let mut session = SessionState::default_for_test();
+        session.set_recovery(
+            "other-terminal",
+            PaneRecovery { source: PaneSource::Manual, target: None, startup: vec![] },
+        );
+
+        assert!(session.replace_terminal_uuid("test-terminal-uuid", "daemon-pane"));
+        assert_eq!(session.layout.terminal_uuids(), vec!["daemon-pane"]);
+        assert_eq!(session.active_terminal_uuid.as_deref(), Some("daemon-pane"));
+        assert!(session.recovery_for("test-terminal-uuid").is_none());
+        assert_eq!(session.recovery_for("daemon-pane"), Some(&PaneRecovery::empty_shell()));
+        assert!(session.recovery_for("other-terminal").is_some());
+    }
+
+    #[test]
+    fn session_replace_terminal_uuid_is_noop_for_missing_terminal() {
+        let mut session = SessionState::default_for_test();
+        let original = session.clone();
+
+        assert!(!session.replace_terminal_uuid("missing", "daemon-pane"));
+        assert_eq!(session, original);
     }
 
     #[test]

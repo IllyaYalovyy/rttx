@@ -214,6 +214,11 @@ impl PersistentPaneView {
         self.imp().uuid.borrow().clone()
     }
 
+    /// Update the pane UUID used by the GTK-side session model.
+    pub fn set_uuid(&self, uuid: &str) {
+        self.imp().uuid.replace(uuid.to_string());
+    }
+
     /// The daemon session UUID this pane belongs to.
     #[must_use]
     pub fn session_id(&self) -> String {

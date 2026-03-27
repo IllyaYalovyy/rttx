@@ -119,7 +119,7 @@ async fn reader_loop(mut reader: DaemonReader, tx: mpsc::UnboundedSender<proto::
                 }
             }
             Ok(None) => {
-                log::warn!("Daemon connection closed");
+                log::debug!("Daemon connection closed");
                 break;
             }
             Err(e) => {
