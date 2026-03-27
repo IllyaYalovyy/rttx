@@ -12,7 +12,7 @@ use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::preferences::{self, Preferences};
-use crate::runtime::{ConnectionStatus, WorkspacePolicy, reconcile_bindings};
+use crate::runtime::{ConnectionStatus, WorkspacePolicy};
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
     SplitOrientation, StartupStep, WindowState,
@@ -1099,15 +1099,9 @@ impl Window {
         terminal_uuid: &str,
     ) -> Option<(String, crate::runtime::RuntimeEndpoint, String, String)> {
         let state = self.imp().state.borrow();
-        let session = state.sessions.iter().find(|session| {
-            session.uses_managed_runtime() && session.layout.contains_terminal(terminal_uuid)
-        })?;
-        let runtime_id = session.runtime.runtime_id.clone()?;
-        let runtime_pane_id = session.runtime.pane_bindings.get(terminal_uuid)?.clone();
-        if session.runtime.is_layout_pane_pending(terminal_uuid) {
-            return None;
-        }
-        Some((session.uuid.clone(), session.runtime.endpoint.clone(), runtime_id, runtime_pane_id))
+        state.managed_terminal_binding(terminal_uuid).map(|binding| {
+            (binding.workspace_id, binding.endpoint, binding.runtime_id, binding.runtime_pane_id)
+        })
     }
 
     fn start_endpoint_event_poller(
@@ -1139,16 +1133,17 @@ impl Window {
                 runtime_id,
                 runtime_pane_id,
             } => {
-                {
+                let applied = {
                     let mut state = self.imp().state.borrow_mut();
-                    let Some(session) =
-                        state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
-                    else {
-                        return;
-                    };
-                    session.runtime.runtime_id = Some(runtime_id);
-                    session.runtime.bind_runtime_pane(&layout_terminal_uuid, &runtime_pane_id);
-                    session.sync_legacy_mode_from_runtime();
+                    state.apply_managed_pane_created(
+                        &workspace_id,
+                        &layout_terminal_uuid,
+                        &runtime_id,
+                        &runtime_pane_id,
+                    )
+                };
+                if !applied {
+                    return;
                 }
                 if let Some(pane) =
                     self.imp().persistent_terminals.borrow().get(&layout_terminal_uuid).cloned()
@@ -1205,80 +1200,27 @@ impl Window {
         runtime_id: &str,
         snapshot: &rttx_proto::proto::Snapshot,
     ) {
-        let (session_state, pane_bindings, missing_runtime_placeholders) = {
+        let Some(opened) = ({
             let mut state = self.imp().state.borrow_mut();
-            let Some(session) =
-                state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
-            else {
-                return;
-            };
-
-            let had_runtime_id = session.runtime.runtime_id.is_some();
-            session.runtime.runtime_id = Some(runtime_id.to_string());
-            session.sync_legacy_mode_from_runtime();
-            let layout_terminal_uuids = session.layout.terminal_uuids();
-            let runtime_pane_uuids = snapshot
-                .panes
-                .iter()
-                .filter_map(|pane| rttx_proto::bytes_to_uuid(&pane.pane_id).ok())
-                .map(|uuid| uuid.to_string())
-                .collect::<Vec<_>>();
-            let reconciliation = reconcile_bindings(
-                &layout_terminal_uuids,
-                &session.runtime.pane_bindings,
-                &runtime_pane_uuids,
-            );
-            session.runtime.pane_bindings = reconciliation.bindings;
-            session.runtime.pending_layout_panes =
-                reconciliation.disconnected_layout_panes.iter().cloned().collect();
-            let missing_runtime_placeholders = if had_runtime_id {
-                Vec::new()
-            } else {
-                let mut placeholders = reconciliation.disconnected_layout_panes.clone();
-                if let Some(initial_terminal_uuid) = layout_terminal_uuids.first() {
-                    placeholders.retain(|layout_terminal_uuid| {
-                        layout_terminal_uuid != initial_terminal_uuid
-                    });
-                }
-                placeholders
-            };
-
-            for runtime_pane_id in reconciliation.recovered_runtime_panes {
-                let Some(anchor_uuid) = session.layout.terminal_uuids().last().cloned() else {
-                    continue;
-                };
-                let anchor_cwd = session.layout.terminal_cwd(&anchor_uuid);
-                let Some((mut new_layout, new_terminal_uuid)) = session
-                    .layout
-                    .split_terminal_with_new_uuid(&anchor_uuid, SplitOrientation::Horizontal)
-                else {
-                    log::warn!(
-                        "Failed to recover runtime pane {runtime_pane_id}: split depth limit"
-                    );
-                    continue;
-                };
-                if let Some(cwd) = anchor_cwd {
-                    new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd));
-                }
-                session.layout = new_layout;
-                session.set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
-                session.runtime.bind_runtime_pane(&new_terminal_uuid, &runtime_pane_id);
-                session.normalize_active_terminal();
-            }
-
-            (session.clone(), session.runtime.pane_bindings.clone(), missing_runtime_placeholders)
+            state.apply_managed_workspace_opened(workspace_id, runtime_id, snapshot)
+        }) else {
+            return;
         };
 
-        self.rebuild_session_content(workspace_id, &session_state);
+        for runtime_pane_id in &opened.skipped_runtime_panes {
+            log::warn!("Failed to recover runtime pane {runtime_pane_id}: split depth limit");
+        }
+
+        self.rebuild_session_content(workspace_id, &opened.session_state);
 
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
-            for layout_terminal_uuid in &missing_runtime_placeholders {
-                if session_state.runtime.pane_bindings.get(layout_terminal_uuid).is_some_and(
+            for layout_terminal_uuid in &opened.panes_to_create {
+                if opened.session_state.runtime.pane_bindings.get(layout_terminal_uuid).is_some_and(
                     |bound_runtime_pane_id| bound_runtime_pane_id == layout_terminal_uuid,
                 ) {
                     manager.create_pane(
                         workspace_id,
-                        &session_state.runtime.endpoint,
+                        &opened.session_state.runtime.endpoint,
                         runtime_id,
                         layout_terminal_uuid,
                     );
@@ -1286,36 +1228,24 @@ impl Window {
             }
         }
 
-        for pane_snapshot in &snapshot.panes {
-            let Ok(runtime_pane_id) = rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id) else {
-                continue;
-            };
-            let runtime_pane_id = runtime_pane_id.to_string();
-            let Some(layout_terminal_uuid) = pane_bindings
-                .iter()
-                .find(|(_, bound_runtime_pane_id)| **bound_runtime_pane_id == runtime_pane_id)
-                .map(|(layout_terminal_uuid, _)| layout_terminal_uuid.clone())
-            else {
-                continue;
-            };
-
+        for restore in opened.snapshot_restores {
             let pane = {
                 let panes = self.imp().persistent_terminals.borrow();
-                panes.get(&layout_terminal_uuid).cloned()
+                panes.get(&restore.layout_terminal_uuid).cloned()
             };
             let Some(pane) = pane else { continue };
 
             pane.vte().reset(true, true);
-            pane.feed_snapshot(&pane_snapshot.scrollback);
-            pane.set_current_directory(Some(&pane_snapshot.cwd));
-            if !pane_snapshot.title.is_empty() && pane.custom_title().is_none() {
-                pane.set_title(&pane_snapshot.title);
+            pane.feed_snapshot(&restore.scrollback);
+            pane.set_current_directory(Some(&restore.cwd));
+            if !restore.title.is_empty() && pane.custom_title().is_none() {
+                pane.set_title(&restore.title);
             }
             pane.set_connected(true);
 
             let (cols, rows) = pane.terminal_size();
             if cols > 0 && rows > 0 {
-                self.send_managed_terminal_resize(&layout_terminal_uuid, cols, rows);
+                self.send_managed_terminal_resize(&restore.layout_terminal_uuid, cols, rows);
             }
         }
     }
@@ -1380,22 +1310,7 @@ impl Window {
     fn apply_managed_pane_closed(&self, workspace_id: &str, layout_terminal_uuid: &str) {
         let session_state = {
             let mut state = self.imp().state.borrow_mut();
-            let Some(session) =
-                state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
-            else {
-                return;
-            };
-            session.runtime.pane_bindings.remove(layout_terminal_uuid);
-            if let Some(new_layout) = session.layout.remove_terminal(layout_terminal_uuid) {
-                session.layout = new_layout;
-                let layout_terminal_uuids = session.layout.terminal_uuids();
-                session.runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
-                session.prune_recovery();
-                session.normalize_active_terminal();
-                Some(session.clone())
-            } else {
-                None
-            }
+            state.apply_managed_pane_closed(workspace_id, layout_terminal_uuid)
         };
 
         self.imp().persistent_terminals.borrow_mut().remove(layout_terminal_uuid);
@@ -1427,15 +1342,7 @@ impl Window {
             let runtime_id = runtime_id.to_string();
             let workspace_id = {
                 let state = self.imp().state.borrow();
-                state
-                    .sessions
-                    .iter()
-                    .find(|session| {
-                        session.uses_managed_runtime()
-                            && &session.runtime.endpoint == endpoint
-                            && session.runtime.runtime_id.as_deref() == Some(runtime_id.as_str())
-                    })
-                    .map(|session| session.uuid.clone())
+                state.workspace_for_runtime(endpoint, &runtime_id)
             };
             if let Some(workspace_id) = workspace_id {
                 self.set_workspace_connection_status(
@@ -1452,27 +1359,10 @@ impl Window {
         let runtime_pane_id = pane_id.to_string();
         let (workspace_id, layout_terminal_uuid) = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| {
-                session.uses_managed_runtime()
-                    && &session.runtime.endpoint == endpoint
-                    && session
-                        .runtime
-                        .pane_bindings
-                        .values()
-                        .any(|bound_runtime_pane_id| bound_runtime_pane_id == &runtime_pane_id)
-            }) else {
+            let Some(target) = state.runtime_pane_target(endpoint, &runtime_pane_id) else {
                 return;
             };
-            let Some(layout_terminal_uuid) = session
-                .runtime
-                .pane_bindings
-                .iter()
-                .find(|(_, bound_runtime_pane_id)| **bound_runtime_pane_id == runtime_pane_id)
-                .map(|(layout_terminal_uuid, _)| layout_terminal_uuid.clone())
-            else {
-                return;
-            };
-            (session.uuid.clone(), layout_terminal_uuid)
+            target
         };
 
         let pane = {
@@ -3144,54 +3034,6 @@ mod tests {
 
         let spawned = wait_until(1000, || term.shell_spawned_for_test());
         assert!(spawned, "presenting the window should trigger delayed shell startup");
-
-        window.close();
-        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-    }
-
-    #[test]
-    fn managed_binding_for_terminal_ignores_placeholders_and_uses_explicit_runtime_bindings() {
-        require_display!();
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-        let app = adw::Application::builder()
-            .application_id("com.illya.rttx.runtime-binding-tests")
-            .build();
-        app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-        let window = Window::new(&app);
-        let mut session =
-            SessionState::new_managed_local("Persistent".into(), WorkspacePolicy::Persistent, None);
-        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-        let runtime_id = uuid::Uuid::new_v4().to_string();
-        let runtime_pane_id = uuid::Uuid::new_v4().to_string();
-        session.runtime.runtime_id = Some(runtime_id.clone());
-
-        window.imp().state.borrow_mut().sessions.push(session);
-
-        assert!(
-            window.managed_binding_for_terminal(&terminal_uuid).is_none(),
-            "self-bindings are placeholders until the daemon assigns a pane UUID"
-        );
-
-        {
-            let mut state = window.imp().state.borrow_mut();
-            let session = state
-                .sessions
-                .iter_mut()
-                .find(|session| session.layout.contains_terminal(&terminal_uuid))
-                .unwrap();
-            session.runtime.bind_runtime_pane(&terminal_uuid, &runtime_pane_id);
-        }
-
-        let binding = window
-            .managed_binding_for_terminal(&terminal_uuid)
-            .expect("explicit runtime bindings should be routable");
-        assert_eq!(binding.2, runtime_id);
-        assert_eq!(binding.3, runtime_pane_id);
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

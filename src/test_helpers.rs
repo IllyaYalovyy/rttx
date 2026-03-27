@@ -3,7 +3,10 @@
 /// Provides builder patterns for constructing test data, temporary
 /// directory fixtures, and GTK initialization helpers.
 use crate::color_scheme::ColorScheme;
-use crate::session::layout::{LayoutNode, SessionState, SplitOrientation, WindowState};
+use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
+use crate::session::layout::{
+    LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState,
+};
 use std::path::{Path, PathBuf};
 
 // ── Layout builders ──────────────────────────────────────────────
@@ -65,6 +68,56 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
         mode: Default::default(),
         runtime: Default::default(),
     }
+}
+
+/// Build a managed session with default local persistent runtime metadata.
+pub fn managed_session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
+    managed_session_with_runtime(
+        id,
+        name,
+        layout,
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        None,
+    )
+}
+
+/// Build a managed session with explicit endpoint/policy/runtime metadata.
+pub fn managed_session_with_runtime(
+    id: &str,
+    name: &str,
+    layout: LayoutNode,
+    endpoint: RuntimeEndpoint,
+    policy: WorkspacePolicy,
+    runtime_id: Option<&str>,
+) -> SessionState {
+    let terminal_uuids = layout.terminal_uuids();
+    let terminal_recovery = terminal_uuids
+        .iter()
+        .cloned()
+        .map(|terminal_uuid| (terminal_uuid, PaneRecovery::empty_shell()))
+        .collect();
+    let active_terminal_uuid = terminal_uuids.first().cloned();
+    let mut session = SessionState {
+        uuid: id.to_string(),
+        name: name.to_string(),
+        layout,
+        terminal_recovery,
+        active_terminal_uuid,
+        input_sync: false,
+        mode: Default::default(),
+        runtime: WorkspaceRuntime {
+            managed: true,
+            endpoint,
+            policy,
+            runtime_id: runtime_id.map(str::to_string),
+            pane_bindings: Default::default(),
+            pending_layout_panes: Default::default(),
+        },
+    };
+    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
+    session.sync_legacy_mode_from_runtime();
+    session
 }
 
 /// Build a window state from sessions.

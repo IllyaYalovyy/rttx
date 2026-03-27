@@ -9,6 +9,7 @@ pub mod daemon_bridge;
 pub mod preferences;
 pub mod runtime;
 pub mod session;
+pub mod workspace_state;
 
 pub mod application;
 pub mod preferences_window;
