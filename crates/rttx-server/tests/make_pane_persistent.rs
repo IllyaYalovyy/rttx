@@ -101,6 +101,7 @@ async fn make_pane_persistent_flow() {
         })),
     })
     .await;
+    assert!(matches!(c.recv().await.msg, Some(proto::server_message::Msg::PaneResized(_))));
 
     // 7. Disconnect and reconnect — verify session persists.
     drop(c);

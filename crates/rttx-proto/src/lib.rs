@@ -149,6 +149,27 @@ mod tests {
                 })),
             },
             proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                    session_id: session_id.clone(),
+                })),
+            },
+            proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                    session_id: session_id.clone(),
+                })),
+            },
+            proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                    session_id: session_id.clone(),
+                })),
+            },
+            proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                })),
+            },
+            proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
@@ -157,10 +178,17 @@ mod tests {
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                    session_id,
-                    pane_id,
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
                     cols: 80,
                     rows: 24,
+                })),
+            },
+            proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    title: "pane-title".into(),
                 })),
             },
             proto::ClientMessage {
@@ -208,7 +236,35 @@ mod tests {
                         policy: proto::RuntimePolicy::Persistent as i32,
                         attached_client_count: 1,
                         reconstructed: true,
+                        revision: 7,
                     }],
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
+                    session_id: session_id.clone(),
+                    revision: 1,
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::SessionDetached(proto::SessionDetached {
+                    session_id: session_id.clone(),
+                    revision: 8,
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
+                    session_id: session_id.clone(),
+                    panes: vec![proto::PaneSnapshot {
+                        pane_id: pane_id.clone(),
+                        title: "pane-title".into(),
+                        cwd: "/tmp/project".into(),
+                        cols: 120,
+                        rows: 40,
+                        scrollback: b"hello".to_vec(),
+                        exit_status: None,
+                    }],
+                    revision: 9,
                 })),
             },
             proto::ServerMessage {
@@ -219,10 +275,42 @@ mod tests {
                 })),
             },
             proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::PaneCreated(proto::PaneCreated {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    revision: 10,
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::PaneClosed(proto::PaneClosed {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    revision: 11,
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::PaneResized(proto::PaneResized {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    cols: 100,
+                    rows: 30,
+                    revision: 12,
+                })),
+            },
+            proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::PaneExited(proto::PaneExited {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    status: 0,
+                    revision: 13,
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::TitleChanged(proto::TitleChanged {
                     session_id,
                     pane_id,
-                    status: 0,
+                    title: "pane-title".into(),
+                    revision: 14,
                 })),
             },
             proto::ServerMessage {

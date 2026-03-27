@@ -102,6 +102,7 @@ mod tests {
                 active_pane_id: None,
                 command_history: Vec::new(),
                 policy: RuntimePolicy::Persistent,
+                revision: 3,
                 created_at: SystemTime::now(),
                 last_active_at: SystemTime::now(),
             }],

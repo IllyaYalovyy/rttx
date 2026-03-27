@@ -120,6 +120,10 @@ async fn resize_updates_pane_dimensions() {
         })),
     };
     client.send(&resize).await;
+    assert!(matches!(
+        client.recv_or_timeout().await.msg,
+        Some(proto::server_message::Msg::PaneResized(_))
+    ));
 
     // Verify by detaching and re-attaching: snapshot should show new dimensions.
     let detach = proto::ClientMessage {
@@ -128,6 +132,10 @@ async fn resize_updates_pane_dimensions() {
         })),
     };
     client.send(&detach).await;
+    assert!(matches!(
+        client.recv_or_timeout().await.msg,
+        Some(proto::server_message::Msg::SessionDetached(_))
+    ));
 
     // Small delay for the resize to process.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -179,6 +187,10 @@ async fn close_pane_kills_pty() {
         })),
     };
     client.send(&detach).await;
+    assert!(matches!(
+        client.recv_or_timeout().await.msg,
+        Some(proto::server_message::Msg::SessionDetached(_))
+    ));
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

@@ -196,6 +196,10 @@ async fn list_sessions_marks_restored_runtime_and_panes_as_reconstructed() {
                 })),
             })
             .await;
+        assert!(matches!(
+            client.recv().await.msg,
+            Some(proto::server_message::Msg::PaneResized(_))
+        ));
 
         client
             .send(&proto::ClientMessage {

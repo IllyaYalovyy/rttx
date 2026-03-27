@@ -51,6 +51,7 @@ fn session_info(session: &Session) -> proto::SessionInfo {
         policy: session.policy.as_proto() as i32,
         attached_client_count: u32::try_from(session.attached_clients.len()).unwrap_or(u32::MAX),
         reconstructed: session.reconstructed,
+        revision: session.revision(),
     }
 }
 
@@ -68,21 +69,38 @@ fn pane_info(pane: &Pane) -> proto::PaneInfo {
 
 /// Build a `SessionCreated` response.
 #[must_use]
-pub fn session_created(session_id: Uuid) -> proto::ServerMessage {
+pub fn session_created(session_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
             session_id: uuid_to_bytes(session_id),
+            revision,
+        })),
+    }
+}
+
+/// Build a `SessionDetached` response.
+#[must_use]
+pub fn session_detached(session_id: Uuid, revision: u64) -> proto::ServerMessage {
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::SessionDetached(proto::SessionDetached {
+            session_id: uuid_to_bytes(session_id),
+            revision,
         })),
     }
 }
 
 /// Build a `Snapshot` response.
 #[must_use]
-pub fn snapshot(session_id: Uuid, panes: Vec<proto::PaneSnapshot>) -> proto::ServerMessage {
+pub fn snapshot(
+    session_id: Uuid,
+    panes: Vec<proto::PaneSnapshot>,
+    revision: u64,
+) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
             session_id: uuid_to_bytes(session_id),
             panes,
+            revision,
         })),
     }
 }
@@ -101,46 +119,80 @@ pub fn delta(session_id: Uuid, pane_id: Uuid, data: Vec<u8>) -> proto::ServerMes
 
 /// Build a `PaneCreated` message.
 #[must_use]
-pub fn pane_created(session_id: Uuid, pane_id: Uuid) -> proto::ServerMessage {
+pub fn pane_created(session_id: Uuid, pane_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneCreated(proto::PaneCreated {
             session_id: uuid_to_bytes(session_id),
             pane_id: uuid_to_bytes(pane_id),
+            revision,
         })),
     }
 }
 
 /// Build a `PaneClosed` message.
 #[must_use]
-pub fn pane_closed(session_id: Uuid, pane_id: Uuid) -> proto::ServerMessage {
+pub fn pane_closed(session_id: Uuid, pane_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneClosed(proto::PaneClosed {
             session_id: uuid_to_bytes(session_id),
             pane_id: uuid_to_bytes(pane_id),
+            revision,
+        })),
+    }
+}
+
+/// Build a `PaneResized` acknowledgement.
+#[must_use]
+pub fn pane_resized(
+    session_id: Uuid,
+    pane_id: Uuid,
+    cols: u16,
+    rows: u16,
+    revision: u64,
+) -> proto::ServerMessage {
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::PaneResized(proto::PaneResized {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: uuid_to_bytes(pane_id),
+            cols: u32::from(cols),
+            rows: u32::from(rows),
+            revision,
         })),
     }
 }
 
 /// Build a `PaneExited` message.
 #[must_use]
-pub fn pane_exited(session_id: Uuid, pane_id: Uuid, status: i32) -> proto::ServerMessage {
+pub fn pane_exited(
+    session_id: Uuid,
+    pane_id: Uuid,
+    status: i32,
+    revision: u64,
+) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneExited(proto::PaneExited {
             session_id: uuid_to_bytes(session_id),
             pane_id: uuid_to_bytes(pane_id),
             status,
+            revision,
         })),
     }
 }
 
 /// Build a `TitleChanged` message.
 #[must_use]
-pub fn title_changed(session_id: Uuid, pane_id: Uuid, title: String) -> proto::ServerMessage {
+pub fn title_changed(
+    session_id: Uuid,
+    pane_id: Uuid,
+    title: String,
+    revision: u64,
+) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::TitleChanged(proto::TitleChanged {
             session_id: uuid_to_bytes(session_id),
             pane_id: uuid_to_bytes(pane_id),
             title,
+            revision,
         })),
     }
 }
@@ -187,6 +239,7 @@ mod tests {
         assert_eq!(info.active_pane_id.as_deref(), Some(pane_id.as_bytes().as_slice()));
         assert_eq!(info.policy, proto::RuntimePolicy::Ephemeral as i32);
         assert!(info.reconstructed);
+        assert_eq!(info.revision, session.revision());
         assert_eq!(info.panes.len(), 1);
         assert_eq!(info.panes[0].id, pane_id.as_bytes());
         assert_eq!(info.panes[0].title, "shell");

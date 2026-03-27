@@ -85,6 +85,10 @@ async fn attach_and_detach_session() {
         })),
     };
     client.send(&detach).await;
+    assert!(matches!(
+        client.recv().await.msg,
+        Some(proto::server_message::Msg::SessionDetached(_))
+    ));
 
     // Verify session still exists after detach.
     let list = proto::ClientMessage {

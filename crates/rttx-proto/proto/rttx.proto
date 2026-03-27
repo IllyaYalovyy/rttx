@@ -89,15 +89,23 @@ message SessionInfo {
     RuntimePolicy policy = 7;
     uint32 attached_client_count = 8;
     bool reconstructed = 9;
+    uint64 revision = 10;
 }
 
 message SessionCreated {
     bytes session_id = 1;
+    uint64 revision = 2;
+}
+
+message SessionDetached {
+    bytes session_id = 1;
+    uint64 revision = 2;
 }
 
 message Snapshot {
     bytes session_id = 1;
     repeated PaneSnapshot panes = 2;
+    uint64 revision = 3;
 }
 
 message PaneSnapshot {
@@ -119,17 +127,28 @@ message Delta {
 message PaneCreated {
     bytes session_id = 1;
     bytes pane_id = 2;
+    uint64 revision = 3;
 }
 
 message PaneClosed {
     bytes session_id = 1;
     bytes pane_id = 2;
+    uint64 revision = 3;
+}
+
+message PaneResized {
+    bytes session_id = 1;
+    bytes pane_id = 2;
+    uint32 cols = 3;
+    uint32 rows = 4;
+    uint64 revision = 5;
 }
 
 message PaneExited {
     bytes session_id = 1;
     bytes pane_id = 2;
     int32 status = 3;
+    uint64 revision = 4;
 }
 
 message Bell {
@@ -141,12 +160,14 @@ message TitleChanged {
     bytes session_id = 1;
     bytes pane_id = 2;
     string title = 3;
+    uint64 revision = 4;
 }
 
 message CwdChanged {
     bytes session_id = 1;
     bytes pane_id = 2;
     string cwd = 3;
+    uint64 revision = 4;
 }
 
 message Error {
@@ -186,5 +207,7 @@ message ServerMessage {
         TitleChanged title_changed = 10;
         CwdChanged cwd_changed = 11;
         Error error = 12;
+        SessionDetached session_detached = 13;
+        PaneResized pane_resized = 14;
     }
 }

@@ -32,6 +32,10 @@ impl RuntimePolicy {
     }
 }
 
+const fn default_session_revision() -> u64 {
+    1
+}
+
 /// Runtime state of a single session.
 pub struct Session {
     /// Unique session identifier.
@@ -48,6 +52,8 @@ pub struct Session {
     pub policy: RuntimePolicy,
     /// Whether this session was resurrected from persisted state.
     pub reconstructed: bool,
+    /// Monotonic revision for meaningful runtime mutations.
+    pub revision: u64,
     /// When this session was created.
     pub created_at: SystemTime,
     /// When this session was last active.
@@ -69,6 +75,7 @@ impl Session {
             command_history: Vec::new(),
             policy: RuntimePolicy::Persistent,
             reconstructed: false,
+            revision: default_session_revision(),
             created_at: now,
             last_active_at: now,
             attached_clients: Vec::new(),
@@ -99,11 +106,22 @@ impl Session {
             command_history: persisted.command_history.clone(),
             policy: persisted.policy,
             reconstructed: true,
+            revision: persisted.revision.max(default_session_revision()),
             created_at: persisted.created_at,
             last_active_at: persisted.last_active_at,
             attached_clients: Vec::new(),
             panes,
         }
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
+
+    /// Return the current runtime revision.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Add a pane to this session.
@@ -113,13 +131,17 @@ impl Session {
         if self.active_pane_id.is_none() {
             self.active_pane_id = Some(id);
         }
+        self.bump_revision();
     }
 
     /// Remove a pane from this session.
     pub fn remove_pane(&mut self, pane_id: Uuid) -> Option<Pane> {
         let pane = self.panes.remove(&pane_id);
-        if self.active_pane_id == Some(pane_id) {
-            self.active_pane_id = self.panes.keys().next().copied();
+        if pane.is_some() {
+            if self.active_pane_id == Some(pane_id) {
+                self.active_pane_id = self.panes.keys().next().copied();
+            }
+            self.bump_revision();
         }
         pane
     }
@@ -128,13 +150,61 @@ impl Session {
     pub fn attach_client(&mut self, client_id: Uuid) {
         if !self.attached_clients.contains(&client_id) {
             self.attached_clients.push(client_id);
+            self.bump_revision();
         }
         self.last_active_at = SystemTime::now();
     }
 
     /// Detach a client from this session.
     pub fn detach_client(&mut self, client_id: Uuid) {
+        let attached_before = self.attached_clients.len();
         self.attached_clients.retain(|id| *id != client_id);
+        if self.attached_clients.len() != attached_before {
+            self.bump_revision();
+        }
+    }
+
+    /// Update a pane's size and return the resulting session revision.
+    pub fn resize_pane(&mut self, pane_id: Uuid, cols: u16, rows: u16) -> Option<u64> {
+        let changed = {
+            let pane = self.panes.get_mut(&pane_id)?;
+            let changed = pane.cols != cols || pane.rows != rows;
+            pane.cols = cols;
+            pane.rows = rows;
+            changed
+        };
+        if changed {
+            self.bump_revision();
+        }
+        Some(self.revision())
+    }
+
+    /// Update a pane's title and return the resulting session revision.
+    pub fn set_pane_title(&mut self, pane_id: Uuid, title: String) -> Option<u64> {
+        let changed = {
+            let pane = self.panes.get_mut(&pane_id)?;
+            let changed = pane.title.as_deref() != Some(title.as_str());
+            pane.title = Some(title);
+            changed
+        };
+        if changed {
+            self.bump_revision();
+        }
+        Some(self.revision())
+    }
+
+    /// Update a pane's exit status and return the resulting session revision.
+    pub fn set_pane_exit_status(&mut self, pane_id: Uuid, status: Option<i32>) -> Option<u64> {
+        let changed = {
+            let pane = self.panes.get_mut(&pane_id)?;
+            let changed = pane.exit_status != status;
+            pane.exit_status = status;
+            changed
+        };
+        if changed {
+            self.bump_revision();
+        }
+        Some(self.revision())
     }
 
     /// Whether any client is attached.
@@ -153,6 +223,7 @@ impl Session {
             active_pane_id: self.active_pane_id,
             command_history: self.command_history.clone(),
             policy: self.policy,
+            revision: self.revision,
             created_at: self.created_at,
             last_active_at: self.last_active_at,
         }
@@ -175,6 +246,9 @@ pub struct PersistedSession {
     /// Runtime retention policy.
     #[serde(default)]
     pub policy: RuntimePolicy,
+    /// Monotonic runtime revision.
+    #[serde(default = "default_session_revision")]
+    pub revision: u64,
     /// When the session was created.
     pub created_at: SystemTime,
     /// When the session was last active.
@@ -192,6 +266,7 @@ mod tests {
         assert!(session.active_pane_id.is_none());
         assert_eq!(session.policy, RuntimePolicy::Persistent);
         assert!(!session.reconstructed);
+        assert_eq!(session.revision(), 1);
     }
 
     #[test]
@@ -202,6 +277,7 @@ mod tests {
         session.add_pane(pane);
         assert_eq!(session.active_pane_id, Some(pane_id));
         assert_eq!(session.panes.len(), 1);
+        assert_eq!(session.revision(), 2);
     }
 
     #[test]
@@ -216,6 +292,7 @@ mod tests {
         session.active_pane_id = Some(id1);
         session.remove_pane(id1);
         assert_eq!(session.active_pane_id, Some(id2));
+        assert_eq!(session.revision(), 4);
     }
 
     #[test]
@@ -224,8 +301,10 @@ mod tests {
         let client = Uuid::new_v4();
         session.attach_client(client);
         assert!(session.has_attached_clients());
+        assert_eq!(session.revision(), 2);
         session.detach_client(client);
         assert!(!session.has_attached_clients());
+        assert_eq!(session.revision(), 3);
     }
 
     #[test]
@@ -252,6 +331,7 @@ mod tests {
         assert_eq!(restored.id, session.id);
         assert_eq!(restored.policy, RuntimePolicy::Persistent);
         assert!(restored.reconstructed);
+        assert_eq!(restored.revision(), session.revision());
         assert!(restored.panes.contains_key(&pane_id));
         assert_eq!(restored.panes[&pane_id].cols, 120);
         assert!(restored.panes[&pane_id].reconstructed);
@@ -264,6 +344,7 @@ mod tests {
         session.attach_client(client);
         session.attach_client(client);
         assert_eq!(session.attached_clients.len(), 1);
+        assert_eq!(session.revision(), 2);
     }
 
     #[test]
@@ -292,5 +373,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(persisted.policy, RuntimePolicy::Persistent);
+        assert_eq!(persisted.revision, 1);
+    }
+
+    #[test]
+    fn resize_title_and_exit_only_bump_revision_on_change() {
+        let mut session = Session::new("test".into());
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let pane_id = pane.id;
+        session.add_pane(pane);
+        assert_eq!(session.revision(), 2);
+
+        assert_eq!(session.resize_pane(pane_id, 80, 24), Some(2));
+        assert_eq!(session.resize_pane(pane_id, 100, 30), Some(3));
+        assert_eq!(session.set_pane_title(pane_id, "shell".into()), Some(4));
+        assert_eq!(session.set_pane_title(pane_id, "shell".into()), Some(4));
+        assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
+        assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
+        assert_eq!(session.set_pane_exit_status(pane_id, None), Some(6));
+    }
+
+    #[test]
+    fn persisted_revision_roundtrip() {
+        let mut session = Session::new("test".into());
+        session.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        let persisted = session.to_persisted();
+        let json = serde_json::to_string(&persisted).unwrap();
+        let recovered: PersistedSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered.revision, session.revision());
     }
 }

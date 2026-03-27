@@ -142,10 +142,8 @@ impl Server {
                         s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                         s.pty_kill_senders.insert(pane_id, kill_tx);
                         // Clear exit status — fresh shell is running.
-                        if let Some(session) = s.sessions.get_mut(&session_id)
-                            && let Some(pane) = session.panes.get_mut(&pane_id)
-                        {
-                            pane.exit_status = None;
+                        if let Some(session) = s.sessions.get_mut(&session_id) {
+                            let _ = session.set_pane_exit_status(pane_id, None);
                         }
                     }
                     spawn_pty_read_loop(
@@ -161,10 +159,8 @@ impl Server {
                 Err(e) => {
                     log::error!("Failed to reconstruct pane {pane_id}: {e}");
                     let mut s = server.lock().await;
-                    if let Some(session) = s.sessions.get_mut(&session_id)
-                        && let Some(pane) = session.panes.get_mut(&pane_id)
-                    {
-                        pane.set_exited(-1);
+                    if let Some(session) = s.sessions.get_mut(&session_id) {
+                        let _ = session.set_pane_exit_status(pane_id, Some(-1));
                     }
                 }
             }
@@ -230,8 +226,9 @@ impl Server {
                 let mut s = server.lock().await;
                 let session = Session::new(req.name);
                 let session_id = session.id;
+                let revision = session.revision();
                 s.sessions.insert(session_id, session);
-                Some(protocol::session_created(session_id))
+                Some(protocol::session_created(session_id, revision))
             }
 
             proto::client_message::Msg::AttachSession(req) => {
@@ -244,6 +241,7 @@ impl Server {
                     return Some(protocol::error(4, "session not found".into()));
                 };
                 session.attach_client(client_id);
+                let revision = session.revision();
 
                 let pane_snapshots: Vec<proto::PaneSnapshot> = session
                     .panes
@@ -258,7 +256,7 @@ impl Server {
                         exit_status: pane.exit_status,
                     })
                     .collect();
-                Some(protocol::snapshot(session_id, pane_snapshots))
+                Some(protocol::snapshot(session_id, pane_snapshots, revision))
             }
 
             proto::client_message::Msg::DetachSession(req) => {
@@ -267,10 +265,11 @@ impl Server {
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
                 let mut s = server.lock().await;
-                if let Some(session) = s.sessions.get_mut(&session_id) {
-                    session.detach_client(client_id);
-                }
-                None
+                let Some(session) = s.sessions.get_mut(&session_id) else {
+                    return Some(protocol::error(4, "session not found".into()));
+                };
+                session.detach_client(client_id);
+                Some(protocol::session_detached(session_id, session.revision()))
             }
 
             proto::client_message::Msg::CreatePane(req) => {
@@ -281,27 +280,31 @@ impl Server {
 
                 let pane_id = Uuid::new_v4();
                 let pty_result = {
-                    let mut s = server.lock().await;
-                    let Some(session) = s.sessions.get_mut(&session_id) else {
+                    let s = server.lock().await;
+                    if !s.sessions.contains_key(&session_id) {
                         return Some(protocol::error(4, "session not found".into()));
-                    };
-                    let pane = Pane::new(pane_id, 80, 24);
-                    session.add_pane(pane);
-
+                    }
                     let config = PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)
                 };
 
                 match pty_result {
                     Ok(pty) => {
-                        let (reader, writer, child) = pty.into_parts();
+                        let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
-                        {
+                        let revision = {
                             let mut s = server.lock().await;
+                            let Some(session) = s.sessions.get_mut(&session_id) else {
+                                let _ = child.start_kill();
+                                return Some(protocol::error(4, "session not found".into()));
+                            };
+                            session.add_pane(Pane::new(pane_id, 80, 24));
+                            let revision = session.revision();
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
-                        }
+                            revision
+                        };
                         spawn_pty_read_loop(
                             Arc::clone(server),
                             session_id,
@@ -310,13 +313,13 @@ impl Server {
                             child,
                             kill_rx,
                         );
+                        Some(protocol::pane_created(session_id, pane_id, revision))
                     }
                     Err(e) => {
                         log::error!("Failed to spawn PTY for pane {pane_id}: {e}");
+                        Some(protocol::error(5, format!("failed to spawn pane: {e}")))
                     }
                 }
-
-                Some(protocol::pane_created(session_id, pane_id))
             }
 
             proto::client_message::Msg::ClosePane(req) => {
@@ -329,14 +332,18 @@ impl Server {
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
                 let mut s = server.lock().await;
-                if let Some(session) = s.sessions.get_mut(&session_id) {
-                    session.remove_pane(pane_id);
-                }
+                let Some(session) = s.sessions.get_mut(&session_id) else {
+                    return Some(protocol::error(4, "session not found".into()));
+                };
+                let Some(_pane) = session.remove_pane(pane_id) else {
+                    return Some(protocol::error(6, "pane not found".into()));
+                };
+                let revision = session.revision();
                 s.pty_writers.remove(&pane_id);
                 if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
                     let _ = kill_tx.send(());
                 }
-                Some(protocol::pane_closed(session_id, pane_id))
+                Some(protocol::pane_closed(session_id, pane_id, revision))
             }
 
             proto::client_message::Msg::Input(req) => {
@@ -369,26 +376,49 @@ impl Server {
                     Ok(id) => id,
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
-                let cols = req.cols as u16;
-                let rows = req.rows as u16;
+                let cols = match u16::try_from(req.cols) {
+                    Ok(cols) => cols,
+                    Err(_) => return Some(protocol::error(3, "cols out of range".into())),
+                };
+                let rows = match u16::try_from(req.rows) {
+                    Ok(rows) => rows,
+                    Err(_) => return Some(protocol::error(3, "rows out of range".into())),
+                };
 
                 let writer = {
-                    let mut s = server.lock().await;
-                    if let Some(session) = s.sessions.get_mut(&session_id)
-                        && let Some(pane) = session.panes.get_mut(&pane_id)
-                    {
-                        pane.cols = cols;
-                        pane.rows = rows;
+                    let s = server.lock().await;
+                    let Some(session) = s.sessions.get(&session_id) else {
+                        return Some(protocol::error(4, "session not found".into()));
+                    };
+                    if !session.panes.contains_key(&pane_id) {
+                        return Some(protocol::error(6, "pane not found".into()));
                     }
-                    s.pty_writers.get(&pane_id).cloned()
+                    let Some(writer) = s.pty_writers.get(&pane_id) else {
+                        return Some(protocol::error(7, "pane is not running".into()));
+                    };
+                    Arc::clone(writer)
                 };
-                if let Some(writer) = writer {
+
+                {
                     let w = writer.lock().await;
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
                         log::error!("Failed to resize PTY {pane_id}: {e}");
+                        return Some(protocol::error(7, format!("failed to resize pane: {e}")));
                     }
                 }
-                None
+
+                let revision = {
+                    let mut s = server.lock().await;
+                    let Some(session) = s.sessions.get_mut(&session_id) else {
+                        return Some(protocol::error(4, "session not found".into()));
+                    };
+                    let Some(revision) = session.resize_pane(pane_id, cols, rows) else {
+                        return Some(protocol::error(6, "pane not found".into()));
+                    };
+                    revision
+                };
+
+                Some(protocol::pane_resized(session_id, pane_id, cols, rows, revision))
             }
 
             proto::client_message::Msg::SetPaneTitle(req) => {
@@ -401,12 +431,13 @@ impl Server {
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
                 let mut s = server.lock().await;
-                if let Some(session) = s.sessions.get_mut(&session_id)
-                    && let Some(pane) = session.panes.get_mut(&pane_id)
-                {
-                    pane.title = Some(req.title.clone());
-                }
-                Some(protocol::title_changed(session_id, pane_id, req.title))
+                let Some(session) = s.sessions.get_mut(&session_id) else {
+                    return Some(protocol::error(4, "session not found".into()));
+                };
+                let Some(revision) = session.set_pane_title(pane_id, req.title.clone()) else {
+                    return Some(protocol::error(6, "pane not found".into()));
+                };
+                Some(protocol::title_changed(session_id, pane_id, req.title, revision))
             }
 
             proto::client_message::Msg::Shutdown(_) => None,
@@ -466,12 +497,11 @@ fn spawn_pty_read_loop(
 
         let mut s = server.lock().await;
         if let Some(session) = s.sessions.get_mut(&session_id)
-            && let Some(pane) = session.panes.get_mut(&pane_id)
+            && let Some(revision) = session.set_pane_exit_status(pane_id, Some(status))
         {
-            pane.set_exited(status);
+            let msg = protocol::pane_exited(session_id, pane_id, status, revision);
+            s.broadcast_to_session(session_id, &msg);
         }
-        let msg = protocol::pane_exited(session_id, pane_id, status);
-        s.broadcast_to_session(session_id, &msg);
         s.pty_writers.remove(&pane_id);
         s.pty_kill_senders.remove(&pane_id);
         drop(s);

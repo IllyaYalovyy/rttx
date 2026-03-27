@@ -29,6 +29,7 @@ fn serialize_and_resurrect_session() {
             active_pane_id: None,
             command_history: Vec::new(),
             policy: RuntimePolicy::Persistent,
+            revision: 4,
             created_at: SystemTime::now(),
             last_active_at: SystemTime::now(),
         }],
@@ -46,6 +47,7 @@ fn serialize_and_resurrect_session() {
     let session = Session::from_persisted(&loaded.sessions[0]);
     assert_eq!(session.name, "persist-test");
     assert_eq!(session.panes.len(), 1);
+    assert_eq!(session.revision(), 4);
 
     let pane = session.panes.values().next().unwrap();
     assert_eq!(pane.cols, 120);
