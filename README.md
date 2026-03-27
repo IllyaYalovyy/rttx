@@ -21,6 +21,10 @@ rttx (GTK GUI)                         rttx-server (daemon)
 The daemon owns all PTYs and terminal state. The GUI is a thin client that attaches/detaches
 freely. One daemon per host, serving multiple sessions and clients.
 
+Sessions are persistent by default in rttx. The daemon auto-starts on first use and sessions
+survive GUI restarts, sleep/wake, and local reboots. Direct (non-persistent) VTE sessions are
+a fallback when the daemon is unavailable.
+
 ### Crates
 
 - **`rttx-proto`** — shared protobuf wire protocol (message types, length-prefixed framing, UUID helpers)
