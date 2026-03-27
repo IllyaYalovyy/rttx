@@ -18,6 +18,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "scrollback-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
@@ -41,6 +42,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     let attach = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;

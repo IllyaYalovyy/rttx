@@ -3,7 +3,7 @@
 //! Convenience functions for constructing server response messages.
 
 use crate::pane::Pane;
-use crate::session::Session;
+use crate::session::{ClientRole, Session, TerminationReason};
 use rttx_proto::{proto, uuid_to_bytes};
 use uuid::Uuid;
 
@@ -32,12 +32,22 @@ pub fn session_inventory<'a, I>(sessions: I) -> Vec<proto::SessionInfo>
 where
     I: IntoIterator<Item = &'a Session>,
 {
-    let mut inventory: Vec<_> = sessions.into_iter().map(session_info).collect();
+    session_inventory_for(Uuid::nil(), sessions)
+}
+
+/// Build a deterministic runtime inventory payload for `ListSessions` tailored to one client.
+#[must_use]
+pub fn session_inventory_for<'a, I>(client_id: Uuid, sessions: I) -> Vec<proto::SessionInfo>
+where
+    I: IntoIterator<Item = &'a Session>,
+{
+    let mut inventory: Vec<_> =
+        sessions.into_iter().map(|session| session_info(client_id, session)).collect();
     inventory.sort_by(|left, right| left.id.cmp(&right.id));
     inventory
 }
 
-fn session_info(session: &Session) -> proto::SessionInfo {
+fn session_info(client_id: Uuid, session: &Session) -> proto::SessionInfo {
     let mut panes: Vec<_> = session.panes.values().map(pane_info).collect();
     panes.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -49,9 +59,15 @@ fn session_info(session: &Session) -> proto::SessionInfo {
         active_pane_id: session.active_pane_id.map(uuid_to_bytes),
         panes,
         policy: session.policy.as_proto() as i32,
-        attached_client_count: u32::try_from(session.attached_clients.len()).unwrap_or(u32::MAX),
+        attached_client_count: u32::try_from(session.attached_client_count()).unwrap_or(u32::MAX),
         reconstructed: session.reconstructed,
         revision: session.revision(),
+        current_client_role: session
+            .client_role(client_id)
+            .map_or(proto::RuntimeClientRole::Unattached, ClientRole::as_proto)
+            as i32,
+        has_write_owner: session.has_write_owner(),
+        read_only_client_count: u32::try_from(session.read_only_client_count()).unwrap_or(u32::MAX),
     }
 }
 
@@ -89,18 +105,36 @@ pub fn session_detached(session_id: Uuid, revision: u64) -> proto::ServerMessage
     }
 }
 
+/// Build a `SessionTerminated` response.
+#[must_use]
+pub fn session_terminated(
+    session_id: Uuid,
+    final_revision: u64,
+    reason: TerminationReason,
+) -> proto::ServerMessage {
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::SessionTerminated(proto::SessionTerminated {
+            session_id: uuid_to_bytes(session_id),
+            final_revision,
+            reason: reason.as_proto() as i32,
+        })),
+    }
+}
+
 /// Build a `Snapshot` response.
 #[must_use]
 pub fn snapshot(
     session_id: Uuid,
     panes: Vec<proto::PaneSnapshot>,
     revision: u64,
+    current_client_role: ClientRole,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
             session_id: uuid_to_bytes(session_id),
             panes,
             revision,
+            current_client_role: current_client_role.as_proto() as i32,
         })),
     }
 }
@@ -197,6 +231,26 @@ pub fn title_changed(
     }
 }
 
+/// Build an `AttachBlocked` response.
+#[must_use]
+pub fn attach_blocked(
+    session_id: Uuid,
+    current_client_role: Option<ClientRole>,
+    attached_client_count: usize,
+    read_only_client_count: usize,
+) -> proto::ServerMessage {
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
+            session_id: uuid_to_bytes(session_id),
+            current_client_role: current_client_role
+                .map_or(proto::RuntimeClientRole::Unattached, ClientRole::as_proto)
+                as i32,
+            attached_client_count: u32::try_from(attached_client_count).unwrap_or(u32::MAX),
+            read_only_client_count: u32::try_from(read_only_client_count).unwrap_or(u32::MAX),
+        })),
+    }
+}
+
 /// Build an `Error` response.
 #[must_use]
 pub const fn error(code: u32, message: String) -> proto::ServerMessage {
@@ -216,7 +270,10 @@ mod tests {
         session.id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
         session.policy = RuntimePolicy::Ephemeral;
         session.reconstructed = true;
-        session.attached_clients = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let writer = Uuid::new_v4();
+        let reader = Uuid::new_v4();
+        let _ = session.attach_client(writer, crate::session::AttachMode::ReadWrite);
+        let _ = session.attach_client(reader, crate::session::AttachMode::ReadOnly);
 
         let mut pane =
             Pane::new(Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(), 120, 40);
@@ -228,7 +285,7 @@ mod tests {
         session.add_pane(pane);
         session.active_pane_id = Some(pane_id);
 
-        let inventory = session_inventory([&session]);
+        let inventory = session_inventory_for(writer, [&session]);
         assert_eq!(inventory.len(), 1);
 
         let info = &inventory[0];
@@ -240,6 +297,9 @@ mod tests {
         assert_eq!(info.policy, proto::RuntimePolicy::Ephemeral as i32);
         assert!(info.reconstructed);
         assert_eq!(info.revision, session.revision());
+        assert_eq!(info.current_client_role, proto::RuntimeClientRole::Writer as i32);
+        assert!(info.has_write_owner);
+        assert_eq!(info.read_only_client_count, 1);
         assert_eq!(info.panes.len(), 1);
         assert_eq!(info.panes[0].id, pane_id.as_bytes());
         assert_eq!(info.panes[0].title, "shell");

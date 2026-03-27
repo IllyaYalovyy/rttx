@@ -31,6 +31,7 @@ async fn list_sessions_includes_runtime_inventory_metadata() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "inventory-test".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -71,6 +72,9 @@ async fn list_sessions_includes_runtime_inventory_metadata() {
     assert_eq!(session.pane_count, 1);
     assert!(!session.has_attached_client);
     assert_eq!(session.attached_client_count, 0);
+    assert_eq!(session.current_client_role, proto::RuntimeClientRole::Unattached as i32);
+    assert!(!session.has_write_owner);
+    assert_eq!(session.read_only_client_count, 0);
     assert_eq!(session.active_pane_id.as_ref(), Some(&pane_id));
     assert_eq!(
         proto::RuntimePolicy::try_from(session.policy).unwrap(),
@@ -101,6 +105,7 @@ async fn list_sessions_tracks_attached_client_count() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "attach-count".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -113,6 +118,7 @@ async fn list_sessions_tracks_attached_client_count() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -124,6 +130,7 @@ async fn list_sessions_tracks_attached_client_count() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
             })),
         })
         .await;
@@ -133,6 +140,9 @@ async fn list_sessions_tracks_attached_client_count() {
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].has_attached_client);
     assert_eq!(sessions[0].attached_client_count, 2);
+    assert_eq!(sessions[0].current_client_role, proto::RuntimeClientRole::Reader as i32);
+    assert!(sessions[0].has_write_owner);
+    assert_eq!(sessions[0].read_only_client_count, 1);
 
     drop(first);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -140,6 +150,8 @@ async fn list_sessions_tracks_attached_client_count() {
     let sessions = list_sessions(&mut second).await;
     assert_eq!(sessions[0].attached_client_count, 1);
     assert!(sessions[0].has_attached_client);
+    assert!(!sessions[0].has_write_owner);
+    assert_eq!(sessions[0].read_only_client_count, 1);
 
     drop(second);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -166,6 +178,7 @@ async fn list_sessions_marks_restored_runtime_and_panes_as_reconstructed() {
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                     name: "reconstructed-inventory".into(),
+                    policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
@@ -236,6 +249,9 @@ async fn list_sessions_marks_restored_runtime_and_panes_as_reconstructed() {
         assert_eq!(session.active_pane_id.as_ref(), Some(&pane_id));
         assert_eq!(session.attached_client_count, 0);
         assert!(!session.has_attached_client);
+        assert_eq!(session.current_client_role, proto::RuntimeClientRole::Unattached as i32);
+        assert!(!session.has_write_owner);
+        assert_eq!(session.read_only_client_count, 0);
         assert_eq!(
             proto::RuntimePolicy::try_from(session.policy).unwrap(),
             proto::RuntimePolicy::Persistent

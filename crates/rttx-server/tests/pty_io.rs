@@ -14,6 +14,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "io-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
@@ -38,6 +39,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     let attach = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
@@ -143,6 +145,7 @@ async fn resize_updates_pane_dimensions() {
     let attach = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
@@ -197,6 +200,7 @@ async fn close_pane_kills_pty() {
     let attach = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;

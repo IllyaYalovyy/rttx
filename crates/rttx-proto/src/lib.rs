@@ -146,15 +146,22 @@ mod tests {
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                     name: "test".into(),
+                    policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                     session_id: session_id.clone(),
+                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                    session_id: session_id.clone(),
+                })),
+            },
+            proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
                     session_id: session_id.clone(),
                 })),
             },
@@ -237,6 +244,9 @@ mod tests {
                         attached_client_count: 1,
                         reconstructed: true,
                         revision: 7,
+                        current_client_role: proto::RuntimeClientRole::Writer as i32,
+                        has_write_owner: true,
+                        read_only_client_count: 0,
                     }],
                 })),
             },
@@ -253,6 +263,15 @@ mod tests {
                 })),
             },
             proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::SessionTerminated(
+                    proto::SessionTerminated {
+                        session_id: session_id.clone(),
+                        final_revision: 9,
+                        reason: proto::RuntimeTerminationReason::Explicit as i32,
+                    },
+                )),
+            },
+            proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
                     session_id: session_id.clone(),
                     panes: vec![proto::PaneSnapshot {
@@ -264,7 +283,8 @@ mod tests {
                         scrollback: b"hello".to_vec(),
                         exit_status: None,
                     }],
-                    revision: 9,
+                    revision: 10,
+                    current_client_role: proto::RuntimeClientRole::Writer as i32,
                 })),
             },
             proto::ServerMessage {
@@ -278,14 +298,14 @@ mod tests {
                 msg: Some(proto::server_message::Msg::PaneCreated(proto::PaneCreated {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
-                    revision: 10,
+                    revision: 11,
                 })),
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::PaneClosed(proto::PaneClosed {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
-                    revision: 11,
+                    revision: 12,
                 })),
             },
             proto::ServerMessage {
@@ -294,7 +314,7 @@ mod tests {
                     pane_id: pane_id.clone(),
                     cols: 100,
                     rows: 30,
-                    revision: 12,
+                    revision: 13,
                 })),
             },
             proto::ServerMessage {
@@ -302,7 +322,7 @@ mod tests {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
                     status: 0,
-                    revision: 13,
+                    revision: 14,
                 })),
             },
             proto::ServerMessage {
@@ -310,7 +330,15 @@ mod tests {
                     session_id,
                     pane_id,
                     title: "pane-title".into(),
-                    revision: 14,
+                    revision: 15,
+                })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
+                    session_id: uuid_to_bytes(uuid::Uuid::new_v4()),
+                    current_client_role: proto::RuntimeClientRole::Unattached as i32,
+                    attached_client_count: 2,
+                    read_only_client_count: 1,
                 })),
             },
             proto::ServerMessage {

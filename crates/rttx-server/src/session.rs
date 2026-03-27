@@ -30,6 +30,114 @@ impl RuntimePolicy {
             Self::Ephemeral => proto::RuntimePolicy::Ephemeral,
         }
     }
+
+    /// Convert from the wire enum, defaulting to `Persistent` for legacy/unknown values.
+    #[must_use]
+    pub fn from_proto(value: i32) -> Self {
+        match proto::RuntimePolicy::try_from(value).ok() {
+            Some(proto::RuntimePolicy::Ephemeral) => Self::Ephemeral,
+            _ => Self::Persistent,
+        }
+    }
+}
+
+/// Client role within a runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientRole {
+    /// The default write owner for a runtime.
+    Writer,
+    /// A read-only attachment.
+    Reader,
+}
+
+impl ClientRole {
+    /// Convert to the protocol enum value used on the wire.
+    #[must_use]
+    pub const fn as_proto(self) -> proto::RuntimeClientRole {
+        match self {
+            Self::Writer => proto::RuntimeClientRole::Writer,
+            Self::Reader => proto::RuntimeClientRole::Reader,
+        }
+    }
+}
+
+/// Requested attach mode from a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachMode {
+    /// Request read-write ownership.
+    ReadWrite,
+    /// Request a read-only attachment.
+    ReadOnly,
+    /// Reserve room for a future explicit takeover flow.
+    TakeOver,
+}
+
+impl AttachMode {
+    /// Convert from the wire enum, defaulting to `ReadWrite` for compatibility.
+    #[must_use]
+    pub fn from_proto(value: i32) -> Self {
+        match proto::RuntimeAttachMode::try_from(value).ok() {
+            Some(proto::RuntimeAttachMode::ReadOnly) => Self::ReadOnly,
+            Some(proto::RuntimeAttachMode::TakeOver) => Self::TakeOver,
+            _ => Self::ReadWrite,
+        }
+    }
+}
+
+/// Reason a runtime was terminated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminationReason {
+    /// Explicit terminate request from a client.
+    Explicit,
+    /// Ephemeral runtime reached zero attached clients after a graceful detach.
+    EphemeralLastDetach,
+}
+
+impl TerminationReason {
+    /// Convert to the wire enum.
+    #[must_use]
+    pub const fn as_proto(self) -> proto::RuntimeTerminationReason {
+        match self {
+            Self::Explicit => proto::RuntimeTerminationReason::Explicit,
+            Self::EphemeralLastDetach => proto::RuntimeTerminationReason::EphemeralLastDetach,
+        }
+    }
+}
+
+/// Why a client attachment is being removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachReason {
+    /// The client requested a graceful detach.
+    ExplicitRequest,
+    /// The client connection disappeared unexpectedly.
+    Disconnect,
+}
+
+/// Result of attempting to attach a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachOutcome {
+    /// The client is now attached with the given role.
+    Attached { role: ClientRole, revision: u64 },
+    /// A conflicting writer already exists.
+    Blocked { current_role: Option<ClientRole>, revision: u64 },
+}
+
+/// Errors that can occur while processing an attach request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachError {
+    /// The future takeover mode is not implemented yet.
+    UnsupportedTakeOver,
+}
+
+/// Result of detaching a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachOutcome {
+    /// The client was detached and the runtime remains alive.
+    Detached { revision: u64 },
+    /// The client was not attached; no runtime state changed.
+    NotAttached { revision: u64 },
+    /// Graceful detach terminated an ephemeral runtime.
+    Terminated { final_revision: u64, reason: TerminationReason },
 }
 
 const fn default_session_revision() -> u64 {
@@ -58,8 +166,8 @@ pub struct Session {
     pub created_at: SystemTime,
     /// When this session was last active.
     pub last_active_at: SystemTime,
-    /// Client IDs currently attached to this session.
-    pub attached_clients: Vec<Uuid>,
+    /// Client roles currently attached to this session.
+    pub attached_clients: HashMap<Uuid, ClientRole>,
 }
 
 impl Session {
@@ -78,7 +186,7 @@ impl Session {
             revision: default_session_revision(),
             created_at: now,
             last_active_at: now,
-            attached_clients: Vec::new(),
+            attached_clients: HashMap::new(),
         }
     }
 
@@ -109,7 +217,7 @@ impl Session {
             revision: persisted.revision.max(default_session_revision()),
             created_at: persisted.created_at,
             last_active_at: persisted.last_active_at,
-            attached_clients: Vec::new(),
+            attached_clients: HashMap::new(),
             panes,
         }
     }
@@ -146,22 +254,104 @@ impl Session {
         pane
     }
 
-    /// Attach a client to this session.
-    pub fn attach_client(&mut self, client_id: Uuid) {
-        if !self.attached_clients.contains(&client_id) {
-            self.attached_clients.push(client_id);
-            self.bump_revision();
+    /// The current role for a given client, if attached.
+    #[must_use]
+    pub fn client_role(&self, client_id: Uuid) -> Option<ClientRole> {
+        self.attached_clients.get(&client_id).copied()
+    }
+
+    /// The current writer client, if any.
+    #[must_use]
+    pub fn writer_client_id(&self) -> Option<Uuid> {
+        self.attached_clients
+            .iter()
+            .find_map(|(client_id, role)| (*role == ClientRole::Writer).then_some(*client_id))
+    }
+
+    /// Whether a write owner is attached.
+    #[must_use]
+    pub fn has_write_owner(&self) -> bool {
+        self.writer_client_id().is_some()
+    }
+
+    /// Count read-only attachments.
+    #[must_use]
+    pub fn read_only_client_count(&self) -> usize {
+        self.attached_clients.values().filter(|role| **role == ClientRole::Reader).count()
+    }
+
+    /// Count attached clients.
+    #[must_use]
+    pub fn attached_client_count(&self) -> usize {
+        self.attached_clients.len()
+    }
+
+    /// Whether the given client can mutate runtime state.
+    #[must_use]
+    pub fn client_has_write_access(&self, client_id: Uuid) -> bool {
+        match self.client_role(client_id) {
+            Some(ClientRole::Writer) => true,
+            Some(ClientRole::Reader) => false,
+            None => self.writer_client_id().is_none(),
         }
+    }
+
+    /// Attach a client to this session.
+    pub fn attach_client(
+        &mut self,
+        client_id: Uuid,
+        mode: AttachMode,
+    ) -> Result<AttachOutcome, AttachError> {
         self.last_active_at = SystemTime::now();
+
+        match mode {
+            AttachMode::ReadOnly => {
+                let changed = self.attached_clients.insert(client_id, ClientRole::Reader)
+                    != Some(ClientRole::Reader);
+                if changed {
+                    self.bump_revision();
+                }
+                Ok(AttachOutcome::Attached { role: ClientRole::Reader, revision: self.revision() })
+            }
+            AttachMode::ReadWrite => {
+                if let Some(writer_client_id) = self.writer_client_id()
+                    && writer_client_id != client_id
+                {
+                    return Ok(AttachOutcome::Blocked {
+                        current_role: self.client_role(client_id),
+                        revision: self.revision(),
+                    });
+                }
+
+                let changed = self.attached_clients.insert(client_id, ClientRole::Writer)
+                    != Some(ClientRole::Writer);
+                if changed {
+                    self.bump_revision();
+                }
+                Ok(AttachOutcome::Attached { role: ClientRole::Writer, revision: self.revision() })
+            }
+            AttachMode::TakeOver => Err(AttachError::UnsupportedTakeOver),
+        }
     }
 
     /// Detach a client from this session.
-    pub fn detach_client(&mut self, client_id: Uuid) {
-        let attached_before = self.attached_clients.len();
-        self.attached_clients.retain(|id| *id != client_id);
-        if self.attached_clients.len() != attached_before {
-            self.bump_revision();
+    pub fn detach_client(&mut self, client_id: Uuid, reason: DetachReason) -> DetachOutcome {
+        let Some(_role) = self.attached_clients.remove(&client_id) else {
+            return DetachOutcome::NotAttached { revision: self.revision() };
+        };
+        self.bump_revision();
+
+        if matches!(reason, DetachReason::ExplicitRequest)
+            && self.policy == RuntimePolicy::Ephemeral
+            && self.attached_clients.is_empty()
+        {
+            return DetachOutcome::Terminated {
+                final_revision: self.revision(),
+                reason: TerminationReason::EphemeralLastDetach,
+            };
         }
+
+        DetachOutcome::Detached { revision: self.revision() }
     }
 
     /// Update a pane's size and return the resulting session revision.
@@ -209,7 +399,7 @@ impl Session {
 
     /// Whether any client is attached.
     #[must_use]
-    pub const fn has_attached_clients(&self) -> bool {
+    pub fn has_attached_clients(&self) -> bool {
         !self.attached_clients.is_empty()
     }
 
@@ -299,10 +489,16 @@ mod tests {
     fn attach_detach_client() {
         let mut session = Session::new("test".into());
         let client = Uuid::new_v4();
-        session.attach_client(client);
+        assert_eq!(
+            session.attach_client(client, AttachMode::ReadWrite),
+            Ok(AttachOutcome::Attached { role: ClientRole::Writer, revision: 2 })
+        );
         assert!(session.has_attached_clients());
         assert_eq!(session.revision(), 2);
-        session.detach_client(client);
+        assert_eq!(
+            session.detach_client(client, DetachReason::ExplicitRequest),
+            DetachOutcome::Detached { revision: 3 }
+        );
         assert!(!session.has_attached_clients());
         assert_eq!(session.revision(), 3);
     }
@@ -341,9 +537,9 @@ mod tests {
     fn duplicate_attach_is_idempotent() {
         let mut session = Session::new("test".into());
         let client = Uuid::new_v4();
-        session.attach_client(client);
-        session.attach_client(client);
-        assert_eq!(session.attached_clients.len(), 1);
+        let _ = session.attach_client(client, AttachMode::ReadWrite);
+        let _ = session.attach_client(client, AttachMode::ReadWrite);
+        assert_eq!(session.attached_client_count(), 1);
         assert_eq!(session.revision(), 2);
     }
 
@@ -401,5 +597,76 @@ mod tests {
         let json = serde_json::to_string(&persisted).unwrap();
         let recovered: PersistedSession = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered.revision, session.revision());
+    }
+
+    #[test]
+    fn read_only_attach_tracks_counts_and_role() {
+        let mut session = Session::new("test".into());
+        let reader = Uuid::new_v4();
+
+        assert_eq!(
+            session.attach_client(reader, AttachMode::ReadOnly),
+            Ok(AttachOutcome::Attached { role: ClientRole::Reader, revision: 2 })
+        );
+        assert_eq!(session.client_role(reader), Some(ClientRole::Reader));
+        assert_eq!(session.read_only_client_count(), 1);
+        assert_eq!(session.attached_client_count(), 1);
+        assert!(!session.client_has_write_access(reader));
+    }
+
+    #[test]
+    fn second_writer_attach_is_blocked() {
+        let mut session = Session::new("test".into());
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+
+        let _ = session.attach_client(first, AttachMode::ReadWrite);
+        assert_eq!(
+            session.attach_client(second, AttachMode::ReadWrite),
+            Ok(AttachOutcome::Blocked { current_role: None, revision: 2 })
+        );
+        assert_eq!(session.writer_client_id(), Some(first));
+        assert_eq!(session.revision(), 2);
+    }
+
+    #[test]
+    fn explicit_last_detach_terminates_ephemeral_runtime() {
+        let mut session = Session::new("test".into());
+        session.policy = RuntimePolicy::Ephemeral;
+        let client = Uuid::new_v4();
+        let _ = session.attach_client(client, AttachMode::ReadWrite);
+
+        assert_eq!(
+            session.detach_client(client, DetachReason::ExplicitRequest),
+            DetachOutcome::Terminated {
+                final_revision: 3,
+                reason: TerminationReason::EphemeralLastDetach,
+            }
+        );
+    }
+
+    #[test]
+    fn disconnect_does_not_terminate_ephemeral_runtime() {
+        let mut session = Session::new("test".into());
+        session.policy = RuntimePolicy::Ephemeral;
+        let client = Uuid::new_v4();
+        let _ = session.attach_client(client, AttachMode::ReadWrite);
+
+        assert_eq!(
+            session.detach_client(client, DetachReason::Disconnect),
+            DetachOutcome::Detached { revision: 3 }
+        );
+        assert!(!session.has_attached_clients());
+    }
+
+    #[test]
+    fn take_over_attach_is_reserved_for_future_work() {
+        let mut session = Session::new("test".into());
+        let client = Uuid::new_v4();
+        assert_eq!(
+            session.attach_client(client, AttachMode::TakeOver),
+            Err(AttachError::UnsupportedTakeOver)
+        );
+        assert_eq!(session.revision(), 1);
     }
 }

@@ -17,6 +17,7 @@ async fn create_session_and_list() {
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "test-session".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
@@ -54,6 +55,7 @@ async fn attach_and_detach_session() {
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "attach-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
@@ -67,6 +69,7 @@ async fn attach_and_detach_session() {
     let attach = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
@@ -116,6 +119,7 @@ async fn create_and_close_pane() {
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "pane-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;

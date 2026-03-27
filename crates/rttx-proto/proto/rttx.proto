@@ -12,13 +12,33 @@ message ListSessions {}
 
 message CreateSession {
     string name = 1;
+    RuntimePolicy policy = 2;
+}
+
+enum RuntimeAttachMode {
+    RUNTIME_ATTACH_MODE_UNSPECIFIED = 0;
+    RUNTIME_ATTACH_MODE_READ_WRITE = 1;
+    RUNTIME_ATTACH_MODE_READ_ONLY = 2;
+    RUNTIME_ATTACH_MODE_TAKE_OVER = 3;
+}
+
+enum RuntimeClientRole {
+    RUNTIME_CLIENT_ROLE_UNSPECIFIED = 0;
+    RUNTIME_CLIENT_ROLE_UNATTACHED = 1;
+    RUNTIME_CLIENT_ROLE_WRITER = 2;
+    RUNTIME_CLIENT_ROLE_READER = 3;
 }
 
 message AttachSession {
     bytes session_id = 1;
+    RuntimeAttachMode attach_mode = 2;
 }
 
 message DetachSession {
+    bytes session_id = 1;
+}
+
+message TerminateSession {
     bytes session_id = 1;
 }
 
@@ -90,6 +110,9 @@ message SessionInfo {
     uint32 attached_client_count = 8;
     bool reconstructed = 9;
     uint64 revision = 10;
+    RuntimeClientRole current_client_role = 11;
+    bool has_write_owner = 12;
+    uint32 read_only_client_count = 13;
 }
 
 message SessionCreated {
@@ -102,10 +125,23 @@ message SessionDetached {
     uint64 revision = 2;
 }
 
+enum RuntimeTerminationReason {
+    RUNTIME_TERMINATION_REASON_UNSPECIFIED = 0;
+    RUNTIME_TERMINATION_REASON_EXPLICIT = 1;
+    RUNTIME_TERMINATION_REASON_EPHEMERAL_LAST_DETACH = 2;
+}
+
+message SessionTerminated {
+    bytes session_id = 1;
+    uint64 final_revision = 2;
+    RuntimeTerminationReason reason = 3;
+}
+
 message Snapshot {
     bytes session_id = 1;
     repeated PaneSnapshot panes = 2;
     uint64 revision = 3;
+    RuntimeClientRole current_client_role = 4;
 }
 
 message PaneSnapshot {
@@ -170,6 +206,13 @@ message CwdChanged {
     uint64 revision = 4;
 }
 
+message AttachBlocked {
+    bytes session_id = 1;
+    RuntimeClientRole current_client_role = 2;
+    uint32 attached_client_count = 3;
+    uint32 read_only_client_count = 4;
+}
+
 message Error {
     uint32 code = 1;
     string message = 2;
@@ -190,6 +233,7 @@ message ClientMessage {
         Resize resize = 9;
         SetPaneTitle set_pane_title = 10;
         Shutdown shutdown = 11;
+        TerminateSession terminate_session = 12;
     }
 }
 
@@ -209,5 +253,7 @@ message ServerMessage {
         Error error = 12;
         SessionDetached session_detached = 13;
         PaneResized pane_resized = 14;
+        SessionTerminated session_terminated = 15;
+        AttachBlocked attach_blocked = 16;
     }
 }

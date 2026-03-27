@@ -30,6 +30,7 @@ async fn gui_restore_flow_no_duplicates() {
             c.send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                     name: format!("Session {i}"),
+                    policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
@@ -56,6 +57,7 @@ async fn gui_restore_flow_no_duplicates() {
             c.send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                     session_id: sid.clone(),
+                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
@@ -112,6 +114,7 @@ async fn gui_restore_flow_no_duplicates() {
             c.send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                     session_id: info.id.clone(),
+                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
             .await;

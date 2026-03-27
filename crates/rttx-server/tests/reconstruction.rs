@@ -24,6 +24,7 @@ async fn reconstruct_session_after_restart() {
         let create = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "reconstruct-test".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         };
         client.send(&create).await;
@@ -50,6 +51,7 @@ async fn reconstruct_session_after_restart() {
         let attach = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
         client.send(&attach).await;
@@ -100,6 +102,7 @@ async fn reconstruct_session_after_restart() {
         let attach = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
         client.send(&attach).await;

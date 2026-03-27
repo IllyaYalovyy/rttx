@@ -20,6 +20,7 @@ async fn make_pane_persistent_flow() {
     c.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "pane-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
@@ -33,6 +34,7 @@ async fn make_pane_persistent_flow() {
     c.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     })
     .await;
@@ -124,6 +126,7 @@ async fn make_pane_persistent_flow() {
     c2.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
             session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     })
     .await;

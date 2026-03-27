@@ -29,6 +29,7 @@ async fn reconnect_restores_scrollback() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "lifecycle-test".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -53,6 +54,7 @@ async fn reconnect_restores_scrollback() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -99,6 +101,7 @@ async fn reconnect_restores_scrollback() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -138,6 +141,7 @@ async fn session_count_stable_across_reconnects() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "stable-test".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -193,6 +197,7 @@ async fn restart_preserves_session_count_and_scrollback() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "restart-stable".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -215,6 +220,7 @@ async fn restart_preserves_session_count_and_scrollback() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -257,6 +263,7 @@ async fn restart_preserves_session_count_and_scrollback() {
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;

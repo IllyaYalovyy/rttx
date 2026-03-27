@@ -31,6 +31,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "revision-acks".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -46,6 +47,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                 session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -152,6 +154,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                     name: "restart-revision".into(),
+                    policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
@@ -213,6 +216,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
                     session_id: session_id.clone(),
+                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
@@ -238,6 +242,7 @@ async fn failed_close_pane_returns_error_without_revision_change() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "revision-error".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;

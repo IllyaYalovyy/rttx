@@ -60,6 +60,7 @@ async fn attach_stdio_hello_and_create_session() {
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "stdio-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     buf.clear();

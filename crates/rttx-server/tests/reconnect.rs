@@ -18,6 +18,7 @@ async fn reconnect_after_disconnect() {
         let create = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
                 name: "reconnect-test".into(),
+                policy: proto::RuntimePolicy::Persistent as i32,
             })),
         };
         client.send(&create).await;

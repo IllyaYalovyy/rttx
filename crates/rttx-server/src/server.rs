@@ -11,7 +11,10 @@ use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
 use crate::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
-use crate::session::Session;
+use crate::session::{
+    AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Session,
+    TerminationReason,
+};
 use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -171,9 +174,33 @@ impl Server {
     #[must_use]
     pub fn build_snapshot(&self) -> ServerState {
         ServerState {
-            sessions: self.sessions.values().map(Session::to_persisted).collect(),
+            sessions: self
+                .sessions
+                .values()
+                .filter(|session| session.policy == RuntimePolicy::Persistent)
+                .map(Session::to_persisted)
+                .collect(),
             serialized_at: std::time::SystemTime::now(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+
+    /// Send a message to the provided clients.
+    fn broadcast_to_clients<I>(
+        &self,
+        client_ids: I,
+        exclude_client_id: Option<Uuid>,
+        msg: &proto::ServerMessage,
+    ) where
+        I: IntoIterator<Item = Uuid>,
+    {
+        for client_id in client_ids {
+            if Some(client_id) == exclude_client_id {
+                continue;
+            }
+            if let Some(sender) = self.client_senders.get(&client_id) {
+                let _ = sender.send(msg.clone());
+            }
         }
     }
 
@@ -182,11 +209,29 @@ impl Server {
         let Some(session) = self.sessions.get(&session_id) else {
             return;
         };
-        for client_id in &session.attached_clients {
-            if let Some(sender) = self.client_senders.get(client_id) {
-                let _ = sender.send(msg.clone());
+        self.broadcast_to_clients(session.attached_clients.keys().copied(), None, msg);
+    }
+
+    fn terminate_session(
+        &mut self,
+        session_id: Uuid,
+        final_revision: u64,
+        reason: TerminationReason,
+        exclude_client_id: Option<Uuid>,
+    ) -> Option<proto::ServerMessage> {
+        let session = self.sessions.remove(&session_id)?;
+        let attached_client_ids: Vec<_> = session.attached_clients.keys().copied().collect();
+        let pane_ids: Vec<_> = session.panes.keys().copied().collect();
+        for pane_id in pane_ids {
+            self.pty_writers.remove(&pane_id);
+            if let Some(kill_tx) = self.pty_kill_senders.remove(&pane_id) {
+                let _ = kill_tx.send(());
             }
         }
+
+        let msg = protocol::session_terminated(session_id, final_revision, reason);
+        self.broadcast_to_clients(attached_client_ids, exclude_client_id, &msg);
+        Some(msg)
     }
 
     /// Handle a single client message, returning an optional response.
@@ -218,7 +263,7 @@ impl Server {
 
             proto::client_message::Msg::ListSessions(_) => {
                 let s = server.lock().await;
-                let infos = protocol::session_inventory(s.sessions.values());
+                let infos = protocol::session_inventory_for(client_id, s.sessions.values());
                 Some(protocol::session_list(infos))
             }
 
@@ -226,7 +271,10 @@ impl Server {
                 let mut s = server.lock().await;
                 let session = Session::new(req.name);
                 let session_id = session.id;
+                let policy = RuntimePolicy::from_proto(req.policy);
                 let revision = session.revision();
+                let mut session = session;
+                session.policy = policy;
                 s.sessions.insert(session_id, session);
                 Some(protocol::session_created(session_id, revision))
             }
@@ -236,12 +284,32 @@ impl Server {
                     Ok(id) => id,
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
+                let attach_mode = AttachMode::from_proto(req.attach_mode);
                 let mut s = server.lock().await;
                 let Some(session) = s.sessions.get_mut(&session_id) else {
                     return Some(protocol::error(4, "session not found".into()));
                 };
-                session.attach_client(client_id);
-                let revision = session.revision();
+                let attach_outcome = match session.attach_client(client_id, attach_mode) {
+                    Ok(outcome) => outcome,
+                    Err(AttachError::UnsupportedTakeOver) => {
+                        return Some(protocol::error(
+                            8,
+                            "take over attach mode is not supported yet".into(),
+                        ));
+                    }
+                };
+
+                let (role, revision) = match attach_outcome {
+                    AttachOutcome::Attached { role, revision } => (role, revision),
+                    AttachOutcome::Blocked { current_role, .. } => {
+                        return Some(protocol::attach_blocked(
+                            session_id,
+                            current_role,
+                            session.attached_client_count(),
+                            session.read_only_client_count(),
+                        ));
+                    }
+                };
 
                 let pane_snapshots: Vec<proto::PaneSnapshot> = session
                     .panes
@@ -256,7 +324,7 @@ impl Server {
                         exit_status: pane.exit_status,
                     })
                     .collect();
-                Some(protocol::snapshot(session_id, pane_snapshots, revision))
+                Some(protocol::snapshot(session_id, pane_snapshots, revision, role))
             }
 
             proto::client_message::Msg::DetachSession(req) => {
@@ -268,8 +336,50 @@ impl Server {
                 let Some(session) = s.sessions.get_mut(&session_id) else {
                     return Some(protocol::error(4, "session not found".into()));
                 };
-                session.detach_client(client_id);
-                Some(protocol::session_detached(session_id, session.revision()))
+                match session.detach_client(client_id, DetachReason::ExplicitRequest) {
+                    DetachOutcome::Detached { revision }
+                    | DetachOutcome::NotAttached { revision } => {
+                        Some(protocol::session_detached(session_id, revision))
+                    }
+                    DetachOutcome::Terminated { final_revision, reason } => {
+                        let _ = s.terminate_session(
+                            session_id,
+                            final_revision,
+                            reason,
+                            Some(client_id),
+                        );
+                        Some(protocol::session_terminated(session_id, final_revision, reason))
+                    }
+                }
+            }
+
+            proto::client_message::Msg::TerminateSession(req) => {
+                let session_id = match bytes_to_uuid(&req.session_id) {
+                    Ok(id) => id,
+                    Err(e) => return Some(protocol::error(3, e.to_string())),
+                };
+                let mut s = server.lock().await;
+                let Some(session) = s.sessions.get(&session_id) else {
+                    return Some(protocol::error(4, "session not found".into()));
+                };
+                if session.has_write_owner() && !session.client_has_write_access(client_id) {
+                    return Some(protocol::error(
+                        9,
+                        "runtime is currently owned by another client".into(),
+                    ));
+                }
+                let final_revision = session.revision().saturating_add(1);
+                let _ = s.terminate_session(
+                    session_id,
+                    final_revision,
+                    TerminationReason::Explicit,
+                    Some(client_id),
+                );
+                Some(protocol::session_terminated(
+                    session_id,
+                    final_revision,
+                    TerminationReason::Explicit,
+                ))
             }
 
             proto::client_message::Msg::CreatePane(req) => {
@@ -281,8 +391,14 @@ impl Server {
                 let pane_id = Uuid::new_v4();
                 let pty_result = {
                     let s = server.lock().await;
-                    if !s.sessions.contains_key(&session_id) {
+                    let Some(session) = s.sessions.get(&session_id) else {
                         return Some(protocol::error(4, "session not found".into()));
+                    };
+                    if !session.client_has_write_access(client_id) {
+                        return Some(protocol::error(
+                            9,
+                            "runtime is currently owned by another client".into(),
+                        ));
                     }
                     let config = PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)
@@ -335,6 +451,12 @@ impl Server {
                 let Some(session) = s.sessions.get_mut(&session_id) else {
                     return Some(protocol::error(4, "session not found".into()));
                 };
+                if !session.client_has_write_access(client_id) {
+                    return Some(protocol::error(
+                        9,
+                        "runtime is currently owned by another client".into(),
+                    ));
+                }
                 let Some(_pane) = session.remove_pane(pane_id) else {
                     return Some(protocol::error(6, "pane not found".into()));
                 };
@@ -347,12 +469,28 @@ impl Server {
             }
 
             proto::client_message::Msg::Input(req) => {
+                let session_id = match bytes_to_uuid(&req.session_id) {
+                    Ok(id) => id,
+                    Err(e) => return Some(protocol::error(3, e.to_string())),
+                };
                 let pane_id = match bytes_to_uuid(&req.pane_id) {
                     Ok(id) => id,
                     Err(e) => return Some(protocol::error(3, e.to_string())),
                 };
                 let writer = {
                     let s = server.lock().await;
+                    let Some(session) = s.sessions.get(&session_id) else {
+                        return Some(protocol::error(4, "session not found".into()));
+                    };
+                    if !session.panes.contains_key(&pane_id) {
+                        return Some(protocol::error(6, "pane not found".into()));
+                    }
+                    if !session.client_has_write_access(client_id) {
+                        return Some(protocol::error(
+                            9,
+                            "runtime is currently owned by another client".into(),
+                        ));
+                    }
                     s.pty_writers.get(&pane_id).cloned()
                 };
                 if let Some(writer) = writer {
@@ -392,6 +530,12 @@ impl Server {
                     };
                     if !session.panes.contains_key(&pane_id) {
                         return Some(protocol::error(6, "pane not found".into()));
+                    }
+                    if !session.client_has_write_access(client_id) {
+                        return Some(protocol::error(
+                            9,
+                            "runtime is currently owned by another client".into(),
+                        ));
                     }
                     let Some(writer) = s.pty_writers.get(&pane_id) else {
                         return Some(protocol::error(7, "pane is not running".into()));
@@ -434,6 +578,12 @@ impl Server {
                 let Some(session) = s.sessions.get_mut(&session_id) else {
                     return Some(protocol::error(4, "session not found".into()));
                 };
+                if !session.client_has_write_access(client_id) {
+                    return Some(protocol::error(
+                        9,
+                        "runtime is currently owned by another client".into(),
+                    ));
+                }
                 let Some(revision) = session.set_pane_title(pane_id, req.title.clone()) else {
                     return Some(protocol::error(6, "pane not found".into()));
                 };
@@ -635,7 +785,7 @@ where
         let mut s = server.lock().await;
         s.client_senders.remove(&client_id);
         for session in s.sessions.values_mut() {
-            session.detach_client(client_id);
+            let _ = session.detach_client(client_id, DetachReason::Disconnect);
         }
     }
 
