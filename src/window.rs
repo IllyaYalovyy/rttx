@@ -636,6 +636,11 @@ impl Window {
         session::schedule_initial_paned_ratios(&content, &session_state.layout);
         self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
         self.renumber_session_rows();
+
+        // If this is a persistent session, connect its panes to the daemon.
+        if session_state.mode.is_persistent() {
+            self.connect_persistent_session(session_state);
+        }
     }
 
     fn build_session_content(&self, session_state: &SessionState) -> gtk4::Widget {
@@ -944,6 +949,18 @@ impl Window {
     }
 
     pub fn add_session(&self) {
+        // Try to create a persistent session. Fall back to direct if daemon unavailable.
+        match self.create_persistent_session() {
+            Ok(()) => {}
+            Err(e) => {
+                log::info!("Persistent session unavailable ({e}), using direct mode");
+                self.add_direct_session();
+            }
+        }
+    }
+
+    /// Create a direct (non-persistent) session.
+    fn add_direct_session(&self) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();
@@ -955,6 +972,260 @@ impl Window {
         let index = imp.state.borrow().sessions.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
+    /// Create a persistent session backed by the local daemon.
+    fn create_persistent_session(&self) -> Result<(), crate::daemon::DaemonError> {
+        use crate::daemon::default_socket_path;
+        use crate::daemon_bridge::DaemonBridge;
+        use crate::session::SessionMode;
+
+        // Ensure bridge exists.
+        if self.imp().daemon_bridge.borrow().is_none() {
+            let socket_path = default_socket_path();
+
+            // Auto-start daemon if socket doesn't exist.
+            if !socket_path.exists() {
+                log::info!("Starting rttx-server daemon");
+                let mut cmd = std::process::Command::new("rttx-server");
+                cmd.arg("start")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                if crate::config::is_development() {
+                    cmd.env("RTTX_DEV_MODE", "1");
+                }
+                if let Ok(mut child) = cmd.spawn() {
+                    let _ = child.wait();
+                    for _ in 0..30 {
+                        if socket_path.exists() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+            }
+
+            let bridge = DaemonBridge::new()?;
+            self.imp().daemon_bridge.replace(Some(bridge));
+        }
+
+        let bridge = self.imp().daemon_bridge.borrow();
+        let bridge = bridge.as_ref().ok_or(crate::daemon::DaemonError::Disconnected)?;
+
+        let socket_path = default_socket_path();
+        let mut conn = bridge.connect(&socket_path)?;
+
+        let count = self.imp().state.borrow().sessions.len() + 1;
+        let daemon_session_id = bridge.run(conn.create_session(&format!("Session {count}")))?;
+        let _snapshot = bridge.run(conn.attach_session(daemon_session_id))?;
+        let daemon_pane_id = bridge.run(conn.create_pane(daemon_session_id))?;
+
+        // Install connection for delta streaming.
+        let msg_rx = bridge.install_connection(conn);
+        let _ = bridge;
+
+        // Create session state with persistent mode.
+        let mut session_state = SessionState::new(format!("Session {count}"));
+        session_state.mode =
+            SessionMode::Persistent { daemon_session_id: daemon_session_id.to_string() };
+
+        // Override the layout terminal UUID to match the daemon pane ID
+        // so materialize_persistent_terminal can map it.
+        let terminal_uuid =
+            session_state.layout.terminal_uuids().into_iter().next().unwrap_or_default();
+
+        self.imp().state.borrow_mut().sessions.push(session_state.clone());
+        self.build_session(&session_state);
+
+        // Wire input/resize/delta for the persistent pane.
+        self.wire_persistent_pane(&terminal_uuid, daemon_session_id, daemon_pane_id);
+
+        // Start polling daemon messages.
+        self.start_message_poller(msg_rx);
+
+        let index = self.imp().state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = self.imp().sidebar_list.row_at_index(index) {
+            self.imp().sidebar_list.select_row(Some(&row));
+        }
+
+        Ok(())
+    }
+
+    /// Connect a persistent session's panes to the daemon on startup.
+    ///
+    /// Called when loading a saved session with `SessionMode::Persistent`.
+    /// Connects to the daemon, attaches to the session, feeds snapshot
+    /// scrollback into each pane, and wires input/resize/delta routing.
+    fn connect_persistent_session(&self, session_state: &SessionState) {
+        use crate::daemon::default_socket_path;
+        use crate::daemon_bridge::DaemonBridge;
+
+        let Some(daemon_session_id_str) = session_state.mode.daemon_session_id() else {
+            return;
+        };
+        let Ok(daemon_session_id) = uuid::Uuid::parse_str(daemon_session_id_str) else {
+            log::error!("Invalid daemon session ID: {daemon_session_id_str}");
+            return;
+        };
+
+        // Ensure bridge exists (don't auto-start daemon for restore — if it's
+        // not running, the sessions will show as disconnected).
+        if self.imp().daemon_bridge.borrow().is_none() {
+            let socket_path = default_socket_path();
+            if !socket_path.exists() {
+                log::info!("Daemon not running, persistent sessions will show as disconnected");
+                return;
+            }
+            match DaemonBridge::new() {
+                Ok(bridge) => {
+                    self.imp().daemon_bridge.replace(Some(bridge));
+                }
+                Err(e) => {
+                    log::error!("Failed to create daemon bridge: {e}");
+                    return;
+                }
+            }
+        }
+
+        let bridge = self.imp().daemon_bridge.borrow();
+        let Some(bridge) = bridge.as_ref() else { return };
+
+        let socket_path = default_socket_path();
+        let Ok(mut conn) = bridge.connect(&socket_path) else {
+            log::error!("Failed to connect to daemon for session restore");
+            return;
+        };
+
+        // Attach and get snapshot.
+        let Ok(snapshot) = bridge.run(conn.attach_session(daemon_session_id)) else {
+            log::error!("Failed to attach to daemon session {daemon_session_id}");
+            return;
+        };
+
+        // Feed snapshot scrollback into panes and wire I/O.
+        for pane_snap in &snapshot.panes {
+            let Ok(daemon_pane_id) = rttx_proto::bytes_to_uuid(&pane_snap.pane_id) else {
+                continue;
+            };
+
+            // Find the GUI terminal UUID that corresponds to this daemon pane.
+            // For now, match by position in the layout tree.
+            let terminal_uuids = session_state.layout.terminal_uuids();
+            let pane_index = snapshot.panes.iter().position(|p| p.pane_id == pane_snap.pane_id);
+            let Some(terminal_uuid) = pane_index.and_then(|i| terminal_uuids.get(i)) else {
+                continue;
+            };
+
+            let panes = self.imp().persistent_terminals.borrow();
+            if let Some(pane_view) = panes.get(terminal_uuid) {
+                pane_view.feed_snapshot(&pane_snap.scrollback);
+                if !pane_snap.title.is_empty() {
+                    pane_view.set_title(&pane_snap.title);
+                }
+            }
+            drop(panes);
+
+            self.wire_persistent_pane(terminal_uuid, daemon_session_id, daemon_pane_id);
+        }
+
+        // Install connection for delta streaming.
+        let msg_rx = bridge.install_connection(conn);
+        let _ = bridge;
+        self.start_message_poller(msg_rx);
+    }
+
+    fn wire_persistent_pane(
+        &self,
+        terminal_uuid: &str,
+        daemon_session_id: uuid::Uuid,
+        daemon_pane_id: uuid::Uuid,
+    ) {
+        let panes = self.imp().persistent_terminals.borrow();
+        let Some(pane_view) = panes.get(terminal_uuid) else {
+            return;
+        };
+
+        pane_view.set_connected(true);
+
+        // Forward keyboard input to daemon.
+        let win = self.clone();
+        pane_view.connect_input(move |text| {
+            let data = text.as_bytes().to_vec();
+            if let Some(ref bridge) = *win.imp().daemon_bridge.borrow() {
+                bridge.send_input(daemon_session_id, daemon_pane_id, data);
+            }
+        });
+
+        // Forward resize to daemon.
+        let win = self.clone();
+        pane_view.connect_resize(move |cols, rows| {
+            if let Some(ref bridge) = *win.imp().daemon_bridge.borrow() {
+                bridge.send_resize(daemon_session_id, daemon_pane_id, cols, rows);
+            }
+        });
+
+        // Focus tracking.
+        let win = self.clone();
+        let uuid = terminal_uuid.to_string();
+        let focus_controller = gtk4::EventControllerFocus::new();
+        focus_controller.connect_enter(move |_| {
+            win.set_focused_terminal(Some(&uuid));
+        });
+        pane_view.vte().add_controller(focus_controller);
+
+        // Bell.
+        let bell_pane = pane_view.clone();
+        pane_view.vte().connect_bell(move |_| {
+            bell_pane.flash_bell();
+        });
+    }
+
+    /// Poll daemon messages and dispatch to persistent panes.
+    fn start_message_poller(
+        &self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<rttx_proto::proto::ServerMessage>,
+    ) {
+        let win = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(4), move || {
+            while let Ok(msg) = rx.try_recv() {
+                win.dispatch_daemon_message(&msg);
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// Route a daemon message to the correct persistent pane by `pane_id`.
+    fn dispatch_daemon_message(&self, msg: &rttx_proto::proto::ServerMessage) {
+        use rttx_proto::proto::server_message::Msg;
+
+        let Some(ref inner) = msg.msg else { return };
+
+        let Some(pane_id) = crate::daemon::extract_pane_id(msg) else {
+            if let Msg::Error(e) = inner {
+                log::error!("Daemon error: {} (code {})", e.message, e.code);
+            }
+            return;
+        };
+
+        let pane_uuid = pane_id.to_string();
+        let panes = self.imp().persistent_terminals.borrow();
+        let Some(pane) = panes.get(&pane_uuid) else {
+            return;
+        };
+
+        match inner {
+            Msg::Delta(delta) => pane.feed_output(&delta.data),
+            Msg::TitleChanged(tc) => {
+                if pane.custom_title().is_none() {
+                    pane.set_title(&tc.title);
+                }
+            }
+            Msg::PaneExited(exited) => {
+                log::info!("Persistent pane {pane_uuid} exited with status {}", exited.status);
+            }
+            Msg::Bell(_) => pane.flash_bell(),
+            _ => {}
         }
     }
 
