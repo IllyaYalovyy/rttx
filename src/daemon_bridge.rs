@@ -394,8 +394,7 @@ impl EndpointActor {
         if let Some(proto::server_message::Msg::SessionTerminated(terminated)) = &msg.msg
             && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id)
         {
-            self.tracked_workspaces
-                .retain(|_, tracked| tracked != &runtime_id.to_string());
+            self.tracked_workspaces.retain(|_, tracked| tracked != &runtime_id.to_string());
         }
         self.forward_push(msg);
     }
@@ -481,11 +480,7 @@ impl EndpointActor {
                     })),
                 };
                 if let Err(error) = self.send_message(&msg).await {
-                    self.handle_command_error(
-                        &workspace_id,
-                        ManagerOperation::CreatePane,
-                        &error,
-                    );
+                    self.handle_command_error(&workspace_id, ManagerOperation::CreatePane, &error);
                     return;
                 }
                 match self.read_response(false).await {
@@ -593,7 +588,11 @@ impl EndpointActor {
                         }
                     },
                     Err(error) => {
-                        self.handle_command_error(&workspace_id, ManagerOperation::ClosePane, &error);
+                        self.handle_command_error(
+                            &workspace_id,
+                            ManagerOperation::ClosePane,
+                            &error,
+                        );
                     }
                 }
             }
@@ -643,8 +642,10 @@ impl EndpointActor {
                             let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
                                 runtime_id,
-                                reason: proto::RuntimeTerminationReason::try_from(terminated.reason)
-                                    .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
+                                reason: proto::RuntimeTerminationReason::try_from(
+                                    terminated.reason,
+                                )
+                                .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
                             });
                         }
                         Some(proto::server_message::Msg::Error(e)) => {
@@ -712,8 +713,10 @@ impl EndpointActor {
                             let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
                                 runtime_id,
-                                reason: proto::RuntimeTerminationReason::try_from(terminated.reason)
-                                    .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
+                                reason: proto::RuntimeTerminationReason::try_from(
+                                    terminated.reason,
+                                )
+                                .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
                             });
                         }
                         Some(proto::server_message::Msg::Error(e)) => {
@@ -758,14 +761,9 @@ impl EndpointActor {
                     return;
                 };
                 if let Some(writer) = self.writer.as_mut()
-                    && let Err(error) =
-                        writer.send_input(runtime_uuid, pane_uuid, &data).await
+                    && let Err(error) = writer.send_input(runtime_uuid, pane_uuid, &data).await
                 {
-                    self.handle_command_error(
-                        &workspace_id,
-                        ManagerOperation::SendInput,
-                        &error,
-                    );
+                    self.handle_command_error(&workspace_id, ManagerOperation::SendInput, &error);
                 }
             }
             EndpointCommand::ResizePane {
@@ -795,11 +793,7 @@ impl EndpointActor {
                     && let Err(error) =
                         writer.send_resize(runtime_uuid, pane_uuid, cols, rows).await
                 {
-                    self.handle_command_error(
-                        &workspace_id,
-                        ManagerOperation::ResizePane,
-                        &error,
-                    );
+                    self.handle_command_error(&workspace_id, ManagerOperation::ResizePane, &error);
                 }
             }
             EndpointCommand::RefreshInventory => {
@@ -815,9 +809,7 @@ impl EndpointActor {
                 }
                 let list_result = if self.writer.is_some() {
                     let msg = proto::ClientMessage {
-                        msg: Some(proto::client_message::Msg::ListSessions(
-                            proto::ListSessions {},
-                        )),
+                        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
                     };
                     match self.send_message(&msg).await {
                         Ok(()) => match self.read_response(false).await {
