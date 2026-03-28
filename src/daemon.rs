@@ -466,7 +466,7 @@ impl DaemonWriter {
         .await
     }
 
-    async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+    pub(crate) async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.stream.write_all(&buf).await?;

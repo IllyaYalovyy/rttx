@@ -5,7 +5,8 @@
 //! connection for multiple managed workspaces on that endpoint.
 
 use crate::daemon::{
-    DaemonConnection, DaemonError, DetachResponse, SshHandle, daemon_binary, default_socket_path,
+    DaemonConnection, DaemonError, DaemonReader, DaemonWriter, SshHandle, daemon_binary,
+    default_socket_path,
 };
 use crate::runtime::{
     ConnectionEvent, ConnectionProblem, ConnectionStatus, RuntimeEndpoint, WorkspacePolicy,
@@ -299,6 +300,8 @@ struct EndpointActor {
     self_tx: mpsc::UnboundedSender<EndpointCommand>,
     cmd_rx: mpsc::UnboundedReceiver<EndpointCommand>,
     connection: Option<DaemonConnection>,
+    reader: Option<DaemonReader>,
+    writer: Option<DaemonWriter>,
     ssh_handle: Option<SshHandle>,
     tracked_workspaces: HashMap<String, String>,
     reconnect_attempt: u32,
@@ -317,6 +320,8 @@ impl EndpointActor {
             self_tx,
             cmd_rx,
             connection: None,
+            reader: None,
+            writer: None,
             ssh_handle: None,
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
@@ -325,14 +330,14 @@ impl EndpointActor {
 
     async fn run(mut self) {
         loop {
-            if let Some(connection) = self.connection.as_mut() {
+            if let Some(reader) = self.reader.as_mut() {
                 tokio::select! {
                     biased;
                     command = self.cmd_rx.recv() => {
                         let Some(command) = command else { break };
                         self.handle_command(command).await;
                     }
-                    message = connection.recv() => {
+                    message = reader.recv() => {
                         self.handle_runtime_message(message);
                     }
                 }
@@ -341,6 +346,58 @@ impl EndpointActor {
                 self.handle_command(command).await;
             }
         }
+    }
+
+    fn split_connection(&mut self) {
+        if let Some(conn) = self.connection.take() {
+            let (reader, writer) = conn.into_split();
+            self.reader = Some(reader);
+            self.writer = Some(writer);
+        }
+    }
+
+    async fn send_message(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+        let writer = self.writer.as_mut().ok_or(DaemonError::Disconnected)?;
+        writer.send(msg).await
+    }
+
+    async fn read_response(
+        &mut self,
+        expect_terminated: bool,
+    ) -> Result<proto::ServerMessage, DaemonError> {
+        loop {
+            let msg = {
+                let reader = self.reader.as_mut().ok_or(DaemonError::Disconnected)?;
+                reader.recv().await?.ok_or(DaemonError::Disconnected)?
+            };
+            let is_push = match &msg.msg {
+                Some(
+                    proto::server_message::Msg::Delta(_)
+                    | proto::server_message::Msg::PaneExited(_)
+                    | proto::server_message::Msg::TitleChanged(_)
+                    | proto::server_message::Msg::CwdChanged(_)
+                    | proto::server_message::Msg::Bell(_)
+                    | proto::server_message::Msg::PaneResized(_),
+                ) => true,
+                Some(proto::server_message::Msg::SessionTerminated(_)) => !expect_terminated,
+                _ => false,
+            };
+            if is_push {
+                self.dispatch_push(msg);
+            } else {
+                return Ok(msg);
+            }
+        }
+    }
+
+    fn dispatch_push(&mut self, msg: proto::ServerMessage) {
+        if let Some(proto::server_message::Msg::SessionTerminated(terminated)) = &msg.msg
+            && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id)
+        {
+            self.tracked_workspaces
+                .retain(|_, tracked| tracked != &runtime_id.to_string());
+        }
+        self.forward_push(msg);
     }
 
     async fn handle_command(&mut self, command: EndpointCommand) {
@@ -377,6 +434,7 @@ impl EndpointActor {
                     return;
                 };
 
+                self.split_connection();
                 self.tracked_workspaces.insert(workspace_id.clone(), runtime_id.clone());
                 let _ = self.event_tx.send(EndpointEvent::WorkspaceOpened {
                     workspace_id: workspace_id.clone(),
@@ -417,20 +475,47 @@ impl EndpointActor {
                 ) else {
                     return;
                 };
-                let pane_id = {
-                    let connection = self.connection.as_mut().expect("connection must exist");
-                    connection.create_pane(runtime_uuid).await
+                let msg = proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    })),
                 };
-                match pane_id {
-                    Ok(pane_id) => {
-                        let _ = self.event_tx.send(EndpointEvent::PaneCreated {
-                            workspace_id: workspace_id.clone(),
-                            layout_terminal_uuid,
-                            runtime_id,
-                            runtime_pane_id: pane_id.to_string(),
-                        });
-                        self.emit_status(&workspace_id, ConnectionStatus::Connected);
-                    }
+                if let Err(error) = self.send_message(&msg).await {
+                    self.handle_command_error(
+                        &workspace_id,
+                        ManagerOperation::CreatePane,
+                        &error,
+                    );
+                    return;
+                }
+                match self.read_response(false).await {
+                    Ok(response) => match response.msg {
+                        Some(proto::server_message::Msg::PaneCreated(created)) => {
+                            if let Ok(pane_id) = rttx_proto::bytes_to_uuid(&created.pane_id) {
+                                let _ = self.event_tx.send(EndpointEvent::PaneCreated {
+                                    workspace_id: workspace_id.clone(),
+                                    layout_terminal_uuid,
+                                    runtime_id,
+                                    runtime_pane_id: pane_id.to_string(),
+                                });
+                                self.emit_status(&workspace_id, ConnectionStatus::Connected);
+                            }
+                        }
+                        Some(proto::server_message::Msg::Error(e)) => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::CreatePane,
+                                &DaemonError::ServerError { code: e.code, message: e.message },
+                            );
+                        }
+                        _ => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::CreatePane,
+                                &DaemonError::UnexpectedMessage,
+                            );
+                        }
+                    },
                     Err(error) => {
                         self.handle_command_error(
                             &workspace_id,
@@ -472,25 +557,43 @@ impl EndpointActor {
                 ) else {
                     return;
                 };
-                let close_result = {
-                    let connection = self.connection.as_mut().expect("connection must exist");
-                    connection.close_pane(runtime_uuid, pane_uuid).await
+                let msg = proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                        pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
+                    })),
                 };
-                match close_result {
-                    Ok(_) => {
-                        let _ = self.event_tx.send(EndpointEvent::PaneClosed {
-                            workspace_id,
-                            layout_terminal_uuid,
-                            runtime_id,
-                            runtime_pane_id,
-                        });
-                    }
+                if let Err(error) = self.send_message(&msg).await {
+                    self.handle_command_error(&workspace_id, ManagerOperation::ClosePane, &error);
+                    return;
+                }
+                match self.read_response(false).await {
+                    Ok(response) => match response.msg {
+                        Some(proto::server_message::Msg::PaneClosed(_)) => {
+                            let _ = self.event_tx.send(EndpointEvent::PaneClosed {
+                                workspace_id,
+                                layout_terminal_uuid,
+                                runtime_id,
+                                runtime_pane_id,
+                            });
+                        }
+                        Some(proto::server_message::Msg::Error(e)) => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::ClosePane,
+                                &DaemonError::ServerError { code: e.code, message: e.message },
+                            );
+                        }
+                        _ => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::ClosePane,
+                                &DaemonError::UnexpectedMessage,
+                            );
+                        }
+                    },
                     Err(error) => {
-                        self.handle_command_error(
-                            &workspace_id,
-                            ManagerOperation::ClosePane,
-                            &error,
-                        );
+                        self.handle_command_error(&workspace_id, ManagerOperation::ClosePane, &error);
                     }
                 }
             }
@@ -513,27 +616,52 @@ impl EndpointActor {
                     return;
                 }
 
-                let detach_result = {
-                    let connection = self.connection.as_mut().expect("connection must exist");
-                    connection.detach_session(runtime_uuid).await
+                let msg = proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    })),
                 };
-
-                match detach_result {
-                    Ok(DetachResponse::Detached(_)) => {
-                        self.tracked_workspaces.remove(&workspace_id);
-                        let _ = self
-                            .event_tx
-                            .send(EndpointEvent::WorkspaceDetached { workspace_id, runtime_id });
-                    }
-                    Ok(DetachResponse::Terminated(terminated)) => {
-                        self.tracked_workspaces.remove(&workspace_id);
-                        let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
-                            workspace_id,
-                            runtime_id,
-                            reason: proto::RuntimeTerminationReason::try_from(terminated.reason)
-                                .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
-                        });
-                    }
+                if let Err(error) = self.send_message(&msg).await {
+                    self.handle_command_error(
+                        &workspace_id,
+                        ManagerOperation::DetachRuntime,
+                        &error,
+                    );
+                    return;
+                }
+                match self.read_response(true).await {
+                    Ok(response) => match response.msg {
+                        Some(proto::server_message::Msg::SessionDetached(_)) => {
+                            self.tracked_workspaces.remove(&workspace_id);
+                            let _ = self.event_tx.send(EndpointEvent::WorkspaceDetached {
+                                workspace_id,
+                                runtime_id,
+                            });
+                        }
+                        Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
+                            self.tracked_workspaces.remove(&workspace_id);
+                            let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
+                                workspace_id,
+                                runtime_id,
+                                reason: proto::RuntimeTerminationReason::try_from(terminated.reason)
+                                    .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
+                            });
+                        }
+                        Some(proto::server_message::Msg::Error(e)) => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::DetachRuntime,
+                                &DaemonError::ServerError { code: e.code, message: e.message },
+                            );
+                        }
+                        _ => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::DetachRuntime,
+                                &DaemonError::UnexpectedMessage,
+                            );
+                        }
+                    },
                     Err(error) => {
                         self.handle_command_error(
                             &workspace_id,
@@ -562,20 +690,47 @@ impl EndpointActor {
                     return;
                 }
 
-                let terminated = {
-                    let connection = self.connection.as_mut().expect("connection must exist");
-                    connection.terminate_session(runtime_uuid).await
+                let msg = proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::TerminateSession(
+                        proto::TerminateSession {
+                            session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                        },
+                    )),
                 };
-                match terminated {
-                    Ok(terminated) => {
-                        self.tracked_workspaces.remove(&workspace_id);
-                        let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
-                            workspace_id,
-                            runtime_id,
-                            reason: proto::RuntimeTerminationReason::try_from(terminated.reason)
-                                .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
-                        });
-                    }
+                if let Err(error) = self.send_message(&msg).await {
+                    self.handle_command_error(
+                        &workspace_id,
+                        ManagerOperation::TerminateRuntime,
+                        &error,
+                    );
+                    return;
+                }
+                match self.read_response(true).await {
+                    Ok(response) => match response.msg {
+                        Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
+                            self.tracked_workspaces.remove(&workspace_id);
+                            let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
+                                workspace_id,
+                                runtime_id,
+                                reason: proto::RuntimeTerminationReason::try_from(terminated.reason)
+                                    .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
+                            });
+                        }
+                        Some(proto::server_message::Msg::Error(e)) => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::TerminateRuntime,
+                                &DaemonError::ServerError { code: e.code, message: e.message },
+                            );
+                        }
+                        _ => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::TerminateRuntime,
+                                &DaemonError::UnexpectedMessage,
+                            );
+                        }
+                    },
                     Err(error) => {
                         self.handle_command_error(
                             &workspace_id,
@@ -602,18 +757,15 @@ impl EndpointActor {
                 ) else {
                     return;
                 };
-                if let Some(connection) = self.connection.as_mut()
-                    && let Err(error) = connection
-                        .send(&proto::ClientMessage {
-                            msg: Some(proto::client_message::Msg::Input(proto::Input {
-                                session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                                pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
-                                data,
-                            })),
-                        })
-                        .await
+                if let Some(writer) = self.writer.as_mut()
+                    && let Err(error) =
+                        writer.send_input(runtime_uuid, pane_uuid, &data).await
                 {
-                    self.handle_command_error(&workspace_id, ManagerOperation::SendInput, &error);
+                    self.handle_command_error(
+                        &workspace_id,
+                        ManagerOperation::SendInput,
+                        &error,
+                    );
                 }
             }
             EndpointCommand::ResizePane {
@@ -639,19 +791,15 @@ impl EndpointActor {
                 ) else {
                     return;
                 };
-                if let Some(connection) = self.connection.as_mut()
-                    && let Err(error) = connection
-                        .send(&proto::ClientMessage {
-                            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                                session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                                pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
-                                cols: u32::from(cols),
-                                rows: u32::from(rows),
-                            })),
-                        })
-                        .await
+                if let Some(writer) = self.writer.as_mut()
+                    && let Err(error) =
+                        writer.send_resize(runtime_uuid, pane_uuid, cols, rows).await
                 {
-                    self.handle_command_error(&workspace_id, ManagerOperation::ResizePane, &error);
+                    self.handle_command_error(
+                        &workspace_id,
+                        ManagerOperation::ResizePane,
+                        &error,
+                    );
                 }
             }
             EndpointCommand::RefreshInventory => {
@@ -665,7 +813,31 @@ impl EndpointActor {
                     );
                     return;
                 }
-                let list_result = {
+                let list_result = if self.writer.is_some() {
+                    let msg = proto::ClientMessage {
+                        msg: Some(proto::client_message::Msg::ListSessions(
+                            proto::ListSessions {},
+                        )),
+                    };
+                    match self.send_message(&msg).await {
+                        Ok(()) => match self.read_response(false).await {
+                            Ok(response) => match response.msg {
+                                Some(proto::server_message::Msg::SessionList(list)) => {
+                                    Ok(list.sessions)
+                                }
+                                Some(proto::server_message::Msg::Error(e)) => {
+                                    Err(DaemonError::ServerError {
+                                        code: e.code,
+                                        message: e.message,
+                                    })
+                                }
+                                _ => Err(DaemonError::UnexpectedMessage),
+                            },
+                            Err(e) => Err(e),
+                        },
+                        Err(e) => Err(e),
+                    }
+                } else {
                     let connection = self.connection.as_mut().expect("connection must exist");
                     connection.list_sessions().await
                 };
@@ -684,7 +856,7 @@ impl EndpointActor {
                 }
             }
             EndpointCommand::Reconnect => {
-                if self.connection.is_some() {
+                if self.writer.is_some() || self.connection.is_some() {
                     return;
                 }
                 let workspaces: Vec<_> = self.tracked_workspaces.keys().cloned().collect();
@@ -710,6 +882,8 @@ impl EndpointActor {
                         self.emit_status(&workspace_id, ConnectionStatus::Recovered);
                     }
                 }
+
+                self.split_connection();
             }
             EndpointCommand::ForgetWorkspace { workspace_id } => {
                 self.tracked_workspaces.remove(&workspace_id);
@@ -718,7 +892,7 @@ impl EndpointActor {
     }
 
     async fn ensure_connected(&mut self, workspace_id: &str) -> Result<(), ConnectionProblem> {
-        if self.connection.is_some() {
+        if self.writer.is_some() || self.connection.is_some() {
             return Ok(());
         }
 
@@ -870,6 +1044,8 @@ impl EndpointActor {
 
     fn handle_disconnect(&mut self) {
         self.connection = None;
+        self.reader = None;
+        self.writer = None;
         self.ssh_handle = None;
         if self.tracked_workspaces.is_empty() {
             return;
