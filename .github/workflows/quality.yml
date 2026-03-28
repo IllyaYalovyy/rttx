@@ -46,6 +46,7 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             git gcc pkg-config rustup \
+            protobuf-compiler protobuf-devel \
             gtk4-devel libadwaita-devel vte291-gtk4-devel
 
       - uses: actions/checkout@v5
@@ -88,6 +89,7 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             git gcc pkg-config rustup \
+            protobuf-compiler protobuf-devel \
             gtk4-devel libadwaita-devel vte291-gtk4-devel
 
       - uses: actions/checkout@v5
