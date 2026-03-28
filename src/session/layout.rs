@@ -1190,6 +1190,44 @@ mod tests {
     }
 
     #[test]
+    fn normalize_runtime_metadata_preserves_detached_remote_workspace_without_runtime_id() {
+        let json = r#"{
+            "uuid": "workspace-1",
+            "name": "Detached Remote",
+            "layout": {"Terminal": {"uuid": "pane-1", "profile": null, "cwd": null, "custom_title": null}},
+            "terminal_recovery": {},
+            "active_terminal_uuid": "pane-1",
+            "input_sync": false,
+            "mode": {
+                "remote-persistent": {
+                    "host": "deploy@example.com",
+                    "daemon_session_id": ""
+                }
+            }
+        }"#;
+
+        let mut session: SessionState = serde_json::from_str(json).unwrap();
+        session.normalize_runtime_metadata();
+
+        assert!(session.runtime.is_managed());
+        assert_eq!(
+            session.runtime.endpoint,
+            RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
+        );
+        assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
+        assert_eq!(session.runtime.runtime_id, None);
+        assert_eq!(
+            session.mode,
+            SessionMode::RemotePersistent {
+                host: "deploy@example.com".into(),
+                daemon_session_id: String::new(),
+            }
+        );
+        assert_eq!(session.runtime.pane_bindings.get("pane-1").map(String::as_str), Some("pane-1"));
+        assert!(session.runtime.pending_layout_panes.contains("pane-1"));
+    }
+
+    #[test]
     fn default_window_state_is_valid() {
         let state = WindowState::default();
         assert_eq!(state.sessions.len(), 1);

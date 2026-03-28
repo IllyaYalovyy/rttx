@@ -5679,6 +5679,62 @@ mod tests {
     }
 
     #[test]
+    fn save_state_persists_detached_workspace_runtime_binding() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.save-detached-workspace-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let session_state = crate::test_helpers::managed_session_with_runtime(
+            "workspace-detached-save",
+            "Detached Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceDetached {
+            workspace_id: session_state.uuid.clone(),
+            runtime_id: runtime_id.clone(),
+        });
+        window.save_state();
+
+        let saved_state = session::load_window_state();
+        let saved_session = saved_state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == session_state.uuid)
+            .expect("detached workspace should persist in saved state");
+
+        assert!(saved_session.runtime.is_managed());
+        assert_eq!(
+            saved_session.runtime.endpoint,
+            RuntimeEndpoint::Remote { host: "builder.example".into() }
+        );
+        assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
+        assert_eq!(saved_session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(
+            saved_session.runtime.pane_bindings.get("managed-pane").map(String::as_str),
+            Some("managed-pane")
+        );
+        assert!(saved_session.runtime.pending_layout_panes.contains("managed-pane"));
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
     fn runtime_terminated_event_clears_runtime_id_but_keeps_workspace() {
         require_display!();
 
@@ -5723,6 +5779,70 @@ mod tests {
             window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
             Some(&ConnectionStatus::Disconnected)
         );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn save_state_persists_terminated_workspace_without_runtime_id() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.save-terminated-workspace-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let session_state = crate::test_helpers::managed_session_with_runtime(
+            "workspace-terminated-save",
+            "Terminated Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::RuntimeTerminated {
+            workspace_id: session_state.uuid.clone(),
+            runtime_id,
+            reason: rttx_proto::proto::RuntimeTerminationReason::Explicit,
+        });
+        window.save_state();
+
+        let saved_state = session::load_window_state();
+        let saved_session = saved_state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == session_state.uuid)
+            .expect("terminated workspace should persist in saved state");
+
+        assert!(saved_session.runtime.is_managed());
+        assert_eq!(
+            saved_session.runtime.endpoint,
+            RuntimeEndpoint::Remote { host: "builder.example".into() }
+        );
+        assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
+        assert_eq!(saved_session.runtime.runtime_id, None);
+        assert_eq!(
+            saved_session.mode,
+            crate::session::SessionMode::RemotePersistent {
+                host: "builder.example".into(),
+                daemon_session_id: String::new(),
+            }
+        );
+        assert_eq!(
+            saved_session.runtime.pane_bindings.get("managed-pane").map(String::as_str),
+            Some("managed-pane")
+        );
+        assert!(saved_session.runtime.pending_layout_panes.contains("managed-pane"));
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
