@@ -16,12 +16,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: rttx
+
+      - name: Read pinned rttxd ref
+        id: rttxd-ref
+        run: echo "ref=$(tr -d '\n' < rttx/.github/rttxd-ref)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: IllyaYalovyy/rttxd
+          ref: ${{ steps.rttxd-ref.outputs.ref }}
+          path: rttxd
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
 
       - name: Check formatting
+        working-directory: rttx
         run: cargo fmt --check
 
   clippy:
@@ -36,6 +49,18 @@ jobs:
             gtk4-devel libadwaita-devel vte291-gtk4-devel
 
       - uses: actions/checkout@v5
+        with:
+          path: rttx
+
+      - name: Read pinned rttxd ref
+        id: rttxd-ref
+        run: echo "ref=$(tr -d '\n' < rttx/.github/rttxd-ref)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: IllyaYalovyy/rttxd
+          ref: ${{ steps.rttxd-ref.outputs.ref }}
+          path: rttxd
 
       - name: Setup Rust
         env:
@@ -49,7 +74,10 @@ jobs:
         env:
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
-        run: cargo clippy -- -D warnings
+        working-directory: rttx
+        run: |
+          bash .github/scripts/ensure-sibling-rttxd.sh
+          cargo clippy -- -D warnings
 
   test:
     name: Test
@@ -63,6 +91,18 @@ jobs:
             gtk4-devel libadwaita-devel vte291-gtk4-devel
 
       - uses: actions/checkout@v5
+        with:
+          path: rttx
+
+      - name: Read pinned rttxd ref
+        id: rttxd-ref
+        run: echo "ref=$(tr -d '\n' < rttx/.github/rttxd-ref)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: IllyaYalovyy/rttxd
+          ref: ${{ steps.rttxd-ref.outputs.ref }}
+          path: rttxd
 
       - name: Setup Rust
         env:
@@ -76,6 +116,7 @@ jobs:
         env:
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
+        working-directory: rttx
         run: bash .github/scripts/run-quality-tests.sh
 
   manifest:
@@ -83,6 +124,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: rttx
 
       - name: Validate Flatpak manifest JSON
+        working-directory: rttx
         run: python3 -m json.tool io.github.IllyaYalovyy.rttx.json > /dev/null

@@ -3,6 +3,9 @@ set -euo pipefail
 
 export GTK_A11Y="${GTK_A11Y:-none}"
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+bash "${script_dir}/ensure-sibling-rttxd.sh"
+
 broadway_cmd=""
 broadway_pid=""
 readonly LIBRARY_SKIP_PATTERNS=(
