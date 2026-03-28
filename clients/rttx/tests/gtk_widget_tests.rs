@@ -1,3 +1,5 @@
+#![allow(clippy::doc_markdown, clippy::items_after_statements, clippy::redundant_clone)]
+
 /// GTK widget integration tests.
 ///
 /// These tests instantiate real GTK4 widgets to catch bugs at the Rust/C
@@ -26,14 +28,12 @@ fn ensure_gtk_init() -> bool {
         // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
         #[allow(unsafe_code)]
         unsafe {
-            std::env::set_var("GTK_A11Y", "none")
+            std::env::set_var("GTK_A11Y", "none");
         };
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
             .unwrap_or(false);
-        if ok {
-            if let Some(display) = gtk4::gdk::Display::default() {
-                std::mem::forget(display);
-            }
+        if ok && let Some(display) = gtk4::gdk::Display::default() {
+            std::mem::forget(display);
         }
         GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
     });

@@ -11,14 +11,12 @@ fn ensure_gtk_init() -> bool {
         // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
         #[allow(unsafe_code)]
         unsafe {
-            std::env::set_var("GTK_A11Y", "none")
+            std::env::set_var("GTK_A11Y", "none");
         };
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
             .unwrap_or(false);
-        if ok {
-            if let Some(display) = gtk4::gdk::Display::default() {
-                std::mem::forget(display);
-            }
+        if ok && let Some(display) = gtk4::gdk::Display::default() {
+            std::mem::forget(display);
         }
         GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
     });
@@ -130,7 +128,7 @@ fn test_rebuild_session_content_reuses_terminals() {
     let layout2 = LayoutNode::Split {
         orientation: SplitOrientation::Horizontal,
         ratio: 0.5,
-        first: Box::new(layout1.clone()),
+        first: Box::new(layout1),
         second: Box::new(LayoutNode::Terminal {
             uuid: "t2".to_string(),
             profile: None,
@@ -139,10 +137,10 @@ fn test_rebuild_session_content_reuses_terminals() {
         }),
     };
 
-    if let Some(t1) = terminals.borrow().get("t1") {
-        if t1.parent().is_some() {
-            t1.unparent();
-        }
+    if let Some(t1) = terminals.borrow().get("t1")
+        && t1.parent().is_some()
+    {
+        t1.unparent();
     }
 
     let widget2 = build_widget(&layout2);
@@ -178,9 +176,9 @@ fn test_build_layout_widget_with_parented_terminals() {
     assert!(t1.parent().is_none());
 }
 
-/// capture_paned_ratios must read the live Paned divider position back into
+/// `capture_paned_ratios` must read the live Paned divider position back into
 /// the layout's ratio field.  This is the invariant that makes split positions
-/// persist across restarts: capture_state calls capture_paned_ratios before
+/// persist across restarts: `capture_state` calls `capture_paned_ratios` before
 /// serialising, so user-dragged positions are saved as ratios.
 #[test]
 fn test_capture_paned_ratios_reads_position() {
@@ -213,7 +211,7 @@ fn test_capture_paned_ratios_reads_position() {
     // Simulate the user dragging the handle to 30% from the left.
     paned.set_position(240); // 240/800 = 0.3
 
-    let mut updated = layout.clone();
+    let mut updated = layout;
     session::capture_paned_ratios(&mut updated, &widget);
 
     let LayoutNode::Split { ratio, .. } = updated else {
@@ -222,7 +220,7 @@ fn test_capture_paned_ratios_reads_position() {
     assert!((ratio - 0.3).abs() < 0.02, "ratio should be ≈0.3 after capture, got {ratio}");
 }
 
-/// capture_paned_ratios must recurse into nested splits.
+/// `capture_paned_ratios` must recurse into nested splits.
 #[test]
 fn test_capture_paned_ratios_nested() {
     require_display!();
@@ -268,7 +266,7 @@ fn test_capture_paned_ratios_nested() {
     inner.allocate(400, 600, -1, None);
     inner.set_position(100); // 100/400 = 0.25
 
-    let mut updated = layout.clone();
+    let mut updated = layout;
     session::capture_paned_ratios(&mut updated, &widget);
 
     let LayoutNode::Split { ratio: outer_ratio, first, .. } = updated else {
@@ -282,8 +280,8 @@ fn test_capture_paned_ratios_nested() {
     assert!((inner_ratio - 0.25).abs() < 0.02, "inner ratio should be ≈0.25, got {inner_ratio}");
 }
 
-/// apply_paned_ratios must set Paned positions from layout ratios and
-/// current allocated sizes.  This is the inverse of capture_paned_ratios
+/// `apply_paned_ratios` must set `Paned` positions from layout ratios and
+/// current allocated sizes.  This is the inverse of `capture_paned_ratios`
 /// and is called (via idle) after adding the widget tree to the window so
 /// splits are visually equal on first display.
 #[test]
@@ -409,7 +407,7 @@ fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
     paned.allocate(801, 600, -1, None);
     pump_events(50);
 
-    let mut updated = layout.clone();
+    let mut updated = layout;
     session::capture_paned_ratios(&mut updated, &widget);
 
     let LayoutNode::Split { ratio, .. } = updated else {

@@ -10,10 +10,12 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
 
 
-# Path to the debug binary (faster to build than release, good enough for UI tests)
-BINARY = os.path.join(
-    os.path.dirname(__file__), "..", "..", "target", "debug", "rttx"
+# Path to the debug binary (faster to build than release, good enough for UI tests).
+REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
+TARGET_DIR = os.environ.get("CARGO_TARGET_DIR", os.path.join(REPO_ROOT, "target"))
+BINARY = os.path.join(TARGET_DIR, "debug", "rttx")
 
 # Private Wayland socket name — avoids any clash with the user's compositor.
 WAYLAND_SOCKET = "rttx-test"
@@ -220,4 +222,3 @@ class AppFixture:
         """Return the first top-level window node."""
         wins = find_all_by_role(self.atspi_app, Atspi.Role.FRAME)
         return wins[0] if wins else None
-

@@ -21,6 +21,7 @@ mod imp {
         pub visual_bell: Cell<bool>,
         pub pending_shell_inputs: RefCell<Vec<String>>,
         #[cfg(test)]
+        #[allow(clippy::option_option)]
         pub current_directory_override: RefCell<Option<Option<String>>>,
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
@@ -791,7 +792,7 @@ mod tests {
     use gtk4::gio;
     use gtk4::prelude::*;
 
-    /// Verify that the RESET constant inside reset_terminal_state() contains
+    /// Verify that the RESET constant inside `reset_terminal_state()` contains
     /// the expected escape sequences without requiring a live VTE widget.
     #[test]
     fn reset_terminal_state_sequences() {
@@ -854,7 +855,7 @@ mod tests {
 
     #[test]
     fn strip_prefix_regression() {
-        let old_way = "file:///home/user/my%20dir".strip_prefix("file://").map(|p| p.to_string());
+        let old_way = "file:///home/user/my%20dir".strip_prefix("file://").map(str::to_string);
         let new_way = parse_file_uri("file:///home/user/my%20dir");
         assert_eq!(old_way, Some("/home/user/my%20dir".into()));
         assert_eq!(new_way, Some("/home/user/my dir".into()));

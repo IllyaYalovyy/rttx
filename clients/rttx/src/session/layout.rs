@@ -1606,7 +1606,7 @@ mod tests {
             uuid: "s1".into(),
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
-            terminal_recovery: Default::default(),
+            terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
             mode: SessionMode::default(),
@@ -1668,7 +1668,7 @@ pub mod proptests {
         fn swap_preserves_all_uuids(layout in arb_layout()) {
             let uuids = layout.terminal_uuids();
             if uuids.len() >= 2 {
-                let mut new_layout = layout.clone();
+                let mut new_layout = layout;
                 new_layout.swap_terminals(&uuids[0], &uuids[1]);
                 let mut new_uuids = new_layout.terminal_uuids();
                 let mut old_uuids = uuids;
@@ -1695,7 +1695,7 @@ pub mod proptests {
                 let target = &uuids[0];
                 let new_layout = layout.split_terminal(target, SplitOrientation::Vertical).unwrap();
                 if let LayoutNode::Split { ratio: r2, .. } = new_layout {
-                    prop_assert_eq!(*ratio, r2);
+                    prop_assert!((*ratio - r2).abs() < f64::EPSILON);
                 }
             }
         }
@@ -1727,11 +1727,12 @@ pub mod proptests {
         fn split_remove_restores_uuids(layout in arb_layout()) {
             let original_uuids = layout.terminal_uuids();
             let target = &original_uuids[0];
-            if let Some((new_layout, new_uuid)) = layout.split_terminal_with_new_uuid(target, SplitOrientation::Horizontal) {
-                if let Some(restored_layout) = new_layout.remove_terminal(&new_uuid) {
-                    let restored = restored_layout.terminal_uuids();
-                    prop_assert_eq!(original_uuids, restored, "Split+remove must restore original UUID set");
-                }
+            if let Some((new_layout, new_uuid)) =
+                layout.split_terminal_with_new_uuid(target, SplitOrientation::Horizontal)
+                && let Some(restored_layout) = new_layout.remove_terminal(&new_uuid)
+            {
+                let restored = restored_layout.terminal_uuids();
+                prop_assert_eq!(original_uuids, restored, "Split+remove must restore original UUID set");
             }
         }
     }

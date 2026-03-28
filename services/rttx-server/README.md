@@ -1,6 +1,6 @@
-# rttxd
+# rttx-server
 
-Daemon runtime service for the [rttx](https://github.com/IllyaYalovyy/rttx) tiling terminal emulator.
+Daemon runtime service for the [rttx](https://github.com/IllyaYalovyy/rttx) tiling terminal environment.
 
 `rttx-server` decouples runtime lifetime from GUI lifetime. rttx workspaces attach and detach
 freely while runtimes continue according to their policy and endpoint availability.
@@ -49,8 +49,10 @@ Instead the GUI shows explicit connection state and retries transient failures a
 
 ## Building
 
+From the repository root:
+
 ```bash
-cargo build
+cargo build -p rttx-server
 ```
 
 Requires `protoc` (protobuf compiler) for code generation:
@@ -122,10 +124,10 @@ Dev mode uses completely separate paths:
 
 ```bash
 # Run dev daemon in foreground with debug logging
-RTTX_DEV_MODE=1 cargo run -- start --foreground
+RTTX_DEV_MODE=1 cargo run -p rttx-server -- start --foreground
 
 # Override log level
-RTTX_DEV_MODE=1 RUST_LOG=trace cargo run -- start --foreground
+RTTX_DEV_MODE=1 RUST_LOG=trace cargo run -p rttx-server -- start --foreground
 ```
 
 The rttx GUI in dev mode (`RTTX_DEV_MODE=1`) automatically connects to the dev daemon and
@@ -133,11 +135,12 @@ propagates the env var when auto-starting it.
 
 ## Testing
 
+From the repository root:
+
 ```bash
-cargo test                          # All tests (56 total)
-cargo test -p rttx-proto            # Protocol framing tests
-cargo test -p rttx-server --lib     # Unit tests
-cargo test -p rttx-server --tests   # Integration tests
+cargo test -p rttx-proto
+cargo test -p rttx-server --lib
+cargo test -p rttx-server --tests
 ```
 
 Integration tests cover:

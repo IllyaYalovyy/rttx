@@ -35,6 +35,8 @@ endif
 
 # Find cargo
 cargo = find_program('cargo')
+client_dir = meson.project_source_root() / 'clients' / 'rttx'
+client_data_dir = client_dir / 'data'
 
 # Build the Rust binary with formatting and clippy verification
 custom_target('rttx-binary',
@@ -42,8 +44,8 @@ custom_target('rttx-binary',
   command: [
     'sh', '-c',
     cargo.full_path() + ' fmt --check && ' +
-    cargo.full_path() + ' clippy -- -D warnings && ' +
-    cargo.full_path() + ' build --release ' + cargo_vte_features + ' --manifest-path ' + meson.project_source_root() / 'Cargo.toml' +
+    cargo.full_path() + ' clippy --manifest-path ' + client_dir / 'Cargo.toml' + ' -- -D warnings && ' +
+    cargo.full_path() + ' build --release -p rttx ' + cargo_vte_features + ' --manifest-path ' + meson.project_source_root() / 'Cargo.toml' +
     ' --target-dir ' + meson.project_build_root() / 'cargo-target && ' +
     'cp ' + meson.project_build_root() / 'cargo-target' / 'release' / 'rttx' + ' @OUTPUT@'
   ],
@@ -55,23 +57,23 @@ custom_target('rttx-binary',
 
 # Desktop file
 install_data(
-  'data' / app_id + '.desktop',
+  client_data_dir / app_id + '.desktop',
   install_dir: desktopdir,
 )
 
 # AppStream metainfo
 install_data(
-  'data' / app_id + '.metainfo.xml',
+  client_data_dir / app_id + '.metainfo.xml',
   install_dir: metainfodir,
 )
 
 # Icon
 install_data(
-  'data' / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.svg',
+  client_data_dir / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.svg',
   install_dir: iconsdir / 'hicolor' / 'scalable' / 'apps',
 )
 
 install_data(
-  'data' / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.Devel.svg',
+  client_data_dir / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.Devel.svg',
   install_dir: iconsdir / 'hicolor' / 'scalable' / 'apps',
 )

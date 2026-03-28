@@ -48,7 +48,7 @@ jobs:
             org.freedesktop.Sdk.Extension.rust-stable//25.08
 
       - name: Build Flatpak bundle
-        run: ./packaging/flatpak/build-bundle.sh
+        run: ./packaging/rttx/flatpak/build-bundle.sh
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4
@@ -80,15 +80,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgtk-4-dev \
             libadwaita-1-dev \
-            libvte-2.91-gtk4-dev
+            libvte-2.91-gtk4-dev \
+            protobuf-compiler
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release -p rttx
 
       - name: Build DEB
+        working-directory: clients/rttx
         run: cargo deb --no-build
 
       - name: Upload DEB
@@ -122,18 +124,20 @@ jobs:
             libgtk-4-dev \
             libadwaita-1-dev \
             libvte-2.91-gtk4-dev \
+            protobuf-compiler \
             rpm
 
       - name: Install cargo-generate-rpm
         run: cargo install cargo-generate-rpm
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release -p rttx
 
       - name: Strip binary
         run: strip target/release/rttx
 
       - name: Build RPM
+        working-directory: clients/rttx
         run: cargo generate-rpm
 
       - name: Upload RPM

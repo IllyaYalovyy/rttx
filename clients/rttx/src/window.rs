@@ -3008,6 +3008,14 @@ fn preferred_command_target_uuid(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::default_trait_access,
+    clippy::doc_markdown,
+    clippy::field_reassign_with_default,
+    clippy::match_wildcard_for_single_variants,
+    clippy::redundant_clone,
+    clippy::redundant_closure_for_method_calls
+)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};

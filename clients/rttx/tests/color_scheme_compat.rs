@@ -16,7 +16,7 @@ fn load_all_tilix_schemes_from_data_dir() {
         .join("tilix/data/schemes");
 
     if !tilix_schemes_dir.exists() {
-        eprintln!("Skipping: tilix schemes dir not found at {:?}", tilix_schemes_dir);
+        eprintln!("Skipping: tilix schemes dir not found at {tilix_schemes_dir:?}");
         return;
     }
 
@@ -29,7 +29,7 @@ fn load_all_tilix_schemes_from_data_dir() {
             match load_scheme_file(&path) {
                 Ok(scheme) => {
                     // Verify basic invariants
-                    assert!(!scheme.name.is_empty(), "Scheme name empty: {:?}", path);
+                    assert!(!scheme.name.is_empty(), "Scheme name empty: {path:?}");
                     assert_eq!(scheme.palette.len(), 16, "Wrong palette size in {:?}", path);
 
                     // Verify all palette colors parse
@@ -56,7 +56,7 @@ fn load_all_tilix_schemes_from_data_dir() {
     }
 
     assert!(failed.is_empty(), "Failed to load {} schemes: {:?}", failed.len(), failed);
-    assert!(loaded > 0, "No schemes were loaded from {:?}", tilix_schemes_dir);
+    assert!(loaded > 0, "No schemes were loaded from {tilix_schemes_dir:?}");
     eprintln!("Successfully loaded and validated {loaded} Tilix color schemes");
 }
 

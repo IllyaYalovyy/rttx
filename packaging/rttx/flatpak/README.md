@@ -3,7 +3,7 @@
 This directory documents the current Flatpak strategy for `rttx`.
 
 The repository keeps a **safe default manifest** at
-[`io.github.IllyaYalovyy.rttx.json`](../../io.github.IllyaYalovyy.rttx.json).
+[`packaging/rttx/io.github.IllyaYalovyy.rttx.json`](../io.github.IllyaYalovyy.rttx.json).
 It is intentionally conservative:
 
 - current GNOME runtime
@@ -73,7 +73,7 @@ currently available extension before scripting CI around it.
 From the repository root:
 
 ```bash
-flatpak-builder --user --install --force-clean flatpak-build io.github.IllyaYalovyy.rttx.json
+flatpak-builder --user --install --force-clean flatpak-build packaging/rttx/io.github.IllyaYalovyy.rttx.json
 flatpak run io.github.IllyaYalovyy.rttx
 ```
 
@@ -83,7 +83,7 @@ The manifest bundles VTE 0.78.7 as a source module (the GNOME 49 SDK does not sh
 To export a standalone `.flatpak` bundle for testing or distribution:
 
 ```bash
-./packaging/flatpak/build-bundle.sh
+./packaging/rttx/flatpak/build-bundle.sh
 # produces rttx.flatpak in the repository root
 ```
 
@@ -96,13 +96,13 @@ bundles VTE 0.78.7 as a source module (official GNOME tarball, GTK4-only Meson c
 
 ### Rust crates (offline)
 
-[`packaging/flatpak/cargo-sources.json`](cargo-sources.json) lists every Rust dependency for
+[`packaging/rttx/flatpak/cargo-sources.json`](cargo-sources.json) lists every Rust dependency for
 offline builds inside the Flatpak sandbox (Cargo cannot reach `crates.io`).
 
 Regenerate whenever `Cargo.lock` changes:
 
 ```bash
-flatpak-cargo-generator Cargo.lock -o packaging/flatpak/cargo-sources.json
+flatpak-cargo-generator Cargo.lock -o packaging/rttx/flatpak/cargo-sources.json
 ```
 
 If you use the Python script from `flatpak-builder-tools` directly, the command name may differ.

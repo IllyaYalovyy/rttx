@@ -15,14 +15,12 @@ fn ensure_gtk_init() -> bool {
         // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
         #[allow(unsafe_code)]
         unsafe {
-            std::env::set_var("GTK_A11Y", "none")
+            std::env::set_var("GTK_A11Y", "none");
         };
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
             .unwrap_or(false);
-        if ok {
-            if let Some(display) = gtk4::gdk::Display::default() {
-                std::mem::forget(display);
-            }
+        if ok && let Some(display) = gtk4::gdk::Display::default() {
+            std::mem::forget(display);
         }
         GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
     });
@@ -92,11 +90,10 @@ fn leaf_descriptions(leaves: &[gtk4::Widget]) -> Vec<String> {
     leaves
         .iter()
         .map(|leaf| {
-            if let Ok(term) = leaf.clone().downcast::<TerminalWidget>() {
-                format!("{}({})", leaf.type_().name(), term.title_label().label())
-            } else {
-                leaf.type_().name().to_string()
-            }
+            leaf.clone().downcast::<TerminalWidget>().map_or_else(
+                |_| leaf.type_().name().to_string(),
+                |term| format!("{}({})", leaf.type_().name(), term.title_label().label()),
+            )
         })
         .collect()
 }
@@ -167,7 +164,7 @@ fn assert_live_tree_matches_layout(
             leaves.iter().map(|leaf| format!("0x{:x}", widget_ptr(leaf))).collect::<Vec<_>>(),
         );
         assert!(
-            leaves.iter().any(|leaf| *leaf == term_widget),
+            leaves.contains(&term_widget),
             "Rebuild {rebuild_index}: terminal {uuid} is not reachable as a leaf from the current root",
         );
     }

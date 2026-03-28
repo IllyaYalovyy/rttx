@@ -280,7 +280,7 @@ mod tests {
             // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
             #[allow(unsafe_code)]
             unsafe {
-                std::env::set_var("GTK_A11Y", "none")
+                std::env::set_var("GTK_A11Y", "none");
             };
             let ok =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
@@ -305,9 +305,7 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let tmp = TempDir::new().unwrap();
-        let mut state = WindowState::default();
-        state.width = 123;
-        state.height = 456;
+        let state = WindowState { width: 123, height: 456, ..WindowState::default() };
 
         let path = tmp.path().join("sessions.json");
         let json = serde_json::to_string_pretty(&state).unwrap();
@@ -344,8 +342,7 @@ mod tests {
     #[case(99)]
     fn window_state_active_index_preserved(#[case] index: usize) {
         let tmp = TempDir::new().unwrap();
-        let mut state = WindowState::default();
-        state.active_session_index = index;
+        let state = WindowState { active_session_index: index, ..WindowState::default() };
 
         let path = tmp.path().join("sessions.json");
         let json = serde_json::to_string_pretty(&state).unwrap();

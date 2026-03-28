@@ -1,3 +1,10 @@
+#![allow(
+    clippy::default_trait_access,
+    clippy::doc_markdown,
+    clippy::items_after_statements,
+    clippy::useless_vec
+)]
+
 /// Contract tests for the Rust/GTK boundary.
 ///
 /// GTK is a C library. Our Rust code makes assumptions about GTK behavior
@@ -124,7 +131,7 @@ fn contract_remove_leaves_no_dangling_references() {
                 "Terminal '{uuid}' still in tree after removal"
             );
             assert!(
-                !result.terminal_uuids().contains(&uuid.to_string()),
+                !result.terminal_uuids().contains(&uuid),
                 "Terminal '{uuid}' still in UUID list after removal"
             );
         }
@@ -149,7 +156,7 @@ fn contract_any_constructible_state_roundtrips() {
         WindowState {
             sessions: vec![SessionState {
                 uuid: "s".into(),
-                name: "".into(),
+                name: String::new(),
                 layout: term("t"),
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,

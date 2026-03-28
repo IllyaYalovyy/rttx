@@ -345,10 +345,10 @@ mod tests {
         let mut schemes = Vec::new();
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json") {
-                if let Ok(s) = load_scheme_file(&path) {
-                    schemes.push(s);
-                }
+            if path.extension().is_some_and(|e| e == "json")
+                && let Ok(s) = load_scheme_file(&path)
+            {
+                schemes.push(s);
             }
         }
         schemes.sort_by(|a, b| a.name.cmp(&b.name));

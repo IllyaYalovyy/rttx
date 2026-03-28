@@ -180,7 +180,7 @@ On a version tag (`v*`):
 
 - [x] COPR RPM repository live
 - [ ] **DEB packaging** — Add `[package.metadata.deb]` to `Cargo.toml`; configure `cargo-deb` — tracked in #108
-- [x] **Flatpak manifest** — `io.github.IllyaYalovyy.rttx.json`; offline Cargo dependencies via `rust-bundle` extension (implemented; see RFC-011)
+- [x] **Flatpak manifest** — `packaging/rttx/io.github.IllyaYalovyy.rttx.json`; offline Cargo dependencies via `rust-bundle` extension (implemented; see RFC-011)
 - [ ] **AppImage** — `linuxdeploy` with GTK + Rust plugins
 - [ ] **GitHub Actions release workflow** — `.github/workflows/release.yml`; all formats on version tag — designed in RFC-012
 

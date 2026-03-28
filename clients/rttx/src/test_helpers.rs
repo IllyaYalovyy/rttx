@@ -5,18 +5,20 @@
 use crate::color_scheme::ColorScheme;
 use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 use crate::session::layout::{
-    LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState,
+    LayoutNode, PaneRecovery, SessionMode, SessionState, SplitOrientation, WindowState,
 };
 use std::path::{Path, PathBuf};
 
 // ── Layout builders ──────────────────────────────────────────────
 
 /// Build a terminal node with a deterministic UUID.
+#[must_use]
 pub fn term(id: &str) -> LayoutNode {
     LayoutNode::Terminal { uuid: id.to_string(), profile: None, cwd: None, custom_title: None }
 }
 
 /// Build a terminal node with all fields populated.
+#[must_use]
 pub fn term_full(id: &str, cwd: &str, title: &str) -> LayoutNode {
     LayoutNode::Terminal {
         uuid: id.to_string(),
@@ -27,6 +29,7 @@ pub fn term_full(id: &str, cwd: &str, title: &str) -> LayoutNode {
 }
 
 /// Build a horizontal split.
+#[must_use]
 pub fn hsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
     LayoutNode::Split {
         orientation: SplitOrientation::Horizontal,
@@ -37,6 +40,7 @@ pub fn hsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
 }
 
 /// Build a vertical split.
+#[must_use]
 pub fn vsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
     LayoutNode::Split {
         orientation: SplitOrientation::Vertical,
@@ -47,6 +51,7 @@ pub fn vsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
 }
 
 /// Build a split with a custom ratio.
+#[must_use]
 pub fn split_ratio(
     orientation: SplitOrientation,
     ratio: f64,
@@ -57,20 +62,22 @@ pub fn split_ratio(
 }
 
 /// Build a session with a given layout.
+#[must_use]
 pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
     SessionState {
         uuid: id.to_string(),
         name: name.to_string(),
         layout,
-        terminal_recovery: Default::default(),
+        terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: None,
         input_sync: false,
-        mode: Default::default(),
-        runtime: Default::default(),
+        mode: SessionMode::default(),
+        runtime: WorkspaceRuntime::default(),
     }
 }
 
 /// Build a managed session with default local persistent runtime metadata.
+#[must_use]
 pub fn managed_session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
     managed_session_with_runtime(
         id,
@@ -83,6 +90,7 @@ pub fn managed_session(id: &str, name: &str, layout: LayoutNode) -> SessionState
 }
 
 /// Build a managed session with explicit endpoint/policy/runtime metadata.
+#[must_use]
 pub fn managed_session_with_runtime(
     id: &str,
     name: &str,
@@ -105,14 +113,14 @@ pub fn managed_session_with_runtime(
         terminal_recovery,
         active_terminal_uuid,
         input_sync: false,
-        mode: Default::default(),
+        mode: SessionMode::default(),
         runtime: WorkspaceRuntime {
             managed: true,
             endpoint,
             policy,
             runtime_id: runtime_id.map(str::to_string),
-            pane_bindings: Default::default(),
-            pending_layout_panes: Default::default(),
+            pane_bindings: std::collections::BTreeMap::default(),
+            pending_layout_panes: std::collections::BTreeSet::default(),
         },
     };
     session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
@@ -121,6 +129,7 @@ pub fn managed_session_with_runtime(
 }
 
 /// Build a window state from sessions.
+#[must_use]
 pub fn window_state(sessions: Vec<SessionState>) -> WindowState {
     WindowState { active_session_index: 0, sessions, ..WindowState::default() }
 }
@@ -133,6 +142,7 @@ pub const TEST_PALETTE: [&str; 16] = [
     "#555753", "#EF2929", "#8AE234", "#FCE94F", "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
 ];
 
+#[must_use]
 pub fn test_scheme(name: &str) -> ColorScheme {
     ColorScheme {
         name: name.into(),
@@ -140,7 +150,7 @@ pub fn test_scheme(name: &str) -> ColorScheme {
         use_theme_colors: false,
         foreground: "#FFFFFF".into(),
         background: "#000000".into(),
-        palette: TEST_PALETTE.iter().map(|s| s.to_string()).collect(),
+        palette: TEST_PALETTE.iter().map(std::string::ToString::to_string).collect(),
         use_cursor_color: false,
         cursor_fg: String::new(),
         cursor_bg: String::new(),
@@ -152,6 +162,7 @@ pub fn test_scheme(name: &str) -> ColorScheme {
     }
 }
 
+#[must_use]
 pub fn test_scheme_full() -> ColorScheme {
     ColorScheme {
         name: "Full Test".into(),
@@ -159,7 +170,7 @@ pub fn test_scheme_full() -> ColorScheme {
         use_theme_colors: false,
         foreground: "#FFFFFF".into(),
         background: "#1A1A2E".into(),
-        palette: TEST_PALETTE.iter().map(|s| s.to_string()).collect(),
+        palette: TEST_PALETTE.iter().map(std::string::ToString::to_string).collect(),
         use_cursor_color: true,
         cursor_fg: "#FFFFFF".into(),
         cursor_bg: "#FF6600".into(),
@@ -191,10 +202,8 @@ pub fn ensure_gtk() -> bool {
         set_env("GTK_A11Y", "none");
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
             .unwrap_or(false);
-        if ok {
-            if let Some(display) = gtk4::gdk::Display::default() {
-                std::mem::forget(display);
-            }
+        if ok && let Some(display) = gtk4::gdk::Display::default() {
+            std::mem::forget(display);
         }
         GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
     });
@@ -234,12 +243,13 @@ pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std:
 }
 
 /// Load a window state from a temp directory (bypasses glib config dir).
+#[must_use]
 pub fn load_state_from(dir: &Path) -> WindowState {
     let path = dir.join(crate::config::CONFIG_DIR).join("sessions").join("window-state.json");
-    match std::fs::read_to_string(path) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
-        Err(_) => WindowState::default(),
-    }
+    std::fs::read_to_string(path).map_or_else(
+        |_| WindowState::default(),
+        |json| serde_json::from_str(&json).unwrap_or_default(),
+    )
 }
 
 /// Save a color scheme to a temp directory.

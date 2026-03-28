@@ -78,18 +78,19 @@ fn preferences_unknown_fields_are_ignored() {
 
 #[test]
 fn preferences_input_sync_persists_in_session_state() {
-    use rttx::session::layout::{LayoutNode, SessionState, WindowState};
+    use rttx::runtime::WorkspaceRuntime;
+    use rttx::session::layout::{LayoutNode, SessionMode, SessionState, WindowState};
 
     let state = WindowState {
         sessions: vec![SessionState {
             uuid: "s1".into(),
             name: "Synced".into(),
             layout: LayoutNode::new_terminal(),
-            terminal_recovery: Default::default(),
+            terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: Default::default(),
-            runtime: Default::default(),
+            mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         }],
         ..WindowState::default()
     };
@@ -98,7 +99,7 @@ fn preferences_input_sync_persists_in_session_state() {
     let loaded: WindowState = serde_json::from_str(&json).unwrap();
     assert!(!loaded.sessions[0].input_sync);
 
-    let mut state2 = state.clone();
+    let mut state2 = state;
     state2.sessions[0].input_sync = true;
     let json2 = serde_json::to_string(&state2).unwrap();
     let loaded2: WindowState = serde_json::from_str(&json2).unwrap();
@@ -127,7 +128,8 @@ fn preferences_backward_compat_missing_input_sync() {
 
 #[test]
 fn custom_title_persists_in_layout() {
-    use rttx::session::layout::{LayoutNode, SessionState, WindowState};
+    use rttx::runtime::WorkspaceRuntime;
+    use rttx::session::layout::{LayoutNode, SessionMode, SessionState, WindowState};
 
     let state = WindowState {
         sessions: vec![SessionState {
@@ -139,11 +141,11 @@ fn custom_title_persists_in_layout() {
                 cwd: Some("/home/user".into()),
                 custom_title: Some("my editor".into()),
             },
-            terminal_recovery: Default::default(),
+            terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: Default::default(),
-            runtime: Default::default(),
+            mode: SessionMode::default(),
+            runtime: WorkspaceRuntime::default(),
         }],
         ..WindowState::default()
     };

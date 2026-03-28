@@ -1,16 +1,20 @@
 [package]
-name = "rttx-server"
+name = "rttx"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
+description = "A tiling terminal emulator for GNOME"
+authors = ["Illya Yalovyy"]
 
 [lints.rust]
 unsafe_code = "deny"
+missing_debug_implementations = "warn"
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
+# Selective overrides for nursery/pedantic if they are too noisy
 future_not_send = "allow"
 redundant_pub_crate = "allow"
 similar_names = "allow"
@@ -29,45 +33,27 @@ suboptimal_flops = "warn"
 todo = "warn"
 dbg_macro = "warn"
 
+[features]
+default = ["vte-0_78"]
+vte-0_76 = ["vte4/v0_76"]
+vte-0_78 = ["vte4/v0_78"]
+
 [dependencies]
-rttx-proto = { path = "../../protocols/rttx-proto" }
-
-# IPC
-interprocess = { version = "2.2", features = ["tokio"] }
-
-# Protocol serialization
-prost = { version = "0.13", features = ["std", "prost-derive"] }
-bytes = "1"
-
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1"
-
-# PTY
-pty-process = { version = "0.5", features = ["async"] }
-
-# Terminal state parsing
-vte = "0.13"
-
-# Serialization (state persistence)
+gtk4 = { version = "0.9", features = ["v4_14"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+vte4 = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Process management
-daemonize = "0.5"
-nix = { version = "0.29", features = ["signal"] }
-signal-hook = { version = "0.3", features = ["iterator"] }
-signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
-
-# Utilities
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 pretty_env_logger = "0.5"
+rttx-proto = { path = "../../protocols/rttx-proto" }
+bytes = "1"
+tokio = { version = "1", features = ["net", "io-util", "sync", "rt", "rt-multi-thread", "macros", "process", "time"] }
 thiserror = "2"
-anyhow = "1"
 
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"
 rstest = "0.23"
-tokio-test = "0.4"
+proptest = "1"

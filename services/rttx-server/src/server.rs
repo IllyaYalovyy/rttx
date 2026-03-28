@@ -297,12 +297,20 @@ impl Server {
             proto::client_message::Msg::AttachSession(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let attach_mode = AttachMode::from_proto(req.attach_mode);
                 let mut s = server.lock().await;
                 let Some(session) = s.sessions.get_mut(&session_id) else {
-                    return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_SESSION_NOT_FOUND,
+                        "session not found".into(),
+                    ));
                 };
                 let attach_outcome = match session.attach_client(client_id, attach_mode) {
                     Ok(outcome) => outcome,
@@ -345,11 +353,19 @@ impl Server {
             proto::client_message::Msg::DetachSession(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let mut s = server.lock().await;
                 let Some(session) = s.sessions.get_mut(&session_id) else {
-                    return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_SESSION_NOT_FOUND,
+                        "session not found".into(),
+                    ));
                 };
                 match session.detach_client(client_id, DetachReason::ExplicitRequest) {
                     DetachOutcome::Detached { revision }
@@ -371,11 +387,19 @@ impl Server {
             proto::client_message::Msg::TerminateSession(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let mut s = server.lock().await;
                 let Some(session) = s.sessions.get(&session_id) else {
-                    return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_SESSION_NOT_FOUND,
+                        "session not found".into(),
+                    ));
                 };
                 if session.has_write_owner() && !session.client_has_write_access(client_id) {
                     return Some(protocol::error(
@@ -400,14 +424,22 @@ impl Server {
             proto::client_message::Msg::CreatePane(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
 
                 let pane_id = Uuid::new_v4();
                 let pty_result = {
                     let s = server.lock().await;
                     let Some(session) = s.sessions.get(&session_id) else {
-                        return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_SESSION_NOT_FOUND,
+                            "session not found".into(),
+                        ));
                     };
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
@@ -427,7 +459,10 @@ impl Server {
                             let mut s = server.lock().await;
                             let Some(session) = s.sessions.get_mut(&session_id) else {
                                 let _ = child.start_kill();
-                                return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                                return Some(protocol::error(
+                                    protocol::ERR_SESSION_NOT_FOUND,
+                                    "session not found".into(),
+                                ));
                             };
                             session.add_pane(Pane::new(pane_id, 80, 24));
                             let revision = session.revision();
@@ -448,7 +483,10 @@ impl Server {
                     }
                     Err(e) => {
                         log::error!("Failed to spawn PTY for pane {pane_id}: {e}");
-                        Some(protocol::error(protocol::ERR_SPAWN_FAILED, format!("failed to spawn pane: {e}")))
+                        Some(protocol::error(
+                            protocol::ERR_SPAWN_FAILED,
+                            format!("failed to spawn pane: {e}"),
+                        ))
                     }
                 }
             }
@@ -456,15 +494,28 @@ impl Server {
             proto::client_message::Msg::ClosePane(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let pane_id = match bytes_to_uuid(&req.pane_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let mut s = server.lock().await;
                 let Some(session) = s.sessions.get_mut(&session_id) else {
-                    return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_SESSION_NOT_FOUND,
+                        "session not found".into(),
+                    ));
                 };
                 if !session.client_has_write_access(client_id) {
                     return Some(protocol::error(
@@ -473,7 +524,10 @@ impl Server {
                     ));
                 }
                 let Some(_pane) = session.remove_pane(pane_id) else {
-                    return Some(protocol::error(protocol::ERR_PANE_NOT_FOUND, "pane not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_PANE_NOT_FOUND,
+                        "pane not found".into(),
+                    ));
                 };
                 let revision = session.revision();
                 s.pty_writers.remove(&pane_id);
@@ -486,19 +540,35 @@ impl Server {
             proto::client_message::Msg::Input(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let pane_id = match bytes_to_uuid(&req.pane_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let writer = {
                     let s = server.lock().await;
                     let Some(session) = s.sessions.get(&session_id) else {
-                        return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_SESSION_NOT_FOUND,
+                            "session not found".into(),
+                        ));
                     };
                     if !session.panes.contains_key(&pane_id) {
-                        return Some(protocol::error(protocol::ERR_PANE_NOT_FOUND, "pane not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_PANE_NOT_FOUND,
+                            "pane not found".into(),
+                        ));
                     }
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
@@ -523,26 +593,48 @@ impl Server {
             proto::client_message::Msg::Resize(req) => {
                 let pane_id = match bytes_to_uuid(&req.pane_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let Ok(cols) = u16::try_from(req.cols) else {
-                    return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, "cols out of range".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_INVALID_PARAMETER,
+                        "cols out of range".into(),
+                    ));
                 };
                 let Ok(rows) = u16::try_from(req.rows) else {
-                    return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, "rows out of range".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_INVALID_PARAMETER,
+                        "rows out of range".into(),
+                    ));
                 };
 
                 let writer = {
                     let s = server.lock().await;
                     let Some(session) = s.sessions.get(&session_id) else {
-                        return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_SESSION_NOT_FOUND,
+                            "session not found".into(),
+                        ));
                     };
                     if !session.panes.contains_key(&pane_id) {
-                        return Some(protocol::error(protocol::ERR_PANE_NOT_FOUND, "pane not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_PANE_NOT_FOUND,
+                            "pane not found".into(),
+                        ));
                     }
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
@@ -551,7 +643,10 @@ impl Server {
                         ));
                     }
                     let Some(writer) = s.pty_writers.get(&pane_id) else {
-                        return Some(protocol::error(protocol::ERR_PANE_NOT_RUNNING, "pane is not running".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_PANE_NOT_RUNNING,
+                            "pane is not running".into(),
+                        ));
                     };
                     Arc::clone(writer)
                 };
@@ -560,17 +655,26 @@ impl Server {
                     let w = writer.lock().await;
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
                         log::error!("Failed to resize PTY {pane_id}: {e}");
-                        return Some(protocol::error(protocol::ERR_PANE_NOT_RUNNING, format!("failed to resize pane: {e}")));
+                        return Some(protocol::error(
+                            protocol::ERR_PANE_NOT_RUNNING,
+                            format!("failed to resize pane: {e}"),
+                        ));
                     }
                 }
 
                 let revision = {
                     let mut s = server.lock().await;
                     let Some(session) = s.sessions.get_mut(&session_id) else {
-                        return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_SESSION_NOT_FOUND,
+                            "session not found".into(),
+                        ));
                     };
                     let Some(revision) = session.resize_pane(pane_id, cols, rows) else {
-                        return Some(protocol::error(protocol::ERR_PANE_NOT_FOUND, "pane not found".into()));
+                        return Some(protocol::error(
+                            protocol::ERR_PANE_NOT_FOUND,
+                            "pane not found".into(),
+                        ));
                     };
                     revision
                 };
@@ -581,15 +685,28 @@ impl Server {
             proto::client_message::Msg::SetPaneTitle(req) => {
                 let session_id = match bytes_to_uuid(&req.session_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let pane_id = match bytes_to_uuid(&req.pane_id) {
                     Ok(id) => id,
-                    Err(e) => return Some(protocol::error(protocol::ERR_INVALID_PARAMETER, e.to_string())),
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
                 };
                 let mut s = server.lock().await;
                 let Some(session) = s.sessions.get_mut(&session_id) else {
-                    return Some(protocol::error(protocol::ERR_SESSION_NOT_FOUND, "session not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_SESSION_NOT_FOUND,
+                        "session not found".into(),
+                    ));
                 };
                 if !session.client_has_write_access(client_id) {
                     return Some(protocol::error(
@@ -598,7 +715,10 @@ impl Server {
                     ));
                 }
                 let Some(revision) = session.set_pane_title(pane_id, req.title.clone()) else {
-                    return Some(protocol::error(protocol::ERR_PANE_NOT_FOUND, "pane not found".into()));
+                    return Some(protocol::error(
+                        protocol::ERR_PANE_NOT_FOUND,
+                        "pane not found".into(),
+                    ));
                 };
                 Some(protocol::title_changed(session_id, pane_id, req.title, revision))
             }
