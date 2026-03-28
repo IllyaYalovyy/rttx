@@ -36,7 +36,7 @@ class TestLaunch(unittest.TestCase):
         )
 
     def test_exactly_one_terminal_on_launch(self) -> None:
-        """A fresh session must start with exactly one terminal pane."""
+        """A fresh workspace must start with exactly one terminal pane."""
         terminals = wait_for_role(
             self.fixture.atspi_app, Atspi.Role.TERMINAL, count=1
         )

@@ -152,7 +152,7 @@ impl SessionRow {
                 imp.activity_dot.remove_css_class("accent");
                 imp.activity_dot.add_css_class("session-activity-idle");
                 imp.activity_dot
-                    .set_tooltip_text(Some("Unread activity is waiting in this session"));
+                    .set_tooltip_text(Some("Unread activity is waiting in this workspace"));
                 imp.activity_dot.set_visible(true);
             }
         }

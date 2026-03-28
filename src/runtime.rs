@@ -285,6 +285,85 @@ pub struct ConnectionPresentation {
     pub input_enabled: bool,
 }
 
+/// UI-facing close/detach/terminate action configuration for a workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceActionPresentation {
+    pub title: String,
+    pub body: String,
+    pub close_label: String,
+    pub show_detach_runtime: bool,
+    pub show_terminate_runtime: bool,
+}
+
+/// Render workspace action semantics into user-facing copy.
+#[must_use]
+pub fn present_workspace_actions(
+    policy: Option<WorkspacePolicy>,
+    runtime_attached: bool,
+    pane_count: usize,
+) -> WorkspaceActionPresentation {
+    let pane_summary = if pane_count > 1 {
+        format!("This workspace has {pane_count} panes. ")
+    } else {
+        String::new()
+    };
+
+    match (policy, runtime_attached) {
+        (Some(WorkspacePolicy::Persistent), true) => WorkspaceActionPresentation {
+            title: "Workspace Actions".into(),
+            body: format!(
+                "{pane_summary}Close Workspace removes this workspace from rttx and deletes its \
+                 local metadata. The persistent runtime keeps running on the daemon. Detach \
+                 Runtime keeps the workspace so you can reconnect later. Terminate Runtime stops \
+                 the runtime and its running processes."
+            ),
+            close_label: "Close Workspace".into(),
+            show_detach_runtime: true,
+            show_terminate_runtime: true,
+        },
+        (Some(WorkspacePolicy::Ephemeral), true) => WorkspaceActionPresentation {
+            title: "Workspace Actions".into(),
+            body: format!(
+                "{pane_summary}Close Workspace removes this workspace from rttx and deletes its \
+                 local metadata. This workspace uses an ephemeral runtime, so detaching the last \
+                 client will terminate that runtime automatically. Detach Runtime keeps the \
+                 workspace visible but still ends the runtime when this is the last attached \
+                 client. Terminate Runtime stops it immediately."
+            ),
+            close_label: "Close Workspace".into(),
+            show_detach_runtime: true,
+            show_terminate_runtime: true,
+        },
+        (Some(_), false) => WorkspaceActionPresentation {
+            title: "Close Workspace?".into(),
+            body: format!(
+                "{pane_summary}This workspace is not attached to a runtime right now. Close \
+                 Workspace removes its local metadata from rttx."
+            ),
+            close_label: "Close Workspace".into(),
+            show_detach_runtime: false,
+            show_terminate_runtime: false,
+        },
+        (None, _) => {
+            let body = if pane_count > 1 {
+                format!(
+                    "This workspace has {pane_count} panes. All panes and their running \
+                     processes will be closed."
+                )
+            } else {
+                "This workspace will be closed.".into()
+            };
+            WorkspaceActionPresentation {
+                title: "Close Workspace?".into(),
+                body,
+                close_label: "Close Workspace".into(),
+                show_detach_runtime: false,
+                show_terminate_runtime: false,
+            }
+        }
+    }
+}
+
 /// Render a connection state into user-facing copy and control visibility.
 #[must_use]
 pub fn present_connection_status(
@@ -530,5 +609,52 @@ mod tests {
         assert!(presentation.show_edit_connection);
         assert!(!presentation.input_enabled);
         assert!(presentation.banner_body.contains("Permission denied"));
+    }
+
+    #[test]
+    fn workspace_actions_for_persistent_runtime_offer_detach_and_terminate() {
+        let presentation =
+            present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
+
+        assert_eq!(presentation.title, "Workspace Actions");
+        assert_eq!(presentation.close_label, "Close Workspace");
+        assert!(presentation.show_detach_runtime);
+        assert!(presentation.show_terminate_runtime);
+        assert!(presentation.body.contains("persistent runtime keeps running"));
+        assert!(presentation.body.contains("reconnect later"));
+        assert!(presentation.body.contains("2 panes"));
+    }
+
+    #[test]
+    fn workspace_actions_for_ephemeral_runtime_warn_about_last_detach() {
+        let presentation = present_workspace_actions(Some(WorkspacePolicy::Ephemeral), true, 1);
+
+        assert!(presentation.show_detach_runtime);
+        assert!(presentation.show_terminate_runtime);
+        assert!(presentation.body.contains("ephemeral runtime"));
+        assert!(presentation.body.contains("last attached client"));
+    }
+
+    #[test]
+    fn workspace_actions_for_detached_managed_workspace_only_offer_close() {
+        let presentation =
+            present_workspace_actions(Some(WorkspacePolicy::Persistent), false, 1);
+
+        assert_eq!(presentation.title, "Close Workspace?");
+        assert!(!presentation.show_detach_runtime);
+        assert!(!presentation.show_terminate_runtime);
+        assert!(presentation.body.contains("not attached to a runtime"));
+    }
+
+    #[test]
+    fn workspace_actions_for_unmanaged_workspace_keep_simple_close_copy() {
+        let presentation = present_workspace_actions(None, false, 3);
+
+        assert_eq!(presentation.title, "Close Workspace?");
+        assert_eq!(presentation.close_label, "Close Workspace");
+        assert!(!presentation.show_detach_runtime);
+        assert!(!presentation.show_terminate_runtime);
+        assert!(presentation.body.contains("3 panes"));
+        assert!(presentation.body.contains("running processes"));
     }
 }

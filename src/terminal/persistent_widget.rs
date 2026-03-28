@@ -109,7 +109,8 @@ mod imp {
             self.status_label.set_xalign(1.0);
             self.status_label.add_css_class("dim-label");
             self.status_label.set_label("⏻");
-            self.status_label.set_tooltip_text(Some("Persistent session — daemon-backed"));
+            self.status_label
+                .set_tooltip_text(Some("Persistent workspace — daemon-backed runtime"));
 
             self.split_h_button.set_icon_name("object-flip-horizontal-symbolic");
             self.split_h_button.add_css_class("flat");
@@ -121,7 +122,7 @@ mod imp {
 
             self.close_button.set_icon_name("window-close-symbolic");
             self.close_button.add_css_class("flat");
-            self.close_button.set_tooltip_text(Some("Detach terminal"));
+            self.close_button.set_tooltip_text(Some("Close pane"));
 
             self.header.append(&self.title_label);
             self.header.append(&self.status_label);

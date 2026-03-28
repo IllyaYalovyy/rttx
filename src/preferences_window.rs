@@ -98,10 +98,11 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     terminal_group.add(&smart_clipboard_row);
 
     let session_group = adw::PreferencesGroup::new();
-    session_group.set_title("Sessions");
+    session_group.set_title("Workspaces");
 
-    let folder_mode_row = adw::ComboRow::builder().title("Default folder for new sessions").build();
-    let folder_mode_names = ["Home directory", "Same as current session", "Custom path"];
+    let folder_mode_row =
+        adw::ComboRow::builder().title("Default folder for new workspaces").build();
+    let folder_mode_names = ["Home directory", "Same as current workspace", "Custom path"];
     let folder_mode_model = gtk4::StringList::new(&folder_mode_names);
     folder_mode_row.set_model(Some(&folder_mode_model));
 

@@ -13,8 +13,8 @@ use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::preferences::{self, Preferences};
 use crate::runtime::{
-    ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspacePolicy,
-    present_connection_status,
+    ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
+    WorkspacePolicy, present_connection_status, present_workspace_actions,
 };
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
@@ -107,7 +107,7 @@ mod imp {
             menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
             menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
             menu.append(Some("About rttx"), Some("win.about"));
-            menu.append(Some("Bookmark This Session"), Some("win.bookmark-session"));
+            menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
             menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
             menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
@@ -118,7 +118,7 @@ mod imp {
 
             self.sidebar_list.set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");
-            self.sidebar_list.update_property(&[gtk4::accessible::Property::Label("Sessions")]);
+            self.sidebar_list.update_property(&[gtk4::accessible::Property::Label("Workspaces")]);
             self.bookmark_list.set_selection_mode(gtk4::SelectionMode::None);
             self.bookmark_list.add_css_class("boxed-list");
             self.bookmark_list.update_property(&[gtk4::accessible::Property::Label("Bookmarks")]);
@@ -207,7 +207,8 @@ mod imp {
             ));
             self.command_empty.set_vexpand(true);
 
-            let templates_placeholder = gtk4::Label::new(Some("Session templates will live here."));
+            let templates_placeholder =
+                gtk4::Label::new(Some("Workspace templates will live here."));
             templates_placeholder.set_wrap(true);
             templates_placeholder.set_margin_start(18);
             templates_placeholder.set_margin_end(18);
@@ -590,6 +591,11 @@ impl Window {
             &session_state.name,
             session_state.layout.terminal_count(),
         );
+        row.close_button().set_tooltip_text(Some(if session_state.uses_managed_runtime() {
+            "Workspace actions"
+        } else {
+            "Close workspace"
+        }));
 
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
@@ -1687,7 +1693,7 @@ impl Window {
 
             let new_session_button = gtk4::Button::builder()
                 .icon_name("window-new-symbolic")
-                .tooltip_text("New session from bookmark")
+                .tooltip_text("New workspace from bookmark")
                 .valign(gtk4::Align::Center)
                 .build();
             new_session_button.add_css_class("flat");
@@ -2022,37 +2028,111 @@ impl Window {
         alert.present(Some(self));
     }
 
-    fn confirm_close_session(&self, session_uuid: &str) {
-        let terminal_count = {
+    fn workspace_action_presentation(
+        &self,
+        session_uuid: &str,
+    ) -> Option<WorkspaceActionPresentation> {
+        let state = self.imp().state.borrow();
+        let session = state.sessions.iter().find(|s| s.uuid == session_uuid)?;
+        let policy = session.uses_managed_runtime().then_some(session.runtime.policy);
+        let runtime_attached = session.runtime.runtime_id.is_some();
+        Some(present_workspace_actions(
+            policy,
+            runtime_attached,
+            session.layout.terminal_count(),
+        ))
+    }
+
+    fn detach_workspace_runtime(&self, session_uuid: &str) {
+        let managed_runtime = {
             let state = self.imp().state.borrow();
             state
                 .sessions
                 .iter()
                 .find(|s| s.uuid == session_uuid)
-                .map_or(0, |s| s.layout.terminal_count())
+                .and_then(|session| {
+                    session
+                        .runtime
+                        .runtime_id
+                        .clone()
+                        .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
+                })
         };
 
-        if terminal_count <= 1 {
+        let Some((endpoint, runtime_id)) = managed_runtime else {
+            return;
+        };
+        let connection_manager = self.imp().connection_manager.borrow();
+        let Some(manager) = connection_manager.as_ref() else {
+            return;
+        };
+        manager.detach_runtime(session_uuid, &endpoint, &runtime_id);
+    }
+
+    fn terminate_workspace_runtime(&self, session_uuid: &str) {
+        let managed_runtime = {
+            let state = self.imp().state.borrow();
+            state
+                .sessions
+                .iter()
+                .find(|s| s.uuid == session_uuid)
+                .and_then(|session| {
+                    session
+                        .runtime
+                        .runtime_id
+                        .clone()
+                        .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
+                })
+        };
+
+        let Some((endpoint, runtime_id)) = managed_runtime else {
+            return;
+        };
+        let connection_manager = self.imp().connection_manager.borrow();
+        let Some(manager) = connection_manager.as_ref() else {
+            return;
+        };
+        manager.terminate_runtime(session_uuid, &endpoint, &runtime_id);
+    }
+
+    fn confirm_close_session(&self, session_uuid: &str) {
+        let should_close_immediately = {
+            let state = self.imp().state.borrow();
+            state.sessions.iter().find(|s| s.uuid == session_uuid).is_some_and(|session| {
+                !session.uses_managed_runtime() && session.layout.terminal_count() <= 1
+            })
+        };
+        if should_close_immediately {
             self.close_session(session_uuid);
             return;
         }
 
+        let Some(presentation) = self.workspace_action_presentation(session_uuid) else {
+            return;
+        };
+
         let win = self.clone();
         let uuid = session_uuid.to_string();
-        let alert = adw::AlertDialog::new(
-            Some("Close Session?"),
-            Some(&format!(
-                "This session has {terminal_count} terminals. All terminals and their running processes will be closed."
-            )),
-        );
+        let alert =
+            adw::AlertDialog::new(Some(&presentation.title), Some(&presentation.body));
         alert.add_response("cancel", "Cancel");
-        alert.add_response("close", "Close Session");
+        if presentation.show_detach_runtime {
+            alert.add_response("detach", "Detach Runtime");
+        }
+        if presentation.show_terminate_runtime {
+            alert.add_response("terminate", "Terminate Runtime");
+            alert.set_response_appearance("terminate", adw::ResponseAppearance::Destructive);
+        }
+        alert.add_response("close", &presentation.close_label);
         alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
         alert.set_default_response(Some("cancel"));
         alert.set_close_response("cancel");
         alert.connect_response(None, move |_, response| {
-            if response == "close" {
-                win.close_session(&uuid);
+            match response {
+                "close" => win.close_session(&uuid),
+                "detach" => win.detach_workspace_runtime(&uuid),
+                "terminate" => win.terminate_workspace_runtime(&uuid),
+                _ => {}
             }
         });
         alert.present(Some(self));
@@ -2883,7 +2963,7 @@ impl Window {
         self.refresh_bookmark_sidebar();
 
         let notification = gtk4::gio::Notification::new("Bookmark saved");
-        notification.set_body(Some(&format!("Session \"{name}\" was added to bookmarks")));
+        notification.set_body(Some(&format!("Workspace \"{name}\" was added to bookmarks")));
         if let Some(app) = self.application() {
             app.send_notification(None, &notification);
         }
@@ -5558,6 +5638,105 @@ mod tests {
         assert_eq!(
             window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
             Some(&ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 })
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn workspace_detached_event_preserves_runtime_id_for_manual_reattach() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.workspace-detached-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let session_state = crate::test_helpers::managed_session_with_runtime(
+            "workspace-detached",
+            "Detached Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceDetached {
+            workspace_id: session_state.uuid.clone(),
+            runtime_id: runtime_id.clone(),
+        });
+
+        let state = window.imp().state.borrow();
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == session_state.uuid)
+            .expect("workspace should stay present after detach");
+        assert_eq!(session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        drop(state);
+
+        assert_eq!(
+            window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
+            Some(&ConnectionStatus::Disconnected)
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn runtime_terminated_event_clears_runtime_id_but_keeps_workspace() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.runtime-terminated-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let session_state = crate::test_helpers::managed_session_with_runtime(
+            "workspace-terminated",
+            "Terminated Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::RuntimeTerminated {
+            workspace_id: session_state.uuid.clone(),
+            runtime_id,
+            reason: rttx_proto::proto::RuntimeTerminationReason::Explicit,
+        });
+
+        let state = window.imp().state.borrow();
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == session_state.uuid)
+            .expect("workspace should stay present after runtime termination");
+        assert_eq!(session.runtime.runtime_id, None);
+        drop(state);
+
+        assert_eq!(
+            window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
+            Some(&ConnectionStatus::Disconnected)
         );
 
         window.close();
