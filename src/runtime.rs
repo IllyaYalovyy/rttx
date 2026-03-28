@@ -613,8 +613,7 @@ mod tests {
 
     #[test]
     fn workspace_actions_for_persistent_runtime_offer_detach_and_terminate() {
-        let presentation =
-            present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
+        let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
 
         assert_eq!(presentation.title, "Workspace Actions");
         assert_eq!(presentation.close_label, "Close Workspace");
@@ -637,8 +636,7 @@ mod tests {
 
     #[test]
     fn workspace_actions_for_detached_managed_workspace_only_offer_close() {
-        let presentation =
-            present_workspace_actions(Some(WorkspacePolicy::Persistent), false, 1);
+        let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), false, 1);
 
         assert_eq!(presentation.title, "Close Workspace?");
         assert!(!presentation.show_detach_runtime);

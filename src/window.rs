@@ -2036,27 +2036,19 @@ impl Window {
         let session = state.sessions.iter().find(|s| s.uuid == session_uuid)?;
         let policy = session.uses_managed_runtime().then_some(session.runtime.policy);
         let runtime_attached = session.runtime.runtime_id.is_some();
-        Some(present_workspace_actions(
-            policy,
-            runtime_attached,
-            session.layout.terminal_count(),
-        ))
+        Some(present_workspace_actions(policy, runtime_attached, session.layout.terminal_count()))
     }
 
     fn detach_workspace_runtime(&self, session_uuid: &str) {
         let managed_runtime = {
             let state = self.imp().state.borrow();
-            state
-                .sessions
-                .iter()
-                .find(|s| s.uuid == session_uuid)
-                .and_then(|session| {
-                    session
-                        .runtime
-                        .runtime_id
-                        .clone()
-                        .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
-                })
+            state.sessions.iter().find(|s| s.uuid == session_uuid).and_then(|session| {
+                session
+                    .runtime
+                    .runtime_id
+                    .clone()
+                    .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
+            })
         };
 
         let Some((endpoint, runtime_id)) = managed_runtime else {
@@ -2072,17 +2064,13 @@ impl Window {
     fn terminate_workspace_runtime(&self, session_uuid: &str) {
         let managed_runtime = {
             let state = self.imp().state.borrow();
-            state
-                .sessions
-                .iter()
-                .find(|s| s.uuid == session_uuid)
-                .and_then(|session| {
-                    session
-                        .runtime
-                        .runtime_id
-                        .clone()
-                        .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
-                })
+            state.sessions.iter().find(|s| s.uuid == session_uuid).and_then(|session| {
+                session
+                    .runtime
+                    .runtime_id
+                    .clone()
+                    .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
+            })
         };
 
         let Some((endpoint, runtime_id)) = managed_runtime else {
@@ -2113,8 +2101,7 @@ impl Window {
 
         let win = self.clone();
         let uuid = session_uuid.to_string();
-        let alert =
-            adw::AlertDialog::new(Some(&presentation.title), Some(&presentation.body));
+        let alert = adw::AlertDialog::new(Some(&presentation.title), Some(&presentation.body));
         alert.add_response("cancel", "Cancel");
         if presentation.show_detach_runtime {
             alert.add_response("detach", "Detach Runtime");
@@ -2127,13 +2114,11 @@ impl Window {
         alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
         alert.set_default_response(Some("cancel"));
         alert.set_close_response("cancel");
-        alert.connect_response(None, move |_, response| {
-            match response {
-                "close" => win.close_session(&uuid),
-                "detach" => win.detach_workspace_runtime(&uuid),
-                "terminate" => win.terminate_workspace_runtime(&uuid),
-                _ => {}
-            }
+        alert.connect_response(None, move |_, response| match response {
+            "close" => win.close_session(&uuid),
+            "detach" => win.detach_workspace_runtime(&uuid),
+            "terminate" => win.terminate_workspace_runtime(&uuid),
+            _ => {}
         });
         alert.present(Some(self));
     }
