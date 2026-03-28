@@ -19,9 +19,8 @@ async fn spawn_shell_and_read_output() {
     // Read until EOF or we find "hello".
     for _ in 0..50 {
         match pty.read(&mut buf).await {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(n) => output.extend_from_slice(&buf[..n]),
-            Err(_) => break,
         }
         if output.windows(5).any(|w| w == b"hello") {
             break;

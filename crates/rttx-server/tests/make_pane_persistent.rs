@@ -1,13 +1,13 @@
-//! Test that simulates exactly what the GUI's make_pane_persistent does:
+//! Test that simulates exactly what the GUI's `make_pane_persistent` does:
 //! connect → create session → attach → create pane → send input → read delta.
 
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
+use rttx_proto::{bytes_to_uuid, proto};
 use std::time::Duration;
 
-/// Simulate the exact sequence make_pane_persistent_impl performs.
+/// Simulate the exact sequence `make_pane_persistent_impl` performs.
 #[tokio::test]
 async fn make_pane_persistent_flow() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -28,7 +28,7 @@ async fn make_pane_persistent_flow() {
         Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
         other => panic!("expected SessionCreated, got {other:?}"),
     };
-    let session_uuid = bytes_to_uuid(&session_id).unwrap();
+    let _session_uuid = bytes_to_uuid(&session_id).unwrap();
 
     // 2. Attach session.
     c.send(&proto::ClientMessage {
@@ -41,7 +41,7 @@ async fn make_pane_persistent_flow() {
     let snapshot = loop {
         match c.recv().await.msg {
             Some(proto::server_message::Msg::Snapshot(s)) => break s,
-            Some(proto::server_message::Msg::Delta(_)) => continue,
+            Some(proto::server_message::Msg::Delta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     };
@@ -57,11 +57,11 @@ async fn make_pane_persistent_flow() {
     let pane_id = loop {
         match c.recv().await.msg {
             Some(proto::server_message::Msg::PaneCreated(pc)) => break pc.pane_id,
-            Some(proto::server_message::Msg::Delta(_)) => continue,
+            Some(proto::server_message::Msg::Delta(_)) => {}
             other => panic!("expected PaneCreated, got {other:?}"),
         }
     };
-    let pane_uuid = bytes_to_uuid(&pane_id).unwrap();
+    let _pane_uuid = bytes_to_uuid(&pane_id).unwrap();
 
     // 4. Send input (cd to a directory).
     c.send(&proto::ClientMessage {
@@ -78,16 +78,15 @@ async fn make_pane_persistent_flow() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(500), c.recv()).await {
-            Ok(msg) => match msg.msg {
-                Some(proto::server_message::Msg::Delta(d)) => {
+            Ok(msg) => {
+                if let Some(proto::server_message::Msg::Delta(d)) = msg.msg {
                     let text = String::from_utf8_lossy(&d.data);
                     if text.contains("PERSIST_OK") {
                         found_marker = true;
                         break;
                     }
                 }
-                _ => {}
-            },
+            }
             Err(_) => break,
         }
     }
@@ -133,7 +132,7 @@ async fn make_pane_persistent_flow() {
     let snapshot = loop {
         match c2.recv().await.msg {
             Some(proto::server_message::Msg::Snapshot(s)) => break s,
-            Some(proto::server_message::Msg::Delta(_)) => continue,
+            Some(proto::server_message::Msg::Delta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     };

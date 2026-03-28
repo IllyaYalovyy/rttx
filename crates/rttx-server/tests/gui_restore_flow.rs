@@ -1,15 +1,15 @@
-//! Tests that simulate the GUI's restore flow using DaemonBridge.
+//! Tests that simulate the GUI's restore flow using `DaemonBridge`.
 //!
 //! These verify the exact sequence the GUI performs:
-//! 1. connect + list_sessions
-//! 2. attach_session for each → get snapshot with scrollback
+//! 1. connect + `list_sessions`
+//! 2. `attach_session` for each → get snapshot with scrollback
 //! 3. disconnect
-//! 4. reconnect + list_sessions → same count, same IDs
+//! 4. reconnect + `list_sessions` → same count, same IDs
 
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
+use rttx_proto::proto;
 use std::time::Duration;
 
 /// Simulate the GUI restore flow: connect, list, attach each session,
@@ -49,7 +49,7 @@ async fn gui_restore_flow_no_duplicates() {
             let pid = loop {
                 match c.recv().await.msg {
                     Some(proto::server_message::Msg::PaneCreated(pc)) => break pc.pane_id,
-                    Some(proto::server_message::Msg::Delta(_)) => continue,
+                    Some(proto::server_message::Msg::Delta(_)) => {}
                     other => panic!("expected PaneCreated or Delta, got {other:?}"),
                 }
             };
@@ -65,7 +65,7 @@ async fn gui_restore_flow_no_duplicates() {
             loop {
                 match c.recv().await.msg {
                     Some(proto::server_message::Msg::Snapshot(_)) => break,
-                    Some(proto::server_message::Msg::Delta(_)) => continue,
+                    Some(proto::server_message::Msg::Delta(_)) => {}
                     other => panic!("expected Snapshot or Delta, got {other:?}"),
                 }
             }
@@ -105,7 +105,7 @@ async fn gui_restore_flow_no_duplicates() {
         // Sort by name for deterministic comparison.
         let mut sorted_sessions = sessions.clone();
         sorted_sessions.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut sorted_ids = session_ids.clone();
+        let sorted_ids = session_ids.clone();
         // session_ids[0] is "Session 1", session_ids[1] is "Session 2" — already sorted.
 
         for (i, info) in sorted_sessions.iter().enumerate() {
@@ -121,7 +121,7 @@ async fn gui_restore_flow_no_duplicates() {
             let snapshot = loop {
                 match c.recv().await.msg {
                     Some(proto::server_message::Msg::Snapshot(s)) => break s,
-                    Some(proto::server_message::Msg::Delta(_)) => continue,
+                    Some(proto::server_message::Msg::Delta(_)) => {}
                     other => panic!("expected Snapshot or Delta, got {other:?}"),
                 }
             };

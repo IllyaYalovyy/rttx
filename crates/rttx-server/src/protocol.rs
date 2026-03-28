@@ -7,6 +7,25 @@ use crate::session::{ClientRole, Session, TerminationReason};
 use rttx_proto::{proto, uuid_to_bytes};
 use uuid::Uuid;
 
+/// Client sent a message with no inner payload.
+pub const ERR_EMPTY_MESSAGE: u32 = 1;
+/// Protocol version mismatch between client and server.
+pub const ERR_VERSION_MISMATCH: u32 = 2;
+/// A UUID or numeric parameter could not be parsed.
+pub const ERR_INVALID_PARAMETER: u32 = 3;
+/// The referenced session/runtime does not exist.
+pub const ERR_SESSION_NOT_FOUND: u32 = 4;
+/// Failed to spawn a PTY process for a new pane.
+pub const ERR_SPAWN_FAILED: u32 = 5;
+/// The referenced pane does not exist in the session.
+pub const ERR_PANE_NOT_FOUND: u32 = 6;
+/// The pane exists but has no running PTY.
+pub const ERR_PANE_NOT_RUNNING: u32 = 7;
+/// The requested operation is not supported yet.
+pub const ERR_UNSUPPORTED: u32 = 8;
+/// The runtime is owned by another client.
+pub const ERR_OWNERSHIP_CONFLICT: u32 = 9;
+
 /// Build a `HelloAck` response.
 #[must_use]
 pub fn hello_ack(server_id: Uuid) -> proto::ServerMessage {
@@ -263,6 +282,28 @@ pub const fn error(code: u32, message: String) -> proto::ServerMessage {
 mod tests {
     use super::*;
     use crate::session::RuntimePolicy;
+
+    #[test]
+    fn error_codes_are_distinct_and_nonzero() {
+        let codes = [
+            ERR_EMPTY_MESSAGE,
+            ERR_VERSION_MISMATCH,
+            ERR_INVALID_PARAMETER,
+            ERR_SESSION_NOT_FOUND,
+            ERR_SPAWN_FAILED,
+            ERR_PANE_NOT_FOUND,
+            ERR_PANE_NOT_RUNNING,
+            ERR_UNSUPPORTED,
+            ERR_OWNERSHIP_CONFLICT,
+        ];
+        for &code in &codes {
+            assert_ne!(code, 0, "error codes must be nonzero");
+        }
+        let mut sorted = codes.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), codes.len(), "error codes must be distinct");
+    }
 
     #[test]
     fn session_inventory_maps_runtime_metadata() {

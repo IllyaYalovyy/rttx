@@ -47,7 +47,7 @@ async fn attach_stdio_hello_and_create_session() {
         assert!(n > 0, "unexpected EOF waiting for HelloAck");
         match decode_frame::<proto::ServerMessage>(&mut read_buf) {
             Ok(msg) => break msg,
-            Err(rttx_proto::FrameError::Incomplete) => continue,
+            Err(rttx_proto::FrameError::Incomplete) => {}
             Err(e) => panic!("decode error: {e}"),
         }
     };
@@ -74,7 +74,7 @@ async fn attach_stdio_hello_and_create_session() {
         assert!(n > 0, "unexpected EOF waiting for SessionCreated");
         match decode_frame::<proto::ServerMessage>(&mut read_buf) {
             Ok(msg) => break msg,
-            Err(rttx_proto::FrameError::Incomplete) => continue,
+            Err(rttx_proto::FrameError::Incomplete) => {}
             Err(e) => panic!("decode error: {e}"),
         }
     };
@@ -100,7 +100,7 @@ async fn attach_stdio_hello_and_create_session() {
         assert!(n > 0, "unexpected EOF waiting for SessionList");
         match decode_frame::<proto::ServerMessage>(&mut read_buf) {
             Ok(msg) => break msg,
-            Err(rttx_proto::FrameError::Incomplete) => continue,
+            Err(rttx_proto::FrameError::Incomplete) => {}
             Err(e) => panic!("decode error: {e}"),
         }
     };

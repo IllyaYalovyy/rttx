@@ -1,5 +1,7 @@
 //! Common test utilities for integration tests.
 
+#![allow(dead_code)]
+
 use bytes::BytesMut;
 use rttx_proto::{decode_frame, encode_frame, proto, uuid_to_bytes};
 use std::path::{Path, PathBuf};
@@ -70,7 +72,7 @@ impl TestClient {
         msgs
     }
 
-    /// Send Hello and receive HelloAck.
+    /// Send Hello and receive `HelloAck`.
     pub async fn handshake(&mut self) -> proto::HelloAck {
         let hello = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Hello(proto::Hello {
@@ -96,13 +98,6 @@ pub async fn start_test_server(
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    let runtime_dir = tmp_dir.join("runtime");
-    let cache_dir = tmp_dir.join("cache");
-    std::fs::create_dir_all(&runtime_dir).unwrap();
-    std::fs::create_dir_all(&cache_dir).unwrap();
-
-    let socket_path = runtime_dir.join("rttx-server.sock");
-
     #[derive(Debug)]
     struct TestOs {
         runtime_dir: PathBuf,
@@ -116,6 +111,13 @@ pub async fn start_test_server(
             self.cache_dir.clone()
         }
     }
+
+    let runtime_dir = tmp_dir.join("runtime");
+    let cache_dir = tmp_dir.join("cache");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    let socket_path = runtime_dir.join("rttx-server.sock");
 
     let os = TestOs { runtime_dir, cache_dir };
     let server = Arc::new(Mutex::new(Server::new(Box::new(os))));

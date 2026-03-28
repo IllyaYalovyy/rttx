@@ -1,13 +1,13 @@
 //! Tests for the daemon client lifecycle: create, produce output, disconnect,
 //! reconnect, verify scrollback is restored.
 //!
-//! These tests exercise the exact code path the GUI uses (DaemonConnection +
-//! DaemonBridge) without any GTK dependency.
+//! These tests exercise the exact code path the GUI uses (`DaemonConnection` +
+//! `DaemonBridge`) without any GTK dependency.
 
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
+use rttx_proto::proto;
 use std::time::Duration;
 
 /// Full lifecycle: create session + pane, produce output, disconnect,

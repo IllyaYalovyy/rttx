@@ -222,7 +222,7 @@ impl Session {
         }
     }
 
-    fn bump_revision(&mut self) {
+    const fn bump_revision(&mut self) {
         self.revision = self.revision.saturating_add(1);
     }
 
