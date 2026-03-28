@@ -1,3 +1,0 @@
-[workspace]
-members = ["crates/rttx-server", "crates/rttx-proto"]
-resolver = "3"
