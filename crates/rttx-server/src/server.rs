@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use uuid::Uuid;
 
 /// Shared mutable server state.
@@ -39,12 +39,15 @@ pub struct Server {
     pty_writers: HashMap<Uuid, Arc<tokio::sync::Mutex<pty_process::OwnedWritePty>>>,
     /// Per-pane kill signals to cancel PTY read loops.
     pty_kill_senders: HashMap<Uuid, oneshot::Sender<()>>,
+    /// Cooperative shutdown signal — set to `true` to stop the server.
+    shutdown_tx: watch::Sender<bool>,
 }
 
 impl Server {
     /// Create a new server with the native engine.
     #[must_use]
     pub fn new(os: Box<dyn OsInterface>) -> Self {
+        let (shutdown_tx, _) = watch::channel(false);
         Self {
             sessions: HashMap::new(),
             server_id: Uuid::new_v4(),
@@ -53,7 +56,19 @@ impl Server {
             client_senders: HashMap::new(),
             pty_writers: HashMap::new(),
             pty_kill_senders: HashMap::new(),
+            shutdown_tx,
         }
+    }
+
+    /// Subscribe to the shutdown signal.
+    #[must_use]
+    pub fn shutdown_rx(&self) -> watch::Receiver<bool> {
+        self.shutdown_tx.subscribe()
+    }
+
+    /// Trigger cooperative shutdown.
+    pub fn request_shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
     }
 
     /// Load persisted state and resurrect sessions.
@@ -396,7 +411,7 @@ impl Server {
                     };
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
-                            9,
+                            protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
                         ));
                     }
@@ -487,7 +502,7 @@ impl Server {
                     }
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
-                            9,
+                            protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
                         ));
                     }
@@ -531,7 +546,7 @@ impl Server {
                     }
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
-                            9,
+                            protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
                         ));
                     }
@@ -659,14 +674,26 @@ fn spawn_pty_read_loop(
 }
 
 /// Run the serialization loop, writing state to disk every `interval`.
-pub async fn serialization_loop(server: Arc<Mutex<Server>>, interval: Duration) {
+///
+/// Stops when the shutdown signal fires.
+pub async fn serialization_loop(
+    server: Arc<Mutex<Server>>,
+    interval: Duration,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) {
     let mut ticker = tokio::time::interval(interval);
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = shutdown_rx.changed() => {
+                log::info!("Serialization loop stopping (shutdown)");
+                return;
+            }
+        }
+
         let mut s = server.lock().await;
         let cache_dir = s.os.cache_dir();
 
-        // Flush scrollback for all panes in all sessions.
         let session_ids: Vec<_> = s.sessions.keys().copied().collect();
         for session_id in session_ids {
             if let Some(session) = s.sessions.get_mut(&session_id) {
@@ -688,11 +715,39 @@ pub async fn serialization_loop(server: Arc<Mutex<Server>>, interval: Duration) 
     }
 }
 
+/// Persist final state and flush all scrollback to disk.
+pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
+    let mut s = server.lock().await;
+    let cache_dir = s.os.cache_dir();
+
+    for session in s.sessions.values_mut() {
+        for pane in session.panes.values_mut() {
+            if let Err(e) = pane.flush_scrollback(&cache_dir, session.id) {
+                log::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
+            }
+        }
+    }
+
+    let snapshot = s.build_snapshot();
+    let state_path = default_state_path(&cache_dir);
+    drop(s);
+
+    if let Err(e) = write_state_atomic(&snapshot, &state_path) {
+        log::error!("Failed to persist final state: {e}");
+    } else {
+        log::info!("Final state persisted");
+    }
+}
+
 /// Run the main server loop: accept clients, handle messages, manage PTYs.
+///
+/// Returns when a cooperative shutdown is signaled (via `Shutdown` message
+/// or OS signal). The caller is responsible for process-level cleanup
+/// (PID file removal, `process::exit`).
 pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
-    let socket_path = {
+    let (socket_path, mut shutdown_rx) = {
         let s = server.lock().await;
-        s.os.runtime_dir().join("rttx-server.sock")
+        (s.os.runtime_dir().join("rttx-server.sock"), s.shutdown_rx())
     };
 
     let listener = Listener::bind(&socket_path)?;
@@ -700,19 +755,31 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
 
     // Start serialization loop.
     let ser_server = Arc::clone(&server);
+    let mut ser_shutdown_rx = shutdown_rx.clone();
     tokio::spawn(async move {
-        serialization_loop(ser_server, Duration::from_secs(1)).await;
+        serialization_loop(ser_server, Duration::from_secs(1), &mut ser_shutdown_rx).await;
     });
 
     loop {
-        let conn = listener.accept().await?;
-        let server = Arc::clone(&server);
-        tokio::spawn(async move {
-            if let Err(e) = handle_client(server, conn).await {
-                log::error!("Client error: {e}");
+        tokio::select! {
+            result = listener.accept() => {
+                let conn = result?;
+                let server = Arc::clone(&server);
+                tokio::spawn(async move {
+                    if let Err(e) = handle_client(server, conn).await {
+                        log::error!("Client error: {e}");
+                    }
+                });
             }
-        });
+            _ = shutdown_rx.changed() => {
+                log::info!("Shutdown signal received, persisting state...");
+                break;
+            }
+        }
     }
+
+    persist_and_cleanup(&server).await;
+    Ok(())
 }
 
 /// Handle a single stdio client (for `attach-stdio` SSH tunneling).
@@ -752,17 +819,11 @@ where
                         break;
                     };
 
-                    // Check for shutdown.
                     if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
                         log::info!("Shutdown requested by client {client_id}");
                         let s = server.lock().await;
-                        let snapshot = s.build_snapshot();
-                        let state_path = default_state_path(&s.os.cache_dir());
-                        let pid_path = s.os.runtime_dir().join("rttx-server.pid");
-                        drop(s);
-                        let _ = write_state_atomic(&snapshot, &state_path);
-                        let _ = std::fs::remove_file(&pid_path);
-                        std::process::exit(0);
+                        s.request_shutdown();
+                        break;
                     }
 
                     if let Some(response) = Server::handle_message(&server, client_id, msg).await {

@@ -6,7 +6,6 @@ use rttx_proto::proto;
 use rttx_server::ipc;
 use rttx_server::os::OsInterface;
 use rttx_server::os::unix::UnixOs;
-use rttx_server::serialization::{default_state_path, write_state_atomic};
 use rttx_server::server::Server;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -97,11 +96,12 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         // Reconstruct sessions: replay scrollback, spawn fresh shells.
         Server::reconstruct_sessions(&server).await;
 
-        let sig_server = Arc::clone(&server);
-        let sig_pid_path = pid_path.clone();
-        tokio::spawn(async move {
-            handle_signals(sig_server, &sig_pid_path).await;
-        });
+        {
+            let sig_server = Arc::clone(&server);
+            tokio::spawn(async move {
+                handle_signals(sig_server).await;
+            });
+        }
 
         rttx_server::server::run(server).await
     });
@@ -138,11 +138,18 @@ fn attach_stdio() -> anyhow::Result<()> {
 
         Server::reconstruct_sessions(&server).await;
 
-        // Start serialization loop so state is persisted while this client is connected.
         let ser_server = Arc::clone(&server);
+        let mut ser_shutdown_rx = {
+            let s = server.lock().await;
+            s.shutdown_rx()
+        };
         tokio::spawn(async move {
-            rttx_server::server::serialization_loop(ser_server, std::time::Duration::from_secs(1))
-                .await;
+            rttx_server::server::serialization_loop(
+                ser_server,
+                std::time::Duration::from_secs(1),
+                &mut ser_shutdown_rx,
+            )
+            .await;
         });
 
         rttx_server::server::handle_stdio_client(server).await
@@ -184,7 +191,7 @@ fn is_running_via_pid(pid_path: &std::path::Path) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }
 
-async fn handle_signals(server: Arc<Mutex<Server>>, pid_path: &std::path::Path) {
+async fn handle_signals(server: Arc<Mutex<Server>>) {
     use signal_hook::consts::{SIGINT, SIGTERM};
     use signal_hook_tokio::Signals;
     use tokio_stream::StreamExt;
@@ -195,14 +202,8 @@ async fn handle_signals(server: Arc<Mutex<Server>>, pid_path: &std::path::Path) 
     };
 
     if signals.next().await.is_some() {
-        log::info!("Received shutdown signal, serializing state...");
+        log::info!("Received OS shutdown signal, triggering cooperative shutdown");
         let s = server.lock().await;
-        let snapshot = s.build_snapshot();
-        let state_path = default_state_path(&s.os.cache_dir());
-        drop(s);
-        let _ = write_state_atomic(&snapshot, &state_path);
-        let _ = std::fs::remove_file(pid_path);
-        log::info!("State saved, exiting");
-        std::process::exit(0);
+        s.request_shutdown();
     }
 }
