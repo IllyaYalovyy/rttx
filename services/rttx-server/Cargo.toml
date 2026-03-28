@@ -1,0 +1,73 @@
+[package]
+name = "rttx-server"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+future_not_send = "allow"
+redundant_pub_crate = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+too_long_first_doc_paragraph = "allow"
+missing_errors_doc = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+cast_lossless = "allow"
+wildcard_imports = "allow"
+unused_self = "allow"
+suboptimal_flops = "warn"
+todo = "warn"
+dbg_macro = "warn"
+
+[dependencies]
+rttx-proto = { path = "../rttx-proto" }
+
+# IPC
+interprocess = { version = "2.2", features = ["tokio"] }
+
+# Protocol serialization
+prost = { version = "0.13", features = ["std", "prost-derive"] }
+bytes = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# PTY
+pty-process = { version = "0.5", features = ["async"] }
+
+# Terminal state parsing
+vte = "0.13"
+
+# Serialization (state persistence)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Process management
+daemonize = "0.5"
+nix = { version = "0.29", features = ["signal"] }
+signal-hook = { version = "0.3", features = ["iterator"] }
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+log = "0.4"
+pretty_env_logger = "0.5"
+thiserror = "2"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+pretty_assertions = "1"
+rstest = "0.23"
+tokio-test = "0.4"
