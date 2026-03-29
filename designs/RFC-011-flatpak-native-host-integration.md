@@ -466,9 +466,9 @@ The important distinction is:
 
 Recommended repo additions:
 
-- `packaging/flatpak/io.github.IllyaYalovyy.rttx.yml`
-- `packaging/flatpak/cargo-sources.json`
-- `packaging/flatpak/README.md`
+- `packaging/rttx/io.github.IllyaYalovyy.rttx.json`
+- `packaging/rttx/flatpak/cargo-sources.json`
+- `packaging/rttx/flatpak/README.md`
 
 Recommended CI tasks:
 
@@ -477,7 +477,7 @@ Recommended CI tasks:
 3. run the app smoke test in Flatpak
 4. export a test bundle for manual QA
 
-The Flatpak packaging should live in `packaging/flatpak/`, not in ad hoc root-level files.
+The Flatpak packaging should live in `packaging/rttx/`, not in ad hoc root-level files.
 
 ### 12. User-facing setup guidance
 
@@ -604,7 +604,7 @@ is done (or submit the safe-default manifest first and add native mode in a foll
 
 ```bash
 pip install flatpak-builder-lint
-flatpak-builder-lint manifest io.github.IllyaYalovyy.rttx.json
+flatpak-builder-lint manifest packaging/rttx/io.github.IllyaYalovyy.rttx.json
 ```
 
 Fix all errors before opening a PR. Common failure categories for new submissions:
@@ -637,7 +637,7 @@ git clone https://github.com/<your-fork>/flathub.git
 cd flathub
 git checkout -b new-pr/io.github.IllyaYalovyy.rttx
 mkdir io.github.IllyaYalovyy.rttx
-cp /path/to/rttx/io.github.IllyaYalovyy.rttx.json io.github.IllyaYalovyy.rttx/
+cp /path/to/rttx/packaging/rttx/io.github.IllyaYalovyy.rttx.json io.github.IllyaYalovyy.rttx/
 git add io.github.IllyaYalovyy.rttx/
 git commit -m "Add io.github.IllyaYalovyy.rttx"
 git push origin new-pr/io.github.IllyaYalovyy.rttx
@@ -703,8 +703,8 @@ Supplementary references:
 
 Local implementation references:
 
-- [`Cargo.toml`](../Cargo.toml)
-- [`src/terminal/widget.rs`](../src/terminal/widget.rs)
-- [`src/window.rs`](../src/window.rs)
-- [`src/config.rs`](../src/config.rs)
+- [`clients/rttx/Cargo.toml`](../clients/rttx/Cargo.toml)
+- [`clients/rttx/src/terminal/widget.rs`](../clients/rttx/src/terminal/widget.rs)
+- [`clients/rttx/src/window.rs`](../clients/rttx/src/window.rs)
+- [`clients/rttx/src/config.rs`](../clients/rttx/src/config.rs)
 - [`designs/RFC-005-distribution-packaging.md`](RFC-005-distribution-packaging.md)

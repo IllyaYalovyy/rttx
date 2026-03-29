@@ -118,7 +118,7 @@ keyed on `Cargo.lock`. Cuts subsequent job times significantly.
 | `fmt` | `cargo fmt --check` | Yes |
 | `clippy` | `cargo clippy -- -D warnings` | Yes |
 | `test` | `GDK_BACKEND=broadway GTK_A11Y=none cargo test` | Yes |
-| `manifest` | `python3 -m json.tool io.github.IllyaYalovyy.rttx.json > /dev/null` | Yes |
+| `manifest` | `python3 -m json.tool packaging/rttx/io.github.IllyaYalovyy.rttx.json > /dev/null` | Yes |
 
 The manifest validation job is a cheap JSON parse of the Flatpak manifest. It does not require
 `flatpak-builder` and catches the most common breakage (malformed JSON from manual edits).
@@ -149,7 +149,7 @@ flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
 flatpak install -y flathub org.freedesktop.Sdk.Extension.rust-stable//25.08
 ```
 
-Build command: `packaging/flatpak/build-bundle.sh`
+Build command: `packaging/rttx/flatpak/build-bundle.sh`
 
 Output artifact: `rttx.flatpak`
 
@@ -215,7 +215,7 @@ cache). All steps are within the free tier.
 
 ## AT-SPI2 UI tests (deferred)
 
-The AT-SPI2 test suite (`tests/ui/`, `run_ui_tests.sh`) requires the following on the runner:
+The AT-SPI2 test suite (`clients/rttx/tests/ui/`, `run_ui_tests.sh`) requires the following on the runner:
 
 **Packages:**
 ```

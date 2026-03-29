@@ -18,7 +18,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UI_TEST_DIR="$SCRIPT_DIR/tests/ui"
+UI_TEST_DIR="$SCRIPT_DIR/clients/rttx/tests/ui"
 
 # Verify the binary exists before starting AT-SPI infrastructure.
 BINARY="$SCRIPT_DIR/target/debug/rttx"

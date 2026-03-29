@@ -63,6 +63,16 @@ Current Rust code still uses `Session*` names in several modules and persisted t
 issues, RFCs, or commit messages, prefer the product terms above unless you are pointing at a
 specific code type such as `SessionState`.
 
+## Repository layout
+
+This repository is a monorepo with role-based top-level directories:
+
+- `clients/rttx/` — GTK client package (`rttx`)
+- `services/rttx-server/` — daemon package (`rttx-server`)
+- `protocols/rttx-proto/` — shared protocol package (`rttx-proto`)
+- `packaging/rttx/` — Flatpak, RPM, and other packaging assets for the client
+- `designs/` — RFCs and architecture notes
+
 ---
 
 ## What belongs in rttx
@@ -109,7 +119,7 @@ sudo apt install cargo meson pkg-config libgtk-4-dev libadwaita-1-dev libvte-2.9
 If your system has VTE 0.76 instead of 0.78, build with:
 
 ```bash
-cargo build --no-default-features --features vte-0_76
+cargo build -p rttx --no-default-features --features vte-0_76
 ```
 
 **For UI behavioral tests** (optional but required for changes touching GTK layout or widget interaction):
@@ -128,32 +138,40 @@ sudo apt install weston python3-gi gir1.2-atspi-2.0
 
 ## Building and running
 
+Build the whole workspace:
+
 ```bash
-cargo build
+cargo build --workspace
+```
+
+Build just the client:
+
+```bash
+cargo build -p rttx
 ./target/debug/rttx
 ```
 
-The build runs `rustfmt` and Clippy automatically via a build script. A build that does not pass
-Clippy is not a valid build.
+Run `cargo fmt` and Clippy explicitly during development. Git hooks and CI enforce both before
+changes land on `mainline`.
 
 For development mode (separate config, debug logging, devel icon):
 ```bash
-RTTX_DEV_MODE=1 cargo run
+RTTX_DEV_MODE=1 cargo run -p rttx
 ```
 
 Debug logging is enabled automatically in dev mode. Override with `RUST_LOG` for finer control:
 ```bash
-RTTX_DEV_MODE=1 RUST_LOG=trace cargo run   # trace-level (everything)
-RTTX_DEV_MODE=1 RUST_LOG=rttx=debug cargo run  # debug only for rttx, not GTK
+RTTX_DEV_MODE=1 RUST_LOG=trace cargo run -p rttx   # trace-level (everything)
+RTTX_DEV_MODE=1 RUST_LOG=rttx=debug cargo run -p rttx  # debug only for rttx, not GTK
 ```
 
 For a release build:
 ```bash
-cargo build --release
+cargo build --release -p rttx
 ./target/release/rttx
 ```
 
-For full system integration (desktop file, icons, AppStream metadata):
+For production installation of the client (desktop file, icons, AppStream metadata):
 ```bash
 meson setup build --prefix="$HOME/.local"
 meson install -C build
@@ -161,28 +179,26 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor"
 update-desktop-database "$HOME/.local/share/applications"
 ```
 
-### Persistent session daemon (rttxd)
+### Persistent session daemon (`rttx-server`)
 
-rttx uses a companion daemon (`rttx-server`) for persistent sessions. The daemon lives in a
-separate repository: [IllyaYalovyy/rttxd](https://github.com/IllyaYalovyy/rttxd).
+rttx uses the `rttx-server` daemon for daemon-backed workspaces. The daemon lives in this same
+repository under `services/rttx-server/`.
 
 **Building the daemon:**
 ```bash
-cd ../rttxd
-cargo build
+cargo build -p rttx-server
 sudo cp target/debug/rttx-server /usr/local/bin/
 ```
 
-The daemon must be on `$PATH` for rttx to auto-start it. Without it, rttx falls back to
-non-persistent direct VTE sessions.
+The daemon must be on `$PATH` for rttx to auto-start it.
 
 **Dev mode** uses completely separate paths so you can develop alongside a stable production
 instance:
 
 | | Production | Development |
 |---|---|---|
-| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttxd-devel/v1/` |
-| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttxd-devel/` |
+| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
+| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
 | Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
 
 **Managing the daemon:**
@@ -204,13 +220,13 @@ pkill -f "rttx-server.*start"
 ```bash
 # Kill daemon, remove all dev state (sessions, scrollback, socket, PID file)
 pkill -f "rttx-server"
-rm -rf ~/.cache/rttxd-devel/ $XDG_RUNTIME_DIR/rttxd-devel/
+rm -rf ~/.cache/rttx-server-devel/ $XDG_RUNTIME_DIR/rttx-server-devel/
 
 # Also clear GUI session state (sidebar tabs, layout)
 rm -f ~/.config/rttx-devel/sessions.json
 
 # Then rebuild and run
-cargo build --no-default-features --features vte-0_76
+cargo build -p rttx --no-default-features --features vte-0_76
 RTTX_DEV_MODE=1 ./target/debug/rttx
 ```
 
@@ -221,12 +237,26 @@ rm -rf ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
 rm -f ~/.config/rttx/sessions.json
 ```
 
+**Production install of the daemon:**
+```bash
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
+**Production install of both client and daemon from source:**
+```bash
+meson setup build --prefix=/usr/local
+meson compile -C build
+sudo meson install -C build
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
 **Running daemon tests:**
 ```bash
-cd ../rttxd
-cargo test                          # all 61 tests
-cargo test --test make_pane_persistent  # GUI flow simulation
-cargo test --test stdio_transport   # SSH transport
+cargo test -p rttx-server
+cargo test -p rttx-server --test make_pane_persistent
+cargo test -p rttx-server --test stdio_transport
 ```
 
 ---
@@ -298,19 +328,24 @@ layout and interaction regressions that unit tests cannot.
 
 ### Running tests
 
-Standard (no display required for pure-Rust tests):
+Fast workspace sanity check:
 ```bash
-cargo test
+cargo test --workspace
 ```
 
-Full suite including GTK widget tests:
+CI-equivalent local validation:
 ```bash
-GDK_BACKEND=broadway GTK_A11Y=none cargo test
+bash .github/scripts/run-clippy.sh
+bash .github/scripts/run-quality-tests.sh
 ```
+
+Use the quality script for the GTK-heavy client suite. Plain `cargo test --workspace` is still
+useful for fast daemon/protocol coverage, but GTK widget tests need main-thread-aware isolation and
+skip/serialization logic that the stock Rust test harness does not provide.
 
 Behavioral UI tests (requires `weston` and `python3-gobject`):
 ```bash
-cargo build && ./run_ui_tests.sh
+cargo build -p rttx && ./run_ui_tests.sh
 ```
 
 The UI tests launch a private `RTTX_DEV_MODE=1` instance on a headless weston compositor. They
@@ -410,8 +445,9 @@ Refs #57
 1. **Open an issue first** for any non-trivial change. Align on scope before writing code.
 2. **One PR, one concern.** Do not bundle unrelated changes.
 3. **All checks must pass:**
-   - `cargo build` (enforces `rustfmt` + Clippy pedantic/nursery)
-   - `cargo test` (pure-Rust and GTK widget tests)
+   - `cargo build --workspace`
+   - `bash .github/scripts/run-clippy.sh`
+   - `bash .github/scripts/run-quality-tests.sh`
    - `./run_ui_tests.sh` (for changes touching GTK layout, widget interaction, or the split/sidebar paths)
 4. **PR description** must explain:
    - What the change does and why

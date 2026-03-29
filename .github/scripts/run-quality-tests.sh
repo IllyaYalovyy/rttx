@@ -4,7 +4,19 @@ set -euo pipefail
 export GTK_A11Y="${GTK_A11Y:-none}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-bash "${script_dir}/ensure-sibling-rttxd.sh"
+bash "${script_dir}/ensure-workspace-layout.sh"
+repo_root=$(cd -- "${script_dir}/../.." && pwd)
+client_manifest="${repo_root}/clients/rttx/Cargo.toml"
+daemon_manifest="${repo_root}/services/rttx-server/Cargo.toml"
+proto_manifest="${repo_root}/protocols/rttx-proto/Cargo.toml"
+client_test_dir="${repo_root}/clients/rttx/tests"
+
+VTE_VERSION=$(pkg-config --modversion vte-2.91-gtk4 2>/dev/null || echo "0.78")
+if printf '%s\n' "0.78" "${VTE_VERSION}" | sort -V | head -n1 | grep -q "^0\.78"; then
+    readonly CLIENT_FEATURE_ARGS=()
+else
+    readonly CLIENT_FEATURE_ARGS=(--no-default-features --features vte-0_76)
+fi
 
 broadway_cmd=""
 broadway_pid=""
@@ -86,7 +98,7 @@ run_logged_command() {
 }
 
 list_isolated_library_tests() {
-    cargo test --lib -- --list |
+    cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib -- --list |
         awk -F': test' '
             /^(window::tests::|sidebar::tests::|session::tests::apply_initial_paned_ratios_restores_nested_non_sentinel_positions)/ {
                 print $1
@@ -96,7 +108,7 @@ list_isolated_library_tests() {
 
 run_library_tests() {
     local stable_args=(
-        cargo test --lib -- --nocapture
+        cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib -- --nocapture
     )
     local isolated_test
 
@@ -110,7 +122,7 @@ run_library_tests() {
         [[ -n "${isolated_test}" ]] || continue
         run_logged_command \
             "Library test ${isolated_test}" \
-            cargo test --lib "${isolated_test}" -- --exact --nocapture
+            cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib "${isolated_test}" -- --exact --nocapture
     done < <(list_isolated_library_tests)
 }
 
@@ -119,11 +131,13 @@ trap cleanup EXIT
 start_broadway_if_available
 
 run_library_tests
-run_logged_command "Binary tests" cargo test --bins -- --nocapture
+run_logged_command "Binary tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --bins -- --nocapture
 
 while IFS= read -r integration_test; do
     run_logged_command "Integration test ${integration_test}" \
-        cargo test --test "${integration_test}" -- --nocapture
-done < <(find tests -maxdepth 1 -type f -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort)
+        cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --test "${integration_test}" -- --nocapture
+done < <(find "${client_test_dir}" -maxdepth 1 -type f -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort)
 
-run_logged_command "Doc tests" cargo test --doc -- --nocapture
+run_logged_command "Doc tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --doc -- --nocapture
+run_logged_command "Protocol tests" cargo test --manifest-path "${proto_manifest}" -- --nocapture
+run_logged_command "Daemon tests" cargo test --manifest-path "${daemon_manifest}" -- --nocapture

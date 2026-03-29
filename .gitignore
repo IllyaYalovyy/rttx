@@ -1,7 +1,12 @@
 /target
+/build
+/build-local
+/build_test
 /META
 /.flatpak-builder
 /b
 /flatpak-build
 /repo
 /rttx.flatpak
+.claude
+__pycache__/

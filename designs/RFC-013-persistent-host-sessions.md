@@ -287,7 +287,7 @@ Key differences from rttx:
 ## References
 
 - [RFC-007: Per-Pane Recovery Recipes & Smart Session Restoration](./RFC-007-session-recovery.md)
-- [rttxd repository](https://github.com/IllyaYalovyy/rttxd)
+- [`services/rttx-server/README.md`](../services/rttx-server/README.md)
 - [Zellij terminal workspace](https://github.com/zellij-org/zellij)
 - [Zellij session resurrection docs](https://zellij.dev/documentation/session-resurrection)
 - [`pty-process` crate](https://docs.rs/pty-process/latest/pty_process/)

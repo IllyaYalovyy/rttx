@@ -10,4 +10,6 @@ else
 fi
 
 cargo fmt
-cargo clippy $FEATURES -- -D warnings
+cargo clippy --manifest-path clients/rttx/Cargo.toml $FEATURES --all-targets -- -D warnings
+cargo clippy --manifest-path services/rttx-server/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path protocols/rttx-proto/Cargo.toml --all-targets -- -D warnings

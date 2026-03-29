@@ -1,59 +1,7 @@
-[package]
-name = "rttx"
-version = "0.1.0"
-edition = "2024"
-license = "GPL-3.0-or-later"
-description = "A tiling terminal emulator for GNOME"
-authors = ["Illya Yalovyy"]
-
-[lints.rust]
-unsafe_code = "deny"
-missing_debug_implementations = "warn"
-
-[lints.clippy]
-all = { level = "deny", priority = -1 }
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-# Selective overrides for nursery/pedantic if they are too noisy
-future_not_send = "allow"
-redundant_pub_crate = "allow"
-similar_names = "allow"
-struct_excessive_bools = "allow"
-too_long_first_doc_paragraph = "allow"
-missing_errors_doc = "allow"
-too_many_lines = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_precision_loss = "allow"
-cast_possible_wrap = "allow"
-cast_lossless = "allow"
-wildcard_imports = "allow"
-unused_self = "allow"
-suboptimal_flops = "warn"
-todo = "warn"
-dbg_macro = "warn"
-
-[features]
-default = ["vte-0_78"]
-vte-0_76 = ["vte4/v0_76"]
-vte-0_78 = ["vte4/v0_78"]
-
-[dependencies]
-gtk4 = { version = "0.9", features = ["v4_14"] }
-libadwaita = { version = "0.7", features = ["v1_5"] }
-vte4 = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
-log = "0.4"
-pretty_env_logger = "0.5"
-rttx-proto = { path = "../rttxd/crates/rttx-proto" }
-bytes = "1"
-tokio = { version = "1", features = ["net", "io-util", "sync", "rt", "rt-multi-thread", "macros", "process", "time"] }
-thiserror = "2"
-
-[dev-dependencies]
-tempfile = "3"
-pretty_assertions = "1"
-rstest = "0.23"
-proptest = "1"
+[workspace]
+members = [
+    "clients/rttx",
+    "services/rttx-server",
+    "protocols/rttx-proto",
+]
+resolver = "3"

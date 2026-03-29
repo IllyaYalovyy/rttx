@@ -1,0 +1,962 @@
+use gtk4::glib;
+use gtk4::glib::subclass::prelude::*;
+use gtk4::prelude::*;
+use gtk4::subclass::prelude::*;
+use std::path::{Path, PathBuf};
+use vte4::prelude::*;
+
+use crate::color_scheme;
+
+mod imp {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    #[derive(Default, Debug)]
+    pub struct TerminalWidget {
+        pub uuid: RefCell<String>,
+        pub custom_title: RefCell<Option<String>>,
+        pub initial_cwd: RefCell<Option<String>>,
+        pub shell_spawned: Cell<bool>,
+        pub smart_clipboard: Cell<bool>,
+        pub visual_bell: Cell<bool>,
+        pub pending_shell_inputs: RefCell<Vec<String>>,
+        #[cfg(test)]
+        #[allow(clippy::option_option)]
+        pub current_directory_override: RefCell<Option<Option<String>>>,
+        pub vte: vte4::Terminal,
+        pub terminal_scroller: gtk4::ScrolledWindow,
+        pub header: gtk4::Box,
+        pub recovery_bar: gtk4::Box,
+        pub recovery_label: gtk4::Label,
+        pub recovery_retry_button: gtk4::Button,
+        pub title_label: gtk4::Label,
+        pub close_button: gtk4::Button,
+        pub split_h_button: gtk4::Button,
+        pub split_v_button: gtk4::Button,
+        pub search_bar: gtk4::SearchBar,
+        pub search_entry: gtk4::SearchEntry,
+        pub child_exited_handler: RefCell<Option<glib::SignalHandlerId>>,
+        pub last_match_at_click: RefCell<Option<String>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for TerminalWidget {
+        const NAME: &'static str = "RttxTerminalWidget";
+        type Type = super::TerminalWidget;
+        type ParentType = gtk4::Box;
+    }
+
+    impl ObjectImpl for TerminalWidget {
+        fn constructed(&self) {
+            self.parent_constructed();
+            let obj = self.obj();
+            obj.set_orientation(gtk4::Orientation::Vertical);
+            obj.set_spacing(0);
+            obj.add_css_class("terminal-pane");
+            obj.set_margin_start(6);
+            obj.set_margin_end(6);
+            obj.set_margin_top(6);
+            obj.set_margin_bottom(6);
+
+            self.header.set_orientation(gtk4::Orientation::Horizontal);
+            self.header.set_spacing(4);
+            self.header.add_css_class("terminal-header");
+
+            self.title_label.set_hexpand(true);
+            self.title_label.set_xalign(0.0);
+            self.title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            self.title_label.set_label("Terminal");
+
+            self.split_h_button.set_icon_name("object-flip-horizontal-symbolic");
+            self.split_h_button.add_css_class("flat");
+            self.split_h_button.set_tooltip_text(Some("Split horizontally"));
+
+            self.split_v_button.set_icon_name("object-flip-vertical-symbolic");
+            self.split_v_button.add_css_class("flat");
+            self.split_v_button.set_tooltip_text(Some("Split vertically"));
+
+            self.close_button.set_icon_name("window-close-symbolic");
+            self.close_button.add_css_class("flat");
+            self.close_button.set_tooltip_text(Some("Close terminal"));
+
+            self.header.append(&self.title_label);
+            self.header.append(&self.split_h_button);
+            self.header.append(&self.split_v_button);
+            self.header.append(&self.close_button);
+
+            self.recovery_bar.set_orientation(gtk4::Orientation::Horizontal);
+            self.recovery_bar.set_spacing(6);
+            self.recovery_bar.set_margin_start(8);
+            self.recovery_bar.set_margin_end(8);
+            self.recovery_bar.set_margin_top(6);
+            self.recovery_bar.set_margin_bottom(6);
+            self.recovery_bar.add_css_class("toolbar");
+            self.recovery_bar.set_visible(false);
+
+            self.recovery_label.set_hexpand(true);
+            self.recovery_label.set_xalign(0.0);
+            self.recovery_label.set_wrap(true);
+
+            self.recovery_retry_button.set_label("Retry");
+            self.recovery_retry_button.add_css_class("suggested-action");
+
+            self.recovery_bar.append(&self.recovery_label);
+            self.recovery_bar.append(&self.recovery_retry_button);
+
+            let gesture = gtk4::GestureClick::new();
+            gesture.set_button(1);
+            let vte = self.vte.clone();
+            gesture.connect_released(move |g, n_press, _, _| {
+                if n_press >= 1 {
+                    let _ = vte.grab_focus();
+                    g.set_state(gtk4::EventSequenceState::Claimed);
+                }
+            });
+            self.title_label.add_controller(gesture);
+
+            self.search_entry.set_hexpand(true);
+            self.search_bar.set_child(Some(&self.search_entry));
+            self.search_bar.set_show_close_button(true);
+
+            self.vte.set_hexpand(true);
+            self.vte.set_vexpand(true);
+            self.vte.set_scroll_on_output(false);
+            self.vte.set_scroll_on_keystroke(true);
+            self.vte.set_scrollback_lines(10000);
+            configure_openable_matches(&self.vte);
+
+            self.terminal_scroller.set_hscrollbar_policy(gtk4::PolicyType::Never);
+            self.terminal_scroller.set_vscrollbar_policy(gtk4::PolicyType::Automatic);
+            self.terminal_scroller.set_hexpand(true);
+            self.terminal_scroller.set_vexpand(true);
+            self.terminal_scroller.add_css_class("terminal-scroller");
+            self.terminal_scroller.set_child(Some(&self.vte));
+
+            let click_target = obj.downgrade();
+            let open_match_click = gtk4::GestureClick::new();
+            open_match_click.set_button(1);
+            open_match_click.connect_released(move |gesture, n_press, x, y| {
+                if n_press != 1 {
+                    return;
+                }
+                let Some(widget) = gesture.widget() else { return };
+                let Ok(vte) = widget.downcast::<vte4::Terminal>() else { return };
+                let Some(term) = click_target.upgrade() else { return };
+                if term.try_open_match_at(x, y, &vte) {
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                }
+            });
+            self.vte.add_controller(open_match_click);
+
+            let hover_target = obj.downgrade();
+            let hover_controller = gtk4::EventControllerMotion::new();
+            hover_controller.connect_motion(move |controller, x, y| {
+                let Some(widget) = controller.widget() else { return };
+                let Ok(vte) = widget.downcast::<vte4::Terminal>() else { return };
+                let Some(term) = hover_target.upgrade() else { return };
+                let cursor_name =
+                    if term.openable_uri_at(x, y, &vte).is_some() { Some("pointer") } else { None };
+                vte.set_cursor_from_name(cursor_name);
+            });
+            let leave_target = obj.downgrade();
+            hover_controller.connect_leave(move |controller| {
+                let Some(_term) = leave_target.upgrade() else { return };
+                let Some(widget) = controller.widget() else { return };
+                let Ok(vte) = widget.downcast::<vte4::Terminal>() else { return };
+                vte.set_cursor_from_name(None);
+            });
+            self.vte.add_controller(hover_controller);
+
+            let vte = self.vte.clone();
+            let smart_clipboard_controller = gtk4::ShortcutController::new();
+            smart_clipboard_controller.set_name(Some("smart-clipboard"));
+            smart_clipboard_controller.set_scope(gtk4::ShortcutScope::Local);
+            smart_clipboard_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+            let copy_vte = vte.clone();
+            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
+                Some(gtk4::KeyvalTrigger::new(
+                    gtk4::gdk::Key::c,
+                    gtk4::gdk::ModifierType::CONTROL_MASK,
+                )),
+                Some(gtk4::CallbackAction::new(move |widget, _| {
+                    let term = widget.downcast_ref::<super::TerminalWidget>().unwrap();
+                    match smart_clipboard_action(
+                        gtk4::gdk::Key::c,
+                        gtk4::gdk::ModifierType::CONTROL_MASK,
+                        copy_vte.has_selection(),
+                        term.imp().smart_clipboard.get(),
+                    ) {
+                        SmartClipboardAction::Copy => {
+                            copy_vte.copy_clipboard_format(vte4::Format::Text);
+                            copy_vte.unselect_all();
+                            glib::Propagation::Stop
+                        }
+                        SmartClipboardAction::Paste => unreachable!(),
+                        SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+                    }
+                })),
+            ));
+
+            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
+                Some(gtk4::KeyvalTrigger::new(
+                    gtk4::gdk::Key::v,
+                    gtk4::gdk::ModifierType::CONTROL_MASK,
+                )),
+                Some(gtk4::CallbackAction::new(move |widget, _| {
+                    let term = widget.downcast_ref::<super::TerminalWidget>().unwrap();
+                    match smart_clipboard_action(
+                        gtk4::gdk::Key::v,
+                        gtk4::gdk::ModifierType::CONTROL_MASK,
+                        vte.has_selection(),
+                        term.imp().smart_clipboard.get(),
+                    ) {
+                        SmartClipboardAction::Paste => {
+                            vte.paste_clipboard();
+                            glib::Propagation::Stop
+                        }
+                        SmartClipboardAction::Copy => unreachable!(),
+                        SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+                    }
+                })),
+            ));
+
+            obj.add_controller(smart_clipboard_controller);
+
+            let copy_link_action = gtk4::gio::SimpleAction::new("copy-link", None);
+            copy_link_action.set_enabled(false);
+            let action_group = gtk4::gio::SimpleActionGroup::new();
+            action_group.add_action(&copy_link_action);
+            obj.insert_action_group("term", Some(&action_group));
+
+            let obj_weak = obj.downgrade();
+            copy_link_action.connect_activate(move |_, _| {
+                let Some(obj) = obj_weak.upgrade() else { return };
+                let matched = obj.imp().last_match_at_click.borrow().clone();
+                if let Some(text) = matched
+                    && let Some(display) = gtk4::gdk::Display::default()
+                {
+                    display.clipboard().set_text(&text);
+                }
+            });
+
+            let menu = gtk4::gio::Menu::new();
+            let clipboard_section = gtk4::gio::Menu::new();
+            clipboard_section.append(Some("Copy"), Some("win.copy"));
+            clipboard_section.append(Some("Paste"), Some("win.paste"));
+            clipboard_section.append(Some("Copy Link"), Some("term.copy-link"));
+            let pane_section = gtk4::gio::Menu::new();
+            pane_section.append(Some("Search"), Some("win.search"));
+            pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
+            pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
+            let session_section = gtk4::gio::Menu::new();
+            session_section.append(Some("New Session"), Some("win.new-session"));
+            session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
+            session_section.append(Some("Bookmark Session"), Some("win.bookmark-session"));
+            session_section.append(Some("Preferences"), Some("win.preferences"));
+            let close_section = gtk4::gio::Menu::new();
+            close_section.append(Some("Close Pane"), Some("win.close-terminal"));
+            menu.append_section(None, &clipboard_section);
+            menu.append_section(None, &pane_section);
+            menu.append_section(None, &session_section);
+            menu.append_section(None, &close_section);
+
+            let context_menu = gtk4::PopoverMenu::from_model(Some(&menu));
+            context_menu.set_has_arrow(false);
+            context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
+
+            let right_click = gtk4::GestureClick::new();
+            right_click.set_button(3);
+            right_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            let copy_link_ref = copy_link_action;
+            let obj_weak = obj.downgrade();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                if let Some(obj) = obj_weak.upgrade() {
+                    let matched = obj.openable_uri_at(x, y, &obj.imp().vte);
+                    copy_link_ref.set_enabled(matched.is_some());
+                    obj.imp().last_match_at_click.replace(matched);
+                }
+                context_menu
+                    .set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                context_menu.popup();
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+            });
+            self.vte.add_controller(right_click);
+
+            obj.append(&self.header);
+            obj.append(&self.recovery_bar);
+            obj.append(&self.search_bar);
+            obj.append(&self.terminal_scroller);
+        }
+    }
+
+    impl WidgetImpl for TerminalWidget {}
+    impl BoxImpl for TerminalWidget {}
+}
+glib::wrapper! {
+    pub struct TerminalWidget(ObjectSubclass<imp::TerminalWidget>)
+        @extends gtk4::Box, gtk4::Widget,
+        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Orientable;
+}
+impl TerminalWidget {
+    #[must_use]
+    pub fn new(uuid: &str, cwd: Option<&str>) -> Self {
+        let obj: Self = glib::Object::builder().build();
+        obj.imp().uuid.replace(uuid.to_string());
+        obj.imp().initial_cwd.replace(cwd.map(str::to_string));
+        obj
+    }
+
+    #[must_use]
+    pub fn uuid(&self) -> String {
+        self.imp().uuid.borrow().clone()
+    }
+
+    #[must_use]
+    pub fn vte(&self) -> &vte4::Terminal {
+        &self.imp().vte
+    }
+
+    #[must_use]
+    pub fn title_label(&self) -> &gtk4::Label {
+        &self.imp().title_label
+    }
+
+    #[must_use]
+    pub fn close_button(&self) -> &gtk4::Button {
+        &self.imp().close_button
+    }
+
+    #[must_use]
+    pub fn split_h_button(&self) -> &gtk4::Button {
+        &self.imp().split_h_button
+    }
+
+    #[must_use]
+    pub fn split_v_button(&self) -> &gtk4::Button {
+        &self.imp().split_v_button
+    }
+
+    #[must_use]
+    pub fn search_bar(&self) -> &gtk4::SearchBar {
+        &self.imp().search_bar
+    }
+
+    #[must_use]
+    pub fn search_entry(&self) -> &gtk4::SearchEntry {
+        &self.imp().search_entry
+    }
+
+    pub fn set_title(&self, title: &str) {
+        self.imp().title_label.set_label(title);
+    }
+
+    pub fn set_custom_title(&self, title: Option<&str>) {
+        self.imp().custom_title.replace(title.map(str::to_string));
+        if let Some(title) = title {
+            self.set_title(title);
+        }
+    }
+
+    #[must_use]
+    pub fn custom_title(&self) -> Option<String> {
+        self.imp().custom_title.borrow().clone()
+    }
+
+    pub fn toggle_search(&self) {
+        let bar = &self.imp().search_bar;
+        bar.set_search_mode(!bar.is_search_mode());
+        if bar.is_search_mode() {
+            self.imp().search_entry.grab_focus();
+        }
+    }
+
+    #[must_use]
+    pub fn current_directory(&self) -> Option<String> {
+        #[cfg(test)]
+        if let Some(cwd) = self.imp().current_directory_override.borrow().clone() {
+            return cwd;
+        }
+        self.imp().vte.current_directory_uri().and_then(|uri| parse_file_uri(uri.as_str()))
+    }
+
+    pub fn set_smart_clipboard(&self, enabled: bool) {
+        self.imp().smart_clipboard.set(enabled);
+    }
+
+    pub fn set_visual_bell(&self, enabled: bool) {
+        self.imp().visual_bell.set(enabled);
+    }
+
+    pub(crate) fn set_active(&self, active: bool) {
+        if active {
+            self.add_css_class("terminal-pane-active");
+        } else {
+            self.remove_css_class("terminal-pane-active");
+        }
+    }
+
+    pub fn flash_bell(&self) {
+        if !self.imp().visual_bell.get() {
+            return;
+        }
+        let header = &self.imp().header;
+        header.remove_css_class("bell-flash");
+        header.add_css_class("bell-flash");
+        let header_weak = header.downgrade();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            if let Some(h) = header_weak.upgrade() {
+                h.remove_css_class("bell-flash");
+            }
+        });
+    }
+
+    #[must_use]
+    pub fn recovery_retry_button(&self) -> &gtk4::Button {
+        &self.imp().recovery_retry_button
+    }
+
+    pub fn show_recovery_message(&self, message: &str) {
+        self.imp().recovery_label.set_label(message);
+        self.imp().recovery_bar.set_visible(true);
+    }
+
+    pub fn hide_recovery_message(&self) {
+        self.imp().recovery_label.set_label("");
+        self.imp().recovery_bar.set_visible(false);
+    }
+
+    pub fn reset_launch_state_for_retry(&self) {
+        self.imp().shell_spawned.set(false);
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn smart_clipboard_enabled_for_test(&self) -> bool {
+        self.imp().smart_clipboard.get()
+    }
+
+    pub fn queue_input_for_shell(&self, input: impl Into<String>) {
+        let input = input.into();
+        if self.imp().shell_spawned.get() {
+            self.imp().vte.feed_child(input.as_bytes());
+            return;
+        }
+        self.imp().pending_shell_inputs.borrow_mut().push(input);
+        self.ensure_shell_spawned_when_ready();
+    }
+
+    pub fn ensure_shell_spawned_when_ready(&self) {
+        if self.imp().shell_spawned.get() {
+            return;
+        }
+        if self.vte().width() > 0 && self.vte().height() > 0 {
+            self.spawn_shell_once();
+            return;
+        }
+        let term = self.clone();
+        self.add_tick_callback(move |_, _| {
+            if term.vte().width() > 0 && term.vte().height() > 0 {
+                term.spawn_shell_once();
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    fn spawn_shell(&self, cwd: Option<&str>) {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let cwd_path = cwd.map(std::string::ToString::to_string);
+
+        let vte = self.imp().vte.clone();
+        let title_label = self.imp().title_label.clone();
+        let custom_title = self.imp().custom_title.clone();
+
+        vte.connect_window_title_changed(move |vte| {
+            if custom_title.borrow().is_none()
+                && let Some(title) = vte.window_title()
+            {
+                title_label.set_label(&title);
+            }
+        });
+
+        vte.spawn_async(
+            vte4::PtyFlags::DEFAULT,
+            cwd_path.as_deref(),
+            &[shell.as_str()],
+            &[],
+            glib::SpawnFlags::DEFAULT,
+            || {},
+            -1,
+            gtk4::gio::Cancellable::NONE,
+            move |_result| {},
+        );
+    }
+
+    fn spawn_shell_once(&self) {
+        if self.imp().shell_spawned.replace(true) {
+            return;
+        }
+        if std::env::var_os("RTTX_DISABLE_SHELL_SPAWN").is_none() {
+            let cwd = self.imp().initial_cwd.borrow().clone();
+            self.spawn_shell(cwd.as_deref());
+        }
+        let pending_inputs: Vec<String> =
+            self.imp().pending_shell_inputs.borrow_mut().drain(..).collect();
+        for input in pending_inputs {
+            self.imp().vte.feed_child(input.as_bytes());
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shell_spawned_for_test(&self) -> bool {
+        self.imp().shell_spawned.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_shell_inputs_for_test(&self) -> Vec<String> {
+        self.imp().pending_shell_inputs.borrow().clone()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn recovery_message_visible_for_test(&self) -> bool {
+        self.imp().recovery_bar.is_visible()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn recovery_message_for_test(&self) -> String {
+        self.imp().recovery_label.label().to_string()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_current_directory_for_test(&self, cwd: Option<&str>) {
+        self.imp().current_directory_override.replace(Some(cwd.map(str::to_string)));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initial_cwd_for_test(&self) -> Option<String> {
+        self.imp().initial_cwd.borrow().clone()
+    }
+
+    /// Disconnect the `child_exited` signal handler to prevent re-entrancy
+    /// panics when the terminal is dropped while a `RefCell` is borrowed.
+    pub fn disconnect_child_exited(&self) {
+        if let Some(id) = self.imp().child_exited_handler.borrow_mut().take() {
+            self.imp().vte.disconnect(id);
+        }
+    }
+
+    /// Reset terminal modes that a remote process (e.g., SSH) may have left active
+    /// after a broken connection.
+    ///
+    /// Feeds ANSI/DEC escape sequences directly to the VTE emulator so it disables
+    /// mouse tracking, bracketed paste, alternate screen, and resets text attributes.
+    /// Called whenever a child process exits so a dangling SSH session never leaves
+    /// the local terminal in a corrupt state.
+    pub fn reset_terminal_state(&self) {
+        // Each sequence targets a specific mode; none has visible side-effects when
+        // the mode was already inactive, so this is safe to call unconditionally.
+        //
+        // ESC [ ! p   — DECSTR: soft terminal reset (resets scroll regions, origin
+        //               mode, insert mode, and most other DEC private modes)
+        // ?1000l      — disable X10 mouse reporting
+        // ?1002l      — disable button-event (cell-motion) mouse tracking
+        // ?1003l      — disable any-event mouse tracking
+        // ?1006l      — disable SGR extended mouse coordinate encoding
+        // ?1015l      — disable URXVT extended mouse coordinate encoding
+        // ?1016l      — disable SGR pixel coordinate mouse encoding
+        // ?2004l      — disable bracketed paste mode
+        // ?1049l      — leave alternate screen buffer, restore normal buffer
+        // ?25h        — show cursor (re-enable if the remote hid it)
+        // 0m          — reset all SGR character attributes
+        const RESET: &str = concat!(
+            "\x1b[!p",
+            "\x1b[?1000l",
+            "\x1b[?1002l",
+            "\x1b[?1003l",
+            "\x1b[?1006l",
+            "\x1b[?1015l",
+            "\x1b[?1016l",
+            "\x1b[?2004l",
+            "\x1b[?1049l",
+            "\x1b[?25h",
+            "\x1b[0m",
+        );
+        self.imp().vte.feed(RESET.as_bytes());
+    }
+
+    pub fn apply_color_scheme(&self, scheme: &color_scheme::ColorScheme) {
+        let vte = &self.imp().vte;
+
+        if let Some(fg) = scheme.foreground_rgba()
+            && let Some(bg) = scheme.background_rgba()
+        {
+            let palette = scheme.palette_rgba();
+            let palette_refs: Vec<&gtk4::gdk::RGBA> = palette.iter().collect();
+            vte.set_colors(Some(&fg), Some(&bg), &palette_refs);
+        }
+
+        if scheme.use_cursor_color {
+            if let Some(cursor_fg) = color_scheme::ColorScheme::parse_color(&scheme.cursor_fg) {
+                vte.set_color_cursor_foreground(Some(&cursor_fg));
+            }
+            if let Some(cursor_bg) = color_scheme::ColorScheme::parse_color(&scheme.cursor_bg) {
+                vte.set_color_cursor(Some(&cursor_bg));
+            }
+        }
+
+        if scheme.use_highlight_color {
+            if let Some(hl_fg) = color_scheme::ColorScheme::parse_color(&scheme.highlight_fg) {
+                vte.set_color_highlight_foreground(Some(&hl_fg));
+            }
+            if let Some(hl_bg) = color_scheme::ColorScheme::parse_color(&scheme.highlight_bg) {
+                vte.set_color_highlight(Some(&hl_bg));
+            }
+        }
+
+        if scheme.use_bold_color
+            && let Some(bold) = color_scheme::ColorScheme::parse_color(&scheme.bold_color)
+        {
+            vte.set_color_bold(Some(&bold));
+        }
+    }
+
+    fn try_open_match_at(&self, x: f64, y: f64, vte: &vte4::Terminal) -> bool {
+        let Some(uri) = self.openable_uri_at(x, y, vte) else {
+            return false;
+        };
+        self.open_uri(&uri)
+    }
+
+    fn openable_uri_at(&self, x: f64, y: f64, vte: &vte4::Terminal) -> Option<String> {
+        if let Some(uri) = vte.check_hyperlink_at(x, y) {
+            return Some(uri.to_string());
+        }
+
+        let (matched, _tag) = vte.check_match_at(x, y);
+        let cwd = self.current_directory();
+        matched.as_deref().and_then(|text| openable_uri_from_match_text(text, cwd.as_deref()))
+    }
+
+    fn open_uri(&self, uri: &str) -> bool {
+        match gtk4::gio::AppInfo::launch_default_for_uri(uri, gtk4::gio::AppLaunchContext::NONE) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("Failed to open terminal match '{uri}': {error}");
+                false
+            }
+        }
+    }
+}
+
+pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
+    glib::filename_from_uri(uri).ok().map(|(path, _hostname)| path.display().to_string())
+}
+
+const OPENABLE_URI_PREFIXES: &[&str] = &["http://", "https://", "mailto:", "file://"];
+const URI_MATCH_REGEX: &str = r#"(?:https?://|mailto:|file://)[^\s<>'"`)\]\}]+"#;
+const PATH_MATCH_REGEX: &str = r#"(?:~/|\.\.?/|/|[A-Za-z0-9._-]+/)[^\s<>'"`]+"#;
+
+fn configure_openable_matches(vte: &vte4::Terminal) {
+    vte.set_allow_hyperlink(true);
+    register_openable_match(vte, URI_MATCH_REGEX);
+    register_openable_match(vte, PATH_MATCH_REGEX);
+}
+
+fn register_openable_match(vte: &vte4::Terminal, pattern: &str) {
+    // VTE 0.78 asserts PCRE2_MULTILINE on match_add_regex. Pass the same
+    // defaults VTE uses internally (VTE_REGEX_FLAGS_DEFAULT from vteregex.hh).
+    const PCRE2_FLAGS: u32 = 0x0008_0000  // PCRE2_UTF
+        | 0x4000_0000  // PCRE2_NO_UTF_CHECK
+        | 0x0000_0008  // PCRE2_CASELESS
+        | 0x0000_0400  // PCRE2_MULTILINE
+        | 0x0000_0020; // PCRE2_DOTALL
+    match vte4::Regex::for_match(pattern, PCRE2_FLAGS) {
+        Ok(regex) => {
+            let tag = vte.match_add_regex(&regex, 0);
+            vte.match_set_cursor_name(tag, "pointer");
+        }
+        Err(error) => {
+            log::error!("Failed to register terminal match regex '{pattern}': {error}");
+        }
+    }
+}
+
+fn openable_uri_from_match_text(
+    match_text: &str,
+    current_directory: Option<&str>,
+) -> Option<String> {
+    let trimmed = trim_openable_match(match_text);
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if OPENABLE_URI_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix)) {
+        return Some(trimmed.to_string());
+    }
+
+    let path_text = strip_editor_position_suffix(trimmed);
+    if !looks_like_path(path_text) {
+        return None;
+    }
+
+    let path = resolve_openable_path(path_text, current_directory)?;
+    Some(gtk4::gio::File::for_path(path).uri().to_string())
+}
+
+fn trim_openable_match(match_text: &str) -> &str {
+    match_text.trim_end_matches(['.', ',', ';', '!', '?', ')', ']', '}', '>'])
+}
+
+fn strip_editor_position_suffix(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    let mut end = path.len();
+    let mut stripped_any = false;
+
+    loop {
+        let mut start = end;
+        while start > 0 && bytes[start - 1].is_ascii_digit() {
+            start -= 1;
+        }
+
+        if start == end || start == 0 || bytes[start - 1] != b':' {
+            break;
+        }
+
+        stripped_any = true;
+        end = start - 1;
+    }
+
+    if stripped_any { &path[..end] } else { path }
+}
+
+fn looks_like_path(path: &str) -> bool {
+    path.starts_with('/')
+        || path.starts_with("~/")
+        || path.starts_with("./")
+        || path.starts_with("../")
+        || path.contains('/')
+}
+
+fn resolve_openable_path(path: &str, current_directory: Option<&str>) -> Option<PathBuf> {
+    if let Some(home_relative) = path.strip_prefix("~/") {
+        return Some(glib::home_dir().join(home_relative));
+    }
+
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Some(path.to_path_buf());
+    }
+
+    current_directory.map(|cwd| Path::new(cwd).join(path))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SmartClipboardAction {
+    Copy,
+    Paste,
+    PassThrough,
+}
+
+fn smart_clipboard_action(
+    key: gtk4::gdk::Key,
+    modifiers: gtk4::gdk::ModifierType,
+    has_selection: bool,
+    smart_clipboard_enabled: bool,
+) -> SmartClipboardAction {
+    if !smart_clipboard_enabled {
+        return SmartClipboardAction::PassThrough;
+    }
+
+    let ignored_modifiers = gtk4::gdk::ModifierType::LOCK_MASK;
+    let normalized = modifiers & !ignored_modifiers;
+    if normalized != gtk4::gdk::ModifierType::CONTROL_MASK {
+        return SmartClipboardAction::PassThrough;
+    }
+
+    match key {
+        gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => SmartClipboardAction::Copy,
+        gtk4::gdk::Key::v | gtk4::gdk::Key::V => SmartClipboardAction::Paste,
+        _ => SmartClipboardAction::PassThrough,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SmartClipboardAction, openable_uri_from_match_text, parse_file_uri, smart_clipboard_action,
+    };
+    use gtk4::gio;
+    use gtk4::prelude::*;
+
+    /// Verify that the RESET constant inside `reset_terminal_state()` contains
+    /// the expected escape sequences without requiring a live VTE widget.
+    #[test]
+    fn reset_terminal_state_sequences() {
+        // Reconstruct the same constant used in the function.
+        let reset = concat!(
+            "\x1b[!p",
+            "\x1b[?1000l",
+            "\x1b[?1002l",
+            "\x1b[?1003l",
+            "\x1b[?1006l",
+            "\x1b[?1015l",
+            "\x1b[?1016l",
+            "\x1b[?2004l",
+            "\x1b[?1049l",
+            "\x1b[?25h",
+            "\x1b[0m",
+        );
+        assert!(reset.contains("\x1b[!p"), "DECSTR soft reset missing");
+        assert!(reset.contains("\x1b[?1000l"), "X10 mouse disable missing");
+        assert!(reset.contains("\x1b[?1002l"), "button-event mouse disable missing");
+        assert!(reset.contains("\x1b[?1003l"), "any-event mouse disable missing");
+        assert!(reset.contains("\x1b[?1006l"), "SGR mouse disable missing");
+        assert!(reset.contains("\x1b[?2004l"), "bracketed paste disable missing");
+        assert!(reset.contains("\x1b[?1049l"), "alt-screen exit missing");
+        assert!(reset.contains("\x1b[?25h"), "cursor show missing");
+        assert!(reset.contains("\x1b[0m"), "SGR reset missing");
+    }
+
+    #[test]
+    fn parse_standard_vte_uri() {
+        assert_eq!(
+            parse_file_uri("file:///home/user/projects"),
+            Some("/home/user/projects".into())
+        );
+    }
+
+    #[test]
+    fn parse_uri_with_percent_encoding() {
+        assert_eq!(
+            parse_file_uri("file:///home/user/my%20project"),
+            Some("/home/user/my project".into())
+        );
+    }
+
+    #[test]
+    fn parse_uri_root() {
+        assert_eq!(parse_file_uri("file:///"), Some("/".into()));
+    }
+
+    #[test]
+    fn parse_non_file_uri_returns_none() {
+        assert_eq!(parse_file_uri("https://example.com/path"), None);
+        assert_eq!(parse_file_uri("ssh://host/path"), None);
+    }
+
+    #[test]
+    fn parse_empty_string_returns_none() {
+        assert_eq!(parse_file_uri(""), None);
+    }
+
+    #[test]
+    fn strip_prefix_regression() {
+        let old_way = "file:///home/user/my%20dir".strip_prefix("file://").map(str::to_string);
+        let new_way = parse_file_uri("file:///home/user/my%20dir");
+        assert_eq!(old_way, Some("/home/user/my%20dir".into()));
+        assert_eq!(new_way, Some("/home/user/my dir".into()));
+        assert_ne!(old_way, new_way);
+    }
+
+    #[test]
+    fn http_match_opens_as_uri() {
+        assert_eq!(
+            openable_uri_from_match_text("https://example.com/docs?q=rust#intro", None),
+            Some("https://example.com/docs?q=rust#intro".into())
+        );
+    }
+
+    #[test]
+    fn trailing_punctuation_is_trimmed_from_uri_match() {
+        assert_eq!(
+            openable_uri_from_match_text("https://example.com/docs).", None),
+            Some("https://example.com/docs".into())
+        );
+    }
+
+    #[test]
+    fn absolute_path_match_becomes_file_uri() {
+        let expected = gio::File::for_path("/tmp/rttx.log").uri().to_string();
+        assert_eq!(openable_uri_from_match_text("/tmp/rttx.log", None), Some(expected));
+    }
+
+    #[test]
+    fn relative_path_match_uses_terminal_cwd() {
+        let expected = gio::File::for_path("/workspace/rttx/src/main.rs").uri().to_string();
+        assert_eq!(
+            openable_uri_from_match_text("src/main.rs", Some("/workspace/rttx")),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn line_and_column_suffix_do_not_block_path_opening() {
+        let expected = gio::File::for_path("/workspace/rttx/src/main.rs").uri().to_string();
+        assert_eq!(
+            openable_uri_from_match_text("src/main.rs:42:7", Some("/workspace/rttx")),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn bare_word_is_not_treated_as_openable_path() {
+        assert_eq!(openable_uri_from_match_text("Cargo.toml", Some("/workspace/rttx")), None);
+    }
+
+    #[test]
+    fn smart_clipboard_only_copies_selected_ctrl_c() {
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                true,
+                true,
+            ),
+            SmartClipboardAction::Copy
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+            ),
+            SmartClipboardAction::PassThrough
+        );
+    }
+
+    #[test]
+    fn smart_clipboard_paste_requires_plain_ctrl_v_and_opt_in() {
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+            ),
+            SmartClipboardAction::Paste
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                false,
+                true,
+            ),
+            SmartClipboardAction::PassThrough
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                false,
+            ),
+            SmartClipboardAction::PassThrough
+        );
+    }
+}
