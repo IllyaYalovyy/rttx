@@ -49,7 +49,7 @@ Instead the GUI shows explicit connection state and retries transient failures a
 
 ## Building
 
-From the repository root:
+Development build from the repository root:
 
 ```bash
 cargo build -p rttx-server
@@ -118,8 +118,8 @@ Dev mode uses completely separate paths:
 
 | | Production | Development |
 |---|---|---|
-| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttxd-devel/v1/` |
-| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttxd-devel/` |
+| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
+| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
 | Log level | info | debug |
 
 ```bash
@@ -132,6 +132,25 @@ RTTX_DEV_MODE=1 RUST_LOG=trace cargo run -p rttx-server -- start --foreground
 
 The rttx GUI in dev mode (`RTTX_DEV_MODE=1`) automatically connects to the dev daemon and
 propagates the env var when auto-starting it.
+
+## Install
+
+Production install from source:
+
+```bash
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
+Combined source install with the client:
+
+```bash
+meson setup build --prefix=/usr/local
+meson compile -C build
+sudo meson install -C build
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
 
 ## Testing
 

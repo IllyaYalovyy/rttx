@@ -1,6 +1,6 @@
-//! Async connection manager for the rttxd persistent session daemon.
+//! Async connection manager for the `rttx-server` persistent-session daemon.
 //!
-//! Provides a `DaemonConnection` that communicates with rttxd over a Unix
+//! Provides a `DaemonConnection` that communicates with `rttx-server` over a Unix
 //! socket or SSH subprocess using the length-prefixed protobuf framing
 //! from `rttx-proto`. After the handshake, the connection can be split
 //! into a `DaemonReader` and `DaemonWriter` for concurrent read/write
@@ -17,18 +17,21 @@ use uuid::Uuid;
 
 use crate::runtime::WorkspacePolicy;
 
-/// Default socket path for the local rttxd instance.
+/// Default socket path for the local `rttx-server` instance.
 ///
-/// In dev mode (`RTTX_DEV_MODE=1`), uses `rttxd-devel` instead of
+/// In dev mode (`RTTX_DEV_MODE=1`), uses `rttx-server-devel` instead of
 /// `rttx-server` so the development daemon runs alongside production.
 #[must_use]
 pub fn default_socket_path() -> PathBuf {
-    let dir_name = if crate::config::is_development() { "rttxd-devel" } else { "rttx-server" };
-    std::env::var("XDG_RUNTIME_DIR")
-        .map_or_else(|_| PathBuf::from("/tmp"), PathBuf::from)
-        .join(dir_name)
-        .join("v1")
-        .join("rttx-server.sock")
+    let runtime_dir =
+        std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| PathBuf::from("/tmp"), PathBuf::from);
+    socket_path_for(&runtime_dir, crate::config::is_development())
+}
+
+#[must_use]
+fn socket_path_for(runtime_dir: &Path, is_dev: bool) -> PathBuf {
+    let dir_name = if is_dev { "rttx-server-devel" } else { "rttx-server" };
+    runtime_dir.join(dir_name).join("v1").join("rttx-server.sock")
 }
 
 /// Return the daemon binary name for the current mode.
@@ -86,7 +89,7 @@ pub enum DetachResponse {
     Terminated(proto::SessionTerminated),
 }
 
-/// A connection to a running rttxd instance (pre-split).
+/// A connection to a running `rttx-server` instance (pre-split).
 ///
 /// Used for the handshake and initial request/response exchanges
 /// (create session, attach, create pane). Once setup is complete,
@@ -108,7 +111,7 @@ impl std::fmt::Debug for DaemonConnection {
 }
 
 impl DaemonConnection {
-    /// Connect to rttxd at the given Unix socket path and perform the handshake.
+    /// Connect to `rttx-server` at the given Unix socket path and perform the handshake.
     pub async fn connect(socket_path: &Path) -> Result<Self, DaemonError> {
         let stream = UnixStream::connect(socket_path).await?;
         let (read_half, write_half) = stream.into_split();
@@ -122,7 +125,7 @@ impl DaemonConnection {
         Ok(conn)
     }
 
-    /// Connect to rttxd on a remote host via SSH.
+    /// Connect to `rttx-server` on a remote host via SSH.
     ///
     /// Spawns `ssh <host> rttx-server attach-stdio` and speaks the protocol
     /// over the subprocess's stdin/stdout. The returned `SshHandle` must be
@@ -567,6 +570,18 @@ mod tests {
         let path = default_socket_path();
         assert!(path.to_string_lossy().contains("v1"));
         assert!(path.to_string_lossy().contains("rttx-server"));
+    }
+
+    #[test]
+    fn socket_path_for_production_uses_production_daemon_dir() {
+        let path = socket_path_for(Path::new("/tmp/runtime"), false);
+        assert_eq!(path, Path::new("/tmp/runtime/rttx-server/v1/rttx-server.sock"));
+    }
+
+    #[test]
+    fn socket_path_for_dev_uses_development_daemon_dir() {
+        let path = socket_path_for(Path::new("/tmp/runtime"), true);
+        assert_eq!(path, Path::new("/tmp/runtime/rttx-server-devel/v1/rttx-server.sock"));
     }
 
     #[tokio::test]

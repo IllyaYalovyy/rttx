@@ -14,3 +14,6 @@ From the repository root:
 cargo build -p rttx-proto
 cargo test -p rttx-proto
 ```
+
+This crate is developed and built as part of the workspace. It is not installed as a standalone
+runtime artifact.

@@ -8,6 +8,32 @@ Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from 
 
 ![rttx screenshot](data/screenshots/rttx-main.png)
 
+## Development
+
+Build the client package:
+
+```bash
+cargo build -p rttx
+```
+
+Run the client in normal mode:
+
+```bash
+cargo run -p rttx
+```
+
+Run the client in development mode:
+
+```bash
+RTTX_DEV_MODE=1 cargo run -p rttx
+```
+
+Build the whole workspace when you are changing client, daemon, and protocol together:
+
+```bash
+cargo build --workspace
+```
+
 ## Install
 
 **Fedora (COPR):**
@@ -24,6 +50,16 @@ flatpak install --user ./rttx.flatpak
 ```
 
 **From source** — see [INSTALL.md](INSTALL.md) for full instructions.
+
+Production install from source:
+
+```bash
+meson setup build --prefix=/usr/local
+meson compile -C build
+sudo meson install -C build
+sudo gtk-update-icon-cache -f -t /usr/local/share/icons/hicolor
+sudo update-desktop-database /usr/local/share/applications
+```
 
 ## Terminology
 

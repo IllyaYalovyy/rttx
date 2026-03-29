@@ -504,12 +504,12 @@ pub enum SessionMode {
     /// Local VTE terminals with PTYs owned by the GUI process.
     #[default]
     Direct,
-    /// All panes backed by the local rttxd daemon.
+    /// All panes backed by the local `rttx-server` daemon.
     Persistent {
         /// Daemon session ID (UUID string).
         daemon_session_id: String,
     },
-    /// All panes backed by a remote rttxd daemon via SSH.
+    /// All panes backed by a remote `rttx-server` daemon via SSH.
     RemotePersistent {
         /// SSH target (e.g., `user@host`).
         host: String,

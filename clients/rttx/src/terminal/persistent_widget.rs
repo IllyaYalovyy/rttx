@@ -1,7 +1,7 @@
 //! GTK widget for daemon-backed persistent terminal panes.
 //!
 //! Uses a `vte4::Terminal` in feed mode — no local PTY. Terminal output
-//! arrives as `Delta` messages from rttxd and is fed into VTE for
+//! arrives as `Delta` messages from `rttx-server` and is fed into VTE for
 //! rendering. Keyboard input is captured and sent back to the daemon.
 
 use gtk4::glib;
@@ -249,7 +249,7 @@ mod imp {
 }
 
 glib::wrapper! {
-    /// A terminal pane backed by the rttxd daemon.
+    /// A terminal pane backed by the `rttx-server` daemon.
     ///
     /// Unlike `TerminalWidget`, this widget does not own a PTY. Terminal
     /// output is fed via `feed_output()` from daemon Delta messages, and

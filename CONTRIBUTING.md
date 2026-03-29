@@ -138,6 +138,14 @@ sudo apt install weston python3-gi gir1.2-atspi-2.0
 
 ## Building and running
 
+Build the whole workspace:
+
+```bash
+cargo build --workspace
+```
+
+Build just the client:
+
 ```bash
 cargo build -p rttx
 ./target/debug/rttx
@@ -163,7 +171,7 @@ cargo build --release -p rttx
 ./target/release/rttx
 ```
 
-For full system integration (desktop file, icons, AppStream metadata):
+For production installation of the client (desktop file, icons, AppStream metadata):
 ```bash
 meson setup build --prefix="$HOME/.local"
 meson install -C build
@@ -189,8 +197,8 @@ instance:
 
 | | Production | Development |
 |---|---|---|
-| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttxd-devel/v1/` |
-| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttxd-devel/` |
+| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
+| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
 | Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
 
 **Managing the daemon:**
@@ -212,7 +220,7 @@ pkill -f "rttx-server.*start"
 ```bash
 # Kill daemon, remove all dev state (sessions, scrollback, socket, PID file)
 pkill -f "rttx-server"
-rm -rf ~/.cache/rttxd-devel/ $XDG_RUNTIME_DIR/rttxd-devel/
+rm -rf ~/.cache/rttx-server-devel/ $XDG_RUNTIME_DIR/rttx-server-devel/
 
 # Also clear GUI session state (sidebar tabs, layout)
 rm -f ~/.config/rttx-devel/sessions.json
@@ -227,6 +235,21 @@ RTTX_DEV_MODE=1 ./target/debug/rttx
 pkill -f "rttx-server"
 rm -rf ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
 rm -f ~/.config/rttx/sessions.json
+```
+
+**Production install of the daemon:**
+```bash
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
+**Production install of both client and daemon from source:**
+```bash
+meson setup build --prefix=/usr/local
+meson compile -C build
+sudo meson install -C build
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
 ```
 
 **Running daemon tests:**

@@ -9,11 +9,16 @@ use std::fs;
 
 #[test]
 fn load_all_tilix_schemes_from_data_dir() {
-    // Load schemes from the original tilix repo if available
-    let tilix_schemes_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("tilix/data/schemes");
+    // Load schemes from an external Tilix checkout if available.
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().and_then(std::path::Path::parent).unwrap();
+    let tilix_schemes_dir = [
+        repo_root.join("third_party/tilix/data/schemes"),
+        repo_root.parent().unwrap_or(repo_root).join("tilix/data/schemes"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+    .unwrap_or_else(|| repo_root.parent().unwrap_or(repo_root).join("tilix/data/schemes"));
 
     if !tilix_schemes_dir.exists() {
         eprintln!("Skipping: tilix schemes dir not found at {tilix_schemes_dir:?}");

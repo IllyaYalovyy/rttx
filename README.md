@@ -17,13 +17,13 @@ Package names stay unchanged even though the repository now uses role-based dire
 
 ## Build
 
-Build the whole workspace:
+Development build for the whole workspace:
 
 ```bash
 cargo build --workspace
 ```
 
-Build individual artifacts:
+Development builds for individual packages:
 
 ```bash
 cargo build -p rttx
@@ -31,17 +31,60 @@ cargo build -p rttx-server
 cargo build -p rttx-proto
 ```
 
-Run the client:
+Run the client in normal mode:
 
 ```bash
 cargo run -p rttx
 ```
 
-Run the daemon:
+Run the client in development mode:
+
+```bash
+RTTX_DEV_MODE=1 cargo run -p rttx
+```
+
+Run the daemon in foreground for development:
 
 ```bash
 cargo run -p rttx-server -- start --foreground
 ```
+
+Run the daemon in development mode:
+
+```bash
+RTTX_DEV_MODE=1 cargo run -p rttx-server -- start --foreground
+```
+
+## Install
+
+Production install of the client from source:
+
+```bash
+meson setup build --prefix=/usr/local
+meson compile -C build
+sudo meson install -C build
+sudo gtk-update-icon-cache -f -t /usr/local/share/icons/hicolor
+sudo update-desktop-database /usr/local/share/applications
+```
+
+Production install of the daemon from source:
+
+```bash
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
+Production install of both from source:
+
+```bash
+meson setup build --prefix=/usr/local
+meson compile -C build
+sudo meson install -C build
+cargo build --release -p rttx-server
+sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
+`rttx-proto` is a shared library crate and is not installed as a standalone artifact.
 
 ## Test
 
@@ -59,6 +102,7 @@ main-thread-aware isolation.
 
 - [Client overview](clients/rttx/README.md)
 - [Daemon overview](services/rttx-server/README.md)
+- [Protocol overview](protocols/rttx-proto/README.md)
 - [Contributing guide](CONTRIBUTING.md)
 
 ## License
