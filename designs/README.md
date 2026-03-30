@@ -31,6 +31,11 @@ concrete code type.
 - [RFC-001-manifesto.md](./RFC-001-manifesto.md) and
   [RFC-013-persistent-host-sessions.md](./RFC-013-persistent-host-sessions.md) define the current
   product direction.
+- [RFC-010-maintainability-refactor.md](./RFC-010-maintainability-refactor.md) is the active
+  maintainability roadmap. Some slices are implemented on `mainline`, but the large file/module
+  decomposition work is still in progress.
+- [RFC-012-ci-cd-pipeline.md](./RFC-012-ci-cd-pipeline.md) now describes the live GitHub Actions
+  workflows rather than a future-only plan.
 - [RFC-007-session-recovery.md](./RFC-007-session-recovery.md) still matters for recipe-based
   recovery and retry UX, but its architecture assumptions are historical.
 - [RFC-011-flatpak-native-host-integration.md](./RFC-011-flatpak-native-host-integration.md)

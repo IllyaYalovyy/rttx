@@ -16,6 +16,21 @@ library; failures at the Rust/C boundary produce segfaults and process aborts, n
 The test suite is organized around specific crash categories and is designed to catch each class
 of GTK-Rust failure as a failing test before it reaches a user.
 
+## Current implementation snapshot (2026-03)
+
+- The project is now a monorepo, so the live test surfaces span:
+  - `clients/rttx/` for GTK/unit/integration/UI tests
+  - `services/rttx-server/` for daemon/unit/integration tests
+  - `protocols/rttx-proto/` for protocol framing/unit tests
+- The CI-equivalent local command is `bash .github/scripts/run-quality-tests.sh`, not plain
+  `cargo test --workspace`. The client's GTK-heavy tests still need the curated harness rather than
+  the default Rust test runner.
+- `run_ui_tests.sh` and the AT-SPI suite exist and run locally/in CI-style environments, but the
+  nightly GitHub job is still tracked separately.
+- The highest-value remaining testing gaps are now deterministic GTK harness behavior under plain
+  `cargo test`, deeper client+daemon end-to-end recovery coverage, and the daemon adversarial test
+  backlog now tracked in the monorepo issue set (`#144`–`#153`).
+
 ---
 
 ## Goals
@@ -104,33 +119,39 @@ violated?" Tests that can't answer that question don't belong in the suite.
 
 ### Test layers
 
-**Unit tests** (`src/session/layout.rs`, `src/config.rs`, `src/color_scheme.rs`, `src/preferences.rs`)
+**Unit tests** (`clients/rttx/src/session/layout.rs`, `clients/rttx/src/config.rs`,
+`clients/rttx/src/color_scheme.rs`, `clients/rttx/src/preferences.rs`,
+`services/rttx-server/src/session.rs`, `services/rttx-server/src/protocol.rs`)
 — data model correctness, serialization, tree invariants. No GTK required.
 
 **Property-based tests** (`proptest`) — randomized layout trees with guaranteed UUID uniqueness.
 Found a real duplicate-UUID bug in early development.
 
-**Integration tests** (`tests/session_lifecycle.rs`, `tests/color_scheme_compat.rs`) — end-to-end
-persistence, Tilix color scheme compatibility.
+**Integration tests** (`clients/rttx/tests/session_lifecycle.rs`,
+`clients/rttx/tests/color_scheme_compat.rs`, `services/rttx-server/tests/*.rs`) — end-to-end
+persistence, Tilix color scheme compatibility, daemon lifecycle, reconnect, ownership, revisions,
+and runtime policy coverage.
 
-**GTK contract tests** (`tests/gtk_boundary_contracts.rs`) — validate data-model assumptions that
-window.rs relies on. These are the C1/C6/C7 defenses: UUID uniqueness, terminal count consistency,
-split/remove invariants, serialization roundtrips, backward compatibility.
+**GTK contract tests** (`clients/rttx/tests/gtk_boundary_contracts.rs`) — validate data-model
+assumptions that `window.rs` relies on. These are the C1/C6/C7 defenses: UUID uniqueness, terminal
+count consistency, split/remove invariants, serialization roundtrips, backward compatibility.
 
-**GTK widget tests** (`tests/gtk_widget_tests.rs`, `tests/layout_widget_tests.rs`,
-`tests/terminal_lifecycle_tests.rs`) — instantiate real GTK4 widgets via broadway backend. Test
+**GTK widget tests** (`clients/rttx/tests/gtk_widget_tests.rs`,
+`clients/rttx/tests/layout_widget_tests.rs`, `clients/rttx/tests/terminal_lifecycle_tests.rs`) —
+instantiate real GTK4 widgets via broadway backend. Test
 exact Stack→Paned→unparent→rebuild sequences, GObject ref-count survival, and Paned position
 application after allocation.
 
 ### Headless execution
 
 ```bash
-GDK_BACKEND=broadway GTK_A11Y=none cargo test
+bash .github/scripts/run-quality-tests.sh
 ```
 
-`broadwayd :5` serves as a framebuffer. Tests that run on non-GTK threads are skipped via
-`std::sync::Once` + `std::panic::catch_unwind` pattern (not `OnceLock<bool>`, which would
-dispatch GTK calls from non-main threads).
+For focused local client-only runs, `GDK_BACKEND=broadway GTK_A11Y=none cargo test -p rttx`
+remains useful. Tests that run on non-GTK threads are skipped via `std::sync::Once` +
+`std::panic::catch_unwind` pattern (not `OnceLock<bool>`, which would dispatch GTK calls from
+non-main threads).
 
 ### Coverage map
 
@@ -144,16 +165,15 @@ dispatch GTK calls from non-main threads).
 | C6 — index out of bounds | partial | — | — |
 | C7 — duplicate UUID | ✓ | — | ✓ |
 
-### Missing tests (priority order)
+### Highest-value remaining gaps
 
-- **M3** — `active_session_index` out-of-bounds safety (pure data, no display)
-- **M2** — RefCell re-entrancy proof with `#[should_panic]` counterpart
-- **M1** — Signal handler doubling: split preserves existing UUID for widget reuse
-- **M7** — `disconnect_child_exited` before VTE destruction
-- **M4** — GObject weak reference invalidated after last strong ref drop
-- **M5** — Extreme ratios (0.1, 0.9) produce non-zero Paned positions
-- **M8** — `SessionColor` backward compat (add alongside that feature)
-- **M6** — Activity timer safe after session close (add alongside activity detection)
+- **GAP1** — Make the client GTK suite deterministic under the plain Rust harness, not just the
+  curated Broadway quality script
+- **GAP2** — Add more real client+daemon restart/reconcile coverage now that both live in one repo
+- **GAP3** — Expand daemon adversarial tests: malformed protocol input, persistence failure
+  injection, race-heavy ownership, stress/load, and leak-oriented lifecycle loops
+- **GAP4** — Add the deferred nightly AT-SPI job so accessibility-level UI regressions run
+  continuously in GitHub Actions
 
 ---
 
@@ -173,11 +193,12 @@ dispatch GTK calls from non-main threads).
 - [x] GTK contract tests (C1, C3, C7, C6 partial)
 - [x] GTK widget tests (C1, C3)
 - [x] Paned position regression tests (nested split goes dark)
-- [ ] **M3** — `active_session_index` bounds contract test — *tracked in todo.md — Stability, Testing & Maintenance*
-- [ ] **M2** — RefCell re-entrancy proof
-- [ ] **M1** — Signal handler doubling / widget reuse contract
-- [ ] **M7** — `child_exited` disconnect test
-- [ ] **M4** — Weak reference lifecycle test
-- [ ] **M5** — Extreme ratio Paned position test
+- [x] Active-index bounds contract coverage
+- [x] Activity indicator timer regression coverage
+- [x] Nested split ratio restore regression coverage
+- [ ] Deterministic plain-harness GTK execution
+- [ ] Deeper client+daemon restart/reconcile integration coverage
+- [ ] Expanded daemon adversarial test matrix
+- [ ] Nightly AT-SPI GitHub Actions job
 
 ---

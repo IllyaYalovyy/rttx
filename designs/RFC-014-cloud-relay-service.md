@@ -10,6 +10,12 @@
 
 A cloud relay service that brokers connections between rttx clients and rttx-server daemons over the internet, eliminating the need for SSH, open inbound ports, or VPN infrastructure. Daemons establish outbound-only WebSocket connections to the relay; clients connect to the same relay and are routed to their registered daemons. End-to-end encryption ensures the relay cannot read terminal content, while OAuth2-based user authentication and device registration provide access control. The relay is a dumb pipe by design - it forwards opaque frames without understanding the rttx protocol.
 
+## Current implementation baseline (2026-03)
+
+- Implemented endpoint types today are local Unix-socket and remote SSH stdio.
+- The monorepo consolidation and endpoint-manager work referenced below are now on `mainline`.
+- The relay itself is still unimplemented; this RFC remains a forward-looking design document.
+
 ## Terminology
 
 | Term              | Definition |

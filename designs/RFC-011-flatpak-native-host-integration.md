@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Draft                   |
+| Status        | Accepted / In Progress  |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -13,6 +13,15 @@
 > This RFC remains relevant for packaging and host-integration constraints, but any language here
 > that assumes direct VTE sessions are the long-term primary execution path is superseded by
 > RFC-013.
+
+## Current implementation snapshot (2026-03)
+
+- The repo is now a monorepo, and packaging assets live under `packaging/rttx/`.
+- The daemon-backed runtime architecture from RFC-013 is the live baseline on `mainline`.
+- The Flatpak manifest and release workflow exist in-repo, but the broader host-integration and
+  permission profile decisions in this RFC are still an ongoing packaging/design track.
+- Any “host shell” or deeper Flatpak-native integration work must now layer on top of the
+  daemon-backed runtime model, not the earlier direct-terminal assumptions.
 
 ## Summary
 
@@ -92,12 +101,14 @@ The current codebase is still a good base for this design:
 - bookmark/session recovery already feeds ordinary shell commands such as `ssh` and `tmux` into the
   terminal rather than depending on custom IPC
 - clickable paths and links open through
-  [`gio::AppInfo::launch_default_for_uri()`](../src/terminal/widget.rs),
+  [`gio::AppInfo::launch_default_for_uri()`](../clients/rttx/src/terminal/widget.rs),
   which aligns well with portal-backed desktop integration
 - notifications go through
-  [`gio::Notification`](../src/window.rs), which GTK desktops and portals already understand
+  [`gio::Notification`](../clients/rttx/src/window.rs), which GTK desktops and portals already
+  understand
 - config lives under `glib::user_config_dir()` in
-  [`src/config.rs`](../src/config.rs), so the app already respects XDG-style
+  [`clients/rttx/src/config.rs`](../clients/rttx/src/config.rs), so the app already respects
+  XDG-style
   storage
 
 This means we do not need to redesign session recovery or UI architecture to make Flatpak possible.

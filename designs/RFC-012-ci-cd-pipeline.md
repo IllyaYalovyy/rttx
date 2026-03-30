@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted                |
+| Status        | Implemented             |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -15,6 +15,19 @@ rttx uses two GitHub Actions pipelines: a **quality gate** that runs on every pu
 request, and a **release pipeline** that builds all distribution artifacts on a version tag.
 Both pipelines are entirely free (GitHub Actions is free for public repositories; COPR and
 Flathub are free services). No paid CI infrastructure is required.
+
+## Current implementation snapshot (2026-03)
+
+- `mainline` is protected by required checks from `.github/workflows/quality.yml`:
+  `Format`, `Clippy`, `Test`, and `Flatpak manifest`
+- the quality workflow now runs `Clippy` and `Test` inside Fedora containers and delegates the
+  detailed commands to repo-local scripts:
+  - `.github/scripts/run-clippy.sh`
+  - `.github/scripts/run-quality-tests.sh`
+- the release workflow exists in `.github/workflows/release.yml` and builds Flatpak, DEB, and RPM
+  artifacts plus GitHub Release publication and COPR submission
+- nightly AT-SPI coverage remains a follow-up item, not part of the live workflow set
+- AppImage is not part of the current release workflow
 
 ---
 
@@ -38,7 +51,7 @@ Flathub are free services). No paid CI infrastructure is required.
 
 ---
 
-## Background & Motivation
+## Historical background
 
 As of the date this RFC was accepted there are no `.github/workflows/` files in the repository.
 The pre-commit hook (fmt + clippy) catches lint issues locally but has no equivalent in CI.
@@ -87,37 +100,28 @@ Version tag v*
 
 **Trigger**: `push` to `mainline`; `pull_request` targeting `mainline`.
 
-**Runner**: `ubuntu-latest` (Ubuntu 24.04 LTS).
+**Current implementation**:
 
-**System dependencies**:
+- `Format` runs on `ubuntu-latest`
+- `Clippy` and `Test` run on `ubuntu-latest` with `fedora:latest` containers
+- the manifest job validates `packaging/rttx/io.github.IllyaYalovyy.rttx.json`
+
+**System dependencies** for the Fedora container jobs:
 
 ```
-libgtk-4-dev libgtk-4-bin libadwaita-1-dev libvte-2.91-gtk4-dev
-meson ninja-build
+gtk4-devel libadwaita-devel vte291-gtk4-devel protobuf-compiler protobuf-devel
 ```
 
-`libgtk-4-bin` provides `gtkbroadwayd`, the headless Broadway display server used by the test
-suite. `meson` and `ninja-build` are needed for the Meson build configuration check.
-
-**Rust toolchain**: `dtolnay/rust-toolchain@stable` with `components: rustfmt, clippy`.
-Edition 2024 with let-chains requires Rust ≥ 1.88; stable is always ahead of that.
-
-**Broadway setup**:
-`gtkbroadwayd :0 &` starts the headless server on port 8080 before the test step. Tests are
-then run with `GDK_BACKEND=broadway GTK_A11Y=none cargo test`. Without broadwayd, GTK
-initialization fails gracefully and widget tests are skipped — but running broadwayd ensures
-the full test suite executes.
-
-**Cargo caching**: `actions/cache@v4` on `~/.cargo/registry`, `~/.cargo/git`, and `target/`
-keyed on `Cargo.lock`. Cuts subsequent job times significantly.
+The Broadway and targeted test orchestration now lives in `.github/scripts/run-quality-tests.sh`
+rather than being spelled out inline in the workflow YAML.
 
 **Jobs**:
 
 | Job | Command | Blocks merge if fails |
 | --- | --- | --- |
 | `fmt` | `cargo fmt --check` | Yes |
-| `clippy` | `cargo clippy -- -D warnings` | Yes |
-| `test` | `GDK_BACKEND=broadway GTK_A11Y=none cargo test` | Yes |
+| `clippy` | `bash .github/scripts/run-clippy.sh` | Yes |
+| `test` | `bash .github/scripts/run-quality-tests.sh` | Yes |
 | `manifest` | `python3 -m json.tool packaging/rttx/io.github.IllyaYalovyy.rttx.json > /dev/null` | Yes |
 
 The manifest validation job is a cheap JSON parse of the Flatpak manifest. It does not require
@@ -178,7 +182,7 @@ Command: `cargo build --release && cargo generate-rpm`
 
 Output artifact: `target/generate-rpm/rttx-*.rpm`
 
-Requires `[package.metadata.generate-rpm]` in `Cargo.toml` (see Development Plan).
+Requires `[package.metadata.generate-rpm]` in `clients/rttx/Cargo.toml` (still tracked separately).
 
 #### `github-release`
 
