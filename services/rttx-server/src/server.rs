@@ -76,17 +76,17 @@ impl Server {
         let state_path = default_state_path(&self.os.cache_dir());
         match load_state(&state_path) {
             Ok(Some(state)) => {
-                log::info!("Loaded {} persisted sessions", state.sessions.len());
+                tracing::info!("Loaded {} persisted sessions", state.sessions.len());
                 for ps in &state.sessions {
                     let session = Session::from_persisted(ps);
                     self.sessions.insert(session.id, session);
                 }
             }
             Ok(None) => {
-                log::info!("No persisted state found, starting fresh");
+                tracing::info!("No persisted state found, starting fresh");
             }
             Err(e) => {
-                log::error!("Failed to load persisted state: {e}");
+                tracing::error!("Failed to load persisted state: {e}");
             }
         }
     }
@@ -109,7 +109,7 @@ impl Server {
                     {
                         match std::fs::read(log_path) {
                             Ok(data) => {
-                                log::info!(
+                                tracing::info!(
                                     "Replaying {} bytes of scrollback for pane {}",
                                     data.len(),
                                     pane.id
@@ -117,7 +117,7 @@ impl Server {
                                 pane.screen.feed(&data);
                             }
                             Err(e) => {
-                                log::error!(
+                                tracing::error!(
                                     "Failed to read scrollback log for pane {}: {e}",
                                     pane.id
                                 );
@@ -142,7 +142,7 @@ impl Server {
             return;
         }
 
-        log::info!("Reconstructing {} panes", panes_to_reconstruct.len());
+        tracing::info!("Reconstructing {} panes", panes_to_reconstruct.len());
 
         for (session_id, pane_id, cwd, cols, rows) in panes_to_reconstruct {
             let pty_result = {
@@ -172,10 +172,10 @@ impl Server {
                         child,
                         kill_rx,
                     );
-                    log::info!("Reconstructed pane {pane_id} in session {session_id}");
+                    tracing::info!("Reconstructed pane {pane_id} in session {session_id}");
                 }
                 Err(e) => {
-                    log::error!("Failed to reconstruct pane {pane_id}: {e}");
+                    tracing::error!("Failed to reconstruct pane {pane_id}: {e}");
                     let mut s = server.lock().await;
                     if let Some(session) = s.sessions.get_mut(&session_id) {
                         let _ = session.set_pane_exit_status(pane_id, Some(-1));
@@ -482,7 +482,7 @@ impl Server {
                         Some(protocol::pane_created(session_id, pane_id, revision))
                     }
                     Err(e) => {
-                        log::error!("Failed to spawn PTY for pane {pane_id}: {e}");
+                        tracing::error!("Failed to spawn PTY for pane {pane_id}: {e}");
                         Some(protocol::error(
                             protocol::ERR_SPAWN_FAILED,
                             format!("failed to spawn pane: {e}"),
@@ -581,10 +581,10 @@ impl Server {
                 if let Some(writer) = writer {
                     let mut w = writer.lock().await;
                     if let Err(e) = w.write_all(&req.data).await {
-                        log::error!("Failed to write to PTY {pane_id}: {e}");
+                        tracing::error!("Failed to write to PTY {pane_id}: {e}");
                     }
                     if let Err(e) = w.flush().await {
-                        log::error!("Failed to flush PTY {pane_id}: {e}");
+                        tracing::error!("Failed to flush PTY {pane_id}: {e}");
                     }
                 }
                 None
@@ -654,7 +654,7 @@ impl Server {
                 {
                     let w = writer.lock().await;
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
-                        log::error!("Failed to resize PTY {pane_id}: {e}");
+                        tracing::error!("Failed to resize PTY {pane_id}: {e}");
                         return Some(protocol::error(
                             protocol::ERR_PANE_NOT_RUNNING,
                             format!("failed to resize pane: {e}"),
@@ -756,14 +756,14 @@ fn spawn_pty_read_loop(
                             s.broadcast_to_session(session_id, &msg);
                         }
                         Err(e) => {
-                            log::error!("PTY read error for pane {pane_id}: {e}");
+                            tracing::error!("PTY read error for pane {pane_id}: {e}");
                             break;
                         }
                     }
                 }
                 _ = &mut kill_rx => {
                     let _ = child.start_kill();
-                    log::info!("PTY read loop cancelled for pane {pane_id}");
+                    tracing::info!("PTY read loop cancelled for pane {pane_id}");
                     return;
                 }
             }
@@ -773,7 +773,7 @@ fn spawn_pty_read_loop(
         let status = match child.wait().await {
             Ok(s) => s.code().unwrap_or(-1),
             Err(e) => {
-                log::error!("Failed to wait on child for pane {pane_id}: {e}");
+                tracing::error!("Failed to wait on child for pane {pane_id}: {e}");
                 -1
             }
         };
@@ -789,7 +789,7 @@ fn spawn_pty_read_loop(
         s.pty_kill_senders.remove(&pane_id);
         drop(s);
 
-        log::info!("PTY exited for pane {pane_id}, status {status}");
+        tracing::info!("PTY exited for pane {pane_id}, status {status}");
     });
 }
 
@@ -806,7 +806,7 @@ pub async fn serialization_loop(
         tokio::select! {
             _ = ticker.tick() => {}
             _ = shutdown_rx.changed() => {
-                log::info!("Serialization loop stopping (shutdown)");
+                tracing::info!("Serialization loop stopping (shutdown)");
                 return;
             }
         }
@@ -819,7 +819,7 @@ pub async fn serialization_loop(
             if let Some(session) = s.sessions.get_mut(&session_id) {
                 for pane in session.panes.values_mut() {
                     if let Err(e) = pane.flush_scrollback(&cache_dir, session_id) {
-                        log::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
+                        tracing::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
                     }
                 }
             }
@@ -830,7 +830,7 @@ pub async fn serialization_loop(
         drop(s);
 
         if let Err(e) = write_state_atomic(&snapshot, &state_path) {
-            log::error!("Failed to serialize state: {e}");
+            tracing::error!("Failed to serialize state: {e}");
         }
     }
 }
@@ -843,7 +843,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     for session in s.sessions.values_mut() {
         for pane in session.panes.values_mut() {
             if let Err(e) = pane.flush_scrollback(&cache_dir, session.id) {
-                log::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
+                tracing::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
             }
         }
     }
@@ -853,9 +853,9 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     drop(s);
 
     if let Err(e) = write_state_atomic(&snapshot, &state_path) {
-        log::error!("Failed to persist final state: {e}");
+        tracing::error!("Failed to persist final state: {e}");
     } else {
-        log::info!("Final state persisted");
+        tracing::info!("Final state persisted");
     }
 }
 
@@ -871,7 +871,7 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     };
 
     let listener = Listener::bind(&socket_path)?;
-    log::info!("Listening on {}", socket_path.display());
+    tracing::info!("Listening on {}", socket_path.display());
 
     // Start serialization loop.
     let ser_server = Arc::clone(&server);
@@ -887,12 +887,12 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
                 let server = Arc::clone(&server);
                 tokio::spawn(async move {
                     if let Err(e) = handle_client(server, conn).await {
-                        log::error!("Client error: {e}");
+                        tracing::error!("Client error: {e}");
                     }
                 });
             }
             _ = shutdown_rx.changed() => {
-                log::info!("Shutdown signal received, persisting state...");
+                tracing::info!("Shutdown signal received, persisting state...");
                 break;
             }
         }
@@ -922,7 +922,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let client_id = Uuid::new_v4();
-    log::info!("Client {client_id} connected");
+    tracing::info!("Client {client_id} connected");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -935,12 +935,12 @@ where
             tokio::select! {
                 msg_result = conn.read_message() => {
                     let Some(msg) = msg_result? else {
-                        log::info!("Client {client_id} disconnected");
+                        tracing::info!("Client {client_id} disconnected");
                         break;
                     };
 
                     if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
-                        log::info!("Shutdown requested by client {client_id}");
+                        tracing::info!("Shutdown requested by client {client_id}");
                         let s = server.lock().await;
                         s.request_shutdown();
                         break;
