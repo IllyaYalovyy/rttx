@@ -1,7 +1,6 @@
 //! CLI entry point for rttx-server.
-//!
-//! Supports `start`, `stop`, and `--foreground` commands.
 
+use clap::{Parser, Subcommand};
 use rttx_proto::proto;
 use rttx_server::ipc;
 use rttx_server::os::OsInterface;
@@ -9,35 +8,48 @@ use rttx_server::os::unix::UnixOs;
 use rttx_server::server::Server;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing_subscriber::EnvFilter;
+
+#[derive(Parser)]
+#[command(
+    name = "rttx-server",
+    version,
+    about = "Daemon runtime service for the rttx terminal emulator"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Start the daemon
+    Start {
+        /// Run in foreground instead of daemonizing
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Stop the running daemon
+    Stop,
+    /// Serve one client over stdin/stdout (for SSH)
+    AttachStdio,
+}
 
 fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let command = args.get(1).map_or("start", String::as_str);
-    let foreground = args.iter().any(|a| a == "--foreground");
+    let cli = Cli::parse();
 
-    match command {
-        "start" => start(foreground),
-        "stop" => stop(),
-        "attach-stdio" => attach_stdio(),
-        "--help" | "-h" => {
-            print_usage();
-            Ok(())
-        }
-        other => {
-            eprintln!("Unknown command: {other}");
-            print_usage();
-            std::process::exit(1);
-        }
+    match cli.command.unwrap_or(Command::Start { foreground: false }) {
+        Command::Start { foreground } => start(foreground),
+        Command::Stop => stop(),
+        Command::AttachStdio => attach_stdio(),
     }
 }
 
-fn print_usage() {
-    eprintln!("Usage: rttx-server <command> [options]");
-    eprintln!();
-    eprintln!("Commands:");
-    eprintln!("  start [--foreground]  Start the daemon");
-    eprintln!("  stop                  Stop the running daemon");
-    eprintln!("  attach-stdio          Serve one client over stdin/stdout (for SSH)");
+fn init_tracing(dev_mode: bool) {
+    let default_level = if dev_mode { "debug" } else { "info" };
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+    tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(filter).init();
 }
 
 fn start(foreground: bool) -> anyhow::Result<()> {
@@ -67,15 +79,11 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         }
     }
 
-    // Initialize logging. In dev mode, default to debug level.
-    let default_level = if dev_mode { "debug" } else { "info" };
-    let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| default_level.to_string());
-    pretty_env_logger::formatted_builder().parse_filters(&env_filter).init();
+    init_tracing(dev_mode);
 
     if dev_mode {
-        log::info!("Starting rttx-server in DEVELOPMENT mode");
-        log::debug!("Runtime dir: {}", runtime_dir.display());
-        log::debug!("Cache dir: {}", os.cache_dir().display());
+        tracing::info!("Starting rttx-server in DEVELOPMENT mode");
+        tracing::debug!(runtime_dir = %runtime_dir.display(), cache_dir = %os.cache_dir().display());
     }
 
     // Write PID file in foreground mode too (daemonize writes it in daemon mode).
@@ -122,9 +130,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 fn attach_stdio() -> anyhow::Result<()> {
     // Stderr is available for logging (stdout is the protocol channel).
     let dev_mode = rttx_server::os::unix::dev_mode_enabled();
-    let default_level = if dev_mode { "debug" } else { "info" };
-    let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| default_level.to_string());
-    pretty_env_logger::formatted_builder().parse_filters(&env_filter).init();
+    init_tracing(dev_mode);
 
     let os = UnixOs;
     let rt = tokio::runtime::Runtime::new()?;
@@ -197,12 +203,12 @@ async fn handle_signals(server: Arc<Mutex<Server>>) {
     use tokio_stream::StreamExt;
 
     let Ok(mut signals) = Signals::new([SIGTERM, SIGINT]) else {
-        log::error!("Failed to register signal handlers");
+        tracing::error!("Failed to register signal handlers");
         return;
     };
 
     if signals.next().await.is_some() {
-        log::info!("Received OS shutdown signal, triggering cooperative shutdown");
+        tracing::info!("Received OS shutdown signal, triggering cooperative shutdown");
         let s = server.lock().await;
         s.request_shutdown();
     }
