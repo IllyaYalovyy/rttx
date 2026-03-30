@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Draft                   |
+| Status        | Accepted / In Progress  |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -16,11 +16,28 @@ duplication, and restore clear boundaries between pure data, GTK wiring, and run
 This RFC is deliberately conservative. It does not propose a rewrite. It proposes small structural
 moves that make the code easier to reason about and harder to accidentally bloat.
 
+## Current implementation snapshot (2026-03)
+
+Several slices of this RFC are already on `mainline`:
+
+- the repository was consolidated into a monorepo, which removed the cross-repo protocol/daemon
+  coordination overhead that had made structural cleanup harder
+- `clients/rttx/src/runtime.rs` now holds pure connection-state and workspace-action logic
+- `clients/rttx/src/workspace_state.rs` now owns a first extracted slice of pure managed-workspace
+  transitions
+- `clients/rttx/src/terminal/handle.rs` is the shared terminal abstraction for direct and
+  daemon-backed panes
+- `window.rs` is still too large and `clients/rttx/src/session/layout.rs` still mixes layout,
+  state, and recovery concerns
+
+So this RFC is no longer speculative. It is the active refactor roadmap for code that has already
+started moving, with major remaining follow-up still tracked in the issue backlog.
+
 ---
 
 ## Goals
 
-- **G1** — Reduce the size and responsibility surface of `src/window.rs`
+- **G1** — Reduce the size and responsibility surface of `clients/rttx/src/window.rs`
 - **G2** — Separate pure layout data from pane recovery/runtime behavior
 - **G3** — Eliminate obvious duplication in sidebar CRUD and dialog code
 - **G4** — Make terminal lifecycle wiring explicit and less error-prone
@@ -42,10 +59,11 @@ too many responsibilities at once.
 
 Concrete pressure points:
 
-- `src/window.rs` now owns window construction, action registration, signal wiring, session
+- `clients/rttx/src/window.rs` now owns window construction, action registration, signal wiring,
+  session
   orchestration, terminal lifecycle, recovery logic, bookmark/command CRUD, sidebars, dialogs,
   notifications, and a large in-file test suite.
-- `src/session/layout.rs` mixes two different domains:
+- `clients/rttx/src/session/layout.rs` mixes two different domains:
   - pure layout tree structure and transforms
   - pane recovery types plus shell/SSH/tmux command generation
 - bookmark and command sidebars are rendered with near-duplicate code paths
@@ -128,25 +146,25 @@ This RFC prefers a few meaningful modules over a maze of tiny helpers.
 
 Proposed internal module split:
 
-- `src/window/mod.rs`
+- `clients/rttx/src/window/mod.rs`
   - object definition
   - `glib::wrapper!`
   - top-level construction entry points
-- `src/window/build.rs`
+- `clients/rttx/src/window/build.rs`
   - header bar and main window widget construction
   - left/right sidebar layout assembly
-- `src/window/actions.rs`
+- `clients/rttx/src/window/actions.rs`
   - action registration
   - accelerator wiring
-- `src/window/sessions.rs`
+- `clients/rttx/src/window/sessions.rs`
   - add/switch/close session
   - split/close/rebuild session content
   - sidebar row bookkeeping
-- `src/window/recovery.rs`
+- `clients/rttx/src/window/recovery.rs`
   - terminal recovery lookup and retry flow
   - bookmark/command execution to `PaneRecovery`
   - child-exit recovery handling
-- `src/window/sidebars.rs`
+- `clients/rttx/src/window/sidebars.rs`
   - bookmark sidebar rendering
   - command sidebar rendering
   - delete confirmation dialogs
@@ -156,7 +174,7 @@ that reflect ownership.
 
 ### 2. Split layout tree code from recovery/runtime code
 
-`src/session/layout.rs` currently mixes:
+`clients/rttx/src/session/layout.rs` currently mixes:
 
 - layout tree operations
 - session/window state structs
@@ -165,21 +183,21 @@ that reflect ownership.
 
 Proposed split:
 
-- `src/session/layout_tree.rs`
+- `clients/rttx/src/session/layout_tree.rs`
   - `LayoutNode`
   - `SplitOrientation`
   - layout transforms and queries
-- `src/session/recovery.rs`
+- `clients/rttx/src/session/recovery.rs`
   - `PaneSource`
   - `PaneTarget`
   - `PaneRecovery`
   - `StartupStep`
   - shell/ssh/tmux command generation
-- `src/session/state.rs`
+- `clients/rttx/src/session/state.rs`
   - `SessionState`
   - `WindowState`
   - persistence helpers and normalization helpers
-- `src/session/mod.rs`
+- `clients/rttx/src/session/mod.rs`
   - re-exports and filesystem save/load entry points
 
 The key design rule is simple:
@@ -329,13 +347,14 @@ This phase should be mostly mechanical and behavior-preserving.
 
 - [ ] Should packaging issues keep `packaging` only, or also carry `area/integration` for filtering consistency?
 - [ ] Should terminal search be finished as part of the refactor, or explicitly removed until the feature is real?
-- [ ] Do we want `src/window/` as a module directory immediately, or only after Phase 2 extracts enough code to justify it?
+- [ ] Do we want `clients/rttx/src/window/` as a module directory immediately, or only after
+  Phase 2 extracts enough code to justify it?
 
 ---
 
 ## References
 
-- `src/window.rs`
-- `src/terminal/widget.rs`
-- `src/session/layout.rs`
-- `META/todo.md`
+- `clients/rttx/src/window.rs`
+- `clients/rttx/src/terminal/widget.rs`
+- `clients/rttx/src/session/layout.rs`
+- GitHub issues #98, #99, #101, #130, #132, and #135

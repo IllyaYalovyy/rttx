@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Draft (v3)              |
+| Status        | Accepted / In Progress  |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | RFC-013 v1 (tmux-first) |
 | Superseded by | ---                       |
@@ -25,6 +25,24 @@ The core decisions:
   workspace UI
 - GUI state, daemon state, and bindings reconcile non-destructively; missing GUI metadata must
   never delete a daemon runtime or pane automatically
+
+## Current implementation snapshot (2026-03)
+
+The core direction in this RFC is now live on `mainline`:
+
+- `rttx-server` and `rttx-proto` live in the same repository as the client
+- daemon inventory, runtime revisions, retention policy, and single-writer ownership are
+  implemented in `services/rttx-server/`
+- the client has explicit `ephemeral` / `persistent` workspace policy, no implicit fallback,
+  explicit connection-state UI, and shared terminal-handle behavior for managed panes
+- pure state extraction has started in `clients/rttx/src/runtime.rs` and
+  `clients/rttx/src/workspace_state.rs`
+
+The remaining gaps are implementation follow-through, not architecture choice:
+
+- event delivery from the endpoint manager still has cleanup work
+- recovered-workspace synthesis from daemon inventory is still incomplete
+- higher-level workflow extraction out of `window.rs` is still in progress
 
 ---
 

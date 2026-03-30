@@ -17,6 +17,17 @@ production build. Development mode uses a distinct application identity, a separ
 and an unmistakable visual indicator. This is not cosmetic. It removes day-to-day friction for
 contributors and makes the project materially easier to develop, test, and adopt.
 
+## Current implementation snapshot (2026-03)
+
+- The client uses a separate application/profile identity in dev mode:
+  - app ID: `io.github.IllyaYalovyy.rttx.Devel`
+  - config dir: `rttx-devel`
+- The daemon also uses separate runtime/cache roots in dev mode:
+  - socket root: `$XDG_RUNTIME_DIR/rttx-server-devel/v1/`
+  - state root: `$XDG_CACHE_HOME/rttx-server-devel/`
+- The monorepo docs in `README.md` and `CONTRIBUTING.md` now document both client and daemon dev
+  mode together because a safe dev run requires both sides to stay isolated from production state.
+
 ---
 
 ## Goals
