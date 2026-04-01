@@ -430,6 +430,47 @@ fn emit_left_click(widget: &gtk4::Widget, n_press: i32) {
     panic!("widget should have a GestureClick controller");
 }
 
+fn emit_left_click_at(widget: &gtk4::Widget, n_press: i32, x: f64, y: f64) {
+    let controllers = widget.observe_controllers();
+    for index in 0..controllers.n_items() {
+        let Some(controller) = controllers.item(index) else {
+            continue;
+        };
+        if let Ok(gesture) = controller.downcast::<gtk4::GestureClick>()
+            && gesture.button() == 1
+        {
+            gesture.emit_by_name::<()>("released", &[&n_press, &x, &y]);
+            return;
+        }
+    }
+    panic!("widget should have a left-click GestureClick controller");
+}
+
+fn find_match_coords(vte: &vte4::Terminal, expected: &str) -> Option<(f64, f64)> {
+    let width = vte.width().max(120);
+    let height = vte.height().max(40);
+    for y in (2..height).step_by(2) {
+        for x in (2..width).step_by(2) {
+            let (matched, _tag) = vte.check_match_at(f64::from(x), f64::from(y));
+            if matched.as_deref() == Some(expected) {
+                return Some((f64::from(x), f64::from(y)));
+            }
+        }
+    }
+    None
+}
+
+fn wait_for_match_coords(vte: &vte4::Terminal, expected: &str, max_ms: u64) -> Option<(f64, f64)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
+    while std::time::Instant::now() < deadline {
+        if let Some(coords) = find_match_coords(vte, expected) {
+            return Some(coords);
+        }
+        pump_events(10);
+    }
+    find_match_coords(vte, expected)
+}
+
 // ── M2: RefCell re-entrancy (GTK signal timing) ───────────────────────────────
 
 /// Proves that GTK property-change signals fire SYNCHRONOUSLY in the same
@@ -999,6 +1040,63 @@ fn terminal_handle_copy_clipboard_uses_managed_terminal_selection() {
     assert!(wait_until(1000, || {
         clipboard_text().is_some_and(|text| text.contains("managed copied text"))
     }));
+    window.close();
+}
+
+#[test]
+fn direct_terminal_clicking_highlighted_url_launches_it() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("direct-link", None);
+    let window = present_widget(&term);
+    let expected = "https://example.com/direct";
+    term.vte().feed(format!("{expected}\n").as_bytes());
+    let (x, y) =
+        wait_for_match_coords(term.vte(), expected, 1000).expect("link match should be present");
+
+    let launched = Rc::new(RefCell::new(Vec::new()));
+    let launched_clone = Rc::clone(&launched);
+    rttx::terminal::links::with_test_uri_launcher(
+        move |uri| {
+            launched_clone.borrow_mut().push(uri.to_string());
+            true
+        },
+        || {
+            emit_left_click_at(term.vte().upcast_ref::<gtk4::Widget>(), 1, x, y);
+            pump_events(50);
+        },
+    );
+
+    assert_eq!(launched.borrow().as_slice(), [expected]);
+    window.close();
+}
+
+#[test]
+fn persistent_terminal_clicking_highlighted_url_launches_it() {
+    require_display!();
+
+    let pane =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-link", "runtime-1");
+    let window = present_widget(&pane);
+    let expected = "https://example.com/persistent";
+    pane.feed_output(format!("{expected}\n").as_bytes());
+    let (x, y) =
+        wait_for_match_coords(pane.vte(), expected, 1000).expect("link match should be present");
+
+    let launched = Rc::new(RefCell::new(Vec::new()));
+    let launched_clone = Rc::clone(&launched);
+    rttx::terminal::links::with_test_uri_launcher(
+        move |uri| {
+            launched_clone.borrow_mut().push(uri.to_string());
+            true
+        },
+        || {
+            emit_left_click_at(pane.vte().upcast_ref::<gtk4::Widget>(), 1, x, y);
+            pump_events(50);
+        },
+    );
+
+    assert_eq!(launched.borrow().as_slice(), [expected]);
     window.close();
 }
 

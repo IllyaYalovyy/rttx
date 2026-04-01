@@ -12,6 +12,7 @@ use vte4::prelude::*;
 
 use crate::color_scheme;
 use crate::runtime::{ConnectionPresentation, ConnectionStatus};
+use crate::terminal::links;
 
 mod imp {
     use super::*;
@@ -136,6 +137,11 @@ mod imp {
             self.vte.set_scroll_on_output(false);
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
+            links::configure_openable_matches(&self.vte);
+            let link_target = obj.downgrade();
+            links::install_openable_link_controllers(&self.vte, move || {
+                link_target.upgrade().and_then(|pane| pane.current_directory())
+            });
 
             self.search_entry.set_hexpand(true);
             self.search_bar.set_child(Some(&self.search_entry));
