@@ -9,6 +9,7 @@ use rttx_proto::{
     PROTOCOL_VERSION, bytes_to_uuid, decode_frame, encode_frame, proto, uuid_to_bytes,
 };
 use std::process::Stdio;
+use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
@@ -16,9 +17,16 @@ use tokio::process::Command;
 #[tokio::test]
 async fn attach_stdio_hello_and_create_session() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let tmp = TempDir::new().expect("failed to create temp dir");
+    let runtime_dir = tmp.path().join("runtime");
+    let cache_dir = tmp.path().join("cache");
+    tokio::fs::create_dir_all(&runtime_dir).await.expect("failed to create isolated runtime dir");
+    tokio::fs::create_dir_all(&cache_dir).await.expect("failed to create isolated cache dir");
 
     let mut child = Command::new(bin)
         .arg("attach-stdio")
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("XDG_CACHE_HOME", &cache_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
