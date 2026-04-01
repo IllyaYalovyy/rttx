@@ -1133,6 +1133,34 @@ fn persistent_pane_view_feed_snapshot_restores_content() {
 }
 
 #[test]
+fn persistent_pane_view_feed_snapshot_restores_cursor_after_inline_motion() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    let window = present_widget(&pane);
+
+    pane.feed_snapshot(b"PROMPT> abcd\x1b[D\x1b[D");
+    pump_events(50);
+
+    assert_eq!(pane.vte().cursor_position(), (10, 0));
+    window.close();
+}
+
+#[test]
+fn persistent_pane_view_feed_snapshot_restores_cursor_after_multiline_formatted_output() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    let window = present_widget(&pane);
+
+    pane.feed_snapshot(b"\x1b[31mRED\x1b[0m\r\nPROMPT> wrap\x1b[D");
+    pump_events(50);
+
+    assert_eq!(pane.vte().cursor_position(), (11, 1));
+    window.close();
+}
+
+#[test]
 fn persistent_pane_view_set_connected_updates_state() {
     require_display!();
 
