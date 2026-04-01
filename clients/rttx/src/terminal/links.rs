@@ -8,10 +8,8 @@ const OPENABLE_URI_PREFIXES: &[&str] = &["http://", "https://", "mailto:", "file
 const URI_MATCH_REGEX: &str = r#"(?:https?://|mailto:|file://)[^\s<>'"`)\]\}]+"#;
 const PATH_MATCH_REGEX: &str = r#"(?:~/|\.\.?/|/|[A-Za-z0-9._-]+/)[^\s<>'"`]+"#;
 
-#[cfg(test)]
 type TestUriLauncher = Box<dyn Fn(&str) -> bool>;
 
-#[cfg(test)]
 thread_local! {
     static TEST_URI_LAUNCHER: std::cell::RefCell<Option<TestUriLauncher>> = std::cell::RefCell::new(None);
 }
@@ -82,7 +80,6 @@ pub(crate) fn openable_uri_at(
 }
 
 pub(crate) fn launch_uri(uri: &str) -> bool {
-    #[cfg(test)]
     if let Some(result) =
         TEST_URI_LAUNCHER.with(|launcher| launcher.borrow().as_ref().map(|launcher| launcher(uri)))
     {
@@ -190,8 +187,8 @@ fn resolve_openable_path(path: &str, current_directory: Option<&str>) -> Option<
     current_directory.map(|cwd| Path::new(cwd).join(path))
 }
 
-#[cfg(test)]
-pub(crate) fn with_test_uri_launcher<R>(
+#[doc(hidden)]
+pub fn with_test_uri_launcher<R>(
     launcher: impl Fn(&str) -> bool + 'static,
     f: impl FnOnce() -> R,
 ) -> R {
@@ -220,75 +217,6 @@ mod tests {
     use gtk4::prelude::*;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::Once;
-    use vte4::prelude::*;
-
-    static GTK_INIT: Once = Once::new();
-    static GTK_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-    fn ensure_gtk_init() -> bool {
-        GTK_INIT.call_once(|| {
-            // SAFETY: GTK init runs once before any threads spawn; no concurrent env readers.
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::set_var("GTK_A11Y", "none");
-            };
-            let ok =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gtk4::init().is_ok()))
-                    .unwrap_or(false);
-            if ok && let Some(display) = gtk4::gdk::Display::default() {
-                std::mem::forget(display);
-            }
-            GTK_AVAILABLE.store(ok, std::sync::atomic::Ordering::Relaxed);
-        });
-        GTK_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    macro_rules! require_display {
-        () => {
-            if !ensure_gtk_init() {
-                eprintln!(
-                    "SKIPPED: no display available (run with GDK_BACKEND=broadway or xvfb-run)"
-                );
-                return;
-            }
-        };
-    }
-
-    fn pump_events(max_ms: u64) {
-        let ctx = gtk4::glib::MainContext::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
-        while std::time::Instant::now() < deadline {
-            if !ctx.iteration(false) {
-                break;
-            }
-        }
-    }
-
-    fn present_widget(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) -> gtk4::Window {
-        let window = gtk4::Window::new();
-        window.set_default_size(800, 500);
-        window.set_child(Some(widget));
-        window.present();
-        pump_events(100);
-        window
-    }
-
-    fn emit_left_click_at(widget: &gtk4::Widget, n_press: i32, x: f64, y: f64) {
-        let controllers = widget.observe_controllers();
-        for index in 0..controllers.n_items() {
-            let Some(controller) = controllers.item(index) else {
-                continue;
-            };
-            if let Ok(gesture) = controller.downcast::<gtk4::GestureClick>()
-                && gesture.button() == 1
-            {
-                gesture.emit_by_name::<()>("released", &[&n_press, &x, &y]);
-                return;
-            }
-        }
-        panic!("widget should have a left-click GestureClick controller");
-    }
 
     #[test]
     fn parse_standard_vte_uri() {
@@ -390,66 +318,5 @@ mod tests {
 
         assert!(result);
         assert_eq!(launched.borrow().as_slice(), ["https://example.com/docs"]);
-    }
-
-    #[test]
-    fn direct_terminal_clicking_highlighted_url_launches_it() {
-        require_display!();
-
-        let term = crate::terminal::widget::TerminalWidget::new("direct-link", None);
-        let window = present_widget(&term);
-        term.vte().feed(b"https://example.com/direct\n");
-        pump_events(100);
-
-        let (matched, _tag) = term.vte().check_match_at(4.0, 4.0);
-        assert_eq!(matched.as_deref(), Some("https://example.com/direct"));
-
-        let launched = Rc::new(RefCell::new(Vec::new()));
-        let launched_clone = Rc::clone(&launched);
-        with_test_uri_launcher(
-            move |uri| {
-                launched_clone.borrow_mut().push(uri.to_string());
-                true
-            },
-            || {
-                emit_left_click_at(term.vte().upcast_ref::<gtk4::Widget>(), 1, 4.0, 4.0);
-                pump_events(50);
-            },
-        );
-
-        assert_eq!(launched.borrow().as_slice(), ["https://example.com/direct"]);
-        window.close();
-    }
-
-    #[test]
-    fn persistent_terminal_clicking_highlighted_url_launches_it() {
-        require_display!();
-
-        let pane = crate::terminal::persistent_widget::PersistentPaneView::new(
-            "managed-link",
-            "runtime-1",
-        );
-        let window = present_widget(&pane);
-        pane.feed_output(b"https://example.com/persistent\n");
-        pump_events(100);
-
-        let (matched, _tag) = pane.vte().check_match_at(4.0, 4.0);
-        assert_eq!(matched.as_deref(), Some("https://example.com/persistent"));
-
-        let launched = Rc::new(RefCell::new(Vec::new()));
-        let launched_clone = Rc::clone(&launched);
-        with_test_uri_launcher(
-            move |uri| {
-                launched_clone.borrow_mut().push(uri.to_string());
-                true
-            },
-            || {
-                emit_left_click_at(pane.vte().upcast_ref::<gtk4::Widget>(), 1, 4.0, 4.0);
-                pump_events(50);
-            },
-        );
-
-        assert_eq!(launched.borrow().as_slice(), ["https://example.com/persistent"]);
-        window.close();
     }
 }
