@@ -1073,8 +1073,8 @@ impl Window {
 
         let win = self.clone();
         let input_terminal_uuid = terminal_uuid.clone();
-        pane_view.connect_input(move |text| {
-            win.send_managed_terminal_input(&input_terminal_uuid, text.as_bytes().to_vec());
+        pane_view.connect_input(move |bytes| {
+            win.send_managed_terminal_input(&input_terminal_uuid, bytes.to_vec());
         });
 
         let win = self.clone();
@@ -1084,11 +1084,30 @@ impl Window {
         });
 
         let win = self.clone();
+        let focus_uuid = terminal_uuid.clone();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
-            win.set_focused_terminal(Some(&terminal_uuid));
+            win.set_focused_terminal(Some(&focus_uuid));
         });
         pane_view.vte().add_controller(focus_controller);
+
+        let win = self.clone();
+        let split_h_uuid = terminal_uuid.clone();
+        pane_view.split_h_button().connect_clicked(move |_| {
+            win.split_terminal(&split_h_uuid, SplitOrientation::Horizontal);
+        });
+
+        let win = self.clone();
+        let split_v_uuid = terminal_uuid.clone();
+        pane_view.split_v_button().connect_clicked(move |_| {
+            win.split_terminal(&split_v_uuid, SplitOrientation::Vertical);
+        });
+
+        let win = self.clone();
+        let close_uuid = terminal_uuid;
+        pane_view.close_button().connect_clicked(move |_| {
+            win.close_terminal(&close_uuid);
+        });
 
         let bell_pane = pane_view.clone();
         pane_view.vte().connect_bell(move |_| {
@@ -5583,6 +5602,65 @@ mod tests {
         assert!(pane.edit_connection_button_visible_for_test());
         assert!(pane.close_workspace_button_visible_for_test());
         assert!(!pane.input_enabled_for_test());
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn managed_pane_split_button_updates_layout_and_materializes_new_pane() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.managed-split-button-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_state = crate::test_helpers::managed_session(
+            "workspace-split",
+            "Split Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        let pane = window
+            .imp()
+            .persistent_terminals
+            .borrow()
+            .get("managed-pane")
+            .cloned()
+            .expect("managed pane should be present");
+
+        pane.split_h_button().emit_clicked();
+
+        let state = window.imp().state.borrow();
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == session_state.uuid)
+            .expect("managed workspace should remain present");
+        let terminal_uuids = session.layout.terminal_uuids();
+        assert_eq!(terminal_uuids.len(), 2, "managed split should add a second layout pane");
+        let new_uuid = terminal_uuids
+            .into_iter()
+            .find(|uuid| uuid != "managed-pane")
+            .expect("managed split should create a new pane uuid");
+        drop(state);
+
+        assert!(
+            window.imp().persistent_terminals.borrow().contains_key(&new_uuid),
+            "managed split should materialize a new persistent pane widget"
+        );
+        assert!(
+            !window.imp().terminals.borrow().contains_key(&new_uuid),
+            "managed split must not fall back to direct terminal widgets"
+        );
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

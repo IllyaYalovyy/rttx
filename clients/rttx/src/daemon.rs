@@ -510,6 +510,18 @@ impl DaemonReader {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn split_transport_for_test<R, W>(reader: R, writer: W) -> (DaemonReader, DaemonWriter)
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    (
+        DaemonReader { stream: Box::new(reader), read_buf: BytesMut::new() },
+        DaemonWriter { stream: Box::new(writer) },
+    )
+}
+
 /// Extract the `pane_id` bytes from a server message, if present.
 #[must_use]
 pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {

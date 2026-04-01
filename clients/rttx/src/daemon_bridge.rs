@@ -972,10 +972,7 @@ impl EndpointActor {
         name: &str,
         policy: WorkspacePolicy,
     ) -> Result<String, ()> {
-        let create_result = {
-            let connection = self.connection.as_mut().expect("connection must exist");
-            connection.create_session(name, policy).await
-        };
+        let create_result = self.create_runtime_via_active_channel(name, policy).await;
         match create_result {
             Ok(runtime_id) => Ok(runtime_id.to_string()),
             Err(error) => {
@@ -995,16 +992,71 @@ impl EndpointActor {
         else {
             return Err(());
         };
-        let attach_result = {
-            let connection = self.connection.as_mut().expect("connection must exist");
-            connection.attach_session(runtime_uuid, proto::RuntimeAttachMode::ReadWrite).await
-        };
+        let attach_result = self.attach_runtime_via_active_channel(runtime_uuid).await;
         match attach_result {
             Ok(snapshot) => Ok(snapshot),
             Err(error) => {
                 self.handle_command_error(workspace_id, ManagerOperation::OpenWorkspace, &error);
                 Err(())
             }
+        }
+    }
+
+    async fn create_runtime_via_active_channel(
+        &mut self,
+        name: &str,
+        policy: WorkspacePolicy,
+    ) -> Result<Uuid, DaemonError> {
+        if let Some(connection) = self.connection.as_mut() {
+            return connection.create_session(name, policy).await;
+        }
+
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                name: name.to_string(),
+                policy: policy.as_proto(),
+            })),
+        };
+        self.send_message(&msg).await?;
+        let response = self.read_response(false).await?;
+        match response.msg {
+            Some(proto::server_message::Msg::SessionCreated(created)) => {
+                rttx_proto::bytes_to_uuid(&created.session_id).map_err(DaemonError::Frame)
+            }
+            Some(proto::server_message::Msg::Error(error)) => {
+                Err(DaemonError::ServerError { code: error.code, message: error.message })
+            }
+            _ => Err(DaemonError::UnexpectedMessage),
+        }
+    }
+
+    async fn attach_runtime_via_active_channel(
+        &mut self,
+        runtime_uuid: Uuid,
+    ) -> Result<proto::Snapshot, DaemonError> {
+        if let Some(connection) = self.connection.as_mut() {
+            return connection
+                .attach_session(runtime_uuid, proto::RuntimeAttachMode::ReadWrite)
+                .await;
+        }
+
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        };
+        self.send_message(&msg).await?;
+        let response = self.read_response(false).await?;
+        match response.msg {
+            Some(proto::server_message::Msg::Snapshot(snapshot)) => Ok(snapshot),
+            Some(proto::server_message::Msg::AttachBlocked(blocked)) => {
+                Err(DaemonError::AttachBlocked(blocked))
+            }
+            Some(proto::server_message::Msg::Error(error)) => {
+                Err(DaemonError::ServerError { code: error.code, message: error.message })
+            }
+            _ => Err(DaemonError::UnexpectedMessage),
         }
     }
 
@@ -1126,5 +1178,134 @@ fn parse_uuid(
             });
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn split_duplex_connection() -> ((DaemonReader, DaemonWriter), tokio::io::DuplexStream) {
+        let (client, server) = tokio::io::duplex(4096);
+        let (read_half, write_half) = tokio::io::split(client);
+        (crate::daemon::split_transport_for_test(read_half, write_half), server)
+    }
+
+    async fn recv_client_message(
+        stream: &mut tokio::io::DuplexStream,
+        read_buf: &mut BytesMut,
+    ) -> proto::ClientMessage {
+        loop {
+            match rttx_proto::decode_frame::<proto::ClientMessage>(read_buf) {
+                Ok(message) => return message,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(error) => panic!("failed to decode client message: {error}"),
+            }
+            let n = stream.read_buf(read_buf).await.expect("read from duplex transport");
+            assert!(n > 0, "unexpected EOF while waiting for client message");
+        }
+    }
+
+    async fn send_server_message(
+        stream: &mut tokio::io::DuplexStream,
+        message: &proto::ServerMessage,
+    ) {
+        let mut buf = BytesMut::new();
+        rttx_proto::encode_frame(message, &mut buf).expect("encode server message");
+        stream.write_all(&buf).await.expect("write server message");
+        stream.flush().await.expect("flush server message");
+    }
+
+    fn make_actor(reader: DaemonReader, writer: DaemonWriter) -> EndpointActor {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::new(),
+            reconnect_attempt: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_runtime_uses_split_transport_after_connection_split() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let mut actor = make_actor(reader, writer);
+        let expected_runtime = Uuid::new_v4();
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
+            match request.msg {
+                Some(proto::client_message::Msg::CreateSession(create)) => {
+                    assert_eq!(create.name, "Workspace 2");
+                    assert_eq!(create.policy, WorkspacePolicy::Persistent.as_proto());
+                }
+                other => panic!("expected CreateSession request, got {other:?}"),
+            }
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
+                        session_id: rttx_proto::uuid_to_bytes(expected_runtime),
+                        revision: 1,
+                    })),
+                },
+            )
+            .await;
+        });
+
+        let runtime_id = actor
+            .create_runtime_via_active_channel("Workspace 2", WorkspacePolicy::Persistent)
+            .await
+            .expect("split transport should support CreateSession");
+        assert_eq!(runtime_id, expected_runtime);
+        server.await.expect("fake server task should complete");
+    }
+
+    #[tokio::test]
+    async fn attach_runtime_uses_split_transport_after_connection_split() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let mut actor = make_actor(reader, writer);
+        let runtime_id = Uuid::new_v4();
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
+            match request.msg {
+                Some(proto::client_message::Msg::AttachSession(attach)) => {
+                    assert_eq!(rttx_proto::bytes_to_uuid(&attach.session_id).unwrap(), runtime_id);
+                    assert_eq!(attach.attach_mode, proto::RuntimeAttachMode::ReadWrite as i32);
+                }
+                other => panic!("expected AttachSession request, got {other:?}"),
+            }
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        panes: vec![],
+                        revision: 1,
+                        current_client_role: proto::RuntimeClientRole::Writer as i32,
+                    })),
+                },
+            )
+            .await;
+        });
+
+        let snapshot = actor
+            .attach_runtime_via_active_channel(runtime_id)
+            .await
+            .expect("split transport should support AttachSession");
+        assert_eq!(rttx_proto::bytes_to_uuid(&snapshot.session_id).unwrap(), runtime_id);
+        server.await.expect("fake server task should complete");
     }
 }
