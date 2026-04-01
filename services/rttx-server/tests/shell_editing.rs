@@ -334,13 +334,7 @@ async fn formatted_output_survives_reattach_and_allows_follow_up_input() {
     let (session_id, pane_id) = setup_attached_pane(&mut client).await;
     wait_for_prompt(&mut client).await;
 
-    send_input(
-        &mut client,
-        &session_id,
-        &pane_id,
-        b"printf $'\\033[31mRED\\033[0m\\n'\r",
-    )
-    .await;
+    send_input(&mut client, &session_id, &pane_id, b"printf $'\\033[31mRED\\033[0m\\n'\r").await;
     tokio::time::sleep(Duration::from_millis(600)).await;
 
     let snapshot_bytes = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
