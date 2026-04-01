@@ -113,10 +113,11 @@ cargo build --release --no-default-features --features vte-0_76
 ### Full install (desktop integration)
 
 This installs the binary, desktop file, icons, and AppStream metadata so rttx appears in the app
-grid:
+grid. Run these commands from the repository root:
 
 ```bash
 meson setup build --prefix="$HOME/.local"
+meson compile -C build
 meson install -C build
 ```
 
@@ -124,6 +125,7 @@ For systems with VTE 0.76 instead of 0.78:
 
 ```bash
 meson setup build --prefix="$HOME/.local" -Dvte_version=0.76
+meson compile -C build
 meson install -C build
 ```
 
@@ -138,7 +140,15 @@ For a system-wide install:
 
 ```bash
 meson setup build --prefix=/usr/local
+meson compile -C build
 sudo meson install -C build
+```
+
+If `build/` already exists, refresh it instead of recreating it:
+
+```bash
+meson setup --reconfigure build --prefix="$HOME/.local"
+meson compile -C build
 ```
 
 If the GNOME app grid still shows a generic icon after a user-local install, log out and back in.

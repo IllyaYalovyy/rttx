@@ -17,6 +17,8 @@ Package names stay unchanged even though the repository now uses role-based dire
 
 ## Build
 
+Run all commands from the repository root.
+
 Development build for the whole workspace:
 
 ```bash
@@ -57,6 +59,11 @@ RTTX_DEV_MODE=1 cargo run -p rttx-server -- start --foreground
 
 ## Install
 
+### Client Only
+
+Use Meson when you want a desktop-integrated client install with the binary, desktop file, icons,
+and AppStream metadata.
+
 Production install of the client from source:
 
 ```bash
@@ -67,6 +74,17 @@ sudo gtk-update-icon-cache -f -t /usr/local/share/icons/hicolor
 sudo update-desktop-database /usr/local/share/applications
 ```
 
+If `build/` already exists, refresh it instead of creating it again:
+
+```bash
+meson setup --reconfigure build --prefix=/usr/local
+meson compile -C build
+```
+
+### Daemon Only
+
+Use Cargo for the daemon. Meson does not install `rttx-server`.
+
 Production install of the daemon from source:
 
 ```bash
@@ -74,7 +92,9 @@ cargo build --release -p rttx-server
 sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
 ```
 
-Production install of both from source:
+### Full Production Install
+
+Install both client and daemon from source:
 
 ```bash
 meson setup build --prefix=/usr/local

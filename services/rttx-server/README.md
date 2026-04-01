@@ -145,6 +145,7 @@ sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
 Combined source install with the client:
 
 ```bash
+# Run from the repository root. Meson installs the client only.
 meson setup build --prefix=/usr/local
 meson compile -C build
 sudo meson install -C build

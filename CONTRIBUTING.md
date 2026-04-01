@@ -174,10 +174,14 @@ cargo build --release -p rttx
 For production installation of the client (desktop file, icons, AppStream metadata):
 ```bash
 meson setup build --prefix="$HOME/.local"
+meson compile -C build
 meson install -C build
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor"
 update-desktop-database "$HOME/.local/share/applications"
 ```
+
+Run Meson from the repository root. If `build/` already exists, use
+`meson setup --reconfigure build --prefix="$HOME/.local"` before `meson compile -C build`.
 
 ### Persistent session daemon (`rttx-server`)
 
