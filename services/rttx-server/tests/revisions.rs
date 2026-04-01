@@ -116,13 +116,21 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
             })),
         })
         .await;
-    match client.recv().await.msg {
-        Some(proto::server_message::Msg::PaneClosed(closed)) => {
-            assert_eq!(closed.revision, 6);
-            assert_eq!(closed.pane_id, pane_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut saw_close = false;
+    while tokio::time::Instant::now() < deadline {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::PaneClosed(closed)) => {
+                assert_eq!(closed.revision, 6);
+                assert_eq!(closed.pane_id, pane_id);
+                saw_close = true;
+                break;
+            }
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected PaneClosed, got {other:?}"),
         }
-        other => panic!("expected PaneClosed, got {other:?}"),
     }
+    assert!(saw_close, "timed out waiting for PaneClosed");
 
     client
         .send(&proto::ClientMessage {
