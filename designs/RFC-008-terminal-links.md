@@ -16,13 +16,20 @@ includes OSC 8 hyperlinks, plain `http(s)` URLs, and local file paths such as `/
 `src/main.rs:42`. The feature is intentionally narrow: it improves real terminal workflows without
 turning rttx into a general-purpose terminal hyperlink engine.
 
+Current implementation snapshot (2026-03):
+
+- link detection and launch are now shared across both `TerminalWidget` and
+  `PersistentPaneView`
+- activation is covered by GTK regression tests for both direct and daemon-backed panes
+- the launch path still uses `gio::AppInfo::launch_default_for_uri()`
+
 ---
 
 ## Goals
 
 - **G1** — Detect common developer-facing links in terminal output
 - **G2** — Open them directly with the system default handler
-- **G3** — Keep the implementation local to `TerminalWidget`
+- **G3** — Keep the implementation scoped to terminal widgets rather than `window.rs`
 
 ## Non-Goals
 
@@ -48,7 +55,7 @@ and sysadmin workflows and open them with one click.
 | Audience | Impact |
 | --- | --- |
 | End users | Links and local paths in terminal output become directly clickable |
-| Contributors | Behavior is isolated to `src/terminal/widget.rs`; no `window.rs` involvement |
+| Contributors | Behavior is isolated to shared terminal-widget helpers; no `window.rs` involvement |
 | Packagers | No new dependencies |
 
 ---
@@ -84,13 +91,13 @@ resolved target with the system default application on click.
 
 ## Design
 
-`TerminalWidget` configures VTE with:
+The terminal widgets configure VTE with:
 
 - `allow-hyperlink = true` for OSC 8 support
 - One regex for `http(s)` / `mailto:` / `file://` URIs
 - One regex for local-looking file paths (`/tmp/x`, `./x`, `../x`, `~/x`, `src/x`)
 
-Click handling lives on the VTE widget:
+Click handling lives on the VTE widget in both pane implementations:
 
 1. Check for an OSC 8 hyperlink at the click position
 2. Otherwise check for a regex match
@@ -112,7 +119,7 @@ Path resolution rules:
 | --- | --- |
 | G1 — detect useful links | VTE regex matches for URLs and local paths, plus OSC 8 support |
 | G2 — open directly | `gio::AppInfo::launch_default_for_uri` |
-| G3 — keep it local | All behavior lives in `TerminalWidget` helper logic and event handlers |
+| G3 — keep it local | All behavior lives in terminal-widget helper logic and event handlers |
 
 ---
 
