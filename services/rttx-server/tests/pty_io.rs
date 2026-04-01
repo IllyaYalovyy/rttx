@@ -177,11 +177,19 @@ async fn close_pane_kills_pty() {
         })),
     };
     client.send(&close).await;
-    let resp = client.recv_or_timeout().await;
-    assert!(
-        matches!(resp.msg, Some(proto::server_message::Msg::PaneClosed(_))),
-        "expected PaneClosed, got {resp:?}"
-    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut saw_close = false;
+    while tokio::time::Instant::now() < deadline {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::PaneClosed(_)) => {
+                saw_close = true;
+                break;
+            }
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected PaneClosed, got {other:?}"),
+        }
+    }
+    assert!(saw_close, "timed out waiting for PaneClosed");
 
     // Verify pane is gone: re-attach and check snapshot has no panes.
     let detach = proto::ClientMessage {
