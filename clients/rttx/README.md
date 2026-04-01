@@ -51,6 +51,8 @@ flatpak install --user ./rttx.flatpak
 
 **From source** — see [INSTALL.md](INSTALL.md) for full instructions.
 
+Run these commands from the repository root. Meson installs the client only.
+
 Production install from source:
 
 ```bash
@@ -59,6 +61,13 @@ meson compile -C build
 sudo meson install -C build
 sudo gtk-update-icon-cache -f -t /usr/local/share/icons/hicolor
 sudo update-desktop-database /usr/local/share/applications
+```
+
+If `build/` already exists, reconfigure it:
+
+```bash
+meson setup --reconfigure build --prefix=/usr/local
+meson compile -C build
 ```
 
 ## Terminology

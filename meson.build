@@ -35,6 +35,7 @@ endif
 
 # Find cargo
 cargo = find_program('cargo')
+workspace_manifest = meson.project_source_root() / 'Cargo.toml'
 client_dir = meson.project_source_root() / 'clients' / 'rttx'
 client_data_dir = client_dir / 'data'
 
@@ -43,9 +44,9 @@ custom_target('rttx-binary',
   output: 'rttx',
   command: [
     'sh', '-c',
-    cargo.full_path() + ' fmt --check && ' +
+    cargo.full_path() + ' fmt --manifest-path ' + workspace_manifest + ' --all --check && ' +
     cargo.full_path() + ' clippy --manifest-path ' + client_dir / 'Cargo.toml' + ' -- -D warnings && ' +
-    cargo.full_path() + ' build --release -p rttx ' + cargo_vte_features + ' --manifest-path ' + meson.project_source_root() / 'Cargo.toml' +
+    cargo.full_path() + ' build --release -p rttx ' + cargo_vte_features + ' --manifest-path ' + workspace_manifest +
     ' --target-dir ' + meson.project_build_root() / 'cargo-target && ' +
     'cp ' + meson.project_build_root() / 'cargo-target' / 'release' / 'rttx' + ' @OUTPUT@'
   ],
