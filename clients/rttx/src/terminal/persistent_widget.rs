@@ -779,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn connection_presentation_controls_banner_and_input_state() {
         require_display!();
 
@@ -825,6 +826,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn connection_action_callbacks_fire() {
         require_display!();
 
@@ -1029,6 +1031,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn input_controller_preserves_clipboard_shortcuts_before_forwarding_shell_input() {
         require_display!();
 

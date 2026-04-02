@@ -252,6 +252,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn session_row_is_an_action_row() {
         require_display!();
 
@@ -264,6 +265,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn session_row_updates_title_and_count() {
         require_display!();
 
@@ -277,6 +279,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn activity_indicator_toggles() {
         require_display!();
 
@@ -300,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn repeated_activity_refreshes_idle_timer() {
         require_display!();
 
@@ -325,6 +329,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn clear_activity_cancels_pending_idle_transition() {
         require_display!();
 
@@ -345,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn position_label_shows_number() {
         require_display!();
 
@@ -357,6 +363,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn position_label_hidden_beyond_nine() {
         require_display!();
 

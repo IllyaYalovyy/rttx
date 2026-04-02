@@ -24,6 +24,22 @@ readonly LIBRARY_SKIP_PATTERNS=(
     "window::tests::"
     "sidebar::tests::"
     "session::tests::apply_initial_paned_ratios_restores_nested_non_sentinel_positions"
+    "terminal::widget::tests::smart_clipboard_key_controller_ignores_extra_non_shortcut_modifiers"
+    "terminal::persistent_widget::tests::connection_presentation_controls_banner_and_input_state"
+    "terminal::persistent_widget::tests::connection_action_callbacks_fire"
+    "terminal::persistent_widget::tests::input_controller_preserves_clipboard_shortcuts_before_forwarding_shell_input"
+)
+readonly IGNORED_GTK_LIBRARY_TESTS=(
+    "session::tests::apply_initial_paned_ratios_restores_nested_non_sentinel_positions"
+    "terminal::widget::tests::smart_clipboard_key_controller_ignores_extra_non_shortcut_modifiers"
+    "terminal::persistent_widget::tests::connection_presentation_controls_banner_and_input_state"
+    "terminal::persistent_widget::tests::connection_action_callbacks_fire"
+    "terminal::persistent_widget::tests::input_controller_preserves_clipboard_shortcuts_before_forwarding_shell_input"
+)
+readonly IGNORED_GTK_INTEGRATION_TESTS=(
+    "gtk_widget_tests"
+    "layout_widget_tests"
+    "terminal_lifecycle_tests"
 )
 
 cleanup() {
@@ -51,21 +67,6 @@ start_broadway_if_available() {
     sleep 1
 }
 
-known_teardown_sigsegv() {
-    local logfile=$1
-    local expected_tests
-    local completed_tests
-
-    expected_tests=$(sed -n 's/^running \([0-9][0-9]*\) tests$/\1/p' "${logfile}" | tail -n 1)
-    completed_tests=$(grep -Ec '^test .+ \.\.\. (ok|ignored)$' "${logfile}" || true)
-
-    grep -q "signal: 11, SIGSEGV: invalid memory reference" "${logfile}" &&
-        [[ -n "${expected_tests}" ]] &&
-        [[ "${completed_tests}" -eq "${expected_tests}" ]] &&
-        ! grep -q "test result: FAILED" "${logfile}" &&
-        ! grep -q "^failures:$" "${logfile}"
-}
-
 run_logged_command() {
     local label=$1
     shift
@@ -86,13 +87,6 @@ run_logged_command() {
         return 0
     fi
 
-    if known_teardown_sigsegv "${logfile}"; then
-        echo "Allowing known GTK teardown SIGSEGV after passing ${label} tests." >&2
-        echo "::endgroup::"
-        rm -f "${logfile}"
-        return 0
-    fi
-
     echo "::endgroup::"
     return "${status}"
 }
@@ -100,10 +94,12 @@ run_logged_command() {
 list_isolated_library_tests() {
     cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib -- --list |
         awk -F': test' '
-            /^(window::tests::|sidebar::tests::|session::tests::apply_initial_paned_ratios_restores_nested_non_sentinel_positions)/ {
+            /^(window::tests::|sidebar::tests::)/ {
                 print $1
             }
         '
+
+    printf '%s\n' "${IGNORED_GTK_LIBRARY_TESTS[@]}"
 }
 
 run_library_tests() {
@@ -122,7 +118,7 @@ run_library_tests() {
         [[ -n "${isolated_test}" ]] || continue
         run_logged_command \
             "Library test ${isolated_test}" \
-            cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib "${isolated_test}" -- --exact --nocapture
+            cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib "${isolated_test}" -- --ignored --exact --nocapture
     done < <(list_isolated_library_tests)
 }
 
@@ -134,8 +130,15 @@ run_library_tests
 run_logged_command "Binary tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --bins -- --nocapture
 
 while IFS= read -r integration_test; do
-    run_logged_command "Integration test ${integration_test}" \
-        cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --test "${integration_test}" -- --nocapture
+    test_args=(
+        cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --test "${integration_test}" --
+    )
+    if [[ " ${IGNORED_GTK_INTEGRATION_TESTS[*]} " == *" ${integration_test} "* ]]; then
+        test_args+=(--ignored --nocapture)
+    else
+        test_args+=(--nocapture)
+    fi
+    run_logged_command "Integration test ${integration_test}" "${test_args[@]}"
 done < <(find "${client_test_dir}" -maxdepth 1 -type f -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort)
 
 run_logged_command "Doc tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --doc -- --nocapture
