@@ -1244,7 +1244,9 @@ impl Window {
                     &ConnectionStatus::Disconnected,
                 );
             }
-            EndpointEvent::InventoryLoaded { .. } => {}
+            EndpointEvent::InventoryLoaded { endpoint, sessions } => {
+                self.handle_inventory_loaded(&endpoint, &sessions);
+            }
             EndpointEvent::RuntimeMessage { endpoint, message } => {
                 self.dispatch_managed_runtime_message(&endpoint, &message);
             }
@@ -1311,6 +1313,31 @@ impl Window {
                 self.send_managed_terminal_resize(&restore.layout_terminal_uuid, cols, rows);
             }
         }
+    }
+
+    fn handle_inventory_loaded(
+        &self,
+        endpoint: &RuntimeEndpoint,
+        sessions: &[rttx_proto::proto::SessionInfo],
+    ) {
+        let recovered = {
+            let mut state = self.imp().state.borrow_mut();
+            state.recover_managed_workspaces_from_inventory(endpoint, sessions)
+        };
+        if recovered.is_empty() {
+            return;
+        }
+
+        for session_state in &recovered {
+            self.build_session(session_state, false);
+            self.set_workspace_connection_status(
+                &session_state.uuid,
+                &ConnectionStatus::Connecting,
+            );
+            self.connect_managed_workspace(session_state);
+        }
+
+        self.save_state();
     }
 
     fn replace_workspace_connection_status(&self, workspace_id: &str, status: &ConnectionStatus) {
@@ -5719,6 +5746,156 @@ mod tests {
             window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
             Some(&ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 })
         );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn inventory_loaded_recovers_missing_managed_workspace() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.inventory-recovery-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let initial_session_count = window.imp().state.borrow().sessions.len();
+        let runtime_id = uuid::Uuid::new_v4();
+        let pane_id = uuid::Uuid::new_v4();
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::InventoryLoaded {
+            endpoint: RuntimeEndpoint::Local,
+            sessions: vec![rttx_proto::proto::SessionInfo {
+                id: rttx_proto::uuid_to_bytes(runtime_id),
+                name: "Recovered Workspace".into(),
+                pane_count: 1,
+                has_attached_client: false,
+                active_pane_id: Some(rttx_proto::uuid_to_bytes(pane_id)),
+                panes: vec![rttx_proto::proto::PaneInfo {
+                    id: rttx_proto::uuid_to_bytes(pane_id),
+                    title: "Shell".into(),
+                    cwd: "/srv/project".into(),
+                    cols: 120,
+                    rows: 40,
+                    exit_status: None,
+                    reconstructed: true,
+                }],
+                policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
+                attached_client_count: 0,
+                reconstructed: true,
+                revision: 7,
+                current_client_role: rttx_proto::proto::RuntimeClientRole::Unattached as i32,
+                has_write_owner: false,
+                read_only_client_count: 0,
+            }],
+        });
+
+        let runtime_id = runtime_id.to_string();
+        let pane_id = pane_id.to_string();
+        let state = window.imp().state.borrow();
+        assert_eq!(
+            state.sessions.len(),
+            initial_session_count + 1,
+            "inventory should materialize one recovered workspace"
+        );
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == format!("inventory:local:{runtime_id}"))
+            .expect("inventory should add a recovered workspace session");
+        assert_eq!(session.uuid, format!("inventory:local:{runtime_id}"));
+        assert_eq!(session.name, "Recovered Workspace");
+        assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
+        assert_eq!(session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(session.layout.terminal_uuids(), vec![pane_id.clone()]);
+        drop(state);
+
+        assert!(
+            window.imp().persistent_terminals.borrow().contains_key(&pane_id),
+            "inventory recovery should materialize a persistent pane widget"
+        );
+        assert_eq!(
+            window
+                .imp()
+                .workspace_connection_status
+                .borrow()
+                .get(&format!("inventory:local:{runtime_id}")),
+            Some(&ConnectionStatus::Connecting)
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn inventory_loaded_skips_workspace_for_known_runtime() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.inventory-recovery-dedup-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let session_state = crate::test_helpers::managed_session_with_runtime(
+            "workspace-existing",
+            "Existing Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+
+        let window = Window::new(&app);
+        let initial_session_count = window.imp().state.borrow().sessions.len();
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::InventoryLoaded {
+            endpoint: RuntimeEndpoint::Local,
+            sessions: vec![rttx_proto::proto::SessionInfo {
+                id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
+                name: "Recovered Workspace".into(),
+                pane_count: 1,
+                has_attached_client: false,
+                active_pane_id: None,
+                panes: vec![rttx_proto::proto::PaneInfo {
+                    id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+                    title: "Shell".into(),
+                    cwd: "/srv/project".into(),
+                    cols: 120,
+                    rows: 40,
+                    exit_status: None,
+                    reconstructed: true,
+                }],
+                policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
+                attached_client_count: 0,
+                reconstructed: true,
+                revision: 7,
+                current_client_role: rttx_proto::proto::RuntimeClientRole::Unattached as i32,
+                has_write_owner: false,
+                read_only_client_count: 0,
+            }],
+        });
+
+        let state = window.imp().state.borrow();
+        assert_eq!(
+            state.sessions.len(),
+            initial_session_count + 1,
+            "inventory should not duplicate an attached runtime"
+        );
+        assert!(state.sessions.iter().any(|session| session.uuid == "workspace-existing"));
+        drop(state);
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
