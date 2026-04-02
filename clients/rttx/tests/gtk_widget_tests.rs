@@ -1161,6 +1161,60 @@ fn persistent_pane_view_feed_snapshot_restores_cursor_after_multiline_formatted_
 }
 
 #[test]
+fn persistent_pane_resize_callback_tracks_allocated_terminal_size() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    let reported_sizes = Rc::new(RefCell::new(Vec::new()));
+    let reported_sizes_clone = Rc::clone(&reported_sizes);
+    pane.connect_resize(move |cols, rows| {
+        reported_sizes_clone.borrow_mut().push((cols, rows));
+    });
+
+    let window = present_widget(&pane);
+    assert!(
+        wait_until(1000, || {
+            let (cols, rows) = pane.terminal_size();
+            cols > 0 && rows > 0
+        }),
+        "persistent pane never received an initial terminal allocation"
+    );
+
+    let initial_size = pane.terminal_size();
+    assert!(
+        wait_until(1000, || reported_sizes.borrow().last().copied() == Some(initial_size)),
+        "resize callback never reported the initial allocated terminal size"
+    );
+    let initial_reported = reported_sizes.borrow().last().copied();
+    assert_eq!(
+        initial_reported,
+        Some(initial_size),
+        "resize callback must report the initial allocated terminal size"
+    );
+
+    window.allocate(420, 500, -1, None);
+    pump_events(50);
+    assert!(
+        wait_until(1000, || pane.terminal_size() != initial_size),
+        "persistent pane terminal size did not change after window resize"
+    );
+
+    let resized_size = pane.terminal_size();
+    assert!(
+        wait_until(1000, || reported_sizes.borrow().last().copied() == Some(resized_size)),
+        "resize callback never reported the resized terminal size"
+    );
+    let resized_reported = reported_sizes.borrow().last().copied();
+    assert_eq!(
+        resized_reported,
+        Some(resized_size),
+        "resize callback must track viewport-derived terminal size changes"
+    );
+
+    window.close();
+}
+
+#[test]
 fn persistent_pane_view_set_connected_updates_state() {
     require_display!();
 
