@@ -318,6 +318,7 @@ impl Window {
         for session in &state.sessions {
             self.build_session(session, true);
         }
+        self.bootstrap_startup_inventory();
 
         if is_maximized {
             self.maximize();
@@ -337,6 +338,22 @@ impl Window {
 
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
+        }
+    }
+
+    fn bootstrap_startup_inventory(&self) {
+        let should_refresh_local_inventory = {
+            let state = self.imp().state.borrow();
+            state.should_refresh_local_inventory_on_startup()
+        };
+        if !should_refresh_local_inventory || !crate::daemon::default_socket_path().exists() {
+            return;
+        }
+        if !self.ensure_connection_manager() {
+            return;
+        }
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.refresh_inventory(&RuntimeEndpoint::Local);
         }
     }
 
@@ -3065,7 +3082,12 @@ fn preferred_command_target_uuid(
 )]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
+    use rttx_proto::{PROTOCOL_VERSION, decode_frame, encode_frame, proto, uuid_to_bytes};
+    use std::io::{Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::time::{Duration, Instant};
+    use uuid::Uuid;
 
     macro_rules! require_display {
         () => {
@@ -3095,6 +3117,164 @@ mod tests {
             }
         }
         condition()
+    }
+
+    fn recv_client_message(
+        stream: &mut UnixStream,
+        read_buf: &mut BytesMut,
+    ) -> proto::ClientMessage {
+        loop {
+            match decode_frame::<proto::ClientMessage>(read_buf) {
+                Ok(message) => return message,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(error) => panic!("failed to decode client message: {error}"),
+            }
+
+            let mut chunk = [0_u8; 4096];
+            let n = stream.read(&mut chunk).expect("read client message");
+            assert!(n > 0, "unexpected EOF while waiting for client message");
+            read_buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+
+    fn send_server_message(stream: &mut UnixStream, message: &proto::ServerMessage) {
+        let mut buf = BytesMut::new();
+        encode_frame(message, &mut buf).expect("encode server message");
+        stream.write_all(&buf).expect("write server message");
+        stream.flush().expect("flush server message");
+    }
+
+    fn accept_client(listener: &UnixListener) -> UnixStream {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "client never connected to the fake daemon socket",
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("failed to accept daemon client: {error}"),
+            }
+        }
+    }
+
+    fn spawn_startup_inventory_daemon(
+        socket_path: &std::path::Path,
+        runtime_id: Uuid,
+        pane_id: Uuid,
+    ) -> std::thread::JoinHandle<()> {
+        let socket_dir = socket_path.parent().expect("daemon socket should have a parent");
+        std::fs::create_dir_all(socket_dir).expect("create daemon socket directory");
+        let listener = UnixListener::bind(socket_path).expect("bind fake daemon socket");
+        listener.set_nonblocking(true).expect("set listener nonblocking");
+
+        std::thread::spawn(move || {
+            let mut stream = accept_client(&listener);
+            stream.set_read_timeout(Some(Duration::from_secs(3))).expect("set daemon read timeout");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .expect("set daemon write timeout");
+
+            let mut read_buf = BytesMut::with_capacity(4096);
+            let hello = recv_client_message(&mut stream, &mut read_buf);
+            match hello.msg {
+                Some(proto::client_message::Msg::Hello(_)) => {}
+                other => panic!("expected Hello, got {other:?}"),
+            }
+            send_server_message(
+                &mut stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::HelloAck(proto::HelloAck {
+                        protocol_version: PROTOCOL_VERSION,
+                        server_id: uuid_to_bytes(Uuid::new_v4()),
+                    })),
+                },
+            );
+
+            let list_sessions = recv_client_message(&mut stream, &mut read_buf);
+            match list_sessions.msg {
+                Some(proto::client_message::Msg::ListSessions(_)) => {}
+                other => panic!("expected initial ListSessions, got {other:?}"),
+            }
+
+            let runtime_session = proto::SessionInfo {
+                id: uuid_to_bytes(runtime_id),
+                name: "Recovered Workspace".into(),
+                pane_count: 1,
+                has_attached_client: false,
+                active_pane_id: Some(uuid_to_bytes(pane_id)),
+                panes: vec![proto::PaneInfo {
+                    id: uuid_to_bytes(pane_id),
+                    title: "Shell".into(),
+                    cwd: "/srv/project".into(),
+                    cols: 120,
+                    rows: 40,
+                    exit_status: None,
+                    reconstructed: true,
+                }],
+                policy: proto::RuntimePolicy::Persistent as i32,
+                attached_client_count: 0,
+                reconstructed: true,
+                revision: 7,
+                current_client_role: proto::RuntimeClientRole::Unattached as i32,
+                has_write_owner: false,
+                read_only_client_count: 0,
+            };
+            send_server_message(
+                &mut stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::SessionList(proto::SessionList {
+                        sessions: vec![runtime_session.clone()],
+                    })),
+                },
+            );
+
+            let attach = recv_client_message(&mut stream, &mut read_buf);
+            match attach.msg {
+                Some(proto::client_message::Msg::AttachSession(attach)) => {
+                    assert_eq!(rttx_proto::bytes_to_uuid(&attach.session_id).unwrap(), runtime_id,);
+                }
+                other => panic!("expected AttachSession, got {other:?}"),
+            }
+            send_server_message(
+                &mut stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
+                        session_id: uuid_to_bytes(runtime_id),
+                        panes: vec![proto::PaneSnapshot {
+                            pane_id: uuid_to_bytes(pane_id),
+                            title: "Shell".into(),
+                            cwd: "/srv/project".into(),
+                            cols: 120,
+                            rows: 40,
+                            scrollback: b"restored output".to_vec(),
+                            exit_status: None,
+                        }],
+                        revision: 7,
+                        current_client_role: proto::RuntimeClientRole::Writer as i32,
+                    })),
+                },
+            );
+
+            let repeated_list_sessions = recv_client_message(&mut stream, &mut read_buf);
+            match repeated_list_sessions.msg {
+                Some(proto::client_message::Msg::ListSessions(_)) => {}
+                other => panic!("expected repeated ListSessions, got {other:?}"),
+            }
+            send_server_message(
+                &mut stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::SessionList(proto::SessionList {
+                        sessions: vec![runtime_session],
+                    })),
+                },
+            );
+
+            std::thread::sleep(Duration::from_secs(2));
+        })
     }
 
     fn session_row_at(window: &Window, index: i32) -> SessionRow {
@@ -5848,6 +6028,77 @@ mod tests {
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn startup_recovers_local_inventory_without_saved_managed_workspace() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let runtime_dir = tmp.path().join("runtime");
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("XDG_RUNTIME_DIR", &runtime_dir);
+        crate::test_helpers::set_env("RTTX_DEV_MODE", "0");
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let runtime_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+        let recovered_uuid = format!("inventory:local:{runtime_id}");
+        let daemon = spawn_startup_inventory_daemon(
+            &crate::daemon::default_socket_path(),
+            runtime_id,
+            pane_id,
+        );
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.startup-inventory-recovery-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+
+        assert!(
+            wait_until(3_000, || {
+                window
+                    .imp()
+                    .state
+                    .borrow()
+                    .sessions
+                    .iter()
+                    .any(|session| session.uuid == recovered_uuid)
+            }),
+            "startup should recover daemon inventory even when no managed GUI workspace is saved",
+        );
+        assert!(
+            wait_until(3_000, || {
+                window.imp().workspace_connection_status.borrow().get(&recovered_uuid)
+                    == Some(&ConnectionStatus::Connected)
+            }),
+            "recovered startup workspace should attach without manual action",
+        );
+
+        let runtime_id = runtime_id.to_string();
+        let pane_id = pane_id.to_string();
+        let state = window.imp().state.borrow();
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.uuid == recovered_uuid)
+            .expect("startup inventory should synthesize the recovered workspace");
+        assert_eq!(session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(session.layout.terminal_uuids(), vec![pane_id.clone()]);
+        drop(state);
+
+        assert!(
+            window.imp().persistent_terminals.borrow().contains_key(&pane_id),
+            "startup recovery should materialize the managed pane widget",
+        );
+
+        daemon.join().expect("fake daemon should serve startup inventory recovery");
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+        crate::test_helpers::remove_env("RTTX_DEV_MODE");
+        crate::test_helpers::remove_env("XDG_RUNTIME_DIR");
     }
 
     #[test]

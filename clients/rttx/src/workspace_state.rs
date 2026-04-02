@@ -33,6 +33,15 @@ pub struct ManagedWorkspaceOpenResult {
 }
 
 impl WindowState {
+    /// Whether startup should query the local daemon inventory to recover
+    /// persistent runtimes that have no saved GUI workspace.
+    #[must_use]
+    pub fn should_refresh_local_inventory_on_startup(&self) -> bool {
+        !self.sessions.iter().any(|session| {
+            session.uses_managed_runtime() && session.runtime.endpoint == RuntimeEndpoint::Local
+        })
+    }
+
     /// Recover daemon-managed workspaces that exist in inventory but not in the GUI state.
     pub fn recover_managed_workspaces_from_inventory(
         &mut self,
@@ -696,6 +705,65 @@ mod tests {
         assert!(recovered.is_empty());
         assert_eq!(state.sessions.len(), 1);
         assert_eq!(state.sessions[0].uuid, "workspace-1");
+    }
+
+    #[test]
+    fn recover_managed_workspaces_from_inventory_is_idempotent_across_refreshes() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let sessions = vec![session_info(
+            runtime_id,
+            "Recovered Workspace",
+            proto::RuntimePolicy::Persistent,
+            vec![pane_info("07fa83b4-9ae3-4354-a1c5-1f685ffab370", "Shell", "/srv/project")],
+            None,
+        )];
+        let mut state = window_state(vec![]);
+
+        let first =
+            state.recover_managed_workspaces_from_inventory(&RuntimeEndpoint::Local, &sessions);
+        let second =
+            state.recover_managed_workspaces_from_inventory(&RuntimeEndpoint::Local, &sessions);
+
+        assert_eq!(first.len(), 1, "first inventory refresh should recover the runtime");
+        assert!(
+            second.is_empty(),
+            "repeated inventory refreshes must not duplicate recovered workspaces",
+        );
+        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id),);
+    }
+
+    #[test]
+    fn startup_refreshes_local_inventory_only_when_gui_has_no_local_managed_workspace() {
+        let local_managed = managed_session_with_runtime(
+            "workspace-local",
+            "Local Workspace",
+            term("local-pane"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
+        let remote_managed = managed_session_with_runtime(
+            "workspace-remote",
+            "Remote Workspace",
+            term("remote-pane"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
+        );
+
+        assert!(
+            window_state(vec![]).should_refresh_local_inventory_on_startup(),
+            "an empty GUI should still probe the local daemon for recovered runtimes",
+        );
+        assert!(
+            window_state(vec![remote_managed]).should_refresh_local_inventory_on_startup(),
+            "remote-only state should still probe the local daemon for recovered runtimes",
+        );
+        assert!(
+            !window_state(vec![local_managed]).should_refresh_local_inventory_on_startup(),
+            "saved local managed workspaces already trigger their own inventory refresh",
+        );
     }
 
     #[test]
