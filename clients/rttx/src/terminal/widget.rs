@@ -5,8 +5,10 @@ use gtk4::subclass::prelude::*;
 use vte4::prelude::*;
 
 use crate::color_scheme;
+use crate::terminal::TerminalInputBackend;
+use crate::terminal::TerminalKeyAction;
 use crate::terminal::links;
-use crate::terminal::normalized_shortcut_modifiers;
+use crate::terminal::terminal_key_action;
 
 mod imp {
     use super::*;
@@ -147,22 +149,25 @@ mod imp {
                     return glib::Propagation::Proceed;
                 };
                 let vte = term.imp().vte.clone();
-                match smart_clipboard_action(
+                match terminal_key_action(
+                    TerminalInputBackend::Direct,
                     key,
                     state,
                     vte.has_selection(),
                     term.imp().smart_clipboard.get(),
                 ) {
-                    SmartClipboardAction::Copy => {
+                    TerminalKeyAction::CopySelection => {
                         vte.copy_clipboard_format(vte4::Format::Text);
                         vte.unselect_all();
                         glib::Propagation::Stop
                     }
-                    SmartClipboardAction::Paste => {
+                    TerminalKeyAction::PasteClipboard => {
                         vte.paste_clipboard();
                         glib::Propagation::Stop
                     }
-                    SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+                    TerminalKeyAction::PassThrough | TerminalKeyAction::ForwardToPty(_) => {
+                        glib::Propagation::Proceed
+                    }
                 }
             });
             self.smart_clipboard_key_controller
@@ -591,38 +596,9 @@ impl TerminalWidget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SmartClipboardAction {
-    Copy,
-    Paste,
-    PassThrough,
-}
-
-fn smart_clipboard_action(
-    key: gtk4::gdk::Key,
-    modifiers: gtk4::gdk::ModifierType,
-    has_selection: bool,
-    smart_clipboard_enabled: bool,
-) -> SmartClipboardAction {
-    if !smart_clipboard_enabled {
-        return SmartClipboardAction::PassThrough;
-    }
-
-    let normalized = normalized_shortcut_modifiers(modifiers);
-    if normalized != gtk4::gdk::ModifierType::CONTROL_MASK {
-        return SmartClipboardAction::PassThrough;
-    }
-
-    match key {
-        gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => SmartClipboardAction::Copy,
-        gtk4::gdk::Key::v | gtk4::gdk::Key::V => SmartClipboardAction::Paste,
-        _ => SmartClipboardAction::PassThrough,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SmartClipboardAction, smart_clipboard_action};
+    use crate::terminal::{TerminalInputBackend, TerminalKeyAction, terminal_key_action};
     use gtk4::glib;
     use gtk4::prelude::*;
 
@@ -658,53 +634,58 @@ mod tests {
     #[test]
     fn smart_clipboard_only_copies_selected_ctrl_c() {
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 true,
                 true,
             ),
-            SmartClipboardAction::Copy
+            TerminalKeyAction::CopySelection
         );
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
             ),
-            SmartClipboardAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
     }
 
     #[test]
     fn smart_clipboard_paste_requires_plain_ctrl_v_and_opt_in() {
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
             ),
-            SmartClipboardAction::Paste
+            TerminalKeyAction::PasteClipboard
         );
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 true,
             ),
-            SmartClipboardAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 false,
             ),
-            SmartClipboardAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
     }
 
@@ -713,16 +694,18 @@ mod tests {
         let pointer_mask = gtk4::gdk::ModifierType::BUTTON1_MASK;
 
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK | pointer_mask,
                 false,
                 true,
             ),
-            SmartClipboardAction::Paste
+            TerminalKeyAction::PasteClipboard
         );
         assert_eq!(
-            smart_clipboard_action(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK
                     | gtk4::gdk::ModifierType::LOCK_MASK
@@ -730,7 +713,7 @@ mod tests {
                 true,
                 true,
             ),
-            SmartClipboardAction::Copy
+            TerminalKeyAction::CopySelection
         );
     }
 

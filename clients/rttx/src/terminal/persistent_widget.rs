@@ -12,8 +12,10 @@ use vte4::prelude::*;
 
 use crate::color_scheme;
 use crate::runtime::{ConnectionPresentation, ConnectionStatus};
+use crate::terminal::TerminalInputBackend;
+use crate::terminal::TerminalKeyAction;
 use crate::terminal::links;
-use crate::terminal::normalized_shortcut_modifiers;
+use crate::terminal::terminal_key_action;
 
 mod imp {
     use super::*;
@@ -479,28 +481,29 @@ impl PersistentPaneView {
             let Some(pane) = pane_weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            match managed_input_action(
+            match terminal_key_action(
+                TerminalInputBackend::Managed,
                 key,
                 state,
                 pane.vte().has_selection(),
                 pane.imp().smart_clipboard.get(),
             ) {
-                ManagedInputAction::Copy => {
+                TerminalKeyAction::CopySelection => {
                     pane.vte().copy_clipboard_format(vte4::Format::Text);
                     pane.vte().unselect_all();
                     glib::Propagation::Stop
                 }
-                ManagedInputAction::Paste => {
+                TerminalKeyAction::PasteClipboard => {
                     pane.vte().paste_clipboard();
                     glib::Propagation::Stop
                 }
-                ManagedInputAction::Forward(bytes) => {
+                TerminalKeyAction::ForwardToPty(bytes) => {
                     if pane.imp().accepts_input.get() {
                         f(&bytes);
                     }
                     glib::Propagation::Stop
                 }
-                ManagedInputAction::PassThrough => glib::Propagation::Proceed,
+                TerminalKeyAction::PassThrough => glib::Propagation::Proceed,
             }
         });
         self.imp().input_key_controller.replace(Some(key_controller.clone()));
@@ -635,133 +638,6 @@ impl PersistentPaneView {
     }
 }
 
-fn encode_terminal_key_input(
-    key: gtk4::gdk::Key,
-    state: gtk4::gdk::ModifierType,
-) -> Option<Vec<u8>> {
-    let ctrl = state.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
-    let alt = state.contains(gtk4::gdk::ModifierType::ALT_MASK);
-    let base = match key {
-        gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => Some(vec![b'\r']),
-        gtk4::gdk::Key::BackSpace => Some(vec![0x7f]),
-        gtk4::gdk::Key::Tab | gtk4::gdk::Key::KP_Tab => Some(vec![b'\t']),
-        gtk4::gdk::Key::ISO_Left_Tab => Some(b"\x1b[Z".to_vec()),
-        gtk4::gdk::Key::Escape => Some(vec![0x1b]),
-        gtk4::gdk::Key::Up | gtk4::gdk::Key::KP_Up => Some(b"\x1b[A".to_vec()),
-        gtk4::gdk::Key::Down | gtk4::gdk::Key::KP_Down => Some(b"\x1b[B".to_vec()),
-        gtk4::gdk::Key::Right | gtk4::gdk::Key::KP_Right => Some(b"\x1b[C".to_vec()),
-        gtk4::gdk::Key::Left | gtk4::gdk::Key::KP_Left => Some(b"\x1b[D".to_vec()),
-        gtk4::gdk::Key::Home | gtk4::gdk::Key::KP_Home => Some(b"\x1b[H".to_vec()),
-        gtk4::gdk::Key::End | gtk4::gdk::Key::KP_End => Some(b"\x1b[F".to_vec()),
-        gtk4::gdk::Key::Insert | gtk4::gdk::Key::KP_Insert => Some(b"\x1b[2~".to_vec()),
-        gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete => Some(b"\x1b[3~".to_vec()),
-        gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => Some(b"\x1b[5~".to_vec()),
-        gtk4::gdk::Key::Page_Down | gtk4::gdk::Key::KP_Page_Down => Some(b"\x1b[6~".to_vec()),
-        _ => {
-            let ch = key.to_unicode()?;
-            if ctrl {
-                Some(vec![encode_control_character(ch)?])
-            } else {
-                Some(ch.to_string().into_bytes())
-            }
-        }
-    }?;
-
-    if alt {
-        let mut prefixed = vec![0x1b];
-        prefixed.extend(base);
-        Some(prefixed)
-    } else {
-        Some(base)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ManagedInputAction {
-    Copy,
-    Paste,
-    Forward(Vec<u8>),
-    PassThrough,
-}
-
-fn managed_input_action(
-    key: gtk4::gdk::Key,
-    modifiers: gtk4::gdk::ModifierType,
-    has_selection: bool,
-    smart_clipboard_enabled: bool,
-) -> ManagedInputAction {
-    let normalized = normalized_shortcut_modifiers(modifiers);
-
-    if smart_clipboard_enabled && normalized == gtk4::gdk::ModifierType::CONTROL_MASK {
-        match key {
-            gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => {
-                return ManagedInputAction::Copy;
-            }
-            gtk4::gdk::Key::v | gtk4::gdk::Key::V => return ManagedInputAction::Paste,
-            _ => {}
-        }
-    }
-
-    if should_pass_through_managed_shortcut(key, normalized) {
-        return ManagedInputAction::PassThrough;
-    }
-
-    encode_terminal_key_input(key, modifiers)
-        .map_or(ManagedInputAction::PassThrough, ManagedInputAction::Forward)
-}
-
-fn should_pass_through_managed_shortcut(
-    key: gtk4::gdk::Key,
-    normalized: gtk4::gdk::ModifierType,
-) -> bool {
-    let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
-    let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
-    let alt = gtk4::gdk::ModifierType::ALT_MASK;
-
-    (normalized == (ctrl | shift)
-        && matches!(
-            key,
-            gtk4::gdk::Key::c
-                | gtk4::gdk::Key::C
-                | gtk4::gdk::Key::v
-                | gtk4::gdk::Key::V
-                | gtk4::gdk::Key::w
-                | gtk4::gdk::Key::W
-                | gtk4::gdk::Key::e
-                | gtk4::gdk::Key::E
-                | gtk4::gdk::Key::o
-                | gtk4::gdk::Key::O
-                | gtk4::gdk::Key::f
-                | gtk4::gdk::Key::F
-                | gtk4::gdk::Key::n
-                | gtk4::gdk::Key::N
-                | gtk4::gdk::Key::b
-                | gtk4::gdk::Key::B
-                | gtk4::gdk::Key::i
-                | gtk4::gdk::Key::I
-                | gtk4::gdk::Key::t
-                | gtk4::gdk::Key::T
-                | gtk4::gdk::Key::Tab
-                | gtk4::gdk::Key::ISO_Left_Tab
-        ))
-        || (normalized == (ctrl | shift | alt)
-            && matches!(key, gtk4::gdk::Key::t | gtk4::gdk::Key::T))
-}
-
-const fn encode_control_character(ch: char) -> Option<u8> {
-    match ch {
-        'a'..='z' | 'A'..='Z' => Some((ch.to_ascii_uppercase() as u8) & 0x1f),
-        ' ' | '@' | '`' | '2' => Some(0x00),
-        '[' | '{' | '3' => Some(0x1b),
-        '\\' | '|' | '4' => Some(0x1c),
-        ']' | '}' | '5' => Some(0x1d),
-        '^' | '~' | '6' => Some(0x1e),
-        '_' | '7' | '/' => Some(0x1f),
-        '?' => Some(0x7f),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,82 +728,46 @@ mod tests {
     }
 
     #[test]
-    fn encode_terminal_key_input_maps_basic_shell_keys() {
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::a, gtk4::gdk::ModifierType::empty()),
-            Some(vec![b'a'])
-        );
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Return, gtk4::gdk::ModifierType::empty()),
-            Some(vec![b'\r'])
-        );
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::BackSpace, gtk4::gdk::ModifierType::empty()),
-            Some(vec![0x7f])
-        );
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Left, gtk4::gdk::ModifierType::empty()),
-            Some(b"\x1b[D".to_vec())
-        );
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::c, gtk4::gdk::ModifierType::CONTROL_MASK),
-            Some(vec![0x03])
-        );
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::x, gtk4::gdk::ModifierType::ALT_MASK),
-            Some(b"\x1bx".to_vec())
-        );
-    }
-
-    #[test]
-    fn encode_terminal_key_input_ignores_unknown_modifier_keys() {
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Shift_L, gtk4::gdk::ModifierType::SHIFT_MASK),
-            None
-        );
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Super_L, gtk4::gdk::ModifierType::SUPER_MASK),
-            None
-        );
-    }
-
-    #[test]
     fn managed_input_action_preserves_clipboard_shortcuts() {
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 true,
                 true,
             ),
-            ManagedInputAction::Copy
+            TerminalKeyAction::CopySelection
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
             ),
-            ManagedInputAction::Paste
+            TerminalKeyAction::PasteClipboard
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::C,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::V,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
     }
 
@@ -936,16 +776,18 @@ mod tests {
         let pointer_mask = gtk4::gdk::ModifierType::BUTTON1_MASK;
 
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK | pointer_mask,
                 false,
                 true,
             ),
-            ManagedInputAction::Paste
+            TerminalKeyAction::PasteClipboard
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK
                     | gtk4::gdk::ModifierType::LOCK_MASK
@@ -953,23 +795,25 @@ mod tests {
                 true,
                 true,
             ),
-            ManagedInputAction::Copy
+            TerminalKeyAction::CopySelection
         );
     }
 
     #[test]
     fn managed_input_action_preserves_window_accelerators() {
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::T,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::T,
                 gtk4::gdk::ModifierType::CONTROL_MASK
                     | gtk4::gdk::ModifierType::SHIFT_MASK
@@ -977,56 +821,61 @@ mod tests {
                 false,
                 false,
             ),
-            ManagedInputAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::ISO_Left_Tab,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::F,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::PassThrough
+            TerminalKeyAction::PassThrough
         );
     }
 
     #[test]
     fn managed_input_action_keeps_shell_control_sequences_when_no_shortcut_applies() {
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
             ),
-            ManagedInputAction::Forward(vec![0x03])
+            TerminalKeyAction::ForwardToPty(vec![0x03])
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::Forward(vec![0x16])
+            TerminalKeyAction::ForwardToPty(vec![0x16])
         );
         assert_eq!(
-            managed_input_action(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
                 gtk4::gdk::Key::X,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
             ),
-            ManagedInputAction::Forward(vec![0x18])
+            TerminalKeyAction::ForwardToPty(vec![0x18])
         );
     }
 
