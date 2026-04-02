@@ -343,9 +343,12 @@ bash .github/scripts/run-clippy.sh
 bash .github/scripts/run-quality-tests.sh
 ```
 
-Use the quality script for the GTK-heavy client suite. Plain `cargo test --workspace` is still
-useful for fast daemon/protocol coverage, but GTK widget tests need main-thread-aware isolation and
-skip/serialization logic that the stock Rust test harness does not provide.
+Known GTK-heavy suites run as ignored tests by default so plain `cargo test --workspace` stays
+reliable under the stock Rust harness. The quality script runs those ignored suites explicitly with
+the GTK-aware setup they need.
+
+Use the quality script for the full CI-equivalent matrix, including isolated GTK client test
+selection and the daemon/protocol suites.
 
 Behavioral UI tests (requires `weston` and `python3-gobject`):
 ```bash

@@ -54,6 +54,7 @@ fn wait_until(max_ms: u64, condition: impl Fn() -> bool) -> bool {
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_build_layout_widget_multiple_splits() {
     require_display!();
 
@@ -98,6 +99,7 @@ fn test_build_layout_widget_multiple_splits() {
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_rebuild_session_content_reuses_terminals() {
     require_display!();
 
@@ -150,6 +152,7 @@ fn test_rebuild_session_content_reuses_terminals() {
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_build_layout_widget_with_parented_terminals() {
     require_display!();
 
@@ -181,6 +184,7 @@ fn test_build_layout_widget_with_parented_terminals() {
 /// persist across restarts: `capture_state` calls `capture_paned_ratios` before
 /// serialising, so user-dragged positions are saved as ratios.
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_capture_paned_ratios_reads_position() {
     require_display!();
 
@@ -222,6 +226,7 @@ fn test_capture_paned_ratios_reads_position() {
 
 /// `capture_paned_ratios` must recurse into nested splits.
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_capture_paned_ratios_nested() {
     require_display!();
 
@@ -285,6 +290,7 @@ fn test_capture_paned_ratios_nested() {
 /// and is called (via idle) after adding the widget tree to the window so
 /// splits are visually equal on first display.
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_apply_paned_ratios_sets_position() {
     require_display!();
 
@@ -323,6 +329,7 @@ fn test_apply_paned_ratios_sets_position() {
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_scheduled_initial_paned_ratios_apply_once_widget_has_size() {
     require_display!();
 
@@ -369,6 +376,7 @@ fn test_scheduled_initial_paned_ratios_apply_once_widget_has_size() {
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
     require_display!();
 

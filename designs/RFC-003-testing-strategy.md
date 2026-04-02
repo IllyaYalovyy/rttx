@@ -22,14 +22,15 @@ of GTK-Rust failure as a failing test before it reaches a user.
   - `clients/rttx/` for GTK/unit/integration/UI tests
   - `services/rttx-server/` for daemon/unit/integration tests
   - `protocols/rttx-proto/` for protocol framing/unit tests
-- The CI-equivalent local command is `bash .github/scripts/run-quality-tests.sh`, not plain
-  `cargo test --workspace`. The client's GTK-heavy tests still need the curated harness rather than
-  the default Rust test runner.
+- Known GTK-heavy suites now run as ignored tests by default, so plain `cargo test --workspace`
+  remains a supported baseline command without crashing in the stock Rust harness.
+- The CI-equivalent local command remains `bash .github/scripts/run-quality-tests.sh`, which still
+  provides the broader curated matrix and isolated GTK client test selection.
 - `run_ui_tests.sh` and the AT-SPI suite exist and run locally/in CI-style environments, but the
   nightly GitHub job is still tracked separately.
-- The highest-value remaining testing gaps are now deterministic GTK harness behavior under plain
-  `cargo test`, deeper client+daemon end-to-end recovery coverage, and the daemon adversarial test
-  backlog now tracked in the monorepo issue set (`#144`–`#153`).
+- The highest-value remaining testing gaps are now deeper client+daemon end-to-end recovery
+  coverage and the daemon adversarial test backlog now tracked in the monorepo issue set
+  (`#144`–`#153`).
 
 ---
 

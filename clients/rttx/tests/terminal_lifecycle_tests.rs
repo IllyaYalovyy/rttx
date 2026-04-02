@@ -171,6 +171,7 @@ fn assert_live_tree_matches_layout(
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
 fn test_terminal_rebuild_integrity_simple() {
     require_display!();
 

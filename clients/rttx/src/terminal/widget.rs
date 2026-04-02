@@ -735,6 +735,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn smart_clipboard_key_controller_ignores_extra_non_shortcut_modifiers() {
         if !crate::test_helpers::ensure_gtk() {
             eprintln!("SKIPPED: no display available");

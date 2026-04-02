@@ -369,6 +369,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires isolated GTK harness"]
     fn apply_initial_paned_ratios_restores_nested_non_sentinel_positions() {
         require_display!();
 
