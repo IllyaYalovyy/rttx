@@ -126,6 +126,10 @@ trap cleanup EXIT
 
 start_broadway_if_available
 
+run_logged_command \
+    "Runtime behavior gate tests" \
+    python3 -m unittest discover -s "${repo_root}/.github/scripts/tests" -p 'test_*.py'
+
 run_library_tests
 run_logged_command "Binary tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --bins -- --nocapture
 

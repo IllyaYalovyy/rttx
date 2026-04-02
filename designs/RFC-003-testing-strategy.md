@@ -26,6 +26,9 @@ of GTK-Rust failure as a failing test before it reaches a user.
   remains a supported baseline command without crashing in the stock Rust harness.
 - The CI-equivalent local command remains `bash .github/scripts/run-quality-tests.sh`, which still
   provides the broader curated matrix and isolated GTK client test selection.
+- Pull request CI now includes a diff-aware runtime behavior gate for tracked daemon/runtime/UI
+  reconciliation paths. Those changes must add both a pure-state regression test and an
+  integration or black-box regression test.
 - `run_ui_tests.sh` and the AT-SPI suite exist and run locally/in CI-style environments, but the
   nightly GitHub job is still tracked separately.
 - The highest-value remaining testing gaps are now deeper client+daemon end-to-end recovery
@@ -197,6 +200,7 @@ non-main threads).
 - [x] Active-index bounds contract coverage
 - [x] Activity indicator timer regression coverage
 - [x] Nested split ratio restore regression coverage
+- [x] Runtime-affecting PR gate requiring pure-state plus behavior-layer evidence
 - [ ] Deterministic plain-harness GTK execution
 - [ ] Deeper client+daemon restart/reconcile integration coverage
 - [ ] Expanded daemon adversarial test matrix
