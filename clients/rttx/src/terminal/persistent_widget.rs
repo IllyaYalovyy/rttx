@@ -13,6 +13,7 @@ use vte4::prelude::*;
 use crate::color_scheme;
 use crate::runtime::{ConnectionPresentation, ConnectionStatus};
 use crate::terminal::links;
+use crate::terminal::normalized_shortcut_modifiers;
 
 mod imp {
     use super::*;
@@ -735,8 +736,7 @@ fn should_pass_through_managed_shortcut(
     has_selection: bool,
     smart_clipboard_enabled: bool,
 ) -> bool {
-    let ignored_modifiers = gtk4::gdk::ModifierType::LOCK_MASK;
-    let normalized = modifiers & !ignored_modifiers;
+    let normalized = normalized_shortcut_modifiers(modifiers);
     let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
     let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
     let alt = gtk4::gdk::ModifierType::ALT_MASK;
@@ -956,6 +956,32 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+            ),
+            ManagedInputAction::PassThrough
+        );
+    }
+
+    #[test]
+    fn managed_input_action_ignores_lock_modifiers_for_clipboard_shortcuts() {
+        let num_lock_mask = gtk4::gdk::ModifierType::from_bits_retain(1 << 4);
+
+        assert_eq!(
+            managed_input_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK | num_lock_mask,
+                false,
+                true,
+            ),
+            ManagedInputAction::PassThrough
+        );
+        assert_eq!(
+            managed_input_action(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK
+                    | gtk4::gdk::ModifierType::LOCK_MASK
+                    | num_lock_mask,
+                true,
+                true,
             ),
             ManagedInputAction::PassThrough
         );

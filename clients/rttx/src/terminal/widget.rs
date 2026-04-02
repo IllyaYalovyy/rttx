@@ -6,6 +6,7 @@ use vte4::prelude::*;
 
 use crate::color_scheme;
 use crate::terminal::links;
+use crate::terminal::normalized_shortcut_modifiers;
 
 mod imp {
     use super::*;
@@ -617,8 +618,7 @@ fn smart_clipboard_action(
         return SmartClipboardAction::PassThrough;
     }
 
-    let ignored_modifiers = gtk4::gdk::ModifierType::LOCK_MASK;
-    let normalized = modifiers & !ignored_modifiers;
+    let normalized = normalized_shortcut_modifiers(modifiers);
     if normalized != gtk4::gdk::ModifierType::CONTROL_MASK {
         return SmartClipboardAction::PassThrough;
     }
@@ -712,6 +712,32 @@ mod tests {
                 false,
             ),
             SmartClipboardAction::PassThrough
+        );
+    }
+
+    #[test]
+    fn smart_clipboard_ignores_lock_modifiers_for_ctrl_shortcuts() {
+        let num_lock_mask = gtk4::gdk::ModifierType::from_bits_retain(1 << 4);
+
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK | num_lock_mask,
+                false,
+                true,
+            ),
+            SmartClipboardAction::Paste
+        );
+        assert_eq!(
+            smart_clipboard_action(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK
+                    | gtk4::gdk::ModifierType::LOCK_MASK
+                    | num_lock_mask,
+                true,
+                true,
+            ),
+            SmartClipboardAction::Copy
         );
     }
 }
