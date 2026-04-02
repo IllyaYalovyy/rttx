@@ -25,6 +25,8 @@ struct ScreenPerformer {
     cursor_col: usize,
     /// Terminal title set via OSC.
     title: Option<String>,
+    /// Current working directory reported via OSC 7.
+    cwd: Option<String>,
 }
 
 impl PaneScreen {
@@ -39,6 +41,7 @@ impl PaneScreen {
                 cursor_row: 0,
                 cursor_col: 0,
                 title: None,
+                cwd: None,
             },
         }
     }
@@ -67,6 +70,12 @@ impl PaneScreen {
     #[must_use]
     pub fn title(&self) -> Option<&str> {
         self.performer.title.as_deref()
+    }
+
+    /// Return the current working directory if set via OSC 7.
+    #[must_use]
+    pub fn cwd(&self) -> Option<&str> {
+        self.performer.cwd.as_deref()
     }
 
     /// Return cursor position (row, col).
@@ -114,6 +123,14 @@ impl vte::Perform for ScreenPerformer {
         {
             self.title = Some(title.to_string());
         }
+
+        if params.len() >= 2
+            && params[0] == b"7"
+            && let Ok(uri) = std::str::from_utf8(params[1])
+            && let Some(cwd) = parse_osc7_current_directory(uri)
+        {
+            self.cwd = Some(cwd);
+        }
     }
 
     fn csi_dispatch(
@@ -148,6 +165,42 @@ impl vte::Perform for ScreenPerformer {
     }
 
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+}
+
+fn parse_osc7_current_directory(uri: &str) -> Option<String> {
+    let path_with_host = uri.strip_prefix("file://")?;
+    let path_start = path_with_host.find('/')?;
+    let encoded_path = &path_with_host[path_start..];
+    percent_decode_path(encoded_path)
+}
+
+fn percent_decode_path(encoded: &str) -> Option<String> {
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hi = *bytes.get(index + 1)?;
+            let lo = *bytes.get(index + 2)?;
+            decoded.push((hex_value(hi)? << 4) | hex_value(lo)?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(decoded).ok()
+}
+
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -190,6 +243,13 @@ mod tests {
         // OSC 0 ; title BEL
         screen.feed(b"\x1b]0;my title\x07");
         assert_eq!(screen.title(), Some("my title"));
+    }
+
+    #[test]
+    fn osc7_current_directory_is_parsed_and_percent_decoded() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b]7;file://localhost/tmp/work%20tree\x07");
+        assert_eq!(screen.cwd(), Some("/tmp/work tree"));
     }
 
     #[test]
