@@ -23,8 +23,13 @@ The core decisions:
   transport is unavailable
 - transient disconnects auto-reconnect; failures that require user action remain explicit in the
   workspace UI
-- GUI state, daemon state, and bindings reconcile non-destructively; missing GUI metadata must
-  never delete a daemon runtime or pane automatically
+- inventory reconciliation is safe by default, but explicit user `Close Workspace` is
+  authoritative: it must remove the workspace, stop any attached runtime, and suppress later
+  automatic resurrection
+- attaching to an existing runtime is explicit; `New Workspace` always creates exactly one new
+  workspace
+- workspace-level reconnect and remediation actions render once per workspace in the tab/sidebar
+  row, not once per pane
 
 ## Current implementation snapshot (2026-03)
 
@@ -43,6 +48,9 @@ The remaining gaps are implementation follow-through, not architecture choice:
 - event delivery from the endpoint manager still has cleanup work
 - recovered-workspace synthesis from daemon inventory is still incomplete
 - higher-level workflow extraction out of `window.rs` is still in progress
+- managed workspace lifecycle UX still violates the intended contract: `Close Workspace` is not
+  authoritative, `Terminate Runtime` leaves disconnected placeholders behind, and reconnect
+  actions are duplicated per pane
 
 ---
 
@@ -57,9 +65,9 @@ The remaining gaps are implementation follow-through, not architecture choice:
 - **R4** — One app window may host multiple workspaces with different endpoints and policies.
 - **R5** — Transient failures auto-reconnect with backoff. Failures that require user action stop
   in an explicit blocked/error state.
-- **R6** — Reconciliation is non-destructive. Missing GUI state may create recovered workspaces;
-  missing runtime state may create disconnected placeholders. Neither case may implicitly delete
-  daemon runtimes or panes.
+- **R6** — Reconciliation is safe by default. Missing GUI state alone may not delete a daemon
+  runtime or pane, but explicit user `Close Workspace` is destructive and must suppress later
+  automatic recovery of the closed workspace/runtime.
 - **R7** — Layout and presentation belong to the workspace. PTYs, scrollback, runtime CWD/title,
   and process lifetime belong to the runtime.
 - **R8** — Pane create/close/split operations must be acknowledged by the runtime before the GUI
@@ -68,6 +76,10 @@ The remaining gaps are implementation follow-through, not architecture choice:
   default; any multi-attach mode must be explicit.
 - **R10** — Users must always know the current runtime state: `Starting`, `Connecting`,
   `Connected`, `Reconnecting`, `Blocked`, `Disconnected`, or `Recovered`.
+- **R11** — `New Workspace` must never implicitly attach to or surface unrelated existing runtimes.
+  Attaching to an existing runtime is a separate explicit action.
+- **R12** — Workspace connection state and actions render once per workspace, using the tab/sidebar
+  row as the primary control surface. Panes may show passive status only.
 
 ---
 
@@ -189,8 +201,27 @@ The application layer should expose a pure state machine:
 - `Disconnected`
 - `Recovered`
 
-GTK renders these states with banners, disabled input, and actions such as `Retry now`, `Close`,
-or `Edit connection`.
+GTK renders these states in the workspace tab/sidebar row. Panes may disable input and show
+minimal passive status, but workspace-level actions such as `Retry now`, `Close Workspace`, or
+`Edit connection` do not appear once per pane.
+
+### User-facing workspace lifecycle
+
+These operations must match normal user expectations:
+
+- **New Workspace** — always creates exactly one new workspace and one new runtime according to the
+  chosen endpoint/policy. It must not implicitly surface unrelated existing runtimes.
+- **Close Workspace** — authoritative destructive action. It removes the workspace from the UI and
+  saved state, stops any attached runtime and its processes, and must not auto-resurrect later.
+- **Attach to Existing Runtime...** — explicit user action exposed from the new-workspace
+  affordance. This is the only ordinary way to surface a runtime that already exists on a daemon
+  but has no visible workspace in the GUI.
+- **Detach Runtime** — advanced keep-running operation only if retained. It must not appear as part
+  of the ordinary close path, and detached runtimes should require explicit later attach rather
+  than silently reappearing.
+- **Terminate Runtime** — not a primary workspace action. If any explicit runtime-stop action
+  remains for advanced flows, it must not leave a disconnected placeholder behind in the normal
+  close path.
 
 ### Failure classification
 
@@ -222,13 +253,17 @@ Use stable ids everywhere:
 
 Rules:
 
-1. If a runtime exists but the GUI has no workspace for it, create a recovered workspace.
-2. If a workspace is bound to a missing runtime, keep the workspace and mark it disconnected or
-   orphaned.
-3. If a runtime has extra panes not present in the layout, add recovered panes.
-4. If the layout references missing runtime panes, keep explicit placeholders.
-5. Reconciliation may create recovered objects automatically, but it may never delete a daemon
-   runtime or pane automatically.
+1. If a runtime exists and the GUI has matching persisted workspace metadata, reconcile it into
+   that workspace.
+2. If a runtime exists but the GUI has no matching workspace metadata, do not surface it
+   automatically in the normal workspace list; it is eligible only for explicit attach.
+3. If a workspace was explicitly closed by the user, inventory refresh must not recreate it.
+4. If a workspace is bound to a missing runtime during restore or reconnect, keep the workspace
+   and mark it disconnected or orphaned unless the user explicitly closed it.
+5. If a runtime has extra panes not present in the layout, add recovered panes.
+6. If the layout references missing runtime panes, keep explicit placeholders.
+7. Reconciliation may create recovered objects automatically for known workspaces, but it may
+   never delete a daemon runtime or pane automatically absent explicit user intent.
 
 ### Terminal model
 
@@ -258,16 +293,43 @@ where replayable context is useful.
    Enforce one endpoint and one runtime policy per workspace while allowing mixed workspaces in the
    same window.
 5. **Explicit connection UX**
-   Add `Connecting`, `Reconnecting`, `Blocked`, and `Recovered` UI states with safe retry
-   controls.
+   Add `Connecting`, `Reconnecting`, `Blocked`, and `Recovered` UI states with one control surface
+   per workspace in the tab/sidebar row.
 6. **Shared terminal abstraction**
    Make search, zoom, copy, paste, cwd/title tracking, and notifications operate through one
    terminal abstraction for all managed workspaces.
-7. **Safe destructive actions**
-   Separate `Close workspace`, `Detach runtime`, `Terminate runtime`, and `Delete local metadata`.
+7. **Authoritative workspace lifecycle**
+   Make `Close Workspace` destructive and final, keep attach explicit, and demote or remove
+   advanced daemon lifecycle actions from the normal close flow.
 8. **Test strategy**
    Push most workflow logic into pure reducer/state-machine tests; keep GTK tests for wiring and
    widget contracts only.
+
+---
+
+## Rejected Behaviors
+
+The following behaviors are rejected by this RFC revision even if they exist temporarily in the
+implementation:
+
+- `Close Workspace` deleting only local GUI metadata while the runtime continues running and later
+  reappears through inventory recovery
+- `New Workspace` implicitly surfacing unrelated daemon runtimes
+- `Terminate Runtime` leaving a disconnected workspace placeholder that requires another close
+  action
+- rendering workspace-level retry/edit/close actions once per managed pane instead of once per
+  workspace
+
+---
+
+## Backlog
+
+1. `#191` — Simplify managed workspace lifecycle UX: close means gone, attach is explicit, tabs own reconnect state
+2. `#192` — Make `Close Workspace` destructive for managed runtimes and suppress inventory resurrection
+3. `#194` — Add explicit `Attach to Existing Runtime` flow and stop implicit attach during `New Workspace`
+4. `#195` — Remove terminate/detach from the normal managed workspace close flow
+5. `#196` — Move managed reconnect and connection actions from panes to workspace tabs
+6. `#193` — Add regression coverage for managed workspace close, attach, and reconnect UX
 
 ---
 
