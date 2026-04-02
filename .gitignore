@@ -9,4 +9,5 @@
 /repo
 /rttx.flatpak
 .claude
+.kiro
 __pycache__/
