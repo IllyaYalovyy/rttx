@@ -13,10 +13,16 @@
 
 Refactor the current UI orchestration and session/recovery code to reduce module size, remove
 duplication, and restore clear boundaries between pure data, GTK wiring, and runtime behavior.
-This RFC is deliberately conservative. It does not propose a rewrite. It proposes small structural
-moves that make the code easier to reason about and harder to accidentally bloat.
 
-## Current implementation snapshot (2026-03)
+This RFC remains deliberately conservative. It does not propose a rewrite. It proposes small
+structural moves that make the code easier to reason about and harder to accidentally bloat.
+
+After the daemon-backed runtime rollout, this RFC is no longer just about maintainability in the
+abstract. It is part of the stability plan. The highest-risk regressions now come from client-side
+runtime reconciliation, duplicate terminal-behavior policy, and the lack of black-box
+client+daemon coverage around startup and restart.
+
+## Current implementation snapshot (2026-04)
 
 Several slices of this RFC are already on `mainline`:
 
@@ -27,8 +33,12 @@ Several slices of this RFC are already on `mainline`:
   transitions
 - `clients/rttx/src/terminal/handle.rs` is the shared terminal abstraction for direct and
   daemon-backed panes
-- `window.rs` is still too large and `clients/rttx/src/session/layout.rs` still mixes layout,
-  state, and recovery concerns
+- `window.rs` is still too large and still carries the hottest daemon-backed correctness paths:
+  endpoint-event handling, workspace/runtime reconciliation, and visible-session rebuild behavior
+- `clients/rttx/src/session/layout.rs` still mixes layout, state, and recovery concerns
+- direct and managed terminals still duplicate parts of shortcut/input policy
+- the daemon has stronger end-to-end lifecycle coverage than the GTK client does; the remaining
+  test gap is now the black-box client+daemon path
 
 So this RFC is no longer speculative. It is the active refactor roadmap for code that has already
 started moving, with major remaining follow-up still tracked in the issue backlog.
@@ -39,9 +49,13 @@ started moving, with major remaining follow-up still tracked in the issue backlo
 
 - **G1** — Reduce the size and responsibility surface of `clients/rttx/src/window.rs`
 - **G2** — Separate pure layout data from pane recovery/runtime behavior
-- **G3** — Eliminate obvious duplication in sidebar CRUD and dialog code
-- **G4** — Make terminal lifecycle wiring explicit and less error-prone
-- **G5** — Keep behavior stable while refactoring internals
+- **G3** — Extract managed-runtime reconciliation out of ad hoc GTK handlers into explicit,
+  testable state transitions
+- **G4** — Eliminate obvious duplication in sidebar CRUD, dialog code, and direct-vs-managed
+  terminal shortcut policy
+- **G5** — Make terminal lifecycle wiring explicit and less error-prone
+- **G6** — Keep behavior stable while refactoring internals, with startup/restart regressions
+  treated as first-class requirements
 
 ## Non-Goals
 
@@ -63,12 +77,17 @@ Concrete pressure points:
   session
   orchestration, terminal lifecycle, recovery logic, bookmark/command CRUD, sidebars, dialogs,
   notifications, and a large in-file test suite.
+- daemon-backed correctness is still concentrated in window-level event handlers instead of a pure
+  reducer-style transition layer
 - `clients/rttx/src/session/layout.rs` mixes two different domains:
   - pure layout tree structure and transforms
   - pane recovery types plus shell/SSH/tmux command generation
 - bookmark and command sidebars are rendered with near-duplicate code paths
-- terminal lifecycle behavior is spread across `Window` and `TerminalWidget`, which makes retry,
-  child-exit, and title-sync behavior easier to get wrong
+- terminal lifecycle behavior is spread across `Window`, `TerminalWidget`, and
+  `PersistentPaneView`, which makes retry, child-exit, title-sync, and shortcut behavior easier to
+  get wrong
+- the client test suite still lacks a black-box layer that drives a real daemon-backed GTK session
+  through startup restore and daemon restart
 
 This is a maintainability risk, not an aesthetic one. The project explicitly values stability,
 clarity, and long-term maintainability. A large multifunction file invites the exact failure modes
@@ -139,6 +158,8 @@ This RFC prefers a few meaningful modules over a maze of tiny helpers.
 3. Reduce repeated tree scans and ad hoc state lookups where a domain method already exists.
 4. Keep public APIs small and obvious.
 5. Refactors should preserve behavior and pass the current test suite at each step.
+6. When choosing between a mechanical cleanup and a seam that improves daemon-backed correctness,
+   prefer the correctness seam first.
 
 ### 1. Split `window.rs` by responsibility
 
@@ -156,6 +177,11 @@ Proposed internal module split:
 - `clients/rttx/src/window/actions.rs`
   - action registration
   - accelerator wiring
+- `clients/rttx/src/window/runtime.rs`
+  - endpoint connection-manager wiring
+  - endpoint-event dispatch entry points
+  - workspace/runtime status updates
+  - managed workspace open/inventory/reconcile rendering hooks
 - `clients/rttx/src/window/sessions.rs`
   - add/switch/close session
   - split/close/rebuild session content
@@ -171,6 +197,11 @@ Proposed internal module split:
 
 This is not a new architecture. It is the same `Window` type with its methods grouped into files
 that reflect ownership.
+
+The important update is that managed-runtime behavior should be treated as its own boundary, not as
+"just another session helper". The daemon-backed path now carries enough correctness risk that
+`window/runtime.rs` should exist even if other module splits stay partially in `window.rs` for a
+while.
 
 ### 2. Split layout tree code from recovery/runtime code
 
@@ -228,6 +259,19 @@ Recommended cleanup inside `TerminalWidget`:
   - `clear_recovery_error()`
 
 Avoid exposing raw internal widgets unless the window genuinely needs them.
+
+### 3a. Share direct and managed terminal shortcut policy
+
+The project now has one product-level terminal model, but direct and managed panes still encode
+overlapping shortcut policy in separate implementations.
+
+Recommended cleanup:
+
+- move modifier normalization and shortcut classification into shared terminal logic
+- keep direct/managed transport differences separate from shortcut policy
+- make managed keyboard forwarding tests and direct smart-clipboard tests assert the same contract
+- treat lock-modifier handling, accelerator pass-through, and shell-input forwarding as shared
+  requirements
 
 ### 4. Deduplicate sidebar CRUD row construction
 
@@ -289,7 +333,17 @@ This keeps production code readable without losing local test coverage.
 
 The order matters. Start with the steps that reduce risk and create cleaner seams for later work.
 
-### Phase 1 — Safe correctness cleanup
+### Phase 1 — Stability seams for daemon-backed correctness
+
+1. Complete inventory-driven recovered-workspace synthesis and regression coverage.
+2. Extract endpoint-event -> workspace/runtime reconciliation into pure tested logic before further
+   widening GTK handlers.
+3. Share direct/managed terminal shortcut policy and add regression coverage for lock modifiers,
+   accelerators, and shell-input forwarding.
+4. Add black-box client+daemon integration coverage for startup restore, daemon restart, selection
+   sync, and managed reattach behavior.
+
+### Phase 2 — Safe correctness cleanup
 
 1. Fix terminal retry/title-sync lifecycle so repeated recovery attempts do not accumulate signal
    handlers.
@@ -297,26 +351,30 @@ The order matters. Start with the steps that reduce risk and create cleaner seam
    `contains_terminal(...)`.
 3. Extract the sidebar row lookup helper used by session close/update paths.
 
-### Phase 2 — Mechanical file split of `window.rs`
+### Phase 3 — Mechanical file split of `window.rs`
 
 1. Move action registration into `src/window/actions.rs`
-2. Move bookmark/command sidebar rendering into `src/window/sidebars.rs`
-3. Move session mutation/rebuild logic into `src/window/sessions.rs`
-4. Move recovery logic into `src/window/recovery.rs`
+2. Move endpoint wiring and managed-runtime rendering hooks into `src/window/runtime.rs`
+3. Move bookmark/command sidebar rendering into `src/window/sidebars.rs`
+4. Move session mutation/rebuild logic into `src/window/sessions.rs`
+5. Move recovery logic into `src/window/recovery.rs`
 
-This phase should be mostly mechanical and behavior-preserving.
+This phase should be mostly mechanical and behavior-preserving once the daemon-backed correctness
+seams already exist.
 
-### Phase 3 — Session model separation
+### Phase 4 — Session model separation
 
 1. Split `session/layout.rs` into layout tree, state, and recovery modules
 2. Update call sites to import through `session/mod.rs`
 3. Keep serialized schema stable unless a separate RFC intentionally changes it
 
-### Phase 4 — Terminal API tightening
+### Phase 5 — Terminal API tightening and CI follow-through
 
 1. Reduce direct `imp()` access from `window.rs` where possible
-2. Make `TerminalWidget` expose intent methods instead of raw widget details
-3. Either implement terminal search properly inside `TerminalWidget` or remove the inactive UI
+2. Make `TerminalWidget` and `PersistentPaneView` expose intent methods instead of raw widget
+   details
+3. Either implement terminal search properly inside the terminal widgets or remove the inactive UI
+4. Promote daemon-backed stability coverage into normal CI gates, including the UI path
 
 ---
 
@@ -326,29 +384,32 @@ This phase should be mostly mechanical and behavior-preserving.
 | --- | --- |
 | G1 | `window.rs` is split by coherent responsibilities |
 | G2 | layout tree and recovery/runtime code are separated |
-| G3 | bookmark/command sidebar scaffolding is deduplicated |
-| G4 | terminal lifecycle state becomes explicit and local |
-| G5 | the plan is incremental and test-driven rather than rewrite-heavy |
+| G3 | endpoint-event reconciliation becomes a pure tested transition layer |
+| G4 | duplicated sidebar and terminal-policy scaffolding is reduced |
+| G5 | terminal lifecycle state becomes explicit and local |
+| G6 | the plan is incremental and test-driven rather than rewrite-heavy |
 
 ---
 
 ## Development Plan
 
-- [ ] **Step 1** — Fix terminal retry/title-sync lifecycle and add regression coverage *(prerequisite: —)*
-- [ ] **Step 2** — Replace remaining ad hoc terminal membership scans with domain methods *(prerequisite: Step 1)*
-- [ ] **Step 3** — Extract session/sidebar helpers that already have obvious seams *(prerequisite: Step 2)*
-- [ ] **Step 4** — Split `window.rs` into `build`, `actions`, `sessions`, `recovery`, and `sidebars` modules *(prerequisite: Step 3)*
-- [ ] **Step 5** — Split `session/layout.rs` into layout tree, state, and recovery modules *(prerequisite: Step 4)*
-- [ ] **Step 6** — Tighten the `TerminalWidget` API and finish or remove inactive search UI *(prerequisite: Step 5)*
+- [ ] **Step 1** — Complete inventory-driven recovered-workspace synthesis with regression coverage (`#184`) *(prerequisite: —)*
+- [ ] **Step 2** — Extract endpoint-event reconciliation into a pure tested workspace/runtime reducer (`#186`) *(prerequisite: Step 1)*
+- [ ] **Step 3** — Share direct/managed terminal shortcut policy and add regression coverage (`#187`) *(prerequisite: Step 2)*
+- [ ] **Step 4** — Add black-box client+daemon GTK integration coverage for restore/restart/selection sync (`#185`) *(prerequisite: Steps 1–3 can land incrementally)*
+- [ ] **Step 5** — Fix terminal retry/title-sync lifecycle and remaining low-risk correctness cleanup *(prerequisite: Step 2)*
+- [ ] **Step 6** — Split `window.rs` into `build`, `actions`, `runtime`, `sessions`, `recovery`, and `sidebars` modules (`#98`) *(prerequisite: Steps 1–5)*
+- [ ] **Step 7** — Split `session/layout.rs` into layout tree, state, and recovery modules (`#101`) *(prerequisite: Step 6)*
+- [ ] **Step 8** — Tighten the terminal widget API and finish or remove inactive search UI (`#24`) *(prerequisite: Step 7)*
+- [ ] **Step 9** — Promote daemon-backed stability coverage into routine CI gating (`#109`, `#147`, `#153`) *(prerequisite: Step 4)*
 
 ---
 
 ## Open Questions
 
-- [ ] Should packaging issues keep `packaging` only, or also carry `area/integration` for filtering consistency?
 - [ ] Should terminal search be finished as part of the refactor, or explicitly removed until the feature is real?
 - [ ] Do we want `clients/rttx/src/window/` as a module directory immediately, or only after
-  Phase 2 extracts enough code to justify it?
+  Phase 3 extracts enough code to justify it?
 
 ---
 
@@ -356,5 +417,8 @@ This phase should be mostly mechanical and behavior-preserving.
 
 - `clients/rttx/src/window.rs`
 - `clients/rttx/src/terminal/widget.rs`
+- `clients/rttx/src/terminal/persistent_widget.rs`
 - `clients/rttx/src/session/layout.rs`
-- GitHub issues #98, #99, #101, #130, #132, and #135
+- `clients/rttx/src/runtime.rs`
+- `clients/rttx/src/workspace_state.rs`
+- GitHub issues #24, #98, #101, #109, #132, #147, #153, #183, #184, #185, #186, and #187
