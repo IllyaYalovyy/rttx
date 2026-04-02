@@ -199,49 +199,6 @@ mod imp {
             obj.append(&self.search_bar);
             obj.append(&self.terminal_scroller);
 
-            // Smart clipboard: Ctrl+C copies if selection exists, Ctrl+V pastes.
-            let smart_clipboard_controller = gtk4::ShortcutController::new();
-            smart_clipboard_controller.set_name(Some("smart-clipboard"));
-            smart_clipboard_controller.set_scope(gtk4::ShortcutScope::Local);
-            smart_clipboard_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
-
-            let copy_vte = self.vte.clone();
-            let copy_flag = std::rc::Rc::clone(&self.smart_clipboard);
-            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
-                Some(gtk4::KeyvalTrigger::new(
-                    gtk4::gdk::Key::c,
-                    gtk4::gdk::ModifierType::CONTROL_MASK,
-                )),
-                Some(gtk4::CallbackAction::new(move |_, _| {
-                    if copy_flag.get() && copy_vte.has_selection() {
-                        copy_vte.copy_clipboard_format(vte4::Format::Text);
-                        copy_vte.unselect_all();
-                        glib::Propagation::Stop
-                    } else {
-                        glib::Propagation::Proceed
-                    }
-                })),
-            ));
-
-            let paste_vte = self.vte.clone();
-            let paste_flag = std::rc::Rc::clone(&self.smart_clipboard);
-            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
-                Some(gtk4::KeyvalTrigger::new(
-                    gtk4::gdk::Key::v,
-                    gtk4::gdk::ModifierType::CONTROL_MASK,
-                )),
-                Some(gtk4::CallbackAction::new(move |_, _| {
-                    if paste_flag.get() {
-                        paste_vte.paste_clipboard();
-                        glib::Propagation::Stop
-                    } else {
-                        glib::Propagation::Proceed
-                    }
-                })),
-            ));
-
-            self.vte.add_controller(smart_clipboard_controller);
-
             // Focus VTE on header click.
             let gesture = gtk4::GestureClick::new();
             gesture.set_button(1);
@@ -522,19 +479,29 @@ impl PersistentPaneView {
             let Some(pane) = pane_weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            let action = managed_input_action(
+            match managed_input_action(
                 key,
                 state,
                 pane.vte().has_selection(),
                 pane.imp().smart_clipboard.get(),
-            );
-            let ManagedInputAction::Forward(bytes) = action else {
-                return glib::Propagation::Proceed;
-            };
-            if pane.imp().accepts_input.get() {
-                f(&bytes);
+            ) {
+                ManagedInputAction::Copy => {
+                    pane.vte().copy_clipboard_format(vte4::Format::Text);
+                    pane.vte().unselect_all();
+                    glib::Propagation::Stop
+                }
+                ManagedInputAction::Paste => {
+                    pane.vte().paste_clipboard();
+                    glib::Propagation::Stop
+                }
+                ManagedInputAction::Forward(bytes) => {
+                    if pane.imp().accepts_input.get() {
+                        f(&bytes);
+                    }
+                    glib::Propagation::Stop
+                }
+                ManagedInputAction::PassThrough => glib::Propagation::Proceed,
             }
-            glib::Propagation::Stop
         });
         self.imp().input_key_controller.replace(Some(key_controller.clone()));
         self.imp().vte.add_controller(key_controller);
@@ -711,6 +678,8 @@ fn encode_terminal_key_input(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ManagedInputAction {
+    Copy,
+    Paste,
     Forward(Vec<u8>),
     PassThrough,
 }
@@ -721,8 +690,19 @@ fn managed_input_action(
     has_selection: bool,
     smart_clipboard_enabled: bool,
 ) -> ManagedInputAction {
-    if should_pass_through_managed_shortcut(key, modifiers, has_selection, smart_clipboard_enabled)
-    {
+    let normalized = normalized_shortcut_modifiers(modifiers);
+
+    if smart_clipboard_enabled && normalized == gtk4::gdk::ModifierType::CONTROL_MASK {
+        match key {
+            gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => {
+                return ManagedInputAction::Copy;
+            }
+            gtk4::gdk::Key::v | gtk4::gdk::Key::V => return ManagedInputAction::Paste,
+            _ => {}
+        }
+    }
+
+    if should_pass_through_managed_shortcut(key, normalized) {
         return ManagedInputAction::PassThrough;
     }
 
@@ -732,23 +712,11 @@ fn managed_input_action(
 
 fn should_pass_through_managed_shortcut(
     key: gtk4::gdk::Key,
-    modifiers: gtk4::gdk::ModifierType,
-    has_selection: bool,
-    smart_clipboard_enabled: bool,
+    normalized: gtk4::gdk::ModifierType,
 ) -> bool {
-    let normalized = normalized_shortcut_modifiers(modifiers);
     let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
     let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
     let alt = gtk4::gdk::ModifierType::ALT_MASK;
-
-    if smart_clipboard_enabled
-        && (normalized == ctrl && matches!(key, gtk4::gdk::Key::v | gtk4::gdk::Key::V)
-            || normalized == ctrl
-                && has_selection
-                && matches!(key, gtk4::gdk::Key::c | gtk4::gdk::Key::C))
-    {
-        return true;
-    }
 
     (normalized == (ctrl | shift)
         && matches!(
@@ -930,7 +898,7 @@ mod tests {
                 true,
                 true,
             ),
-            ManagedInputAction::PassThrough
+            ManagedInputAction::Copy
         );
         assert_eq!(
             managed_input_action(
@@ -939,7 +907,7 @@ mod tests {
                 false,
                 true,
             ),
-            ManagedInputAction::PassThrough
+            ManagedInputAction::Paste
         );
         assert_eq!(
             managed_input_action(
@@ -962,28 +930,28 @@ mod tests {
     }
 
     #[test]
-    fn managed_input_action_ignores_lock_modifiers_for_clipboard_shortcuts() {
-        let num_lock_mask = gtk4::gdk::ModifierType::from_bits_retain(1 << 4);
+    fn managed_input_action_ignores_extra_non_shortcut_modifiers_for_clipboard_shortcuts() {
+        let pointer_mask = gtk4::gdk::ModifierType::BUTTON1_MASK;
 
         assert_eq!(
             managed_input_action(
                 gtk4::gdk::Key::v,
-                gtk4::gdk::ModifierType::CONTROL_MASK | num_lock_mask,
+                gtk4::gdk::ModifierType::CONTROL_MASK | pointer_mask,
                 false,
                 true,
             ),
-            ManagedInputAction::PassThrough
+            ManagedInputAction::Paste
         );
         assert_eq!(
             managed_input_action(
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK
                     | gtk4::gdk::ModifierType::LOCK_MASK
-                    | num_lock_mask,
+                    | pointer_mask,
                 true,
                 true,
             ),
-            ManagedInputAction::PassThrough
+            ManagedInputAction::Copy
         );
     }
 
@@ -1083,7 +1051,14 @@ mod tests {
         pane.vte().select_all();
         assert_eq!(
             pane.emit_input_key_for_test(gtk4::gdk::Key::c, gtk4::gdk::ModifierType::CONTROL_MASK,),
-            glib::Propagation::Proceed
+            glib::Propagation::Stop
+        );
+        assert_eq!(
+            pane.emit_input_key_for_test(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::BUTTON1_MASK,
+            ),
+            glib::Propagation::Stop
         );
         assert_eq!(
             pane.emit_input_key_for_test(

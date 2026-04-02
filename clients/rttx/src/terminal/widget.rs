@@ -19,6 +19,7 @@ mod imp {
         pub initial_cwd: RefCell<Option<String>>,
         pub shell_spawned: Cell<bool>,
         pub smart_clipboard: Cell<bool>,
+        pub smart_clipboard_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
         pub visual_bell: Cell<bool>,
         pub pending_shell_inputs: RefCell<Vec<String>>,
         #[cfg(test)]
@@ -138,61 +139,35 @@ mod imp {
                 link_target.upgrade().and_then(|term| term.current_directory())
             });
 
-            let vte = self.vte.clone();
-            let smart_clipboard_controller = gtk4::ShortcutController::new();
-            smart_clipboard_controller.set_name(Some("smart-clipboard"));
-            smart_clipboard_controller.set_scope(gtk4::ShortcutScope::Local);
-            smart_clipboard_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
-
-            let copy_vte = vte.clone();
-            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
-                Some(gtk4::KeyvalTrigger::new(
-                    gtk4::gdk::Key::c,
-                    gtk4::gdk::ModifierType::CONTROL_MASK,
-                )),
-                Some(gtk4::CallbackAction::new(move |widget, _| {
-                    let term = widget.downcast_ref::<super::TerminalWidget>().unwrap();
-                    match smart_clipboard_action(
-                        gtk4::gdk::Key::c,
-                        gtk4::gdk::ModifierType::CONTROL_MASK,
-                        copy_vte.has_selection(),
-                        term.imp().smart_clipboard.get(),
-                    ) {
-                        SmartClipboardAction::Copy => {
-                            copy_vte.copy_clipboard_format(vte4::Format::Text);
-                            copy_vte.unselect_all();
-                            glib::Propagation::Stop
-                        }
-                        SmartClipboardAction::Paste => unreachable!(),
-                        SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+            let term_weak = obj.downgrade();
+            let smart_clipboard_key_controller = gtk4::EventControllerKey::new();
+            smart_clipboard_key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            smart_clipboard_key_controller.connect_key_pressed(move |_, key, _keycode, state| {
+                let Some(term) = term_weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                let vte = term.imp().vte.clone();
+                match smart_clipboard_action(
+                    key,
+                    state,
+                    vte.has_selection(),
+                    term.imp().smart_clipboard.get(),
+                ) {
+                    SmartClipboardAction::Copy => {
+                        vte.copy_clipboard_format(vte4::Format::Text);
+                        vte.unselect_all();
+                        glib::Propagation::Stop
                     }
-                })),
-            ));
-
-            smart_clipboard_controller.add_shortcut(gtk4::Shortcut::new(
-                Some(gtk4::KeyvalTrigger::new(
-                    gtk4::gdk::Key::v,
-                    gtk4::gdk::ModifierType::CONTROL_MASK,
-                )),
-                Some(gtk4::CallbackAction::new(move |widget, _| {
-                    let term = widget.downcast_ref::<super::TerminalWidget>().unwrap();
-                    match smart_clipboard_action(
-                        gtk4::gdk::Key::v,
-                        gtk4::gdk::ModifierType::CONTROL_MASK,
-                        vte.has_selection(),
-                        term.imp().smart_clipboard.get(),
-                    ) {
-                        SmartClipboardAction::Paste => {
-                            vte.paste_clipboard();
-                            glib::Propagation::Stop
-                        }
-                        SmartClipboardAction::Copy => unreachable!(),
-                        SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+                    SmartClipboardAction::Paste => {
+                        vte.paste_clipboard();
+                        glib::Propagation::Stop
                     }
-                })),
-            ));
-
-            obj.add_controller(smart_clipboard_controller);
+                    SmartClipboardAction::PassThrough => glib::Propagation::Proceed,
+                }
+            });
+            self.smart_clipboard_key_controller
+                .replace(Some(smart_clipboard_key_controller.clone()));
+            self.vte.add_controller(smart_clipboard_key_controller);
 
             let copy_link_action = gtk4::gio::SimpleAction::new("copy-link", None);
             copy_link_action.set_enabled(false);
@@ -410,6 +385,21 @@ impl TerminalWidget {
     #[must_use]
     pub(crate) fn smart_clipboard_enabled_for_test(&self) -> bool {
         self.imp().smart_clipboard.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn emit_smart_clipboard_key_for_test(
+        &self,
+        key: gtk4::gdk::Key,
+        modifiers: gtk4::gdk::ModifierType,
+    ) -> glib::Propagation {
+        self.imp()
+            .smart_clipboard_key_controller
+            .borrow()
+            .as_ref()
+            .expect("smart clipboard key controller should be available")
+            .emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers])
+            .into()
     }
 
     pub fn queue_input_for_shell(&self, input: impl Into<String>) {
@@ -633,6 +623,9 @@ fn smart_clipboard_action(
 #[cfg(test)]
 mod tests {
     use super::{SmartClipboardAction, smart_clipboard_action};
+    use gtk4::glib;
+    use gtk4::prelude::*;
+
     /// Verify that the RESET constant inside `reset_terminal_state()` contains
     /// the expected escape sequences without requiring a live VTE widget.
     #[test]
@@ -716,13 +709,13 @@ mod tests {
     }
 
     #[test]
-    fn smart_clipboard_ignores_lock_modifiers_for_ctrl_shortcuts() {
-        let num_lock_mask = gtk4::gdk::ModifierType::from_bits_retain(1 << 4);
+    fn smart_clipboard_ignores_extra_non_shortcut_modifiers_for_ctrl_shortcuts() {
+        let pointer_mask = gtk4::gdk::ModifierType::BUTTON1_MASK;
 
         assert_eq!(
             smart_clipboard_action(
                 gtk4::gdk::Key::v,
-                gtk4::gdk::ModifierType::CONTROL_MASK | num_lock_mask,
+                gtk4::gdk::ModifierType::CONTROL_MASK | pointer_mask,
                 false,
                 true,
             ),
@@ -733,11 +726,37 @@ mod tests {
                 gtk4::gdk::Key::c,
                 gtk4::gdk::ModifierType::CONTROL_MASK
                     | gtk4::gdk::ModifierType::LOCK_MASK
-                    | num_lock_mask,
+                    | pointer_mask,
                 true,
                 true,
             ),
             SmartClipboardAction::Copy
         );
+    }
+
+    #[test]
+    fn smart_clipboard_key_controller_ignores_extra_non_shortcut_modifiers() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let term = super::TerminalWidget::new("term-1", None);
+        term.set_smart_clipboard(true);
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 320);
+        window.set_child(Some(&term));
+        window.present();
+        while gtk4::glib::MainContext::default().iteration(false) {}
+
+        assert_eq!(
+            term.emit_smart_clipboard_key_for_test(
+                gtk4::gdk::Key::v,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::BUTTON1_MASK,
+            ),
+            glib::Propagation::Stop
+        );
+
+        window.close();
     }
 }
