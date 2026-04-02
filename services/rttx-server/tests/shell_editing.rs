@@ -127,7 +127,37 @@ async fn wait_for_prompt(client: &mut TestClient) {
     panic!("shell prompt did not arrive within 5 seconds");
 }
 
-async fn snapshot_scrollback(client: &mut TestClient, session_id: &[u8], pane_id: &[u8]) -> String {
+async fn resize_pane(
+    client: &mut TestClient,
+    session_id: &[u8],
+    pane_id: &[u8],
+    cols: u32,
+    rows: u32,
+) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+                session_id: session_id.to_vec(),
+                pane_id: pane_id.to_vec(),
+                cols,
+                rows,
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::PaneResized(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected PaneResized, got {other:?}"),
+        }
+    }
+}
+
+async fn reattach_snapshot_bytes(
+    client: &mut TestClient,
+    session_id: &[u8],
+    pane_id: &[u8],
+) -> Vec<u8> {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
@@ -158,12 +188,46 @@ async fn snapshot_scrollback(client: &mut TestClient, session_id: &[u8], pane_id
             other => panic!("expected Snapshot, got {other:?}"),
         }
     };
-    let pane = snapshot
+    snapshot
         .panes
         .iter()
         .find(|pane| pane.pane_id == pane_id)
-        .expect("pane missing from snapshot");
-    normalize_scrollback(&pane.scrollback)
+        .expect("pane missing from snapshot")
+        .scrollback
+        .clone()
+}
+
+async fn snapshot_scrollback(client: &mut TestClient, session_id: &[u8], pane_id: &[u8]) -> String {
+    normalize_scrollback(&reattach_snapshot_bytes(client, session_id, pane_id).await)
+}
+
+async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], data: &[u8]) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: session_id.to_vec(),
+                pane_id: pane_id.to_vec(),
+                data: data.to_vec(),
+            })),
+        })
+        .await;
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
+        })
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(5), server_child.wait())
+        .await
+        .expect("timed out waiting for rttx-server to stop")
+        .expect("failed to wait for rttx-server child");
+    assert!(status.success(), "rttx-server exited unsuccessfully: {status}");
 }
 
 fn normalize_scrollback(bytes: &[u8]) -> String {
@@ -185,15 +249,7 @@ async fn shell_line_editing_bytes_render_expected_output_after_snapshot_restore(
 
     // Type `echo abxd`, move left once, backspace the `x`, insert `c`,
     // then press Return. This should execute `echo abcd`.
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.clone(),
-                pane_id: pane_id.clone(),
-                data: b"echo abxd\x1b[D\x7fc\r".to_vec(),
-            })),
-        })
-        .await;
+    send_input(&mut client, &session_id, &pane_id, b"echo abxd\x1b[D\x7fc\r").await;
 
     tokio::time::sleep(Duration::from_millis(800)).await;
     let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
@@ -203,14 +259,94 @@ async fn shell_line_editing_bytes_render_expected_output_after_snapshot_restore(
         "expected rendered output line and prompt after edited command.\nscrollback:\n{scrollback:?}"
     );
 
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
-        })
-        .await;
-    let status = tokio::time::timeout(Duration::from_secs(5), server_child.wait())
-        .await
-        .expect("timed out waiting for rttx-server to stop")
-        .expect("failed to wait for rttx-server child");
-    assert!(status.success(), "rttx-server exited unsuccessfully: {status}");
+    shutdown_server(&mut client, &mut server_child).await;
+}
+
+#[tokio::test]
+async fn shell_line_editing_survives_detach_mid_command_and_executes_after_reattach() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (socket_path, mut server_child) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&socket_path).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    send_input(&mut client, &session_id, &pane_id, b"echo abxd\x1b[D\x7f").await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let partial_snapshot = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    assert!(
+        contains_bytes(&partial_snapshot, b"echo abxd"),
+        "expected the in-progress command to survive reattach.\nsnapshot bytes: {:?}",
+        String::from_utf8_lossy(&partial_snapshot)
+    );
+
+    send_input(&mut client, &session_id, &pane_id, b"c\r").await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    assert!(
+        scrollback.contains("\nabcd\nPROMPT> "),
+        "expected reattached line editing to continue at the restored cursor.\nscrollback:\n{scrollback:?}"
+    );
+
+    shutdown_server(&mut client, &mut server_child).await;
+}
+
+#[tokio::test]
+async fn wrapped_shell_line_editing_survives_detach_and_reattach() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (socket_path, mut server_child) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&socket_path).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+    resize_pane(&mut client, &session_id, &pane_id, 12, 24).await;
+
+    send_input(&mut client, &session_id, &pane_id, b"echo 0123456789abxd\x1b[D\x7f").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+
+    send_input(&mut client, &session_id, &pane_id, b"c\r").await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    assert!(
+        scrollback.contains("0123456789abcd\nPROMPT> "),
+        "expected wrapped line editing to survive reattach with the cursor in the right column.\nscrollback:\n{scrollback:?}"
+    );
+
+    shutdown_server(&mut client, &mut server_child).await;
+}
+
+#[tokio::test]
+async fn formatted_output_survives_reattach_and_allows_follow_up_input() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (socket_path, mut server_child) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&socket_path).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    send_input(&mut client, &session_id, &pane_id, b"printf $'\\033[31mRED\\033[0m\\n'\r").await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let snapshot_bytes = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    assert!(
+        contains_bytes(&snapshot_bytes, b"\x1b[31mRED\x1b[0m"),
+        "expected ANSI formatting bytes to survive snapshot replay.\nsnapshot bytes: {:?}",
+        String::from_utf8_lossy(&snapshot_bytes)
+    );
+
+    send_input(&mut client, &session_id, &pane_id, b"echo AFTER\r").await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    assert!(
+        scrollback.contains("RED") && scrollback.contains("AFTER\nPROMPT> "),
+        "expected formatted output and follow-up typing to survive reattach.\nscrollback:\n{scrollback:?}"
+    );
+
+    shutdown_server(&mut client, &mut server_child).await;
 }
