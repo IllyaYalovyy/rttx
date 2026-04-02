@@ -532,16 +532,46 @@ impl PersistentPaneView {
     /// sending a `Resize` message to the daemon.
     pub fn connect_resize<F: Fn(u16, u16) + 'static>(&self, f: F) {
         use std::cell::Cell;
-        let last_cols = Cell::new(0u16);
-        let last_rows = Cell::new(0u16);
-        self.imp().vte.connect_char_size_changed(move |vte, _, _| {
-            let cols = vte.column_count() as u16;
-            let rows = vte.row_count() as u16;
-            if cols > 0 && rows > 0 && (cols != last_cols.get() || rows != last_rows.get()) {
-                last_cols.set(cols);
-                last_rows.set(rows);
-                f(cols, rows);
+        use std::rc::Rc;
+
+        let vte = self.imp().vte.clone();
+        let last_cols = Rc::new(Cell::new(0u16));
+        let last_rows = Rc::new(Cell::new(0u16));
+        let f = Rc::new(f);
+
+        let emit_size = Rc::new({
+            let last_cols = Rc::clone(&last_cols);
+            let last_rows = Rc::clone(&last_rows);
+            let f = Rc::clone(&f);
+            move |vte: &vte4::Terminal| {
+                if vte.width() <= 0 || vte.height() <= 0 {
+                    return;
+                }
+                let cols = vte.column_count() as u16;
+                let rows = vte.row_count() as u16;
+                if cols > 0 && rows > 0 && (cols != last_cols.get() || rows != last_rows.get()) {
+                    last_cols.set(cols);
+                    last_rows.set(rows);
+                    f(cols, rows);
+                }
             }
+        });
+
+        {
+            let emit_size = Rc::clone(&emit_size);
+            let resize_vte = vte.clone();
+            vte.connect_char_size_changed(move |_, _, _| {
+                emit_size(&resize_vte);
+            });
+        }
+
+        let pane_weak = self.downgrade();
+        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+            let Some(pane) = pane_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            emit_size(pane.vte());
+            glib::ControlFlow::Continue
         });
     }
 
