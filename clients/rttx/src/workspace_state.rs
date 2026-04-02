@@ -1,7 +1,9 @@
-use crate::runtime::{RuntimeEndpoint, reconcile_bindings};
-use crate::session::layout::{PaneRecovery, SessionState, SplitOrientation, WindowState};
+use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
+use crate::session::layout::{
+    LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState,
+};
 use rttx_proto::proto;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Routing metadata for a daemon-managed terminal pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +33,39 @@ pub struct ManagedWorkspaceOpenResult {
 }
 
 impl WindowState {
+    /// Recover daemon-managed workspaces that exist in inventory but not in the GUI state.
+    pub fn recover_managed_workspaces_from_inventory(
+        &mut self,
+        endpoint: &RuntimeEndpoint,
+        sessions: &[proto::SessionInfo],
+    ) -> Vec<SessionState> {
+        let mut known_runtime_ids = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                session.uses_managed_runtime() && &session.runtime.endpoint == endpoint
+            })
+            .filter_map(|session| session.runtime.runtime_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut recovered = Vec::new();
+
+        for session_info in sessions {
+            let Some(session) = recovered_managed_workspace(endpoint, session_info) else {
+                continue;
+            };
+            let Some(runtime_id) = session.runtime.runtime_id.clone() else {
+                continue;
+            };
+            if !known_runtime_ids.insert(runtime_id) {
+                continue;
+            }
+            self.sessions.push(session.clone());
+            recovered.push(session);
+        }
+
+        recovered
+    }
+
     /// Resolve a layout terminal to its managed runtime binding.
     #[must_use]
     pub fn managed_terminal_binding(&self, terminal_uuid: &str) -> Option<ManagedTerminalBinding> {
@@ -140,6 +175,14 @@ impl WindowState {
         let session = self.sessions.iter_mut().find(|session| session.uuid == workspace_id)?;
 
         let had_runtime_id = session.runtime.runtime_id.is_some();
+        let had_only_placeholder_bindings =
+            session.layout.terminal_uuids().iter().all(|layout_terminal_uuid| {
+                session
+                    .runtime
+                    .pane_bindings
+                    .get(layout_terminal_uuid)
+                    .is_some_and(|runtime_pane_id| runtime_pane_id == layout_terminal_uuid)
+            });
         session.runtime.runtime_id = Some(runtime_id.to_string());
         session.sync_legacy_mode_from_runtime();
 
@@ -156,15 +199,17 @@ impl WindowState {
         session.runtime.pending_layout_panes =
             reconciliation.disconnected_layout_panes.iter().cloned().collect();
 
-        let panes_to_create = if had_runtime_id {
-            Vec::new()
-        } else {
+        let panes_to_create = if !had_runtime_id {
             let mut placeholders = reconciliation.disconnected_layout_panes.clone();
             if let Some(initial_terminal_uuid) = layout_terminal_uuids.first() {
                 placeholders
                     .retain(|layout_terminal_uuid| layout_terminal_uuid != initial_terminal_uuid);
             }
             placeholders
+        } else if snapshot.panes.is_empty() && had_only_placeholder_bindings {
+            reconciliation.disconnected_layout_panes.clone()
+        } else {
+            Vec::new()
         };
 
         let mut skipped_runtime_panes = Vec::new();
@@ -223,6 +268,74 @@ impl WindowState {
     }
 }
 
+fn recovered_managed_workspace(
+    endpoint: &RuntimeEndpoint,
+    session_info: &proto::SessionInfo,
+) -> Option<SessionState> {
+    let runtime_id = rttx_proto::bytes_to_uuid(&session_info.id).ok()?.to_string();
+    let policy = match proto::RuntimePolicy::try_from(session_info.policy).ok() {
+        Some(proto::RuntimePolicy::Ephemeral) => WorkspacePolicy::Ephemeral,
+        _ => WorkspacePolicy::Persistent,
+    };
+
+    let mut session = SessionState::new_managed_local(session_info.name.clone(), policy, None);
+    session.uuid = inventory_workspace_id(endpoint, &runtime_id);
+    session.runtime.endpoint = endpoint.clone();
+    session.runtime.runtime_id = Some(runtime_id);
+
+    if !session_info.panes.is_empty() {
+        session.layout = layout_from_inventory_panes(&session_info.panes);
+        let pane_ids = session.layout.terminal_uuids();
+        session.terminal_recovery = pane_ids
+            .iter()
+            .cloned()
+            .map(|pane_id| (pane_id, PaneRecovery::empty_shell()))
+            .collect();
+        session.active_terminal_uuid = session_info
+            .active_pane_id
+            .as_ref()
+            .and_then(|pane_id| rttx_proto::bytes_to_uuid(pane_id).ok().map(|id| id.to_string()))
+            .or_else(|| pane_ids.first().cloned());
+        session.runtime.pane_bindings =
+            pane_ids.iter().cloned().map(|pane_id| (pane_id.clone(), pane_id)).collect();
+        session.runtime.pending_layout_panes.clear();
+    }
+
+    session.sync_legacy_mode_from_runtime();
+    Some(session)
+}
+
+fn inventory_workspace_id(endpoint: &RuntimeEndpoint, runtime_id: &str) -> String {
+    format!("inventory:{}:{runtime_id}", endpoint.key())
+}
+
+fn layout_from_inventory_panes(panes: &[proto::PaneInfo]) -> LayoutNode {
+    let mut panes = panes.iter();
+    let Some(first_pane) = panes.next() else {
+        return LayoutNode::new_terminal();
+    };
+
+    panes.fold(layout_terminal_from_inventory(first_pane), |layout, pane| LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(layout),
+        second: Box::new(layout_terminal_from_inventory(pane)),
+    })
+}
+
+fn layout_terminal_from_inventory(pane: &proto::PaneInfo) -> LayoutNode {
+    LayoutNode::Terminal {
+        uuid: inventory_pane_id(pane).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        profile: None,
+        cwd: (!pane.cwd.is_empty()).then(|| pane.cwd.clone()),
+        custom_title: (!pane.title.is_empty()).then(|| pane.title.clone()),
+    }
+}
+
+fn inventory_pane_id(pane: &proto::PaneInfo) -> Option<String> {
+    rttx_proto::bytes_to_uuid(&pane.id).ok().map(|uuid| uuid.to_string())
+}
+
 fn snapshot_pane_id(pane_snapshot: &proto::PaneSnapshot) -> Option<String> {
     rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id).ok().map(|uuid| uuid.to_string())
 }
@@ -230,7 +343,7 @@ fn snapshot_pane_id(pane_snapshot: &proto::PaneSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use crate::runtime::WorkspacePolicy;
     use crate::test_helpers::{
         hsplit, managed_session, managed_session_with_runtime, term, term_full, window_state,
     };
@@ -258,6 +371,43 @@ mod tests {
             panes,
             revision: 7,
             current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+        }
+    }
+
+    fn pane_info(pane_id: &str, title: &str, cwd: &str) -> proto::PaneInfo {
+        proto::PaneInfo {
+            id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap()),
+            title: title.to_string(),
+            cwd: cwd.to_string(),
+            cols: 120,
+            rows: 40,
+            exit_status: None,
+            reconstructed: true,
+        }
+    }
+
+    fn session_info(
+        runtime_id: &str,
+        name: &str,
+        policy: proto::RuntimePolicy,
+        panes: Vec<proto::PaneInfo>,
+        active_pane_id: Option<&str>,
+    ) -> proto::SessionInfo {
+        proto::SessionInfo {
+            id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
+            name: name.to_string(),
+            pane_count: panes.len() as u32,
+            has_attached_client: false,
+            active_pane_id: active_pane_id
+                .map(|pane_id| rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap())),
+            panes,
+            policy: policy as i32,
+            attached_client_count: 0,
+            reconstructed: true,
+            revision: 7,
+            current_client_role: proto::RuntimeClientRole::Unattached as i32,
+            has_write_owner: false,
+            read_only_client_count: 0,
         }
     }
 
@@ -457,5 +607,125 @@ mod tests {
                 && restore.cwd == "/srv/project"
                 && restore.scrollback == b"logs"
         }));
+    }
+
+    #[test]
+    fn recover_managed_workspaces_from_inventory_creates_recoverable_layouts() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let first_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let second_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+        let mut state = window_state(vec![]);
+
+        let recovered = state.recover_managed_workspaces_from_inventory(
+            &RuntimeEndpoint::Local,
+            &[session_info(
+                runtime_id,
+                "Recovered Workspace",
+                proto::RuntimePolicy::Persistent,
+                vec![
+                    pane_info(first_pane, "Shell", "/srv/project"),
+                    pane_info(second_pane, "Logs", "/srv/project"),
+                ],
+                Some(second_pane),
+            )],
+        );
+
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(state.sessions.len(), 1);
+        let session = &recovered[0];
+        assert_eq!(session.uuid, "inventory:local:d7d04564-b2bf-4302-9495-e65c4df12ac6");
+        assert_eq!(session.name, "Recovered Workspace");
+        assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
+        assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
+        assert_eq!(session.runtime.runtime_id.as_deref(), Some(runtime_id));
+        assert_eq!(session.active_terminal_uuid.as_deref(), Some(second_pane));
+        assert_eq!(
+            session.layout.terminal_uuids(),
+            vec![first_pane.to_string(), second_pane.to_string()]
+        );
+        assert_eq!(
+            session.runtime.pane_bindings.get(first_pane).map(String::as_str),
+            Some(first_pane)
+        );
+        assert_eq!(
+            session.runtime.pane_bindings.get(second_pane).map(String::as_str),
+            Some(second_pane)
+        );
+        assert!(session.runtime.pending_layout_panes.is_empty());
+
+        let snapshot = snapshot(
+            runtime_id,
+            vec![
+                pane_snapshot(first_pane, "Shell", "/srv/project", b"shell"),
+                pane_snapshot(second_pane, "Logs", "/srv/project", b"logs"),
+            ],
+        );
+        let opened = state
+            .apply_managed_workspace_opened(&session.uuid, runtime_id, &snapshot)
+            .expect("inventory-recovered workspace should reattach cleanly");
+        assert!(opened.panes_to_create.is_empty());
+        assert!(opened.skipped_runtime_panes.is_empty());
+        assert_eq!(opened.session_state.layout.terminal_uuids(), session.layout.terminal_uuids());
+        assert_eq!(opened.snapshot_restores.len(), 2);
+    }
+
+    #[test]
+    fn recover_managed_workspaces_from_inventory_skips_known_runtime_ids() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let existing = managed_session_with_runtime(
+            "workspace-1",
+            "Existing Workspace",
+            term("pane-1"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        let mut state = window_state(vec![existing]);
+
+        let recovered = state.recover_managed_workspaces_from_inventory(
+            &RuntimeEndpoint::Local,
+            &[session_info(
+                runtime_id,
+                "Recovered Workspace",
+                proto::RuntimePolicy::Persistent,
+                vec![pane_info("07fa83b4-9ae3-4354-a1c5-1f685ffab370", "Shell", "/srv/project")],
+                None,
+            )],
+        );
+
+        assert!(recovered.is_empty());
+        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.sessions[0].uuid, "workspace-1");
+    }
+
+    #[test]
+    fn apply_managed_workspace_opened_creates_initial_pane_for_empty_inventory_runtime() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let mut state = window_state(vec![]);
+
+        let recovered = state.recover_managed_workspaces_from_inventory(
+            &RuntimeEndpoint::Local,
+            &[session_info(
+                runtime_id,
+                "Recovered Workspace",
+                proto::RuntimePolicy::Persistent,
+                vec![],
+                None,
+            )],
+        );
+
+        let session =
+            recovered.first().expect("inventory should synthesize a placeholder workspace");
+        let placeholder_uuid = session.layout.terminal_uuids()[0].clone();
+        let opened = state
+            .apply_managed_workspace_opened(
+                &session.uuid,
+                runtime_id,
+                &snapshot(runtime_id, vec![]),
+            )
+            .expect("empty runtime should still reconcile");
+
+        assert_eq!(opened.panes_to_create, vec![placeholder_uuid]);
+        assert!(opened.snapshot_restores.is_empty());
     }
 }
