@@ -63,6 +63,9 @@ impl Pane {
         if let Some(title) = self.screen.title() {
             self.title = Some(title.to_string());
         }
+        if let Some(cwd) = self.screen.cwd() {
+            self.cwd = Some(cwd.to_string());
+        }
     }
 
     /// Flush pending scrollback bytes to the log file on disk.
@@ -178,6 +181,13 @@ mod tests {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         pane.feed_output(b"hello");
         assert_eq!(pane.screen.raw_bytes(), b"hello");
+    }
+
+    #[test]
+    fn feed_output_updates_current_directory_from_osc7() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"\x1b]7;file://localhost/tmp/project\x07");
+        assert_eq!(pane.cwd.as_deref(), Some("/tmp/project"));
     }
 
     #[test]

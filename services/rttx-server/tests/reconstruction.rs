@@ -123,3 +123,133 @@ async fn reconstruct_session_after_restart() {
         assert!(panes[0].exit_status.is_none(), "reconstructed pane should have a live shell");
     }
 }
+
+#[tokio::test]
+async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project_dir = tmp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let project_dir_string = project_dir.to_string_lossy().to_string();
+
+    let session_id;
+    let pane_id;
+    {
+        let (sock, handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                    name: "reconstruct-cwd".into(),
+                    policy: proto::RuntimePolicy::Persistent as i32,
+                })),
+            })
+            .await;
+        session_id = match client.recv().await.msg {
+            Some(proto::server_message::Msg::SessionCreated(created)) => created.session_id,
+            other => panic!("expected SessionCreated, got {other:?}"),
+        };
+
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                    session_id: session_id.clone(),
+                })),
+            })
+            .await;
+        pane_id = match client.recv().await.msg {
+            Some(proto::server_message::Msg::PaneCreated(created)) => created.pane_id,
+            other => panic!("expected PaneCreated, got {other:?}"),
+        };
+
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                    session_id: session_id.clone(),
+                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                })),
+            })
+            .await;
+        match client.recv().await.msg {
+            Some(proto::server_message::Msg::Snapshot(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+
+        let cwd_command = format!(
+            "cd '{}'\nprintf '\\033]7;file://localhost%s\\007' \"$PWD\"\n",
+            shell_quote(&project_dir_string)
+        );
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Input(proto::Input {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    data: cwd_command.into_bytes(),
+                })),
+            })
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
+
+        handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    {
+        let (sock, _handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                    session_id: session_id.clone(),
+                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                })),
+            })
+            .await;
+
+        let panes = match client.recv().await.msg {
+            Some(proto::server_message::Msg::Snapshot(snapshot)) => snapshot.panes,
+            other => panic!("expected Snapshot, got {other:?}"),
+        };
+        let pane = panes
+            .iter()
+            .find(|pane| pane.pane_id == pane_id)
+            .expect("reconstructed pane should be present");
+        assert_eq!(pane.cwd, project_dir_string);
+
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Input(proto::Input {
+                    session_id: session_id.clone(),
+                    pane_id: pane_id.clone(),
+                    data: b"pwd\n".to_vec(),
+                })),
+            })
+            .await;
+
+        let output = collect_delta_text(&mut client, Duration::from_secs(2)).await;
+        assert!(
+            output.contains(&project_dir_string),
+            "reconstructed shell should start in the last reported cwd.\noutput:\n{output}"
+        );
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    value.replace('\'', "'\"'\"'")
+}
+
+async fn collect_delta_text(client: &mut TestClient, window: Duration) -> String {
+    let messages = client.drain(window).await;
+    let mut output = Vec::new();
+    for message in messages {
+        if let Some(proto::server_message::Msg::Delta(delta)) = message.msg {
+            output.extend(delta.data);
+        }
+    }
+    String::from_utf8_lossy(&output).to_string()
+}
