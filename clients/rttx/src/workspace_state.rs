@@ -72,6 +72,15 @@ pub struct EndpointEventTransition {
 }
 
 impl WindowState {
+    /// True when startup should query an endpoint for inventory bootstrap.
+    #[must_use]
+    pub fn needs_inventory_bootstrap(&self, endpoint: &RuntimeEndpoint) -> bool {
+        !self
+            .sessions
+            .iter()
+            .any(|session| session.uses_managed_runtime() && &session.runtime.endpoint == endpoint)
+    }
+
     /// Reconcile a daemon endpoint event into pure state updates plus follow-on effects.
     #[must_use]
     pub fn reconcile_endpoint_event(&mut self, event: &EndpointEvent) -> EndpointEventTransition {
@@ -500,7 +509,8 @@ mod tests {
     use crate::runtime::ConnectionStatus;
     use crate::runtime::WorkspacePolicy;
     use crate::test_helpers::{
-        hsplit, managed_session, managed_session_with_runtime, term, term_full, window_state,
+        hsplit, managed_session, managed_session_with_runtime, session, term, term_full,
+        window_state,
     };
 
     fn pane_snapshot(
@@ -934,6 +944,48 @@ mod tests {
                 .sessions
                 .iter()
                 .any(|session| session.uuid == format!("inventory:local:{runtime_id}"))
+        );
+    }
+
+    #[test]
+    fn needs_inventory_bootstrap_when_no_managed_workspace_uses_endpoint() {
+        let state = window_state(vec![session("session-1", "Session 1", term("pane-1"))]);
+
+        assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::Local));
+        assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
+            host: "builder.example".into(),
+        }));
+    }
+
+    #[test]
+    fn needs_inventory_bootstrap_skips_endpoints_already_present_in_state() {
+        let state = window_state(vec![
+            managed_session_with_runtime(
+                "workspace-1",
+                "Local Workspace",
+                term("local-pane"),
+                RuntimeEndpoint::Local,
+                WorkspacePolicy::Persistent,
+                Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+            ),
+            managed_session_with_runtime(
+                "workspace-2",
+                "Remote Workspace",
+                term("remote-pane"),
+                RuntimeEndpoint::Remote { host: "builder.example".into() },
+                WorkspacePolicy::Persistent,
+                Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
+            ),
+        ]);
+
+        assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::Local));
+        assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
+            host: "builder.example".into(),
+        }));
+        assert!(
+            state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
+                host: "other.example".into(),
+            })
         );
     }
 
