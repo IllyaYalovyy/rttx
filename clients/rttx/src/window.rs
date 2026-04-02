@@ -15,6 +15,7 @@ use crate::preferences::{self, Preferences};
 use crate::runtime::{
     ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
     WorkspacePolicy, present_connection_status, present_workspace_actions,
+    workspace_connection_summary,
 };
 use crate::session::{
     self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
@@ -1398,14 +1399,7 @@ impl Window {
         else {
             return;
         };
-        let summary = match &session.runtime.endpoint {
-            RuntimeEndpoint::Local => {
-                format!("{} · Local · {}", session.runtime.policy.label(), status.label())
-            }
-            RuntimeEndpoint::Remote { host } => {
-                format!("{} · {} · {}", session.runtime.policy.label(), host, status.label())
-            }
-        };
+        let summary = workspace_connection_summary(&session.runtime.endpoint, status);
         drop(state);
 
         let list = &self.imp().sidebar_list;
@@ -3077,6 +3071,21 @@ mod tests {
             .and_then(|row| row.child())
             .and_then(|child| child.downcast::<SessionRow>().ok())
             .expect("session row should exist")
+    }
+
+    fn session_row_for_uuid(window: &Window, session_uuid: &str) -> SessionRow {
+        let list = &window.imp().sidebar_list;
+        let mut idx = 0;
+        while let Some(row) = list.row_at_index(idx) {
+            if let Some(session_row) =
+                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                && session_row.uuid() == session_uuid
+            {
+                return session_row;
+            }
+            idx += 1;
+        }
+        panic!("session row for {session_uuid} should exist");
     }
 
     fn emit_left_click(widget: &gtk4::Widget, n_press: i32) {
@@ -5709,6 +5718,52 @@ mod tests {
         assert_eq!(
             window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
             Some(&ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 })
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn recovered_workspace_uses_compact_sidebar_status_without_banner() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.recovered-workspace-status-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_state = crate::test_helpers::managed_session(
+            "workspace-local",
+            "Local Workspace",
+            LayoutNode::new_terminal_with_uuid("managed-pane"),
+        );
+        window.imp().state.borrow_mut().sessions.push(session_state.clone());
+        window.build_session(&session_state, false);
+
+        window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Recovered);
+
+        let pane = window
+            .imp()
+            .persistent_terminals
+            .borrow()
+            .get("managed-pane")
+            .cloned()
+            .expect("managed pane should be present");
+        assert!(!pane.connection_banner_visible_for_test());
+        assert_eq!(pane.status_label_text_for_test(), "Connected");
+
+        let row = session_row_for_uuid(&window, &session_state.uuid);
+        let subtitle = row.subtitle().map(|value| value.to_string());
+        assert_eq!(subtitle.as_deref(), Some("Local · Recovered"));
+        assert!(
+            !subtitle.as_deref().is_some_and(|value| value.contains("Persistent")),
+            "workspace row status should no longer include the policy label"
         );
 
         window.close();

@@ -179,11 +179,10 @@ impl ConnectionStatus {
         match self {
             Self::Starting => "Starting".into(),
             Self::Connecting => "Connecting".into(),
-            Self::Connected => "Connected".into(),
+            Self::Connected | Self::Recovered => "Connected".into(),
             Self::Reconnecting { retry_in_secs, .. } => format!("Retry {retry_in_secs}s"),
             Self::Blocked(_) => "Action Required".into(),
             Self::Disconnected => "Disconnected".into(),
-            Self::Recovered => "Recovered".into(),
         }
     }
 }
@@ -378,21 +377,10 @@ pub fn present_connection_status(
         && matches!(status, ConnectionStatus::Blocked(_));
 
     let (banner_title, banner_body, banner_visible, show_retry, show_close) = match status {
-        ConnectionStatus::Starting => (
-            "Starting local daemon".into(),
-            "This workspace is waiting for the local daemon to come online.".into(),
-            true,
-            false,
-            true,
-        ),
-        ConnectionStatus::Connecting => (
-            format!("Connecting to {endpoint_label}"),
-            "This workspace is attaching to its runtime.".into(),
-            true,
-            false,
-            true,
-        ),
-        ConnectionStatus::Connected => (String::new(), String::new(), false, false, false),
+        ConnectionStatus::Starting
+        | ConnectionStatus::Connecting
+        | ConnectionStatus::Connected
+        | ConnectionStatus::Recovered => (String::new(), String::new(), false, false, false),
         ConnectionStatus::Reconnecting { attempt, retry_in_secs } => (
             format!("Reconnecting in {retry_in_secs}s"),
             format!(
@@ -412,13 +400,6 @@ pub fn present_connection_status(
             true,
             true,
         ),
-        ConnectionStatus::Recovered => (
-            "Connection restored".into(),
-            format!("The workspace is connected to {endpoint_label} again."),
-            true,
-            false,
-            false,
-        ),
     };
 
     ConnectionPresentation {
@@ -430,6 +411,26 @@ pub fn present_connection_status(
         show_close,
         show_edit_connection,
         input_enabled: status.accepts_input(),
+    }
+}
+
+/// Render a compact workspace-row summary for connection state.
+#[must_use]
+pub fn workspace_connection_summary(
+    endpoint: &RuntimeEndpoint,
+    status: &ConnectionStatus,
+) -> String {
+    let endpoint_label = match endpoint {
+        RuntimeEndpoint::Local => "Local".to_string(),
+        RuntimeEndpoint::Remote { host } => host.clone(),
+    };
+
+    match status {
+        ConnectionStatus::Connected => match endpoint {
+            RuntimeEndpoint::Local => "Local runtime".into(),
+            RuntimeEndpoint::Remote { .. } => endpoint_label,
+        },
+        _ => format!("{endpoint_label} · {}", status.label()),
     }
 }
 
@@ -571,12 +572,21 @@ mod tests {
     }
 
     #[test]
-    fn connection_presentation_hides_banner_only_when_connected() {
+    fn connection_presentation_hides_banner_for_compact_states() {
         let presentation =
             present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
         assert!(!presentation.banner_visible);
         assert!(presentation.input_enabled);
         assert!(!presentation.show_retry);
+
+        let recovered =
+            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered);
+        assert!(!recovered.banner_visible);
+        assert_eq!(recovered.header_label, "Connected");
+
+        let connecting =
+            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connecting);
+        assert!(!connecting.banner_visible);
     }
 
     #[test]
@@ -609,6 +619,25 @@ mod tests {
         assert!(presentation.show_edit_connection);
         assert!(!presentation.input_enabled);
         assert!(presentation.banner_body.contains("Permission denied"));
+    }
+
+    #[test]
+    fn workspace_connection_summary_omits_policy_and_keeps_recovery_compact() {
+        assert_eq!(
+            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Connected),
+            "Local runtime"
+        );
+        assert_eq!(
+            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered),
+            "Local · Recovered"
+        );
+        assert_eq!(
+            workspace_connection_summary(
+                &RuntimeEndpoint::Remote { host: "builder.example".into() },
+                &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
+            ),
+            "builder.example · Action Required: Permission denied"
+        );
     }
 
     #[test]

@@ -417,7 +417,11 @@ impl PersistentPaneView {
         status: &ConnectionStatus,
         presentation: &ConnectionPresentation,
     ) {
-        self.set_connection_status(status);
+        self.imp()
+            .connected
+            .set(matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered));
+        self.imp().status_label.set_label(&presentation.header_label);
+        self.imp().status_label.set_tooltip_text(Some(&status.label()));
         self.imp().connection_title_label.set_label(&presentation.banner_title);
         self.imp().connection_body_label.set_label(&presentation.banner_body);
         self.imp().connection_banner.set_visible(presentation.banner_visible);
@@ -844,6 +848,12 @@ mod tests {
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
         assert!(!pane.connection_banner_visible_for_test());
         assert!(pane.input_enabled_for_test());
+
+        let recovered =
+            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered);
+        pane.set_connection_presentation(&ConnectionStatus::Recovered, &recovered);
+        assert!(!pane.connection_banner_visible_for_test());
+        assert_eq!(pane.status_label_text_for_test(), "Connected");
     }
 
     #[test]
