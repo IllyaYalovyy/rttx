@@ -12,6 +12,24 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  runtime-behavior-gate:
+    name: Runtime behavior gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Test runtime behavior gate
+        run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
+
+      - name: Enforce runtime behavior coverage
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 .github/scripts/check_runtime_behavior_policy.py \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

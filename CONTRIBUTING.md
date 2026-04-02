@@ -364,6 +364,12 @@ are safe to run while rttx is open for normal work — the dev instance uses a s
 - **Bug fixes** must include a regression test that fails before the fix and passes after.
 - **New features** must include tests covering the primary success path and any GTK-boundary
   interactions the feature introduces.
+- **Runtime-affecting changes** to daemon/runtime/reconnect/restore/reconciliation paths must add
+  both:
+  - at least one new pure-state regression test in a unit-style source test host
+  - at least one new integration, GTK boundary/widget, or AT-SPI behavioral regression test for
+    the user-visible behavior
+  PR CI enforces this rule for the tracked runtime-affecting source paths.
 - **New crash categories** must be added to the crash taxonomy in `designs/RFC-003-testing-strategy.md`.
 - Tautological tests (tests that assert the code does what it obviously does, without validating a
   user-visible invariant or a specific crash category) will be rejected.
@@ -452,6 +458,9 @@ Refs #57
 1. **Open an issue first** for any non-trivial change. Align on scope before writing code.
 2. **One PR, one concern.** Do not bundle unrelated changes.
 3. **All checks must pass:**
+   - PRs that touch tracked daemon/runtime/restore/reconciliation code must satisfy the runtime
+     behavior gate by adding both a pure-state regression test and an integration or behavioral
+     regression test
    - `cargo build --workspace`
    - `bash .github/scripts/run-clippy.sh`
    - `bash .github/scripts/run-quality-tests.sh`
