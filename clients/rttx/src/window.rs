@@ -25,6 +25,7 @@ use crate::sidebar::SessionRow;
 use crate::terminal::handle::TerminalHandle;
 use crate::terminal::persistent_widget::PersistentPaneView;
 use crate::terminal::widget::TerminalWidget;
+use crate::workspace_state::{EndpointEventTransition, WorkspacePaneRestore};
 use std::collections::HashMap;
 
 mod imp {
@@ -1184,69 +1185,6 @@ impl Window {
         use crate::daemon_bridge::EndpointEvent;
 
         match event {
-            EndpointEvent::WorkspaceConnectionChanged { workspace_id, status } => {
-                self.set_workspace_connection_status(&workspace_id, &status);
-            }
-            EndpointEvent::WorkspaceOpened { workspace_id, runtime_id, snapshot } => {
-                self.handle_workspace_opened(&workspace_id, &runtime_id, &snapshot);
-            }
-            EndpointEvent::PaneCreated {
-                workspace_id,
-                layout_terminal_uuid,
-                runtime_id,
-                runtime_pane_id,
-            } => {
-                let applied = {
-                    let mut state = self.imp().state.borrow_mut();
-                    state.apply_managed_pane_created(
-                        &workspace_id,
-                        &layout_terminal_uuid,
-                        &runtime_id,
-                        &runtime_pane_id,
-                    )
-                };
-                if !applied {
-                    return;
-                }
-                if let Some(pane) =
-                    self.imp().persistent_terminals.borrow().get(&layout_terminal_uuid).cloned()
-                {
-                    pane.set_connected(true);
-                    let (cols, rows) = pane.terminal_size();
-                    if cols > 0 && rows > 0 {
-                        self.send_managed_terminal_resize(&layout_terminal_uuid, cols, rows);
-                    }
-                }
-                self.trigger_managed_recovery_for_terminal(&layout_terminal_uuid);
-                self.set_workspace_connection_status(&workspace_id, &ConnectionStatus::Connected);
-            }
-            EndpointEvent::PaneClosed { workspace_id, layout_terminal_uuid, .. } => {
-                self.apply_managed_pane_closed(&workspace_id, &layout_terminal_uuid);
-            }
-            EndpointEvent::WorkspaceDetached { workspace_id, .. } => {
-                self.set_workspace_connection_status(
-                    &workspace_id,
-                    &ConnectionStatus::Disconnected,
-                );
-            }
-            EndpointEvent::RuntimeTerminated { workspace_id, .. } => {
-                {
-                    let mut state = self.imp().state.borrow_mut();
-                    if let Some(session) =
-                        state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
-                    {
-                        session.runtime.runtime_id = None;
-                        session.sync_legacy_mode_from_runtime();
-                    }
-                }
-                self.set_workspace_connection_status(
-                    &workspace_id,
-                    &ConnectionStatus::Disconnected,
-                );
-            }
-            EndpointEvent::InventoryLoaded { endpoint, sessions } => {
-                self.handle_inventory_loaded(&endpoint, &sessions);
-            }
             EndpointEvent::RuntimeMessage { endpoint, message } => {
                 self.dispatch_managed_runtime_message(&endpoint, &message);
             }
@@ -1256,88 +1194,103 @@ impl Window {
                     self.show_toast(&detail);
                 }
             }
+            other => {
+                let transition = {
+                    let mut state = self.imp().state.borrow_mut();
+                    state.reconcile_endpoint_event(&other)
+                };
+                self.apply_endpoint_event_transition(&transition);
+            }
         }
     }
 
-    fn handle_workspace_opened(
-        &self,
-        workspace_id: &str,
-        runtime_id: &str,
-        snapshot: &rttx_proto::proto::Snapshot,
-    ) {
-        let Some(opened) = ({
-            let mut state = self.imp().state.borrow_mut();
-            state.apply_managed_workspace_opened(workspace_id, runtime_id, snapshot)
-        }) else {
-            return;
-        };
+    fn apply_endpoint_event_transition(&self, transition: &EndpointEventTransition) {
+        for session_state in &transition.recovered_workspaces {
+            self.build_session(session_state, false);
+        }
 
-        for runtime_pane_id in &opened.skipped_runtime_panes {
+        for runtime_pane_id in &transition.skipped_runtime_panes {
             log::warn!("Failed to recover runtime pane {runtime_pane_id}: split depth limit");
         }
 
-        self.rebuild_session_content(workspace_id, &opened.session_state);
+        for layout_terminal_uuid in &transition.removed_layout_terminals {
+            self.imp().persistent_terminals.borrow_mut().remove(layout_terminal_uuid);
+        }
+
+        for rebuild in &transition.rebuilt_workspaces {
+            self.rebuild_session_content(&rebuild.workspace_id, &rebuild.session_state);
+        }
 
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
-            for layout_terminal_uuid in &opened.panes_to_create {
-                if opened.session_state.runtime.pane_bindings.get(layout_terminal_uuid).is_some_and(
-                    |bound_runtime_pane_id| bound_runtime_pane_id == layout_terminal_uuid,
-                ) {
-                    manager.create_pane(
-                        workspace_id,
-                        &opened.session_state.runtime.endpoint,
-                        runtime_id,
-                        layout_terminal_uuid,
-                    );
-                }
+            for request in &transition.pane_create_requests {
+                manager.create_pane(
+                    &request.workspace_id,
+                    &request.endpoint,
+                    &request.runtime_id,
+                    &request.layout_terminal_uuid,
+                );
             }
         }
 
-        for restore in opened.snapshot_restores {
-            let pane = {
-                let panes = self.imp().persistent_terminals.borrow();
-                panes.get(&restore.layout_terminal_uuid).cloned()
-            };
-            let Some(pane) = pane else { continue };
-
-            pane.vte().reset(true, true);
-            pane.feed_snapshot(&restore.scrollback);
-            pane.set_current_directory(Some(&restore.cwd));
-            if !restore.title.is_empty() && pane.custom_title().is_none() {
-                pane.set_title(&restore.title);
-            }
-            pane.set_connected(true);
-
-            let (cols, rows) = pane.terminal_size();
-            if cols > 0 && rows > 0 {
-                self.send_managed_terminal_resize(&restore.layout_terminal_uuid, cols, rows);
-            }
-        }
-    }
-
-    fn handle_inventory_loaded(
-        &self,
-        endpoint: &RuntimeEndpoint,
-        sessions: &[rttx_proto::proto::SessionInfo],
-    ) {
-        let recovered = {
-            let mut state = self.imp().state.borrow_mut();
-            state.recover_managed_workspaces_from_inventory(endpoint, sessions)
-        };
-        if recovered.is_empty() {
-            return;
+        for restore in &transition.pane_snapshot_restores {
+            self.restore_managed_snapshot(restore);
         }
 
-        for session_state in &recovered {
-            self.build_session(session_state, false);
+        for layout_terminal_uuid in &transition.connected_layout_terminals {
+            self.mark_managed_pane_connected(layout_terminal_uuid);
+        }
+
+        for layout_terminal_uuid in &transition.layout_terminals_to_recover {
+            self.trigger_managed_recovery_for_terminal(layout_terminal_uuid);
+        }
+
+        for status_update in &transition.connection_status_updates {
             self.set_workspace_connection_status(
-                &session_state.uuid,
-                &ConnectionStatus::Connecting,
+                &status_update.workspace_id,
+                &status_update.status,
             );
+        }
+
+        for session_state in &transition.recovered_workspaces {
             self.connect_managed_workspace(session_state);
         }
 
-        self.save_state();
+        if transition.persist_window_state {
+            self.save_state();
+        }
+    }
+
+    fn restore_managed_snapshot(&self, restore: &WorkspacePaneRestore) {
+        let pane = {
+            let panes = self.imp().persistent_terminals.borrow();
+            panes.get(&restore.layout_terminal_uuid).cloned()
+        };
+        let Some(pane) = pane else { return };
+
+        pane.vte().reset(true, true);
+        pane.feed_snapshot(&restore.scrollback);
+        pane.set_current_directory(Some(&restore.cwd));
+        if !restore.title.is_empty() && pane.custom_title().is_none() {
+            pane.set_title(&restore.title);
+        }
+        pane.set_connected(true);
+
+        let (cols, rows) = pane.terminal_size();
+        if cols > 0 && rows > 0 {
+            self.send_managed_terminal_resize(&restore.layout_terminal_uuid, cols, rows);
+        }
+    }
+
+    fn mark_managed_pane_connected(&self, layout_terminal_uuid: &str) {
+        if let Some(pane) =
+            self.imp().persistent_terminals.borrow().get(layout_terminal_uuid).cloned()
+        {
+            pane.set_connected(true);
+            let (cols, rows) = pane.terminal_size();
+            if cols > 0 && rows > 0 {
+                self.send_managed_terminal_resize(layout_terminal_uuid, cols, rows);
+            }
+        }
     }
 
     fn replace_workspace_connection_status(&self, workspace_id: &str, status: &ConnectionStatus) {
@@ -1459,18 +1412,6 @@ impl Window {
             if let Some(pane) = panes.get(&terminal_uuid) {
                 pane.set_connection_presentation(status, &presentation);
             }
-        }
-    }
-
-    fn apply_managed_pane_closed(&self, workspace_id: &str, layout_terminal_uuid: &str) {
-        let session_state = {
-            let mut state = self.imp().state.borrow_mut();
-            state.apply_managed_pane_closed(workspace_id, layout_terminal_uuid)
-        };
-
-        self.imp().persistent_terminals.borrow_mut().remove(layout_terminal_uuid);
-        if let Some(session_state) = session_state {
-            self.rebuild_session_content(workspace_id, &session_state);
         }
     }
 
