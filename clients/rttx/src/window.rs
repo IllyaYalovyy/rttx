@@ -2538,6 +2538,8 @@ impl Window {
 
     fn rebuild_session_content(&self, session_uuid: &str, session_state: &SessionState) {
         let imp = self.imp();
+        let previously_visible =
+            imp.session_stack.visible_child_name().map(|name| name.to_string());
 
         let old_content = imp.session_stack.child_by_name(session_uuid);
         if let Some(ref old) = old_content {
@@ -2552,7 +2554,12 @@ impl Window {
         let content = self.build_session_content(session_state);
 
         imp.session_stack.add_named(&content, Some(session_uuid));
-        imp.session_stack.set_visible_child_name(session_uuid);
+        let visible_after_rebuild = previously_visible
+            .as_deref()
+            .filter(|visible_uuid| *visible_uuid != session_uuid)
+            .filter(|visible_uuid| imp.session_stack.child_by_name(visible_uuid).is_some())
+            .unwrap_or(session_uuid);
+        imp.session_stack.set_visible_child_name(visible_after_rebuild);
         session::schedule_initial_paned_ratios(&content, &session_state.layout);
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
@@ -3113,6 +3120,16 @@ mod tests {
             idx += 1;
         }
         panic!("session row for {session_uuid} should exist");
+    }
+
+    fn selected_session_uuid(window: &Window) -> Option<String> {
+        window
+            .imp()
+            .sidebar_list
+            .selected_row()
+            .and_then(|row| row.child())
+            .and_then(|child| child.downcast::<SessionRow>().ok())
+            .map(|row| row.uuid())
     }
 
     fn emit_left_click(widget: &gtk4::Widget, n_press: i32) {
@@ -5896,6 +5913,138 @@ mod tests {
         );
         assert!(state.sessions.iter().any(|session| session.uuid == "workspace-existing"));
         drop(state);
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn managed_workspace_recovery_does_not_steal_visible_session_from_selected_row() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.recovery-selection-sync-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let visible_before = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].uuid.clone()
+        };
+        let runtime_id = uuid::Uuid::new_v4();
+        let pane_id = uuid::Uuid::new_v4();
+        let recovered_session = crate::test_helpers::managed_session_with_runtime(
+            "workspace-recovered",
+            "Recovered Workspace",
+            LayoutNode::new_terminal_with_uuid(&pane_id.to_string()),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id.to_string()),
+        );
+        window.imp().state.borrow_mut().sessions.push(recovered_session.clone());
+        window.build_session(&recovered_session, false);
+
+        let first_row = window.imp().sidebar_list.row_at_index(0).unwrap();
+        window.imp().sidebar_list.select_row(Some(&first_row));
+        pump_events(50);
+
+        assert_eq!(selected_session_uuid(&window).as_deref(), Some(visible_before.as_str()));
+        assert_eq!(
+            window.imp().session_stack.visible_child_name().as_deref(),
+            Some(visible_before.as_str())
+        );
+
+        window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
+            workspace_id: recovered_session.uuid.clone(),
+            runtime_id: runtime_id.to_string(),
+            snapshot: rttx_proto::proto::Snapshot {
+                session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                panes: vec![rttx_proto::proto::PaneSnapshot {
+                    pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                    title: "Shell".into(),
+                    cwd: "/srv/project".into(),
+                    cols: 120,
+                    rows: 40,
+                    scrollback: b"restored output".to_vec(),
+                    exit_status: None,
+                }],
+                revision: 7,
+                current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+            },
+        });
+        pump_events(50);
+
+        assert_eq!(
+            selected_session_uuid(&window).as_deref(),
+            Some(visible_before.as_str()),
+            "background recovery must not change the selected row"
+        );
+        assert_eq!(
+            window.imp().session_stack.visible_child_name().as_deref(),
+            Some(visible_before.as_str()),
+            "background recovery must not change the visible session"
+        );
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn load_state_keeps_selected_row_and_visible_session_in_sync() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let first_uuid = "workspace-1".to_string();
+        let second_uuid = "workspace-2".to_string();
+        crate::session::save_window_state(&WindowState {
+            active_session_index: 1,
+            sessions: vec![
+                SessionState {
+                    uuid: first_uuid,
+                    name: "Workspace 1".into(),
+                    layout: LayoutNode::new_terminal_with_uuid("terminal-1"),
+                    terminal_recovery: Default::default(),
+                    active_terminal_uuid: None,
+                    input_sync: false,
+                    mode: Default::default(),
+                    runtime: Default::default(),
+                },
+                SessionState {
+                    uuid: second_uuid.clone(),
+                    name: "Workspace 2".into(),
+                    layout: LayoutNode::new_terminal_with_uuid("terminal-2"),
+                    terminal_recovery: Default::default(),
+                    active_terminal_uuid: None,
+                    input_sync: false,
+                    mode: Default::default(),
+                    runtime: Default::default(),
+                },
+            ],
+            ..WindowState::default()
+        })
+        .unwrap();
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.restore-selection-sync-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        pump_events(50);
+
+        assert_eq!(selected_session_uuid(&window).as_deref(), Some(second_uuid.as_str()));
+        assert_eq!(
+            window.imp().session_stack.visible_child_name().as_deref(),
+            Some(second_uuid.as_str())
+        );
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
