@@ -1,4 +1,5 @@
-use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
+use crate::daemon_bridge::EndpointEvent;
+use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
 use crate::session::layout::{
     LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState,
 };
@@ -32,7 +33,159 @@ pub struct ManagedWorkspaceOpenResult {
     pub skipped_runtime_panes: Vec<String>,
 }
 
+/// Pure connection-status update derived from an endpoint event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionStatusUpdate {
+    pub workspace_id: String,
+    pub status: ConnectionStatus,
+}
+
+/// Pure request to rebuild one workspace from mutated state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedWorkspaceRebuild {
+    pub workspace_id: String,
+    pub session_state: SessionState,
+}
+
+/// Pure request to create a missing daemon pane for a layout terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedPaneCreateRequest {
+    pub workspace_id: String,
+    pub endpoint: RuntimeEndpoint,
+    pub runtime_id: String,
+    pub layout_terminal_uuid: String,
+}
+
+/// Pure outcome of reconciling a daemon endpoint event against app state.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct EndpointEventTransition {
+    pub recovered_workspaces: Vec<SessionState>,
+    pub rebuilt_workspaces: Vec<ManagedWorkspaceRebuild>,
+    pub pane_create_requests: Vec<ManagedPaneCreateRequest>,
+    pub pane_snapshot_restores: Vec<WorkspacePaneRestore>,
+    pub connected_layout_terminals: Vec<String>,
+    pub layout_terminals_to_recover: Vec<String>,
+    pub removed_layout_terminals: Vec<String>,
+    pub connection_status_updates: Vec<ConnectionStatusUpdate>,
+    pub skipped_runtime_panes: Vec<String>,
+    pub persist_window_state: bool,
+}
+
 impl WindowState {
+    /// Reconcile a daemon endpoint event into pure state updates plus follow-on effects.
+    #[must_use]
+    pub fn reconcile_endpoint_event(&mut self, event: &EndpointEvent) -> EndpointEventTransition {
+        let mut transition = EndpointEventTransition::default();
+
+        match event {
+            EndpointEvent::WorkspaceConnectionChanged { workspace_id, status } => {
+                transition.connection_status_updates.push(ConnectionStatusUpdate {
+                    workspace_id: workspace_id.clone(),
+                    status: status.clone(),
+                });
+            }
+            EndpointEvent::WorkspaceOpened { workspace_id, runtime_id, snapshot } => {
+                let Some(opened) =
+                    self.apply_managed_workspace_opened(workspace_id, runtime_id, snapshot)
+                else {
+                    return transition;
+                };
+                let ManagedWorkspaceOpenResult {
+                    session_state,
+                    panes_to_create,
+                    snapshot_restores,
+                    skipped_runtime_panes,
+                } = opened;
+
+                transition.rebuilt_workspaces.push(ManagedWorkspaceRebuild {
+                    workspace_id: workspace_id.clone(),
+                    session_state: session_state.clone(),
+                });
+                transition.skipped_runtime_panes = skipped_runtime_panes;
+                transition.pane_snapshot_restores = snapshot_restores;
+
+                for layout_terminal_uuid in panes_to_create {
+                    transition.pane_create_requests.push(ManagedPaneCreateRequest {
+                        workspace_id: workspace_id.clone(),
+                        endpoint: session_state.runtime.endpoint.clone(),
+                        runtime_id: runtime_id.clone(),
+                        layout_terminal_uuid,
+                    });
+                }
+            }
+            EndpointEvent::PaneCreated {
+                workspace_id,
+                layout_terminal_uuid,
+                runtime_id,
+                runtime_pane_id,
+            } => {
+                let applied = self.apply_managed_pane_created(
+                    workspace_id,
+                    layout_terminal_uuid,
+                    runtime_id,
+                    runtime_pane_id,
+                );
+                if !applied {
+                    return transition;
+                }
+
+                transition.connected_layout_terminals.push(layout_terminal_uuid.clone());
+                transition.layout_terminals_to_recover.push(layout_terminal_uuid.clone());
+                transition.connection_status_updates.push(ConnectionStatusUpdate {
+                    workspace_id: workspace_id.clone(),
+                    status: ConnectionStatus::Connected,
+                });
+            }
+            EndpointEvent::PaneClosed { workspace_id, layout_terminal_uuid, .. } => {
+                let session_state =
+                    self.apply_managed_pane_closed(workspace_id, layout_terminal_uuid);
+                transition.removed_layout_terminals.push(layout_terminal_uuid.clone());
+                if let Some(session_state) = session_state {
+                    transition.rebuilt_workspaces.push(ManagedWorkspaceRebuild {
+                        workspace_id: workspace_id.clone(),
+                        session_state,
+                    });
+                }
+            }
+            EndpointEvent::WorkspaceDetached { workspace_id, .. } => {
+                transition.connection_status_updates.push(ConnectionStatusUpdate {
+                    workspace_id: workspace_id.clone(),
+                    status: ConnectionStatus::Disconnected,
+                });
+            }
+            EndpointEvent::RuntimeTerminated { workspace_id, .. } => {
+                if let Some(session) =
+                    self.sessions.iter_mut().find(|session| session.uuid == *workspace_id)
+                {
+                    session.runtime.runtime_id = None;
+                    session.sync_legacy_mode_from_runtime();
+                }
+                transition.connection_status_updates.push(ConnectionStatusUpdate {
+                    workspace_id: workspace_id.clone(),
+                    status: ConnectionStatus::Disconnected,
+                });
+            }
+            EndpointEvent::InventoryLoaded { endpoint, sessions } => {
+                let recovered = self.recover_managed_workspaces_from_inventory(endpoint, sessions);
+                if recovered.is_empty() {
+                    return transition;
+                }
+
+                for session_state in &recovered {
+                    transition.recovered_workspaces.push(session_state.clone());
+                    transition.connection_status_updates.push(ConnectionStatusUpdate {
+                        workspace_id: session_state.uuid.clone(),
+                        status: ConnectionStatus::Connecting,
+                    });
+                }
+                transition.persist_window_state = true;
+            }
+            EndpointEvent::RuntimeMessage { .. } | EndpointEvent::WorkspaceError { .. } => {}
+        }
+
+        transition
+    }
+
     /// Recover daemon-managed workspaces that exist in inventory but not in the GUI state.
     pub fn recover_managed_workspaces_from_inventory(
         &mut self,
@@ -343,6 +496,8 @@ fn snapshot_pane_id(pane_snapshot: &proto::PaneSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon_bridge::EndpointEvent;
+    use crate::runtime::ConnectionStatus;
     use crate::runtime::WorkspacePolicy;
     use crate::test_helpers::{
         hsplit, managed_session, managed_session_with_runtime, term, term_full, window_state,
@@ -727,5 +882,218 @@ mod tests {
 
         assert_eq!(opened.panes_to_create, vec![placeholder_uuid]);
         assert!(opened.snapshot_restores.is_empty());
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_status_change_emits_workspace_status_update() {
+        let mut state = WindowState::default_for_test();
+
+        let transition =
+            state.reconcile_endpoint_event(&EndpointEvent::WorkspaceConnectionChanged {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
+            });
+
+        assert_eq!(
+            transition.connection_status_updates,
+            vec![ConnectionStatusUpdate {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
+            }],
+        );
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_inventory_loaded_recovers_workspace_and_persists() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_id = uuid::Uuid::new_v4().to_string();
+        let mut state = WindowState::default_for_test();
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+            endpoint: RuntimeEndpoint::Local,
+            sessions: vec![session_info(
+                &runtime_id,
+                "Recovered Workspace",
+                proto::RuntimePolicy::Persistent,
+                vec![pane_info(&pane_id, "Shell", "/srv/project")],
+                Some(&pane_id),
+            )],
+        });
+
+        assert_eq!(transition.recovered_workspaces.len(), 1);
+        assert!(transition.persist_window_state);
+        assert_eq!(
+            transition.connection_status_updates,
+            vec![ConnectionStatusUpdate {
+                workspace_id: format!("inventory:local:{runtime_id}"),
+                status: ConnectionStatus::Connecting,
+            }],
+        );
+        assert!(
+            state
+                .sessions
+                .iter()
+                .any(|session| session.uuid == format!("inventory:local:{runtime_id}"))
+        );
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_workspace_opened_rebuilds_restores_and_requests_missing_panes() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let first_terminal_uuid = uuid::Uuid::new_v4().to_string();
+        let second_terminal_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session(
+            "workspace-1",
+            "Workspace",
+            hsplit(term(&first_terminal_uuid), term(&second_terminal_uuid)),
+        )]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "workspace-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(
+                &runtime_id,
+                vec![pane_snapshot(
+                    &first_terminal_uuid,
+                    "Shell",
+                    "/srv/project",
+                    b"restored output",
+                )],
+            ),
+        });
+
+        assert_eq!(
+            transition.rebuilt_workspaces,
+            vec![ManagedWorkspaceRebuild {
+                workspace_id: "workspace-1".into(),
+                session_state: state.sessions[0].clone(),
+            }],
+        );
+        assert_eq!(
+            transition.pane_create_requests,
+            vec![ManagedPaneCreateRequest {
+                workspace_id: "workspace-1".into(),
+                endpoint: RuntimeEndpoint::Local,
+                runtime_id: runtime_id.clone(),
+                layout_terminal_uuid: second_terminal_uuid,
+            }],
+        );
+        assert_eq!(
+            transition.pane_snapshot_restores,
+            vec![WorkspacePaneRestore {
+                layout_terminal_uuid: first_terminal_uuid,
+                title: "Shell".into(),
+                cwd: "/srv/project".into(),
+                scrollback: b"restored output".to_vec(),
+            }],
+        );
+        assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_pane_created_updates_binding_and_requests_recovery() {
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::PaneCreated {
+            workspace_id: "workspace-1".into(),
+            layout_terminal_uuid: "pane-1".into(),
+            runtime_id: "d7d04564-b2bf-4302-9495-e65c4df12ac6".into(),
+            runtime_pane_id: "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26".into(),
+        });
+
+        assert_eq!(transition.connected_layout_terminals, vec!["pane-1".to_string()]);
+        assert_eq!(transition.layout_terminals_to_recover, vec!["pane-1".to_string()]);
+        assert_eq!(
+            transition.connection_status_updates,
+            vec![ConnectionStatusUpdate {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::Connected,
+            }],
+        );
+        assert_eq!(
+            state.sessions[0].runtime.pane_bindings.get("pane-1").map(String::as_str),
+            Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
+        );
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_pane_closed_removes_terminal_and_rebuilds_workspace() {
+        let mut session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
+        session.runtime.bind_runtime_pane("left", "07fa83b4-9ae3-4354-a1c5-1f685ffab370");
+        session.runtime.bind_runtime_pane("right", "0d88f17f-626d-40b8-a1d3-6a42af628ac9");
+        let mut state = window_state(vec![session]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::PaneClosed {
+            workspace_id: "workspace-1".into(),
+            layout_terminal_uuid: "right".into(),
+            runtime_id: "d7d04564-b2bf-4302-9495-e65c4df12ac6".into(),
+            runtime_pane_id: "0d88f17f-626d-40b8-a1d3-6a42af628ac9".into(),
+        });
+
+        assert_eq!(transition.removed_layout_terminals, vec!["right".to_string()]);
+        assert_eq!(transition.rebuilt_workspaces.len(), 1);
+        assert_eq!(state.sessions[0].layout.terminal_uuids(), vec!["left".to_string()]);
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_workspace_detached_preserves_runtime_id_and_marks_disconnected() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            term("pane-1"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        )]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceDetached {
+            workspace_id: "workspace-1".into(),
+            runtime_id: runtime_id.clone(),
+        });
+
+        assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(
+            transition.connection_status_updates,
+            vec![ConnectionStatusUpdate {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::Disconnected,
+            }],
+        );
+    }
+
+    #[test]
+    fn reconcile_endpoint_event_runtime_terminated_clears_runtime_id_and_marks_disconnected() {
+        let mut state = window_state(vec![managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            term("pane-1"),
+            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        )]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::RuntimeTerminated {
+            workspace_id: "workspace-1".into(),
+            runtime_id: "d7d04564-b2bf-4302-9495-e65c4df12ac6".into(),
+            reason: proto::RuntimeTerminationReason::Explicit,
+        });
+
+        assert_eq!(state.sessions[0].runtime.runtime_id, None);
+        assert_eq!(
+            transition.connection_status_updates,
+            vec![ConnectionStatusUpdate {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::Disconnected,
+            }],
+        );
     }
 }
