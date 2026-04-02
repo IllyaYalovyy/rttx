@@ -7,7 +7,7 @@
 # while rttx is open for normal work.
 #
 # Prerequisites:
-#   - cargo build  (produces target/debug/rttx)
+#   - cargo build --workspace  (produces target/debug/rttx and target/debug/rttx-server)
 #   - python3 with gi.repository.Atspi (python3-atspi / typelib-1_0-Atspi-2_0)
 #   - weston (headless Wayland compositor — dnf install weston)
 #
@@ -24,6 +24,12 @@ UI_TEST_DIR="$SCRIPT_DIR/clients/rttx/tests/ui"
 BINARY="$SCRIPT_DIR/target/debug/rttx"
 if [[ ! -f "$BINARY" ]]; then
     echo "ERROR: $BINARY not found. Run 'cargo build' first." >&2
+    exit 1
+fi
+
+DAEMON_BINARY="$SCRIPT_DIR/target/debug/rttx-server"
+if [[ ! -f "$DAEMON_BINARY" ]]; then
+    echo "ERROR: $DAEMON_BINARY not found. Run 'cargo build --workspace' first." >&2
     exit 1
 fi
 

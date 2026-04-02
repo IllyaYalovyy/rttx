@@ -339,6 +339,19 @@ impl Window {
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
         }
+
+        if state.needs_inventory_bootstrap(&RuntimeEndpoint::Local)
+            && crate::daemon::default_socket_path().exists()
+        {
+            let win = self.clone();
+            glib::idle_add_local_once(move || {
+                if win.ensure_connection_manager()
+                    && let Some(manager) = win.imp().connection_manager.borrow().as_ref()
+                {
+                    manager.refresh_inventory(&RuntimeEndpoint::Local);
+                }
+            });
+        }
     }
 
     pub fn save_state(&self) {
