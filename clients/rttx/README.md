@@ -63,6 +63,14 @@ sudo gtk-update-icon-cache -f -t /usr/local/share/icons/hicolor
 sudo update-desktop-database /usr/local/share/applications
 ```
 
+If your system has VTE 0.76 instead of 0.78, pass `-Dvte_version=0.76`:
+
+```bash
+meson setup build --prefix=/usr/local -Dvte_version=0.76
+meson compile -C build
+sudo meson install -C build
+```
+
 If `build/` already exists, reconfigure it:
 
 ```bash

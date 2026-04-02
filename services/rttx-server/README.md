@@ -135,7 +135,23 @@ propagates the env var when auto-starting it.
 
 ## Install
 
-Production install from source:
+The daemon must be on `$PATH` for the rttx client to auto-start it. Without it, daemon-backed
+workspaces (both ephemeral and persistent) will fail to connect.
+
+User-local install (no sudo needed):
+
+```bash
+cargo build --release -p rttx-server
+install -Dm755 target/release/rttx-server "$HOME/.local/bin/rttx-server"
+```
+
+Make sure `~/.local/bin` is in your `$PATH`. Most distributions include it by default; if not:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
+System-wide install:
 
 ```bash
 cargo build --release -p rttx-server
@@ -151,6 +167,12 @@ meson compile -C build
 sudo meson install -C build
 cargo build --release -p rttx-server
 sudo install -Dm755 target/release/rttx-server /usr/local/bin/rttx-server
+```
+
+Verify the daemon is reachable:
+
+```bash
+rttx-server --help
 ```
 
 ## Testing

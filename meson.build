@@ -45,7 +45,7 @@ custom_target('rttx-binary',
   command: [
     'sh', '-c',
     cargo.full_path() + ' fmt --manifest-path ' + workspace_manifest + ' --all --check && ' +
-    cargo.full_path() + ' clippy --manifest-path ' + client_dir / 'Cargo.toml' + ' -- -D warnings && ' +
+    cargo.full_path() + ' clippy --manifest-path ' + client_dir / 'Cargo.toml' + ' ' + cargo_vte_features + ' -- -D warnings && ' +
     cargo.full_path() + ' build --release -p rttx ' + cargo_vte_features + ' --manifest-path ' + workspace_manifest +
     ' --target-dir ' + meson.project_build_root() / 'cargo-target && ' +
     'cp ' + meson.project_build_root() / 'cargo-target' / 'release' / 'rttx' + ' @OUTPUT@'
