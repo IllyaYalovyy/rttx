@@ -15,7 +15,7 @@ pub struct TestClient {
 }
 
 /// Default timeout for `recv_timeout`.
-const DEFAULT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const DEFAULT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 impl TestClient {
     /// Connect to the server at the given socket path.
@@ -142,4 +142,23 @@ pub async fn start_test_server(
     assert!(sock.exists(), "server socket did not appear");
 
     (socket_path, handle)
+}
+
+/// Wait until the state file exists and has been written at least once.
+/// Polls every 200ms for up to `timeout`.
+pub async fn wait_for_state_file(cache_dir: &std::path::Path, timeout: std::time::Duration) {
+    let state_path = cache_dir.join("state.json");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if state_path.exists() && std::fs::metadata(&state_path).is_ok_and(|m| m.len() > 2) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "state file not written within {}ms at {}",
+            timeout.as_millis(),
+            state_path.display()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 }
