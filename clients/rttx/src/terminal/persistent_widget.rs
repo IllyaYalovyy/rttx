@@ -238,6 +238,7 @@ impl PersistentPaneView {
         let obj: Self = glib::Object::builder().build();
         obj.imp().uuid.replace(uuid.to_string());
         obj.imp().session_id.replace(session_id.to_string());
+        obj.connect_search();
         obj
     }
 
@@ -324,7 +325,41 @@ impl PersistentPaneView {
         bar.set_search_mode(!bar.is_search_mode());
         if bar.is_search_mode() {
             self.imp().search_entry.grab_focus();
+        } else {
+            self.imp().vte.search_set_regex(None::<&vte4::Regex>, 0);
+            let _ = self.imp().vte.grab_focus();
         }
+    }
+
+    fn connect_search(&self) {
+        let vte = self.imp().vte.clone();
+        self.imp().search_entry.connect_search_changed(move |entry| {
+            let text = entry.text();
+            if text.is_empty() {
+                vte.search_set_regex(None::<&vte4::Regex>, 0);
+                return;
+            }
+            if let Ok(regex) = vte4::Regex::for_search(&format!("\\Q{text}\\E"), 0) {
+                vte.search_set_regex(Some(&regex), 0);
+                vte.search_set_wrap_around(true);
+                vte.search_find_previous();
+            }
+        });
+
+        let vte_next = self.imp().vte.clone();
+        self.imp().search_entry.connect_next_match(move |_| {
+            vte_next.search_find_next();
+        });
+
+        let vte_prev = self.imp().vte.clone();
+        self.imp().search_entry.connect_previous_match(move |_| {
+            vte_prev.search_find_previous();
+        });
+
+        let vte_activate = self.imp().vte.clone();
+        self.imp().search_entry.connect_activate(move |_| {
+            vte_activate.search_find_next();
+        });
     }
 
     /// Current working directory reported by the runtime.
