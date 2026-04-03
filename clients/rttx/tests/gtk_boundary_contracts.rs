@@ -17,7 +17,7 @@
 /// 3. State machine contracts (valid operation sequences)
 /// 4. Data integrity contracts (what crosses the Rust/C boundary)
 use pretty_assertions::assert_eq;
-use rttx::session::layout::*;
+use rttx::session::*;
 
 fn term(id: &str) -> LayoutNode {
     LayoutNode::Terminal { uuid: id.into(), profile: None, cwd: None, custom_title: None }

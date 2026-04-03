@@ -6,7 +6,7 @@
 
 use pretty_assertions::assert_eq;
 use rttx::runtime::WorkspaceRuntime;
-use rttx::session::layout::*;
+use rttx::session::*;
 
 // ── Helpers (can't use test_helpers from lib, so inline) ─────────
 

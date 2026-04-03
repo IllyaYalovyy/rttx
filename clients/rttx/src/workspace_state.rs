@@ -1,8 +1,6 @@
 use crate::daemon_bridge::EndpointEvent;
 use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
-use crate::session::layout::{
-    LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState,
-};
+use crate::session::{LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState};
 use rttx_proto::proto;
 use std::collections::{BTreeMap, BTreeSet};
 

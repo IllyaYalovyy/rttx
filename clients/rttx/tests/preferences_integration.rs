@@ -79,7 +79,7 @@ fn preferences_unknown_fields_are_ignored() {
 #[test]
 fn preferences_input_sync_persists_in_session_state() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::session::layout::{LayoutNode, SessionMode, SessionState, WindowState};
+    use rttx::session::{LayoutNode, SessionMode, SessionState, WindowState};
 
     let state = WindowState {
         sessions: vec![SessionState {
@@ -121,7 +121,7 @@ fn preferences_backward_compat_missing_input_sync() {
         "is_maximized": false
     }"#;
 
-    let state: rttx::session::layout::WindowState = serde_json::from_str(json).unwrap();
+    let state: rttx::session::WindowState = serde_json::from_str(json).unwrap();
     assert!(!state.sessions[0].input_sync);
     assert!(state.sessions[0].active_terminal_uuid.is_none());
 }
@@ -129,7 +129,7 @@ fn preferences_backward_compat_missing_input_sync() {
 #[test]
 fn custom_title_persists_in_layout() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::session::layout::{LayoutNode, SessionMode, SessionState, WindowState};
+    use rttx::session::{LayoutNode, SessionMode, SessionState, WindowState};
 
     let state = WindowState {
         sessions: vec![SessionState {
@@ -173,10 +173,8 @@ fn custom_title_backward_compat_null() {
         "height": 600,
         "is_maximized": false
     }"#;
-    let state: rttx::session::layout::WindowState = serde_json::from_str(json).unwrap();
-    if let rttx::session::layout::LayoutNode::Terminal { custom_title, .. } =
-        &state.sessions[0].layout
-    {
+    let state: rttx::session::WindowState = serde_json::from_str(json).unwrap();
+    if let rttx::session::LayoutNode::Terminal { custom_title, .. } = &state.sessions[0].layout {
         assert_eq!(*custom_title, None);
     }
 }
