@@ -316,3 +316,17 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod search_tests {
+    /// The PCRE2 literal escape pattern wraps user input safely so special
+    /// regex characters are not interpreted.
+    #[test]
+    fn search_regex_literal_escaping() {
+        let text = "hello.world*[test](foo)+";
+        let pattern = format!("\\Q{text}\\E");
+        assert!(pattern.starts_with("\\Q"));
+        assert!(pattern.ends_with("\\E"));
+        assert!(pattern.contains(text));
+    }
+}
