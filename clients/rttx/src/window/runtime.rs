@@ -60,7 +60,6 @@ impl Window {
                 session_state.runtime.runtime_id.as_deref(),
                 placeholder_terminal_uuid.as_deref(),
             );
-            manager.refresh_inventory(&session_state.runtime.endpoint);
         }
     }
 
