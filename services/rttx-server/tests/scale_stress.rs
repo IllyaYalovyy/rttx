@@ -65,14 +65,18 @@ async fn create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
 }
 
 async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
+    client.drain(Duration::from_millis(50)).await;
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
         })
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-        other => panic!("expected SessionList, got {other:?}"),
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionList(sl)) => return sl.sessions,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionList, got {other:?}"),
+        }
     }
 }
 
