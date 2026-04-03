@@ -155,7 +155,7 @@ async fn large_scrollback_survives_detach_and_reattach() {
 
     let session_id =
         create_session(&mut client, "scrollback", proto::RuntimePolicy::Persistent).await;
-    let _snap = attach_rw(&mut client, &session_id).await;
+    attach_rw(&mut client, &session_id).await;
     let pane_id = create_pane(&mut client, &session_id).await;
 
     // Send a burst of input to generate scrollback.
