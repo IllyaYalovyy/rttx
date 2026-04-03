@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, list_sessions, start_test_server};
+use common::{TestClient, list_sessions, start_test_server, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -193,7 +193,12 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             other => panic!("expected PaneResized, got {other:?}"),
         }
 
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        wait_for_state_containing(
+            &tmp.path().join("cache"),
+            "restart-revision",
+            Duration::from_secs(10),
+        )
+        .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

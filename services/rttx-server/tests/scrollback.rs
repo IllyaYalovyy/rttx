@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::{TestClient, start_test_server, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -66,7 +66,12 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     client.send(&input).await;
 
     // Wait for output + serialization tick (server serializes every 1s).
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    wait_for_state_containing(
+        &tmp.path().join("cache"),
+        "scrollback-test",
+        Duration::from_secs(10),
+    )
+    .await;
 
     // Check that scrollback log exists in the cache directory.
     let scrollback_dir = tmp.path().join("cache").join("scrollback");

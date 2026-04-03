@@ -328,3 +328,27 @@ pub async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u
         })
         .await;
 }
+
+/// Wait until the state file contains a specific substring.
+/// Polls every 200ms for up to `timeout`.
+pub async fn wait_for_state_containing(
+    cache_dir: &std::path::Path,
+    needle: &str,
+    timeout: std::time::Duration,
+) {
+    let state_path = cache_dir.join("state.json");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if state_path.exists()
+            && std::fs::read_to_string(&state_path).is_ok_and(|c| c.contains(needle))
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "state file at {} never contained '{needle}'",
+            state_path.display()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
