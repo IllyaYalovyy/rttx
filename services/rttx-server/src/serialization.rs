@@ -160,4 +160,103 @@ mod tests {
         assert!(path.starts_with("/tmp/cache/scrollback"));
         assert!(path.to_string_lossy().ends_with(".log"));
     }
+
+    #[test]
+    fn load_corrupt_json_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+        std::fs::write(&path, "{ this is not valid json }").unwrap();
+        let result = load_state(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_truncated_json_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+        let state = sample_state();
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        // Write only the first half of the JSON.
+        std::fs::write(&path, &json[..json.len() / 2]).unwrap();
+        let result = load_state(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_empty_file_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+        std::fs::write(&path, "").unwrap();
+        let result = load_state(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_ignores_leftover_tmp_file() {
+        let tmp = TempDir::new().unwrap();
+        let state_path = tmp.path().join("state.json");
+        let tmp_path = state_path.with_extension("tmp");
+
+        // Simulate interrupted write: .tmp exists but .json doesn't.
+        std::fs::write(&tmp_path, "partial garbage").unwrap();
+
+        let result = load_state(&state_path).unwrap();
+        assert!(result.is_none(), "leftover .tmp must not be loaded as state");
+    }
+
+    #[test]
+    fn load_state_with_unknown_fields_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+        // JSON with extra fields that don't exist in the struct.
+        let json = r#"{
+            "sessions": [],
+            "serialized_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "server_version": "99.0.0",
+            "future_field": "should be ignored"
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let loaded = load_state(&path).unwrap().unwrap();
+        assert!(loaded.sessions.is_empty());
+    }
+
+    #[test]
+    fn write_to_readonly_dir_returns_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root ignores filesystem permission bits, so this test is meaningless as root.
+        if std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        {
+            eprintln!("SKIPPED: running as root");
+            return;
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("readonly");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let path = dir.join("state.json");
+        let state = ServerState::empty();
+        let result = write_state_atomic(&state, &path);
+        assert!(result.is_err());
+
+        // Restore permissions for cleanup.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_does_not_leave_tmp_on_success() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+        let state = sample_state();
+        write_state_atomic(&state, &path).unwrap();
+
+        let tmp_path = path.with_extension("tmp");
+        assert!(!tmp_path.exists(), ".tmp file must be cleaned up after successful write");
+        assert!(path.exists());
+    }
 }
