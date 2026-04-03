@@ -54,9 +54,13 @@ async fn create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
             })),
         })
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
-        other => panic!("expected PaneCreated, got {other:?}"),
+    // Drain Deltas from earlier panes until we find PaneCreated.
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::PaneCreated(pc)) => return pc.pane_id,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected PaneCreated, got {other:?}"),
+        }
     }
 }
 
