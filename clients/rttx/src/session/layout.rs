@@ -821,10 +821,8 @@ mod tests {
     /// Replacing a UUID must not corrupt sibling terminal metadata.
     #[test]
     fn replace_uuid_does_not_affect_sibling_cwd_or_title() {
-        let mut layout = hsplit(
-            term_full("t1", "/home", "editor"),
-            term_full("t2", "/tmp", "build"),
-        );
+        let mut layout =
+            hsplit(term_full("t1", "/home", "editor"), term_full("t2", "/tmp", "build"));
         assert!(layout.replace_terminal_uuid("t1", "new-t1"));
         assert_eq!(layout.terminal_cwd("new-t1").as_deref(), Some("/home"));
         assert_eq!(layout.terminal_custom_title("new-t1").as_deref(), Some("editor"));
