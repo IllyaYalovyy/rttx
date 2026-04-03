@@ -167,8 +167,8 @@ async fn large_scrollback_survives_detach_and_reattach() {
         send_input(&mut client, &session_id, &pane_id, format!("echo line-{i}\n").as_bytes()).await;
     }
 
-    // Let PTY process and serialization tick.
-    tokio::time::sleep(Duration::from_millis(3000)).await;
+    // Let PTY process the input.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // Detach.
     client
@@ -217,9 +217,25 @@ async fn scrollback_survives_restart() {
         }
 
         // Wait for serialization + scrollback flush.
-        tokio::time::sleep(Duration::from_millis(3000)).await;
+        // The serialization loop ticks every 1s. Wait for the state file to
+        // contain our session data, not just exist.
+        let cache_dir = tmp.path().join("cache");
+        let state_path = cache_dir.join("state.json");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if state_path.exists()
+                && std::fs::read_to_string(&state_path).is_ok_and(|c| c.contains("restart-scroll"))
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "state file never contained session data"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         handle.abort();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
     // Restart and reattach.

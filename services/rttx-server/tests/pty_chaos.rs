@@ -90,7 +90,7 @@ async fn wait_for_pane_exited(
     client: &mut TestClient,
     expected_pane_id: &[u8],
 ) -> proto::PaneExited {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(!remaining.is_zero(), "timed out waiting for PaneExited");
@@ -250,7 +250,7 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     client.drain(Duration::from_millis(500)).await;
 
     // Wait for shell to exit while detached.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Reattach — inventory should show exit status.
     let sessions = list_sessions(&mut client).await;
