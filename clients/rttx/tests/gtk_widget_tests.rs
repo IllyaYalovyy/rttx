@@ -1377,3 +1377,45 @@ fn window_add_session_materializes_managed_runtime_controls() {
     remove_env("RTTX_DISABLE_SHELL_SPAWN");
     remove_env("XDG_CONFIG_HOME");
 }
+
+#[test]
+#[ignore = "requires GTK display"]
+fn terminal_search_bar_wired_to_vte() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("search-wire-test", None);
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&term));
+    window.present();
+    pump_events(50);
+
+    assert!(!term.search_bar().is_search_mode());
+
+    term.toggle_search();
+    assert!(term.search_bar().is_search_mode());
+
+    term.search_entry().set_text("hello");
+    pump_events(50);
+    assert!(
+        term.vte().search_get_regex().is_some(),
+        "typing in search entry must set VTE search regex"
+    );
+
+    term.search_entry().set_text("");
+    pump_events(50);
+    assert!(
+        term.vte().search_get_regex().is_none(),
+        "clearing search entry must clear VTE search regex"
+    );
+
+    term.search_entry().set_text("world");
+    pump_events(50);
+    term.toggle_search();
+    assert!(
+        term.vte().search_get_regex().is_none(),
+        "closing search bar must clear VTE search regex"
+    );
+
+    window.close();
+}
