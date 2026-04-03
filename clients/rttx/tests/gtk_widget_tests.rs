@@ -270,7 +270,7 @@ fn build_layout_widget_sets_position_after_allocation() {
     require_display!();
 
     use rttx::session::build_layout_widget;
-    use rttx::session::layout::*;
+    use rttx::session::*;
 
     // (t1 / t2) | t3 — nested split
     let layout = LayoutNode::Split {
@@ -326,7 +326,7 @@ fn triple_nested_split_all_paneds_nonzero() {
     require_display!();
 
     use rttx::session::build_layout_widget;
-    use rttx::session::layout::*;
+    use rttx::session::*;
 
     // ((t1 | t2) | t3) | t4
     let layout = LayoutNode::Split {
@@ -602,7 +602,7 @@ fn build_layout_widget_calls_make_terminal_exactly_once_per_uuid() {
     require_display!();
 
     use rttx::session::build_layout_widget;
-    use rttx::session::layout::*;
+    use rttx::session::*;
     use std::collections::HashMap;
 
     let layout = LayoutNode::Split {
@@ -794,7 +794,7 @@ fn paned_extreme_but_valid_ratios_produce_nonzero_positions() {
     require_display!();
 
     use rttx::session::build_layout_widget;
-    use rttx::session::layout::*;
+    use rttx::session::*;
 
     // Test ratios near both ends of the valid (0, 1) range
     for &ratio in &[0.1f64, 0.2, 0.5, 0.8, 0.9] {

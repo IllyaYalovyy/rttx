@@ -6,7 +6,7 @@
 
 use pretty_assertions::assert_eq;
 use rttx::runtime::WorkspaceRuntime;
-use rttx::session::layout::*;
+use rttx::session::*;
 
 // ── Helpers (can't use test_helpers from lib, so inline) ─────────
 
@@ -286,4 +286,25 @@ fn session_order_persists_through_serialization() {
     let uuids: Vec<&str> = restored.sessions.iter().map(|s| s.uuid.as_str()).collect();
     assert_eq!(uuids, vec!["s3", "s1", "s2"], "session order must be preserved");
     assert_eq!(restored.active_session_index, 1);
+}
+
+/// Verify that the session module re-exports work correctly after the
+/// layout/state/recovery split — types from all three submodules are
+/// accessible through `rttx::session::*`.
+#[test]
+fn module_split_reexports_are_complete() {
+    // Layout types
+    let layout = LayoutNode::new_terminal();
+    assert_eq!(layout.terminal_count(), 1);
+
+    // Recovery types
+    let recovery = PaneRecovery::empty_shell();
+    assert_eq!(recovery.source, PaneSource::EmptyShell);
+
+    // State types
+    let session = SessionState::new("reexport-test".into());
+    assert_eq!(session.mode, SessionMode::Direct);
+
+    let state = WindowState::default();
+    assert!(!state.sessions.is_empty());
 }

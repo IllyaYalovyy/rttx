@@ -1,9 +1,10 @@
 pub mod layout;
+pub mod recovery;
+pub mod state;
 
-pub use layout::{
-    LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionMode, SessionState,
-    SplitOrientation, StartupStep, WindowState,
-};
+pub use layout::{LayoutNode, MAX_SPLIT_DEPTH, SplitOrientation};
+pub use recovery::{PaneRecovery, PaneSource, PaneTarget, StartupStep};
+pub use state::{SessionMode, SessionState, WindowState};
 
 use crate::config;
 use gtk4::glib;

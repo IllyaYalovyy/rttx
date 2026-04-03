@@ -4,7 +4,7 @@
 /// directory fixtures, and GTK initialization helpers.
 use crate::color_scheme::ColorScheme;
 use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
-use crate::session::layout::{
+use crate::session::{
     LayoutNode, PaneRecovery, SessionMode, SessionState, SplitOrientation, WindowState,
 };
 use std::path::{Path, PathBuf};
