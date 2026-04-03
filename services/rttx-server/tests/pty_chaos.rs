@@ -218,8 +218,23 @@ async fn title_change_during_output_does_not_corrupt_state() {
     let mixed = [osc_title.as_slice(), b"echo after-title\n"].concat();
     send_input(&mut client, &session_id, &pane_id, &mixed).await;
 
-    // Let the PTY process the input.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Drain Deltas until we see the echo output.
+    let target = b"after-title";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for title-interleaved output");
+        match client.try_recv(remaining).await {
+            Some(msg) => {
+                if let Some(proto::server_message::Msg::Delta(d)) = &msg.msg
+                    && d.data.windows(target.len()).any(|w| w == target)
+                {
+                    break;
+                }
+            }
+            None => panic!("timed out waiting for title-interleaved output"),
+        }
+    }
 
     // Server should still be responsive — list sessions as a liveness check.
     let sessions = list_sessions(&mut client).await;
@@ -249,8 +264,22 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
         .await;
     client.drain(Duration::from_millis(500)).await;
 
-    // Wait for shell to exit while detached.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Poll inventory until the pane reports an exit status.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let sessions = list_sessions(&mut client).await;
+        if !sessions.is_empty()
+            && !sessions[0].panes.is_empty()
+            && sessions[0].panes[0].exit_status.is_some()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for pane exit status in inventory"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
     // Reattach — inventory should show exit status.
     let sessions = list_sessions(&mut client).await;
