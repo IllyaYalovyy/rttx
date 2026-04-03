@@ -162,3 +162,169 @@ pub async fn wait_for_state_file(cache_dir: &std::path::Path, timeout: std::time
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
+
+// ── Reusable protocol helpers ───────────────────────────────────
+//
+// These cover the most common test operations. All helpers that receive
+// server responses drain interleaved Delta messages so they work
+// reliably on slow CI runners.
+
+/// Create a session and return its ID.
+pub async fn create_session(
+    client: &mut TestClient,
+    name: &str,
+    policy: proto::RuntimePolicy,
+) -> Vec<u8> {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                name: name.into(),
+                policy: policy as i32,
+            })),
+        })
+        .await;
+    match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
+        other => panic!("expected SessionCreated, got {other:?}"),
+    }
+}
+
+/// Attach as read-write and return the snapshot.
+pub async fn attach_rw(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                session_id: session_id.to_vec(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
+        .await;
+    match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::Snapshot(s)) => s,
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
+}
+
+/// Attach as read-only and return the snapshot.
+pub async fn attach_ro(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                session_id: session_id.to_vec(),
+                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+            })),
+        })
+        .await;
+    match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::Snapshot(s)) => s,
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
+}
+
+/// Create a pane, draining interleaved Deltas until `PaneCreated` arrives.
+pub async fn create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                session_id: session_id.to_vec(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::PaneCreated(pc)) => return pc.pane_id,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected PaneCreated, got {other:?}"),
+        }
+    }
+}
+
+/// Close a pane, draining interleaved Deltas and `PaneExited` until `PaneClosed`.
+pub async fn close_pane(client: &mut TestClient, session_id: &[u8], pane_id: &[u8]) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+                session_id: session_id.to_vec(),
+                pane_id: pane_id.to_vec(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::PaneClosed(_)) => return,
+            Some(
+                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+            ) => {}
+            other => panic!("expected PaneClosed, got {other:?}"),
+        }
+    }
+}
+
+/// Detach from a session, draining Deltas until `SessionDetached` or `SessionTerminated`.
+pub async fn detach_session(client: &mut TestClient, session_id: &[u8]) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                session_id: session_id.to_vec(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(
+                proto::server_message::Msg::SessionDetached(_)
+                | proto::server_message::Msg::SessionTerminated(_),
+            ) => return,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionDetached/Terminated, got {other:?}"),
+        }
+    }
+}
+
+/// Terminate a session, draining Deltas until `SessionTerminated`.
+pub async fn terminate_session(client: &mut TestClient, session_id: &[u8]) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
+                session_id: session_id.to_vec(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionTerminated(_)) => return,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionTerminated, got {other:?}"),
+        }
+    }
+}
+
+/// List sessions, draining pending Deltas.
+pub async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
+    client.drain(std::time::Duration::from_millis(50)).await;
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionList(sl)) => return sl.sessions,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionList, got {other:?}"),
+        }
+    }
+}
+
+/// Send input to a pane (fire-and-forget, no response expected).
+pub async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], data: &[u8]) {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: session_id.to_vec(),
+                pane_id: pane_id.to_vec(),
+                data: data.to_vec(),
+            })),
+        })
+        .await;
+}

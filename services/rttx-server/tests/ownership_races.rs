@@ -6,79 +6,11 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::*;
 use rttx_proto::proto;
 use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
-
-async fn create_session(client: &mut TestClient, name: &str) -> Vec<u8> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
-                name: name.into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
-            })),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
-    }
-}
-
-async fn attach_rw(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(s)) => s,
-        other => panic!("expected Snapshot, got {other:?}"),
-    }
-}
-
-async fn attach_ro(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
-            })),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(s)) => s,
-        other => panic!("expected Snapshot, got {other:?}"),
-    }
-}
-
-async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-        other => panic!("expected SessionList, got {other:?}"),
-    }
-}
-
-async fn detach(client: &mut TestClient, session_id: &[u8]) {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.to_vec(),
-            })),
-        })
-        .await;
-    client.recv_or_timeout().await;
-}
 
 // ── Competing writer attaches ───────────────────────────────────
 
@@ -89,7 +21,7 @@ async fn three_competing_writers_only_first_succeeds() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let session_id = create_session(&mut c1, "race").await;
+    let session_id = create_session(&mut c1, "race", proto::RuntimePolicy::Persistent).await;
     let snap = attach_rw(&mut c1, &session_id).await;
     assert_eq!(snap.current_client_role, proto::RuntimeClientRole::Writer as i32);
 
@@ -121,7 +53,8 @@ async fn readers_observe_pane_created_push() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let session_id = create_session(&mut writer, "push-test").await;
+    let session_id =
+        create_session(&mut writer, "push-test", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &session_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -159,7 +92,8 @@ async fn multiple_readers_see_consistent_revision() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let session_id = create_session(&mut writer, "rev-test").await;
+    let session_id =
+        create_session(&mut writer, "rev-test", proto::RuntimePolicy::Persistent).await;
     let snap = attach_rw(&mut writer, &session_id).await;
     let base_rev = snap.revision;
 
@@ -191,7 +125,8 @@ async fn writer_detach_then_reader_detach_leaves_clean_state() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let session_id = create_session(&mut writer, "detach-race").await;
+    let session_id =
+        create_session(&mut writer, "detach-race", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &session_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -199,12 +134,12 @@ async fn writer_detach_then_reader_detach_leaves_clean_state() {
     attach_ro(&mut reader, &session_id).await;
 
     // Writer detaches first.
-    detach(&mut writer, &session_id).await;
+    detach_session(&mut writer, &session_id).await;
     // Reader gets SessionDetached push.
     reader.drain(Duration::from_millis(200)).await;
 
     // Reader detaches.
-    detach(&mut reader, &session_id).await;
+    detach_session(&mut reader, &session_id).await;
 
     // Session should still exist (persistent policy).
     let mut checker = TestClient::connect(&sock).await;
@@ -222,7 +157,8 @@ async fn terminate_while_reader_attached_notifies_reader() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let session_id = create_session(&mut writer, "term-race").await;
+    let session_id =
+        create_session(&mut writer, "term-race", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &session_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -261,7 +197,8 @@ async fn writer_disconnect_frees_ownership_for_new_writer() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let session_id = create_session(&mut writer, "disconnect").await;
+    let session_id =
+        create_session(&mut writer, "disconnect", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &session_id).await;
 
     // Drop the writer (simulates disconnect).
@@ -282,7 +219,8 @@ async fn reader_survives_writer_disconnect() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let session_id = create_session(&mut writer, "reader-survives").await;
+    let session_id =
+        create_session(&mut writer, "reader-survives", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &session_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -309,7 +247,7 @@ async fn revisions_monotonic_across_attach_detach_cycle() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let session_id = create_session(&mut c1, "mono-rev").await;
+    let session_id = create_session(&mut c1, "mono-rev", proto::RuntimePolicy::Persistent).await;
 
     let mut last_rev = 0u64;
 
@@ -319,7 +257,7 @@ async fn revisions_monotonic_across_attach_detach_cycle() {
         assert!(snap.revision > last_rev, "revision must increase on attach");
         last_rev = snap.revision;
 
-        detach(&mut c1, &session_id).await;
+        detach_session(&mut c1, &session_id).await;
     }
 
     // Final inventory check.
