@@ -110,8 +110,8 @@ jobs:
             git gcc pkg-config rustup \
             protobuf-compiler protobuf-devel \
             gtk4-devel libadwaita-devel vte291-gtk4-devel \
-            weston python3-gobject python3-atspi \
-            dbus-daemon at-spi2-core
+            weston python3-gobject at-spi2-core at-spi2-atk \
+            dbus-daemon
 
       - uses: actions/checkout@v5
 
