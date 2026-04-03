@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::*;
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -37,52 +37,6 @@ async fn create_and_attach(client: &mut TestClient, name: &str) -> Vec<u8> {
         other => panic!("expected Snapshot, got {other:?}"),
     }
     session_id
-}
-
-async fn create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.to_vec(),
-            })),
-        })
-        .await;
-    loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => return pc.pane_id,
-            Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected PaneCreated, got {other:?}"),
-        }
-    }
-}
-
-async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], data: &[u8]) {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.to_vec(),
-                pane_id: pane_id.to_vec(),
-                data: data.to_vec(),
-            })),
-        })
-        .await;
-}
-
-async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
-    // Drain pending Deltas before sending ListSessions.
-    client.drain(Duration::from_millis(100)).await;
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
-        })
-        .await;
-    loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => return sl.sessions,
-            Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionList, got {other:?}"),
-        }
-    }
 }
 
 /// Drain messages until we find exactly one `PaneExited` for the given pane.

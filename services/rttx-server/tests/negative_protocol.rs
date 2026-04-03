@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::*;
 use rttx_proto::{proto, uuid_to_bytes};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -163,7 +163,7 @@ async fn close_pane_with_nonexistent_pane_returns_error() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test").await;
+    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
@@ -185,7 +185,7 @@ async fn resize_nonexistent_pane_returns_error() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test").await;
+    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
     attach_session(&mut client, &session_id).await;
 
     let msg = proto::ClientMessage {
@@ -212,7 +212,7 @@ async fn duplicate_close_pane_returns_error_on_second_call() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test").await;
+    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
     let pane_id = attach_and_create_pane(&mut client, &session_id).await;
 
     // First close succeeds.
@@ -246,7 +246,7 @@ async fn detach_without_attach_is_harmless() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test").await;
+    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
 
     // Detach without ever attaching — should not panic or error.
     let msg = proto::ClientMessage {
@@ -291,7 +291,7 @@ async fn input_to_nonexistent_pane_does_not_crash() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test").await;
+    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
     attach_session(&mut client, &session_id).await;
 
     let msg = proto::ClientMessage {
@@ -322,21 +322,6 @@ fn expect_error(resp: &proto::ServerMessage) -> &proto::Error {
     match &resp.msg {
         Some(proto::server_message::Msg::Error(e)) => e,
         other => panic!("expected Error, got {other:?}"),
-    }
-}
-
-async fn create_session(client: &mut TestClient, name: &str) -> Vec<u8> {
-    let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
-            name: name.into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
-        })),
-    };
-    client.send(&msg).await;
-    let resp = client.recv_or_timeout().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
     }
 }
 

@@ -2,22 +2,9 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::{TestClient, list_sessions, start_test_server};
 use rttx_proto::proto;
 use std::time::Duration;
-
-async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
-        })
-        .await;
-
-    match client.recv().await.msg {
-        Some(proto::server_message::Msg::SessionList(list)) => list.sessions,
-        other => panic!("expected SessionList, got {other:?}"),
-    }
-}
 
 #[tokio::test]
 async fn mutation_acks_return_monotonic_runtime_revisions() {

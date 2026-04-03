@@ -15,71 +15,11 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::*;
 use rttx_proto::proto;
 use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
-
-async fn create_session(
-    client: &mut TestClient,
-    name: &str,
-    policy: proto::RuntimePolicy,
-) -> Vec<u8> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
-                name: name.into(),
-                policy: policy as i32,
-            })),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
-    }
-}
-
-async fn attach_rw(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(s)) => s,
-        other => panic!("expected Snapshot, got {other:?}"),
-    }
-}
-
-async fn create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.to_vec(),
-            })),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
-        other => panic!("expected PaneCreated, got {other:?}"),
-    }
-}
-
-async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
-        })
-        .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-        other => panic!("expected SessionList, got {other:?}"),
-    }
-}
 
 // ── Persistent × Transport disconnect ───────────────────────────
 

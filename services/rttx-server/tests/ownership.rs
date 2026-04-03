@@ -2,21 +2,8 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::{TestClient, list_sessions, start_test_server};
 use rttx_proto::proto;
-
-async fn list_sessions(client: &mut TestClient) -> Vec<proto::SessionInfo> {
-    client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
-        })
-        .await;
-
-    match client.recv().await.msg {
-        Some(proto::server_message::Msg::SessionList(list)) => list.sessions,
-        other => panic!("expected SessionList, got {other:?}"),
-    }
-}
 
 #[tokio::test]
 async fn second_writer_attach_returns_attach_blocked() {
