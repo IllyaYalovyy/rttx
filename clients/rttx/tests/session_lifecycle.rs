@@ -308,3 +308,62 @@ fn module_split_reexports_are_complete() {
     let state = WindowState::default();
     assert!(!state.sessions.is_empty());
 }
+
+/// Closing a managed workspace must dismiss the runtime so inventory
+/// refresh does not resurrect it.
+#[test]
+fn close_managed_workspace_prevents_inventory_resurrection() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+    let mut state = WindowState {
+        sessions: vec![
+            SessionState::new("Direct".into()),
+            SessionState::new_managed_local("Managed".into(), WorkspacePolicy::Persistent, None),
+        ],
+        active_session_index: 0,
+        ..WindowState::default()
+    };
+
+    // Assign a runtime ID to the managed session.
+    state.sessions[1].runtime.runtime_id = Some(runtime_id.clone());
+
+    // Simulate close: remove session and dismiss runtime.
+    state.dismiss_runtime(&RuntimeEndpoint::Local, &runtime_id);
+    state.sessions.retain(|s| s.runtime.runtime_id.as_deref() != Some(&runtime_id));
+
+    // Inventory reports the runtime still exists.
+    let pane_id = uuid::Uuid::new_v4().to_string();
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+        endpoint: RuntimeEndpoint::Local,
+        sessions: vec![rttx_proto::proto::SessionInfo {
+            id: uuid::Uuid::parse_str(&runtime_id).unwrap().as_bytes().to_vec(),
+            name: "Should Not Resurrect".into(),
+            pane_count: 1,
+            has_attached_client: false,
+            active_pane_id: None,
+            panes: vec![rttx_proto::proto::PaneInfo {
+                id: uuid::Uuid::parse_str(&pane_id).unwrap().as_bytes().to_vec(),
+                title: "bash".into(),
+                cwd: "/tmp".into(),
+                cols: 80,
+                rows: 24,
+                exit_status: None,
+                reconstructed: false,
+            }],
+            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
+            attached_client_count: 0,
+            reconstructed: false,
+            revision: 1,
+            current_client_role: 0,
+            has_write_owner: false,
+            read_only_client_count: 0,
+        }],
+    });
+
+    assert!(
+        transition.recovered_workspaces.is_empty(),
+        "dismissed runtime must not be resurrected"
+    );
+}
