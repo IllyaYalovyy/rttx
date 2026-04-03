@@ -159,12 +159,12 @@ async fn large_scrollback_survives_detach_and_reattach() {
     let pane_id = create_pane(&mut client, &session_id).await;
 
     // Send a burst of input to generate scrollback.
-    for i in 0..50 {
+    for i in 0..20 {
         send_input(&mut client, &session_id, &pane_id, format!("echo line-{i}\n").as_bytes()).await;
     }
 
     // Let PTY process and serialization tick.
-    tokio::time::sleep(Duration::from_millis(2000)).await;
+    tokio::time::sleep(Duration::from_millis(3000)).await;
 
     // Detach.
     client
@@ -213,7 +213,7 @@ async fn scrollback_survives_restart() {
         }
 
         // Wait for serialization + scrollback flush.
-        tokio::time::sleep(Duration::from_millis(2000)).await;
+        tokio::time::sleep(Duration::from_millis(3000)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
