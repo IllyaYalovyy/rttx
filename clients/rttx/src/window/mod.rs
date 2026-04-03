@@ -1654,11 +1654,16 @@ impl Window {
         if let Some((endpoint, runtime_id)) = managed_runtime
             && let Some(manager) = imp.connection_manager.borrow().as_ref()
         {
-            if let Some(runtime_id) = runtime_id {
-                manager.detach_runtime(session_uuid, &endpoint, &runtime_id);
+            if let Some(ref runtime_id) = runtime_id {
+                manager.terminate_runtime(session_uuid, &endpoint, runtime_id);
             }
             manager.forget_workspace(&endpoint, session_uuid);
             imp.workspace_connection_status.borrow_mut().remove(session_uuid);
+
+            // Prevent inventory resurrection of the terminated runtime.
+            if let Some(runtime_id) = runtime_id {
+                imp.state.borrow_mut().dismissed_runtime_ids.insert(runtime_id);
+            }
         }
         self.clear_workspace_reconnect_countdown(session_uuid);
 

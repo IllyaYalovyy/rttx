@@ -70,6 +70,11 @@ pub struct EndpointEventTransition {
 }
 
 impl WindowState {
+    /// Record a runtime ID as dismissed so inventory refresh won't resurrect it.
+    pub fn dismiss_runtime(&mut self, _endpoint: &RuntimeEndpoint, runtime_id: &str) {
+        self.dismissed_runtime_ids.insert(runtime_id.to_string());
+    }
+
     /// True when startup should query an endpoint for inventory bootstrap.
     #[must_use]
     pub fn needs_inventory_bootstrap(&self, endpoint: &RuntimeEndpoint) -> bool {
@@ -216,6 +221,9 @@ impl WindowState {
             let Some(runtime_id) = session.runtime.runtime_id.clone() else {
                 continue;
             };
+            if self.dismissed_runtime_ids.contains(&runtime_id) {
+                continue;
+            }
             if !known_runtime_ids.insert(runtime_id) {
                 continue;
             }
@@ -1158,5 +1166,36 @@ mod tests {
         assert!(ws.recovery_for("t1").is_some());
         ws.prune_recovery();
         assert!(ws.recovery_for("t1").is_some());
+    }
+
+    #[test]
+    fn dismissed_runtime_is_not_resurrected_by_inventory() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_id = uuid::Uuid::new_v4().to_string();
+        let mut state = WindowState::default_for_test();
+
+        // Dismiss the runtime (simulates user closing the workspace).
+        state.dismiss_runtime(&RuntimeEndpoint::Local, &runtime_id);
+
+        // Inventory refresh reports the runtime still exists on the daemon.
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+            endpoint: RuntimeEndpoint::Local,
+            sessions: vec![session_info(
+                &runtime_id,
+                "Should Not Resurrect",
+                proto::RuntimePolicy::Persistent,
+                vec![pane_info(&pane_id, "Shell", "/tmp")],
+                Some(&pane_id),
+            )],
+        });
+
+        assert!(
+            transition.recovered_workspaces.is_empty(),
+            "dismissed runtime must not be resurrected by inventory"
+        );
+        assert!(
+            !state.sessions.iter().any(|s| s.runtime.runtime_id.as_deref() == Some(&runtime_id)),
+            "dismissed runtime must not appear in session state"
+        );
     }
 }

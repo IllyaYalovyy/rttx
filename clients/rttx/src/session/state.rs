@@ -240,6 +240,10 @@ pub struct WindowState {
     pub left_sidebar_width: i32,
     #[serde(default = "default_right_sidebar_width")]
     pub right_sidebar_width: i32,
+    /// Runtime IDs that the user explicitly closed. Prevents inventory
+    /// resurrection until the daemon actually removes the runtime.
+    #[serde(default)]
+    pub dismissed_runtime_ids: std::collections::BTreeSet<String>,
 }
 
 impl Default for WindowState {
@@ -252,6 +256,7 @@ impl Default for WindowState {
             is_maximized: false,
             left_sidebar_width: default_left_sidebar_width(),
             right_sidebar_width: default_right_sidebar_width(),
+            dismissed_runtime_ids: std::collections::BTreeSet::new(),
         }
     }
 }
