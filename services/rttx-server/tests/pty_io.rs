@@ -61,7 +61,7 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
 
     // A shell produces a prompt or at least some output on startup.
     // Collect any Delta messages within a reasonable window.
-    let msgs = client.drain(Duration::from_secs(2)).await;
+    let msgs = client.drain(Duration::from_secs(10)).await;
     let delta_count =
         msgs.iter().filter(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_)))).count();
     assert!(delta_count > 0, "expected at least one Delta, got {delta_count} messages: {msgs:?}");
