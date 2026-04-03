@@ -99,6 +99,43 @@ jobs:
           CARGO_HOME: /usr/local/cargo
         run: bash .github/scripts/run-quality-tests.sh
 
+  ui-test:
+    name: UI behavioral tests
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install toolchain and dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkg-config rustup \
+            protobuf-compiler protobuf-devel \
+            gtk4-devel libadwaita-devel vte291-gtk4-devel \
+            weston python3-gobject at-spi2-core at-spi2-atk \
+            dbus-daemon
+
+      - uses: actions/checkout@v5
+
+      - name: Setup Rust
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: |
+          rustup-init -y --default-toolchain stable
+          echo "/usr/local/cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build workspace
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: cargo build --workspace
+
+      - name: Run UI tests
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: |
+          dbus-run-session -- ./run_ui_tests.sh
+
   manifest:
     name: Flatpak manifest
     runs-on: ubuntu-latest
