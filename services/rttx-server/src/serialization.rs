@@ -223,6 +223,17 @@ mod tests {
     #[test]
     fn write_to_readonly_dir_returns_error() {
         use std::os::unix::fs::PermissionsExt;
+
+        // Root ignores filesystem permission bits, so this test is meaningless as root.
+        if std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        {
+            eprintln!("SKIPPED: running as root");
+            return;
+        }
+
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("readonly");
         std::fs::create_dir_all(&dir).unwrap();
