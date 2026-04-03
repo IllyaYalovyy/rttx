@@ -57,14 +57,30 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (_session_id, _pane_id) = setup_attached_pane(&mut client).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // A shell produces a prompt or at least some output on startup.
-    // Collect any Delta messages within a reasonable window.
-    let msgs = client.drain(Duration::from_secs(10)).await;
-    let delta_count =
-        msgs.iter().filter(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_)))).count();
-    assert!(delta_count > 0, "expected at least one Delta, got {delta_count} messages: {msgs:?}");
+    // Force output by sending a harmless command, then poll for the Delta.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: session_id.clone(),
+                pane_id: pane_id.clone(),
+                data: b"echo rttx_pty_test\n".to_vec(),
+            })),
+        })
+        .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for Delta from shell");
+        match client.try_recv(remaining).await {
+            Some(msg) if matches!(msg.msg, Some(proto::server_message::Msg::Delta(_))) => break,
+            Some(_) => {}
+            None => panic!("timed out waiting for Delta from shell"),
+        }
+    }
 }
 
 #[tokio::test]
@@ -250,8 +266,8 @@ async fn pane_exit_produces_pane_exited_message() {
     });
     let exited = exited.expect("expected PaneExited message");
 
-    let exit_pane_id = bytes_to_uuid(&exited.pane_id).unwrap();
-    let expected_pane_id = bytes_to_uuid(&pane_id).unwrap();
-    assert_eq!(exit_pane_id, expected_pane_id);
+    let exitpane_id = bytes_to_uuid(&exited.pane_id).unwrap();
+    let expectedpane_id = bytes_to_uuid(&pane_id).unwrap();
+    assert_eq!(exitpane_id, expectedpane_id);
     assert_eq!(exited.status, 7);
 }
