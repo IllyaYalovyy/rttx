@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, list_sessions, start_test_server};
+use common::{TestClient, list_sessions, start_test_server, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -140,7 +140,7 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
-                    name: "ephemeral-restart".into(),
+                    name: "serialized_at".into(),
                     policy: proto::RuntimePolicy::Ephemeral as i32,
                 })),
             })
@@ -160,7 +160,12 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
             Some(proto::server_message::Msg::PaneCreated(_))
         ));
 
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        wait_for_state_containing(
+            &tmp.path().join("cache"),
+            "serialized_at",
+            Duration::from_secs(10),
+        )
+        .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

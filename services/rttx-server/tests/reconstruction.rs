@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::{TestClient, start_test_server, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -68,7 +68,12 @@ async fn reconstruct_session_after_restart() {
         client.send(&input).await;
 
         // Wait for output and serialization tick (>1s).
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        wait_for_state_containing(
+            &tmp.path().join("cache"),
+            "reconstruct-test",
+            Duration::from_secs(10),
+        )
+        .await;
 
         // Drain any pending deltas.
         let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
@@ -190,7 +195,12 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
             })
             .await;
 
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        wait_for_state_containing(
+            &tmp.path().join("cache"),
+            "reconstruct-cwd",
+            Duration::from_secs(10),
+        )
+        .await;
         let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
 
         handle.abort();

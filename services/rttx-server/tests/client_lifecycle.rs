@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server};
+use common::{TestClient, start_test_server, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -71,7 +71,12 @@ async fn reconnect_restores_scrollback() {
         .await;
 
         // Wait for output + serialization tick.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        wait_for_state_containing(
+            &tmp.path().join("cache"),
+            "lifecycle-test",
+            Duration::from_secs(10),
+        )
+        .await;
 
         // Drain deltas.
         let _ = c.drain(Duration::from_millis(500)).await;
@@ -236,7 +241,12 @@ async fn restart_preserves_session_count_and_scrollback() {
         .await;
 
         // Wait for serialization.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        wait_for_state_containing(
+            &tmp.path().join("cache"),
+            "restart-stable",
+            Duration::from_secs(10),
+        )
+        .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
