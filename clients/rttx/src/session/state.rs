@@ -616,3 +616,34 @@ mod tests {
         assert_eq!(session, restored);
     }
 }
+
+#[cfg(test)]
+mod module_boundary_tests {
+    use super::*;
+    use crate::session::layout::SplitOrientation;
+
+    /// Verify that layout tree operations and state recovery stay consistent
+    /// across the module boundary after the layout/state/recovery split.
+    #[test]
+    fn split_then_prune_recovery_respects_module_boundary() {
+        let mut session = SessionState::new("Test".into());
+        let uuid = session.layout.terminal_uuids()[0].clone();
+
+        let (new_layout, new_uuid) = session
+            .layout
+            .split_terminal_with_new_uuid(&uuid, SplitOrientation::Horizontal)
+            .unwrap();
+        session.layout = new_layout;
+        session.set_recovery(&new_uuid, PaneRecovery::empty_shell());
+
+        assert_eq!(session.layout.terminal_count(), 2);
+        assert!(session.recovery_for(&new_uuid).is_some());
+
+        session.layout = session.layout.remove_terminal(&new_uuid).unwrap();
+        session.prune_recovery();
+
+        assert_eq!(session.layout.terminal_count(), 1);
+        assert!(session.recovery_for(&new_uuid).is_none());
+        assert!(session.recovery_for(&uuid).is_some());
+    }
+}

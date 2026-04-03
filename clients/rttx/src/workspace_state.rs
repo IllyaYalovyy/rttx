@@ -1146,4 +1146,17 @@ mod tests {
             }],
         );
     }
+
+    /// After the layout/state/recovery module split, session types imported
+    /// through `crate::session::*` must still compose correctly in workspace
+    /// state operations.
+    #[test]
+    fn session_types_compose_after_module_split() {
+        let mut state = window_state(vec![session("s1", "Work", term("t1"))]);
+        let ws = &mut state.sessions[0];
+        ws.set_recovery("t1", PaneRecovery::empty_shell());
+        assert!(ws.recovery_for("t1").is_some());
+        ws.prune_recovery();
+        assert!(ws.recovery_for("t1").is_some());
+    }
 }
