@@ -60,11 +60,17 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
     let (_session_id, _pane_id) = setup_attached_pane(&mut client).await;
 
     // A shell produces a prompt or at least some output on startup.
-    // Collect any Delta messages within a reasonable window.
-    let msgs = client.drain(Duration::from_secs(10)).await;
-    let delta_count =
-        msgs.iter().filter(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_)))).count();
-    assert!(delta_count > 0, "expected at least one Delta, got {delta_count} messages: {msgs:?}");
+    // Poll until we receive at least one Delta instead of draining a fixed window.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for initial Delta from shell");
+        match client.try_recv(remaining).await {
+            Some(msg) if matches!(msg.msg, Some(proto::server_message::Msg::Delta(_))) => break,
+            Some(_) => {}
+            None => panic!("timed out waiting for initial Delta from shell"),
+        }
+    }
 }
 
 #[tokio::test]
