@@ -641,6 +641,20 @@ mod tests {
     }
 
     #[test]
+    fn workspace_connection_summary_for_connected_remote_stays_compact() {
+        let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+
+        assert_eq!(
+            workspace_connection_summary(&endpoint, &ConnectionStatus::Connected),
+            "builder.example"
+        );
+        assert_eq!(
+            workspace_connection_summary(&endpoint, &ConnectionStatus::Disconnected),
+            "builder.example · Disconnected"
+        );
+    }
+
+    #[test]
     fn workspace_actions_for_persistent_runtime_offer_detach_and_terminate() {
         let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
 

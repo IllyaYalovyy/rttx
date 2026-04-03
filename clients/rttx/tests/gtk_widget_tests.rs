@@ -15,6 +15,7 @@
 /// These tests are ignored by default so `cargo test` works headless.
 use gtk4::gio::prelude::*;
 use gtk4::prelude::*;
+use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Once;
@@ -47,6 +48,16 @@ macro_rules! require_display {
             return;
         }
     };
+}
+
+#[allow(unsafe_code)]
+fn set_env(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    unsafe { std::env::set_var(key, value) }
+}
+
+#[allow(unsafe_code)]
+fn remove_env(key: &str) {
+    unsafe { std::env::remove_var(key) }
 }
 
 /// This is the exact bug that caused the split crash: a single widget
@@ -414,6 +425,45 @@ fn present_widget(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) -> gtk4::Windo
     window.present();
     pump_events(100);
     window
+}
+
+fn walk_widget_tree(root: &gtk4::Widget, mut visit: impl FnMut(&gtk4::Widget)) {
+    fn walk(root: &gtk4::Widget, visit: &mut impl FnMut(&gtk4::Widget)) {
+        visit(root);
+
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            walk(&widget, visit);
+            child = widget.next_sibling();
+        }
+    }
+
+    walk(root, &mut visit);
+}
+
+fn count_buttons_with_tooltip(
+    root: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    tooltip: &str,
+) -> usize {
+    let mut matches = 0;
+    walk_widget_tree(root.as_ref(), |widget| {
+        if let Some(button) = widget.downcast_ref::<gtk4::Button>()
+            && button.tooltip_text().as_deref() == Some(tooltip)
+        {
+            matches += 1;
+        }
+    });
+    matches
+}
+
+fn count_vte_terminals(root: &impl gtk4::prelude::IsA<gtk4::Widget>) -> usize {
+    let mut matches = 0;
+    walk_widget_tree(root.as_ref(), |widget| {
+        if widget.is::<vte4::Terminal>() {
+            matches += 1;
+        }
+    });
+    matches
 }
 
 fn clipboard_text() -> Option<String> {
@@ -1282,4 +1332,48 @@ fn persistent_pane_view_has_expected_children() {
     assert!(pane.split_v_button().icon_name().is_some());
     // VTE should exist.
     assert!(pane.vte().column_count() >= 0);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn window_add_session_materializes_managed_runtime_controls() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    set_env("XDG_CONFIG_HOME", tmp.path());
+    set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.window-runtime-module-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = rttx::window::Window::new(&app);
+    window.set_default_size(1200, 800);
+    window.present();
+    pump_events(100);
+
+    assert_eq!(count_buttons_with_tooltip(&window, "Close terminal"), 1);
+    assert_eq!(count_buttons_with_tooltip(&window, "Close pane"), 0);
+    assert_eq!(count_vte_terminals(&window), 1);
+
+    window.add_session();
+    assert!(
+        wait_until(1_000, || count_buttons_with_tooltip(&window, "Close pane") == 1),
+        "adding a managed workspace should materialize persistent pane controls"
+    );
+    assert_eq!(
+        count_buttons_with_tooltip(&window, "Close terminal"),
+        1,
+        "the direct workspace controls should remain present"
+    );
+    assert_eq!(
+        count_vte_terminals(&window),
+        2,
+        "window should keep one direct terminal and add one managed pane terminal"
+    );
+
+    window.close();
+    remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    remove_env("XDG_CONFIG_HOME");
 }
