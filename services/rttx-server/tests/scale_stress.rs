@@ -167,8 +167,23 @@ async fn large_scrollback_survives_detach_and_reattach() {
         send_input(&mut client, &session_id, &pane_id, format!("echo line-{i}\n").as_bytes()).await;
     }
 
-    // Let PTY process the input.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // Drain Deltas until we see output from the last echo command.
+    let target = b"line-19";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for PTY output");
+        match client.try_recv(remaining).await {
+            Some(msg) => {
+                if let Some(proto::server_message::Msg::Delta(d)) = &msg.msg
+                    && d.data.windows(target.len()).any(|w| w == target)
+                {
+                    break;
+                }
+            }
+            None => panic!("timed out waiting for PTY output"),
+        }
+    }
 
     // Detach.
     client
