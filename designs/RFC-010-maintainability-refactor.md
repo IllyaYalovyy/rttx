@@ -33,15 +33,17 @@ Several slices of this RFC are already on `mainline`:
   transitions
 - `clients/rttx/src/terminal/handle.rs` is the shared terminal abstraction for direct and
   daemon-backed panes
-- `window.rs` is still too large and still carries the hottest daemon-backed correctness paths:
-  endpoint-event handling, workspace/runtime reconciliation, and visible-session rebuild behavior
-- `clients/rttx/src/session/layout.rs` still mixes layout, state, and recovery concerns
-- direct and managed terminals still duplicate parts of shortcut/input policy
-- the daemon has stronger end-to-end lifecycle coverage than the GTK client does; the remaining
-  test gap is now the black-box client+daemon path
-
-So this RFC is no longer speculative. It is the active refactor roadmap for code that has already
-started moving, with major remaining follow-up still tracked in the issue backlog.
+- `window.rs` has been split into `window/mod.rs` and `window/runtime.rs` (#204), moving
+  endpoint-event dispatch and managed-workspace rendering hooks into their own module
+- `session/layout.rs` has been split into `layout.rs`, `recovery.rs`, and `state.rs` (#205),
+  separating layout tree operations from recovery types and persisted state
+- terminal search is now wired to VTE's buffer search API (#221), resolving the dead-UI concern
+- direct and managed terminals share shortcut policy via a unified input handler (#201)
+- the daemon test harness has been consolidated into shared helpers (#219) with polling-based
+  assertions instead of fixed sleeps
+- AT-SPI2 behavioral UI tests now run in CI on every push and PR (#220)
+- the daemon has comprehensive lifecycle, adversarial, and recovery matrix coverage (#144–#153)
+- the remaining test gap is the black-box client+daemon GTK path (#185)
 
 ---
 
@@ -395,21 +397,23 @@ seams already exist.
 
 - [ ] **Step 1** — Complete inventory-driven recovered-workspace synthesis with regression coverage (`#184`) *(prerequisite: —)*
 - [ ] **Step 2** — Extract endpoint-event reconciliation into a pure tested workspace/runtime reducer (`#186`) *(prerequisite: Step 1)*
-- [ ] **Step 3** — Share direct/managed terminal shortcut policy and add regression coverage (`#187`) *(prerequisite: Step 2)*
+- [x] **Step 3** — Share direct/managed terminal shortcut policy and add regression coverage (`#187`, `#201`) *(prerequisite: Step 2)*
 - [ ] **Step 4** — Add black-box client+daemon GTK integration coverage for restore/restart/selection sync (`#185`) *(prerequisite: Steps 1–3 can land incrementally)*
 - [ ] **Step 5** — Fix terminal retry/title-sync lifecycle and remaining low-risk correctness cleanup *(prerequisite: Step 2)*
-- [ ] **Step 6** — Split `window.rs` into `build`, `actions`, `runtime`, `sessions`, `recovery`, and `sidebars` modules (`#98`) *(prerequisite: Steps 1–5)*
-- [ ] **Step 7** — Split `session/layout.rs` into layout tree, state, and recovery modules (`#101`) *(prerequisite: Step 6)*
-- [ ] **Step 8** — Tighten the terminal widget API and finish or remove inactive search UI (`#24`) *(prerequisite: Step 7)*
-- [ ] **Step 9** — Promote daemon-backed stability coverage into routine CI gating (`#109`, `#147`, `#153`) *(prerequisite: Step 4)*
+- [ ] **Step 6** — Split `window.rs` into `build`, `actions`, `runtime`, `sessions`, `recovery`, and `sidebars` modules (`#98`, `#204` partial) *(prerequisite: Steps 1–5)*
+- [x] **Step 7** — Split `session/layout.rs` into layout tree, state, and recovery modules (`#101`, `#205`) *(prerequisite: Step 6)*
+- [x] **Step 8** — Tighten the terminal widget API and finish or remove inactive search UI (`#24`, `#221`) *(prerequisite: Step 7)*
+- [x] **Step 9** — Promote daemon-backed stability coverage into routine CI gating (`#109`→`#220`, `#147`→`#209`, `#153`→`#219`) *(prerequisite: Step 4)*
 
 ---
 
 ## Open Questions
 
-- [ ] Should terminal search be finished as part of the refactor, or explicitly removed until the feature is real?
-- [ ] Do we want `clients/rttx/src/window/` as a module directory immediately, or only after
+- [x] Should terminal search be finished as part of the refactor, or explicitly removed until the feature is real?
+  **Resolved**: Implemented in #221. Search entry is now wired to VTE's `search_set_regex`/`search_find_next`/`search_find_previous`.
+- [x] Do we want `clients/rttx/src/window/` as a module directory immediately, or only after
   Phase 3 extracts enough code to justify it?
+  **Resolved**: `window/` is already a module directory with `mod.rs` and `runtime.rs` (#204). Further splits will add files to this directory.
 
 ---
 
