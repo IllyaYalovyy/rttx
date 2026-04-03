@@ -76,8 +76,19 @@ run_logged_command() {
 }
 
 run_library_tests() {
-    run_logged_command "Library tests" \
-        cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib -- --test-threads=1 --include-ignored --nocapture
+    # Non-GTK tests run normally (they're not #[ignore]).
+    run_logged_command "Library tests (non-GTK)" \
+        cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib -- --nocapture
+
+    # GTK tests are #[ignore] because they need a display and can't share
+    # a process (GTK global state). Run each one in its own cargo invocation.
+    local ignored_test
+    while IFS= read -r ignored_test; do
+        [[ -n "${ignored_test}" ]] || continue
+        run_logged_command "Library test ${ignored_test}" \
+            cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" \
+            --lib "${ignored_test}" -- --ignored --exact --nocapture
+    done < <(cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --lib -- --ignored --list 2>/dev/null | grep ': test$' | sed 's/: test$//')
 }
 
 trap cleanup EXIT
@@ -92,9 +103,18 @@ run_library_tests
 run_logged_command "Binary tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --bins -- --nocapture
 
 while IFS= read -r integration_test; do
+    # Non-ignored tests.
     run_logged_command "Integration test ${integration_test}" \
         cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" \
-        --test "${integration_test}" -- --test-threads=1 --include-ignored --nocapture
+        --test "${integration_test}" -- --nocapture
+
+    # Ignored (GTK) tests — each in its own process.
+    while IFS= read -r ignored_test; do
+        [[ -n "${ignored_test}" ]] || continue
+        run_logged_command "Integration test ${integration_test}::${ignored_test}" \
+            cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" \
+            --test "${integration_test}" "${ignored_test}" -- --ignored --exact --nocapture
+    done < <(cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --test "${integration_test}" -- --ignored --list 2>/dev/null | grep ': test$' | sed 's/: test$//')
 done < <(find "${client_test_dir}" -maxdepth 1 -type f -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort)
 
 run_logged_command "Doc tests" cargo test --manifest-path "${client_manifest}" "${CLIENT_FEATURE_ARGS[@]}" --doc -- --nocapture
