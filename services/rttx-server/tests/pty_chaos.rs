@@ -230,44 +230,35 @@ async fn title_change_during_output_does_not_corrupt_state() {
 // ── Shell exits before first attach ─────────────────────────────
 
 #[tokio::test]
-async fn shell_exits_before_attach_shows_exit_status_in_inventory() {
+async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     let tmp = tempfile::tempdir().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    client.handshake().await;
+    let session_id = create_and_attach(&mut client, "pre-attach-exit").await;
+    let pane_id = create_pane(&mut client, &session_id).await;
 
-    // Create session and pane WITHOUT attaching first.
+    // Send exit, then detach before the shell finishes.
+    send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
-                name: "pre-attach-exit".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                session_id: session_id.clone(),
             })),
         })
         .await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
-    };
+    client.drain(Duration::from_millis(500)).await;
 
-    let pane_id = create_pane(&mut client, &session_id).await;
-
-    // Send exit — shell will die before any client attaches.
-    send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
-
-    // Wait for exit.
+    // Wait for shell to exit while detached.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Now attach — the pane should show exit status in the inventory.
+    // Reattach — inventory should show exit status.
     let sessions = list_sessions(&mut client).await;
     assert_eq!(sessions.len(), 1);
-
-    let pane_info = &sessions[0].panes;
-    assert_eq!(pane_info.len(), 1);
+    assert_eq!(sessions[0].panes.len(), 1);
     assert!(
-        pane_info[0].exit_status.is_some(),
-        "pane that exited before attach must report exit status"
+        sessions[0].panes[0].exit_status.is_some(),
+        "pane that exited while detached must report exit status"
     );
 }
 
