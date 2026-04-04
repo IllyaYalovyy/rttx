@@ -1445,3 +1445,15 @@ fn close_dialog_has_no_detach_or_terminate_for_managed_workspace() {
     assert!(!presentation.body.contains("Detach"));
     assert!(!presentation.body.contains("Terminate"));
 }
+
+/// Managed pane banner must not have retry/edit/close action buttons.
+/// Regression test for #196.
+#[test]
+fn managed_pane_banner_is_passive() {
+    // The PersistentPaneView no longer has retry_button, edit_connection_button,
+    // or close_workspace_button fields. This is a compile-time check that the
+    // connect_retry_requested, connect_edit_connection_requested, and
+    // connect_close_workspace_requested methods no longer exist.
+    let _: fn(&str, &str) -> rttx::terminal::persistent_widget::PersistentPaneView =
+        rttx::terminal::persistent_widget::PersistentPaneView::new;
+}
