@@ -1433,3 +1433,15 @@ fn managed_terminal_paste_method_exists() {
     // routing is covered by the unit tests in terminal/mod.rs.
     let _: fn(&PersistentPaneView) -> &vte4::Terminal = PersistentPaneView::vte;
 }
+
+/// Close dialog for managed workspaces must not offer detach or terminate.
+/// Regression test for #195.
+#[test]
+fn close_dialog_has_no_detach_or_terminate_for_managed_workspace() {
+    use rttx::runtime::{WorkspacePolicy, present_workspace_actions};
+
+    let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 1);
+    assert_eq!(presentation.close_label, "Close Workspace");
+    assert!(!presentation.body.contains("Detach"));
+    assert!(!presentation.body.contains("Terminate"));
+}
