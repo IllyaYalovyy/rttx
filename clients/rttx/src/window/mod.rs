@@ -408,7 +408,9 @@ impl Window {
             for session in &mut state.sessions {
                 for node_uuid in session.layout.terminal_uuids() {
                     if let Some(pane) = panes.get(&node_uuid) {
-                        session.layout.set_terminal_cwd(&node_uuid, pane.current_directory());
+                        if let Some(cwd) = pane.current_directory() {
+                            session.layout.set_terminal_cwd(&node_uuid, Some(cwd));
+                        }
                         session.layout.set_terminal_custom_title(&node_uuid, pane.custom_title());
                     }
                 }
