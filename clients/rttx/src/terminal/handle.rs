@@ -65,11 +65,6 @@ impl TerminalHandle {
         self.vte().copy_clipboard_format(vte4::Format::Text);
     }
 
-    /// Paste clipboard contents into the terminal.
-    pub fn paste_clipboard(&self) {
-        self.vte().paste_clipboard();
-    }
-
     /// Mark the pane as active or inactive in the UI.
     pub fn set_active(&self, active: bool) {
         match self {

@@ -445,6 +445,35 @@ impl PersistentPaneView {
         self.imp().visual_bell.set(enabled);
     }
 
+    /// Read clipboard text and deliver it through the managed input path.
+    ///
+    /// Managed panes use VTE only as a renderer. Their real writable backend
+    /// is the daemon `Input` message, so VTE's local `paste_clipboard()`
+    /// handler does not reach the remote PTY.
+    pub fn request_clipboard_paste<F: Fn(Vec<u8>) + 'static>(&self, f: F) {
+        if !self.imp().accepts_input.get() {
+            return;
+        }
+
+        let pane_weak = self.downgrade();
+        self.clipboard().read_text_async(None::<&gtk4::gio::Cancellable>, move |result| {
+            let Some(pane) = pane_weak.upgrade() else {
+                return;
+            };
+            if !pane.imp().accepts_input.get() {
+                return;
+            }
+
+            match result {
+                Ok(Some(text)) if !text.is_empty() => f(text.as_bytes().to_vec()),
+                Ok(Some(_) | None) => {}
+                Err(error) => {
+                    log::warn!("Failed to read clipboard text for managed paste: {error}");
+                }
+            }
+        });
+    }
+
     /// Flash the header on bell.
     pub fn flash_bell(&self) {
         if !self.imp().visual_bell.get() {
@@ -509,6 +538,7 @@ impl PersistentPaneView {
     ///
     /// The callback receives the raw terminal bytes to send to the daemon.
     pub fn connect_input<F: Fn(&[u8]) + 'static>(&self, f: F) {
+        let forward_input = std::rc::Rc::new(f);
         let pane_weak = self.downgrade();
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
@@ -529,12 +559,15 @@ impl PersistentPaneView {
                     glib::Propagation::Stop
                 }
                 TerminalKeyAction::PasteClipboard => {
-                    pane.vte().paste_clipboard();
+                    let forward_input = std::rc::Rc::clone(&forward_input);
+                    pane.request_clipboard_paste(move |bytes| {
+                        forward_input(&bytes);
+                    });
                     glib::Propagation::Stop
                 }
                 TerminalKeyAction::ForwardToPty(bytes) => {
                     if pane.imp().accepts_input.get() {
-                        f(&bytes);
+                        forward_input(&bytes);
                     }
                     glib::Propagation::Stop
                 }
@@ -679,6 +712,7 @@ mod tests {
     use crate::runtime::{ConnectionProblem, RuntimeEndpoint, present_connection_status};
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::time::{Duration, Instant};
 
     macro_rules! require_display {
         () => {
@@ -687,6 +721,27 @@ mod tests {
                 return;
             }
         };
+    }
+
+    fn pump_events(max_ms: u64) {
+        let ctx = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        while Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    fn wait_until(max_ms: u64, condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        while Instant::now() < deadline {
+            pump_events(20);
+            if condition() {
+                return true;
+            }
+        }
+        condition()
     }
 
     #[test]
@@ -927,9 +982,14 @@ mod tests {
         window.set_default_size(640, 320);
         window.set_child(Some(&pane));
         window.present();
-        while gtk4::glib::MainContext::default().iteration(false) {}
+        pump_events(50);
+        let display =
+            gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+        display.clipboard().set_text("managed pasted text");
         pane.feed_output(b"managed copied text\r\n");
-        pane.imp().accepts_input.set(true);
+        let connected =
+            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
 
         let forwarded = Rc::new(RefCell::new(Vec::new()));
         let forwarded_clone = Rc::clone(&forwarded);
@@ -937,16 +997,21 @@ mod tests {
             forwarded_clone.borrow_mut().push(bytes.to_vec());
         });
 
-        pane.vte().select_all();
-        assert_eq!(
-            pane.emit_input_key_for_test(gtk4::gdk::Key::c, gtk4::gdk::ModifierType::CONTROL_MASK,),
-            glib::Propagation::Stop
-        );
         assert_eq!(
             pane.emit_input_key_for_test(
                 gtk4::gdk::Key::v,
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::BUTTON1_MASK,
             ),
+            glib::Propagation::Stop
+        );
+        assert!(
+            wait_until(1_000, || { forwarded.borrow().contains(&b"managed pasted text".to_vec()) }),
+            "managed Ctrl+V should forward clipboard text through the daemon input path"
+        );
+
+        pane.vte().select_all();
+        assert_eq!(
+            pane.emit_input_key_for_test(gtk4::gdk::Key::c, gtk4::gdk::ModifierType::CONTROL_MASK,),
             glib::Propagation::Stop
         );
         assert_eq!(
@@ -956,14 +1021,52 @@ mod tests {
             ),
             glib::Propagation::Proceed
         );
-        assert!(forwarded.borrow().is_empty());
+        assert_eq!(
+            forwarded.borrow().as_slice(),
+            &[b"managed pasted text".to_vec()],
+            "copy shortcuts must not leak shell input when a selection is present"
+        );
 
         pane.vte().unselect_all();
         assert_eq!(
             pane.emit_input_key_for_test(gtk4::gdk::Key::c, gtk4::gdk::ModifierType::CONTROL_MASK,),
             glib::Propagation::Stop
         );
-        assert_eq!(forwarded.borrow().as_slice(), &[vec![0x03]]);
+        assert_eq!(forwarded.borrow().as_slice(), &[b"managed pasted text".to_vec(), vec![0x03]]);
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn request_clipboard_paste_delivers_text_when_connected() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 320);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+
+        let display =
+            gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+        display.clipboard().set_text("window action paste");
+
+        let connected =
+            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.request_clipboard_paste(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes);
+        });
+
+        assert!(
+            wait_until(1_000, || { forwarded.borrow().contains(&b"window action paste".to_vec()) }),
+            "managed clipboard paste helper should deliver clipboard bytes to daemon input"
+        );
+
         window.close();
     }
 }

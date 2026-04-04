@@ -1420,18 +1420,37 @@ fn terminal_search_bar_wired_to_vte() {
     window.close();
 }
 
-/// Ctrl+Shift+V must paste in managed terminals. Regression test for #228.
-/// The actual key-action logic is tested in terminal/mod.rs unit tests;
-/// this test verifies the PersistentPaneView widget can be constructed
-/// and exposes the paste method.
+/// Managed clipboard paste must forward clipboard text through the daemon
+/// input callback instead of delegating to VTE's local PTY paste path.
 #[test]
-fn managed_terminal_paste_method_exists() {
-    use rttx::terminal::persistent_widget::PersistentPaneView;
+#[ignore = "requires isolated GTK harness"]
+fn managed_terminal_request_clipboard_paste_delivers_bytes() {
+    require_display!();
 
-    // PersistentPaneView must expose paste_clipboard via its VTE.
-    // This is a compile-time + construction check — the key-action
-    // routing is covered by the unit tests in terminal/mod.rs.
-    let _: fn(&PersistentPaneView) -> &vte4::Terminal = PersistentPaneView::vte;
+    let display = gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+    display.clipboard().set_text("managed clipboard bytes");
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
+    let window = present_widget(&managed);
+    let connected = rttx::runtime::present_connection_status(
+        &rttx::runtime::RuntimeEndpoint::Local,
+        &rttx::runtime::ConnectionStatus::Connected,
+    );
+    managed.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let forwarded_clone = Rc::clone(&forwarded);
+    managed.request_clipboard_paste(move |bytes| {
+        forwarded_clone.borrow_mut().push(bytes);
+    });
+
+    assert!(
+        wait_until(1_000, || { forwarded.borrow().contains(&b"managed clipboard bytes".to_vec()) }),
+        "managed paste helper should deliver clipboard text to the daemon input callback"
+    );
+
+    window.close();
 }
 
 /// Close dialog for managed workspaces must not offer detach or terminate.
