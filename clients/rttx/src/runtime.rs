@@ -666,4 +666,19 @@ mod tests {
         assert!(presentation.body.contains("3 panes"));
         assert!(presentation.body.contains("running processes"));
     }
+
+    /// Close dialog copy must never mention detach or terminate.
+    #[test]
+    fn workspace_actions_never_mention_detach_or_terminate() {
+        for (policy, attached) in [
+            (Some(WorkspacePolicy::Persistent), true),
+            (Some(WorkspacePolicy::Ephemeral), true),
+            (Some(WorkspacePolicy::Persistent), false),
+            (None, false),
+        ] {
+            let p = present_workspace_actions(policy, attached, 1);
+            assert!(!p.body.contains("Detach"), "body must not mention Detach: {}", p.body);
+            assert!(!p.body.contains("Terminate"), "body must not mention Terminate: {}", p.body);
+        }
+    }
 }
