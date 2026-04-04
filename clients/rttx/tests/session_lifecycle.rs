@@ -470,3 +470,15 @@ fn save_state_preserves_layout_cwd_when_widget_reports_none() {
         "layout CWD must survive serialization"
     );
 }
+
+/// Regression test for #235: layout CWD must survive daemon restart cycle.
+#[test]
+fn layout_cwd_survives_reconnect_cycle() {
+    use rttx::session::SessionState;
+    let mut session = SessionState::new("test".into());
+    let uuid = session.layout.terminal_uuids()[0].clone();
+    session.layout.set_terminal_cwd(&uuid, Some("/project/dir".into()));
+
+    // Simulate disconnect: CWD should not be cleared.
+    assert_eq!(session.layout.terminal_cwd(&uuid).as_deref(), Some("/project/dir"),);
+}

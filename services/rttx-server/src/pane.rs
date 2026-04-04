@@ -264,4 +264,18 @@ mod tests {
         assert_eq!(recovered.id, pane.id);
         assert_eq!(recovered.cols, 80);
     }
+
+    #[test]
+    fn effective_cwd_prefers_osc7_over_proc() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.cwd = Some("/osc7/path".into());
+        pane.child_pid = Some(1); // won't be read
+        assert_eq!(pane.effective_cwd().as_deref(), Some("/osc7/path"));
+    }
+
+    #[test]
+    fn effective_cwd_returns_none_without_pid_or_osc7() {
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert!(pane.effective_cwd().is_none());
+    }
 }

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, list_sessions, start_test_server, wait_for_state_containing};
+use common::*;
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -257,4 +257,24 @@ async fn list_sessions_marks_restored_runtime_and_panes_as_reconstructed() {
         assert_eq!(pane.rows, 30);
         assert!(pane.reconstructed);
     }
+}
+
+/// Pane CWD in inventory must be populated from /proc fallback. Regression for #235.
+#[tokio::test]
+async fn inventory_pane_cwd_populated_from_proc_fallback() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&sock).await;
+    client.handshake().await;
+
+    let session_id =
+        create_session(&mut client, "cwd-check", proto::RuntimePolicy::Persistent).await;
+    let _pane_id = create_pane(&mut client, &session_id).await;
+
+    // Give the shell a moment to start so /proc/<pid>/cwd is readable.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let sessions = list_sessions(&mut client).await;
+    let pane = &sessions[0].panes[0];
+    assert!(!pane.cwd.is_empty(), "pane CWD should be populated from /proc fallback, got empty");
 }
