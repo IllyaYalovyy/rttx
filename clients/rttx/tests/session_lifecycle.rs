@@ -451,3 +451,22 @@ fn dismissed_runtime_ids_persist_through_save_load() {
         "dismissed runtime IDs must survive serialization"
     );
 }
+
+/// Layout CWD must not be cleared when a managed pane widget reports
+/// None during save. Regression test for #235.
+#[test]
+fn save_state_preserves_layout_cwd_when_widget_reports_none() {
+    let mut state = WindowState::default();
+    let session = &mut state.sessions[0];
+    let uuid = session.layout.terminal_uuids()[0].clone();
+    session.layout.set_terminal_cwd(&uuid, Some("/important/project".into()));
+
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        restored.sessions[0].layout.terminal_cwd(&uuid).as_deref(),
+        Some("/important/project"),
+        "layout CWD must survive serialization"
+    );
+}
