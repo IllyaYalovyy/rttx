@@ -165,6 +165,24 @@ fn terminal_key_action(
         return action;
     }
 
+    // Managed terminals intercept all keys before VTE sees them, so
+    // Ctrl+Shift+C/V (standard terminal copy/paste) must be handled
+    // explicitly — VTE never gets a chance to process them.
+    if backend == TerminalInputBackend::Managed
+        && normalized
+            == (gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK)
+    {
+        match key {
+            gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => {
+                return TerminalKeyAction::CopySelection;
+            }
+            gtk4::gdk::Key::v | gtk4::gdk::Key::V => {
+                return TerminalKeyAction::PasteClipboard;
+            }
+            _ => {}
+        }
+    }
+
     if should_pass_through_window_accelerator(key, normalized) {
         return TerminalKeyAction::PassThrough;
     }
@@ -313,6 +331,40 @@ mod tests {
         assert_eq!(
             encode_terminal_key_input(gtk4::gdk::Key::Shift_L, gtk4::gdk::ModifierType::SHIFT_MASK,),
             None
+        );
+    }
+
+    /// Ctrl+Shift+V must paste in managed terminals even with smart clipboard off.
+    #[test]
+    fn managed_ctrl_shift_v_pastes_without_smart_clipboard() {
+        let modifiers = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
+
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::V,
+                modifiers,
+                false,
+                false, // smart clipboard OFF
+            ),
+            TerminalKeyAction::PasteClipboard
+        );
+    }
+
+    /// Ctrl+Shift+C must copy in managed terminals when text is selected.
+    #[test]
+    fn managed_ctrl_shift_c_copies_without_smart_clipboard() {
+        let modifiers = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
+
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::C,
+                modifiers,
+                true,  // has selection
+                false, // smart clipboard OFF
+            ),
+            TerminalKeyAction::CopySelection
         );
     }
 }
