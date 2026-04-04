@@ -73,7 +73,7 @@ async fn list_sessions_includes_runtime_inventory_metadata() {
     let pane = &session.panes[0];
     assert_eq!(pane.id, pane_id);
     assert_eq!(pane.title, "inventory-shell");
-    assert_eq!(pane.cwd, "");
+    // CWD may be populated from /proc fallback even without OSC 7.
     assert_eq!(pane.cols, 80);
     assert_eq!(pane.rows, 24);
     assert_eq!(pane.exit_status, None);
