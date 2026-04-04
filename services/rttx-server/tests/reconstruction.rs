@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server, wait_for_state_containing};
+use common::*;
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -262,4 +262,73 @@ async fn collect_delta_text(client: &mut TestClient, window: Duration) -> String
         }
     }
     String::from_utf8_lossy(&output).to_string()
+}
+
+/// Multiple panes must each preserve their CWD after daemon restart.
+#[tokio::test]
+async fn reconstruct_preserves_cwd_for_multiple_panes() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir_a = tmp.path().join("dir_a");
+    let dir_b = tmp.path().join("dir_b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let session_id;
+    let pane_a_id;
+    let pane_b_id;
+    {
+        let (sock, handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        session_id =
+            create_session(&mut client, "multi-cwd", proto::RuntimePolicy::Persistent).await;
+        pane_a_id = create_pane(&mut client, &session_id).await;
+        pane_b_id = create_pane(&mut client, &session_id).await;
+        attach_rw(&mut client, &session_id).await;
+
+        // Set CWD for pane A via OSC 7.
+        let osc_a = format!(
+            "cd '{}'\nprintf '\\033]7;file://localhost{}\\007' \n",
+            dir_a.display(),
+            dir_a.display()
+        );
+        send_input(&mut client, &session_id, &pane_a_id, osc_a.as_bytes()).await;
+
+        // Set CWD for pane B via OSC 7.
+        let osc_b = format!(
+            "cd '{}'\nprintf '\\033]7;file://localhost{}\\007' \n",
+            dir_b.display(),
+            dir_b.display()
+        );
+        send_input(&mut client, &session_id, &pane_b_id, osc_b.as_bytes()).await;
+
+        // Wait for state to contain both directories.
+        let dir_a_str = dir_a.to_string_lossy().to_string();
+        wait_for_state_containing(&tmp.path().join("cache"), &dir_a_str, Duration::from_secs(10))
+            .await;
+
+        handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Restart and verify CWDs.
+    {
+        let (sock, _handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        let snap = attach_rw(&mut client, &session_id).await;
+        let pane_a = snap.panes.iter().find(|p| p.pane_id == pane_a_id);
+        let pane_b = snap.panes.iter().find(|p| p.pane_id == pane_b_id);
+
+        assert!(pane_a.is_some(), "pane A must be in snapshot");
+        assert!(pane_b.is_some(), "pane B must be in snapshot");
+
+        let cwd_a = &pane_a.unwrap().cwd;
+        let cwd_b = &pane_b.unwrap().cwd;
+
+        assert!(!cwd_a.is_empty(), "pane A CWD must not be empty after restart, got: '{cwd_a}'");
+        assert!(!cwd_b.is_empty(), "pane B CWD must not be empty after restart, got: '{cwd_b}'");
+    }
 }

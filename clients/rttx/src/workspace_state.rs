@@ -1253,4 +1253,41 @@ mod tests {
         state.sessions.retain(|s| s.uuid != "ws-1");
         assert!(state.sessions.is_empty());
     }
+
+    #[test]
+    fn workspace_opened_preserves_layout_cwd_from_snapshot() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_id = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session_with_runtime(
+            "ws-1",
+            "Work",
+            term("t1"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        )]);
+        state.sessions[0].layout.set_terminal_cwd("t1", Some("/old/path".into()));
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: proto::Snapshot {
+                session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
+                panes: vec![proto::PaneSnapshot {
+                    pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
+                    title: "bash".into(),
+                    cwd: "/new/project".into(),
+                    cols: 80,
+                    rows: 24,
+                    scrollback: Vec::new(),
+                    exit_status: None,
+                }],
+                revision: 2,
+                current_client_role: proto::RuntimeClientRole::Writer as i32,
+            },
+        });
+
+        assert!(!transition.pane_snapshot_restores.is_empty());
+        assert_eq!(transition.pane_snapshot_restores[0].cwd, "/new/project");
+    }
 }
