@@ -1512,22 +1512,14 @@ impl Window {
         let uuid = session_uuid.to_string();
         let alert = adw::AlertDialog::new(Some(&presentation.title), Some(&presentation.body));
         alert.add_response("cancel", "Cancel");
-        if presentation.show_detach_runtime {
-            alert.add_response("detach", "Detach Runtime");
-        }
-        if presentation.show_terminate_runtime {
-            alert.add_response("terminate", "Terminate Runtime");
-            alert.set_response_appearance("terminate", adw::ResponseAppearance::Destructive);
-        }
         alert.add_response("close", &presentation.close_label);
         alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
         alert.set_default_response(Some("cancel"));
         alert.set_close_response("cancel");
-        alert.connect_response(None, move |_, response| match response {
-            "close" => win.close_session(&uuid),
-            "detach" => win.detach_workspace_runtime(&uuid),
-            "terminate" => win.terminate_workspace_runtime(&uuid),
-            _ => {}
+        alert.connect_response(None, move |_, response| {
+            if response == "close" {
+                win.close_session(&uuid);
+            }
         });
         alert.present(Some(self));
     }
