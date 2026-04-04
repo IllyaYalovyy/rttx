@@ -303,6 +303,24 @@ mod tests {
     }
 
     #[test]
+    fn managed_ctrl_v_prefers_clipboard_paste_over_shell_syn() {
+        let modifiers = gtk4::gdk::ModifierType::CONTROL_MASK
+            | gtk4::gdk::ModifierType::LOCK_MASK
+            | gtk4::gdk::ModifierType::BUTTON1_MASK;
+
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::v,
+                modifiers,
+                false,
+                true,
+            ),
+            TerminalKeyAction::PasteClipboard
+        );
+    }
+
+    #[test]
     fn encode_terminal_key_input_maps_basic_shell_keys() {
         assert_eq!(
             encode_terminal_key_input(gtk4::gdk::Key::a, gtk4::gdk::ModifierType::empty()),

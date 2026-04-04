@@ -2299,7 +2299,16 @@ impl Window {
         if let Some(uuid) = self.focused_terminal_uuid()
             && let Some(terminal) = self.terminal_handle(&uuid)
         {
-            terminal.paste_clipboard();
+            match terminal {
+                TerminalHandle::Direct(terminal) => terminal.vte().paste_clipboard(),
+                TerminalHandle::Managed(pane) => {
+                    let win = self.clone();
+                    let terminal_uuid = uuid.clone();
+                    pane.request_clipboard_paste(move |bytes| {
+                        win.send_managed_terminal_input(&terminal_uuid, bytes);
+                    });
+                }
+            }
         }
     }
 }
