@@ -284,14 +284,12 @@ pub struct ConnectionPresentation {
     pub input_enabled: bool,
 }
 
-/// UI-facing close/detach/terminate action configuration for a workspace.
+/// UI-facing close action configuration for a workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceActionPresentation {
     pub title: String,
     pub body: String,
     pub close_label: String,
-    pub show_detach_runtime: bool,
-    pub show_terminate_runtime: bool,
 }
 
 /// Render workspace action semantics into user-facing copy.
@@ -308,40 +306,21 @@ pub fn present_workspace_actions(
     };
 
     match (policy, runtime_attached) {
-        (Some(WorkspacePolicy::Persistent), true) => WorkspaceActionPresentation {
-            title: "Workspace Actions".into(),
+        (Some(_), true) => WorkspaceActionPresentation {
+            title: "Close Workspace?".into(),
             body: format!(
-                "{pane_summary}Close Workspace removes this workspace from rttx and deletes its \
-                 local metadata. The persistent runtime keeps running on the daemon. Detach \
-                 Runtime keeps the workspace so you can reconnect later. Terminate Runtime stops \
-                 the runtime and its running processes."
+                "{pane_summary}Closing this workspace will stop its runtime and all running \
+                 processes."
             ),
             close_label: "Close Workspace".into(),
-            show_detach_runtime: true,
-            show_terminate_runtime: true,
-        },
-        (Some(WorkspacePolicy::Ephemeral), true) => WorkspaceActionPresentation {
-            title: "Workspace Actions".into(),
-            body: format!(
-                "{pane_summary}Close Workspace removes this workspace from rttx and deletes its \
-                 local metadata. This workspace uses an ephemeral runtime, so detaching the last \
-                 client will terminate that runtime automatically. Detach Runtime keeps the \
-                 workspace visible but still ends the runtime when this is the last attached \
-                 client. Terminate Runtime stops it immediately."
-            ),
-            close_label: "Close Workspace".into(),
-            show_detach_runtime: true,
-            show_terminate_runtime: true,
         },
         (Some(_), false) => WorkspaceActionPresentation {
             title: "Close Workspace?".into(),
             body: format!(
-                "{pane_summary}This workspace is not attached to a runtime right now. Close \
-                 Workspace removes its local metadata from rttx."
+                "{pane_summary}This workspace is not connected to a runtime. Closing it removes \
+                 its local metadata."
             ),
             close_label: "Close Workspace".into(),
-            show_detach_runtime: false,
-            show_terminate_runtime: false,
         },
         (None, _) => {
             let body = if pane_count > 1 {
@@ -356,8 +335,6 @@ pub fn present_workspace_actions(
                 title: "Close Workspace?".into(),
                 body,
                 close_label: "Close Workspace".into(),
-                show_detach_runtime: false,
-                show_terminate_runtime: false,
             }
         }
     }
@@ -655,26 +632,21 @@ mod tests {
     }
 
     #[test]
-    fn workspace_actions_for_persistent_runtime_offer_detach_and_terminate() {
+    fn workspace_actions_for_attached_managed_workspace_shows_destructive_close() {
         let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
 
-        assert_eq!(presentation.title, "Workspace Actions");
+        assert_eq!(presentation.title, "Close Workspace?");
         assert_eq!(presentation.close_label, "Close Workspace");
-        assert!(presentation.show_detach_runtime);
-        assert!(presentation.show_terminate_runtime);
-        assert!(presentation.body.contains("persistent runtime keeps running"));
-        assert!(presentation.body.contains("reconnect later"));
+        assert!(presentation.body.contains("stop its runtime"));
         assert!(presentation.body.contains("2 panes"));
     }
 
     #[test]
-    fn workspace_actions_for_ephemeral_runtime_warn_about_last_detach() {
+    fn workspace_actions_for_ephemeral_attached_shows_same_close() {
         let presentation = present_workspace_actions(Some(WorkspacePolicy::Ephemeral), true, 1);
 
-        assert!(presentation.show_detach_runtime);
-        assert!(presentation.show_terminate_runtime);
-        assert!(presentation.body.contains("ephemeral runtime"));
-        assert!(presentation.body.contains("last attached client"));
+        assert_eq!(presentation.title, "Close Workspace?");
+        assert!(presentation.body.contains("stop its runtime"));
     }
 
     #[test]
@@ -682,9 +654,7 @@ mod tests {
         let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), false, 1);
 
         assert_eq!(presentation.title, "Close Workspace?");
-        assert!(!presentation.show_detach_runtime);
-        assert!(!presentation.show_terminate_runtime);
-        assert!(presentation.body.contains("not attached to a runtime"));
+        assert!(presentation.body.contains("not connected to a runtime"));
     }
 
     #[test]
@@ -693,9 +663,22 @@ mod tests {
 
         assert_eq!(presentation.title, "Close Workspace?");
         assert_eq!(presentation.close_label, "Close Workspace");
-        assert!(!presentation.show_detach_runtime);
-        assert!(!presentation.show_terminate_runtime);
         assert!(presentation.body.contains("3 panes"));
         assert!(presentation.body.contains("running processes"));
+    }
+
+    /// Close dialog copy must never mention detach or terminate.
+    #[test]
+    fn workspace_actions_never_mention_detach_or_terminate() {
+        for (policy, attached) in [
+            (Some(WorkspacePolicy::Persistent), true),
+            (Some(WorkspacePolicy::Ephemeral), true),
+            (Some(WorkspacePolicy::Persistent), false),
+            (None, false),
+        ] {
+            let p = present_workspace_actions(policy, attached, 1);
+            assert!(!p.body.contains("Detach"), "body must not mention Detach: {}", p.body);
+            assert!(!p.body.contains("Terminate"), "body must not mention Terminate: {}", p.body);
+        }
     }
 }

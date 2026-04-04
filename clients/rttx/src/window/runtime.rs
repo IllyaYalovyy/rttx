@@ -563,50 +563,6 @@ impl Window {
         Some(present_workspace_actions(policy, runtime_attached, session.layout.terminal_count()))
     }
 
-    pub(super) fn detach_workspace_runtime(&self, session_uuid: &str) {
-        let managed_runtime = {
-            let state = self.imp().state.borrow();
-            state.sessions.iter().find(|s| s.uuid == session_uuid).and_then(|session| {
-                session
-                    .runtime
-                    .runtime_id
-                    .clone()
-                    .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
-            })
-        };
-
-        let Some((endpoint, runtime_id)) = managed_runtime else {
-            return;
-        };
-        let connection_manager = self.imp().connection_manager.borrow();
-        let Some(manager) = connection_manager.as_ref() else {
-            return;
-        };
-        manager.detach_runtime(session_uuid, &endpoint, &runtime_id);
-    }
-
-    pub(super) fn terminate_workspace_runtime(&self, session_uuid: &str) {
-        let managed_runtime = {
-            let state = self.imp().state.borrow();
-            state.sessions.iter().find(|s| s.uuid == session_uuid).and_then(|session| {
-                session
-                    .runtime
-                    .runtime_id
-                    .clone()
-                    .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id))
-            })
-        };
-
-        let Some((endpoint, runtime_id)) = managed_runtime else {
-            return;
-        };
-        let connection_manager = self.imp().connection_manager.borrow();
-        let Some(manager) = connection_manager.as_ref() else {
-            return;
-        };
-        manager.terminate_runtime(session_uuid, &endpoint, &runtime_id);
-    }
-
     pub(super) fn show_edit_workspace_connection_dialog(&self, workspace_id: &str) {
         let current_host = {
             let state = self.imp().state.borrow();
