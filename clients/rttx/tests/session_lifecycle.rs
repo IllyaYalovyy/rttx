@@ -433,3 +433,21 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
     );
     assert_eq!(state.sessions.len(), 3, "state should have 3 sessions: existing + new + recovered");
 }
+
+/// Dismissed runtime IDs must persist through save/load so closed
+/// workspaces stay closed across restarts.
+#[test]
+fn dismissed_runtime_ids_persist_through_save_load() {
+    use rttx::runtime::RuntimeEndpoint;
+
+    let mut state = WindowState::default();
+    state.dismiss_runtime(&RuntimeEndpoint::Local, "test-runtime-id");
+
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+    assert!(
+        restored.dismissed_runtime_ids.contains("test-runtime-id"),
+        "dismissed runtime IDs must survive serialization"
+    );
+}

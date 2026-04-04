@@ -1198,4 +1198,59 @@ mod tests {
             "dismissed runtime must not appear in session state"
         );
     }
+
+    #[test]
+    fn dismissed_runtime_ids_survive_serde_roundtrip() {
+        let mut state = WindowState::default_for_test();
+        state.dismiss_runtime(&RuntimeEndpoint::Local, "runtime-abc");
+        state.dismiss_runtime(&RuntimeEndpoint::Local, "runtime-def");
+
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+        assert!(restored.dismissed_runtime_ids.contains("runtime-abc"));
+        assert!(restored.dismissed_runtime_ids.contains("runtime-def"));
+    }
+
+    #[test]
+    fn repeated_close_and_inventory_cycles_stay_clean() {
+        let mut state = WindowState::default_for_test();
+
+        for i in 0..5 {
+            let runtime_id = uuid::Uuid::new_v4().to_string();
+            let pane_id = uuid::Uuid::new_v4().to_string();
+
+            state.dismiss_runtime(&RuntimeEndpoint::Local, &runtime_id);
+
+            let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+                endpoint: RuntimeEndpoint::Local,
+                sessions: vec![session_info(
+                    &runtime_id,
+                    &format!("Dismissed {i}"),
+                    proto::RuntimePolicy::Persistent,
+                    vec![pane_info(&pane_id, "bash", "/tmp")],
+                    Some(&pane_id),
+                )],
+            });
+
+            assert!(
+                transition.recovered_workspaces.is_empty(),
+                "cycle {i}: dismissed runtime must not be recovered"
+            );
+        }
+
+        assert_eq!(state.dismissed_runtime_ids.len(), 5);
+    }
+
+    #[test]
+    fn close_workspace_without_runtime_id_removes_cleanly() {
+        let mut state = window_state(vec![managed_session("ws-1", "Disconnected", term("t1"))]);
+        // No runtime_id — workspace was never connected.
+        state.sessions[0].runtime.runtime_id = None;
+
+        // Dismiss with empty string (no runtime to track).
+        assert_eq!(state.sessions.len(), 1);
+        state.sessions.retain(|s| s.uuid != "ws-1");
+        assert!(state.sessions.is_empty());
+    }
 }
