@@ -784,6 +784,7 @@ mod tests {
             ),
             TerminalKeyAction::PasteClipboard
         );
+        // Ctrl+Shift+C without selection passes through (nothing to copy).
         assert_eq!(
             terminal_key_action(
                 TerminalInputBackend::Managed,
@@ -794,6 +795,7 @@ mod tests {
             ),
             TerminalKeyAction::PassThrough
         );
+        // Ctrl+Shift+V always pastes in managed terminals.
         assert_eq!(
             terminal_key_action(
                 TerminalInputBackend::Managed,
@@ -802,7 +804,7 @@ mod tests {
                 false,
                 false,
             ),
-            TerminalKeyAction::PassThrough
+            TerminalKeyAction::PasteClipboard
         );
     }
 
