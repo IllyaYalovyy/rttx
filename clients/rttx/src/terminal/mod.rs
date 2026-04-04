@@ -388,6 +388,14 @@ mod tests {
 }
 
 #[cfg(test)]
+mod pane_passive_tests {
+    #[test]
+    fn persistent_pane_view_is_constructible_without_action_buttons() {
+        let _size = std::mem::size_of::<super::persistent_widget::PersistentPaneView>();
+    }
+}
+
+#[cfg(test)]
 mod search_tests {
     /// The PCRE2 literal escape pattern wraps user input safely so special
     /// regex characters are not interpreted.

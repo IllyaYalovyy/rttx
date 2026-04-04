@@ -4998,9 +4998,6 @@ mod tests {
             .expect("managed pane should be present");
 
         assert!(pane.connection_banner_visible_for_test());
-        assert!(pane.retry_button_visible_for_test());
-        assert!(pane.edit_connection_button_visible_for_test());
-        assert!(pane.close_workspace_button_visible_for_test());
         assert!(!pane.input_enabled_for_test());
 
         window.close();

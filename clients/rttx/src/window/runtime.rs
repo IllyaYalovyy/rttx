@@ -68,7 +68,6 @@ impl Window {
         session_state: &SessionState,
         pane_view: &PersistentPaneView,
     ) {
-        let workspace_id = session_state.uuid.clone();
         let terminal_uuid = pane_view.uuid();
         let status = self
             .imp()
@@ -80,24 +79,6 @@ impl Window {
         let presentation =
             self.connection_presentation_for_workspace(&session_state.runtime.endpoint, &status);
         pane_view.set_connection_presentation(&status, &presentation);
-
-        let win = self.clone();
-        let retry_workspace_id = workspace_id.clone();
-        pane_view.connect_retry_requested(move || {
-            win.retry_workspace_connection(&retry_workspace_id);
-        });
-
-        let win = self.clone();
-        let close_workspace_id = workspace_id.clone();
-        pane_view.connect_close_workspace_requested(move || {
-            win.confirm_close_session(&close_workspace_id);
-        });
-
-        let win = self.clone();
-        let edit_workspace_id = workspace_id;
-        pane_view.connect_edit_connection_requested(move || {
-            win.show_edit_workspace_connection_dialog(&edit_workspace_id);
-        });
 
         let win = self.clone();
         let input_terminal_uuid = terminal_uuid.clone();
@@ -143,6 +124,7 @@ impl Window {
         });
     }
 
+    #[allow(dead_code)] // Will be wired to sidebar actions in #196 follow-up
     pub(super) fn retry_workspace_connection(&self, workspace_id: &str) {
         let session_state = {
             let state = self.imp().state.borrow();
@@ -563,6 +545,7 @@ impl Window {
         Some(present_workspace_actions(policy, runtime_attached, session.layout.terminal_count()))
     }
 
+    #[allow(dead_code)] // Will be wired to sidebar actions in #196 follow-up
     pub(super) fn show_edit_workspace_connection_dialog(&self, workspace_id: &str) {
         let current_host = {
             let state = self.imp().state.borrow();
@@ -621,6 +604,7 @@ impl Window {
         dialog.present(Some(self));
     }
 
+    #[allow(dead_code)] // Will be wired to sidebar actions in #196 follow-up
     pub(super) fn update_workspace_endpoint(&self, workspace_id: &str, host: String) {
         let (session_state, previous_endpoint) = {
             let mut state = self.imp().state.borrow_mut();

@@ -39,10 +39,6 @@ mod imp {
         pub connection_banner: gtk4::Box,
         pub connection_title_label: gtk4::Label,
         pub connection_body_label: gtk4::Label,
-        pub connection_actions: gtk4::Box,
-        pub retry_button: gtk4::Button,
-        pub edit_connection_button: gtk4::Button,
-        pub close_workspace_button: gtk4::Button,
         pub title_label: gtk4::Label,
         pub close_button: gtk4::Button,
         pub split_h_button: gtk4::Button,
@@ -70,10 +66,6 @@ mod imp {
                 connection_banner: gtk4::Box::default(),
                 connection_title_label: gtk4::Label::default(),
                 connection_body_label: gtk4::Label::default(),
-                connection_actions: gtk4::Box::default(),
-                retry_button: gtk4::Button::default(),
-                edit_connection_button: gtk4::Button::default(),
-                close_workspace_button: gtk4::Button::default(),
                 title_label: gtk4::Label::default(),
                 close_button: gtk4::Button::default(),
                 split_h_button: gtk4::Button::default(),
@@ -179,23 +171,8 @@ mod imp {
             self.connection_body_label.set_wrap(true);
             self.connection_body_label.add_css_class("dim-label");
 
-            self.connection_actions.set_orientation(gtk4::Orientation::Horizontal);
-            self.connection_actions.set_spacing(6);
-
-            self.retry_button.set_label("Retry now");
-            self.retry_button.add_css_class("suggested-action");
-
-            self.edit_connection_button.set_label("Edit connection");
-
-            self.close_workspace_button.set_label("Close workspace");
-
-            self.connection_actions.append(&self.retry_button);
-            self.connection_actions.append(&self.edit_connection_button);
-            self.connection_actions.append(&self.close_workspace_button);
-
             self.connection_banner.append(&self.connection_title_label);
             self.connection_banner.append(&self.connection_body_label);
-            self.connection_banner.append(&self.connection_actions);
 
             obj.append(&self.connection_banner);
             obj.append(&self.search_bar);
@@ -420,9 +397,6 @@ impl PersistentPaneView {
         self.imp().connection_title_label.set_label(&presentation.banner_title);
         self.imp().connection_body_label.set_label(&presentation.banner_body);
         self.imp().connection_banner.set_visible(presentation.banner_visible);
-        self.imp().retry_button.set_visible(presentation.show_retry);
-        self.imp().close_workspace_button.set_visible(presentation.show_close);
-        self.imp().edit_connection_button.set_visible(presentation.show_edit_connection);
         self.imp().accepts_input.set(presentation.input_enabled);
     }
 
@@ -627,49 +601,10 @@ impl PersistentPaneView {
         });
     }
 
-    /// Connect a callback for retrying the workspace connection.
-    pub fn connect_retry_requested<F: Fn() + 'static>(&self, f: F) {
-        self.imp().retry_button.connect_clicked(move |_| {
-            f();
-        });
-    }
-
-    /// Connect a callback for editing the remote endpoint.
-    pub fn connect_edit_connection_requested<F: Fn() + 'static>(&self, f: F) {
-        self.imp().edit_connection_button.connect_clicked(move |_| {
-            f();
-        });
-    }
-
-    /// Connect a callback for closing the workspace.
-    pub fn connect_close_workspace_requested<F: Fn() + 'static>(&self, f: F) {
-        self.imp().close_workspace_button.connect_clicked(move |_| {
-            f();
-        });
-    }
-
     #[cfg(test)]
     #[must_use]
     pub(crate) fn connection_banner_visible_for_test(&self) -> bool {
         self.imp().connection_banner.is_visible()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn retry_button_visible_for_test(&self) -> bool {
-        self.imp().retry_button.is_visible()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn edit_connection_button_visible_for_test(&self) -> bool {
-        self.imp().edit_connection_button.is_visible()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn close_workspace_button_visible_for_test(&self) -> bool {
-        self.imp().close_workspace_button.is_visible()
     }
 
     #[cfg(test)]
@@ -763,9 +698,6 @@ mod tests {
         assert!(pane.connection_banner_visible_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Retry 4s");
         assert_eq!(pane.connection_title_for_test(), "Reconnecting in 4s");
-        assert!(pane.retry_button_visible_for_test());
-        assert!(pane.close_workspace_button_visible_for_test());
-        assert!(!pane.edit_connection_button_visible_for_test());
         assert!(!pane.input_enabled_for_test());
 
         let blocked = present_connection_status(
@@ -776,7 +708,6 @@ mod tests {
             &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
             &blocked,
         );
-        assert!(pane.edit_connection_button_visible_for_test());
 
         let connected =
             present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
@@ -789,32 +720,6 @@ mod tests {
         pane.set_connection_presentation(&ConnectionStatus::Recovered, &recovered);
         assert!(!pane.connection_banner_visible_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Connected");
-    }
-
-    #[test]
-    #[ignore = "requires isolated GTK harness"]
-    fn connection_action_callbacks_fire() {
-        require_display!();
-
-        let pane = PersistentPaneView::new("pane-1", "runtime-1");
-        let retry_fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        let edit_fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        let close_fired = std::rc::Rc::new(std::cell::Cell::new(false));
-
-        let retry_flag = retry_fired.clone();
-        pane.connect_retry_requested(move || retry_flag.set(true));
-        let edit_flag = edit_fired.clone();
-        pane.connect_edit_connection_requested(move || edit_flag.set(true));
-        let close_flag = close_fired.clone();
-        pane.connect_close_workspace_requested(move || close_flag.set(true));
-
-        pane.imp().retry_button.emit_clicked();
-        pane.imp().edit_connection_button.emit_clicked();
-        pane.imp().close_workspace_button.emit_clicked();
-
-        assert!(retry_fired.get());
-        assert!(edit_fired.get());
-        assert!(close_fired.get());
     }
 
     #[test]
