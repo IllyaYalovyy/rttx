@@ -1453,6 +1453,33 @@ fn managed_terminal_request_clipboard_paste_delivers_bytes() {
     window.close();
 }
 
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_terminal_request_clipboard_paste_requires_connected_input() {
+    require_display!();
+
+    let display = gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+    display.clipboard().set_text("managed clipboard bytes");
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("managed-2", "runtime-1");
+    let window = present_widget(&managed);
+
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let forwarded_clone = Rc::clone(&forwarded);
+    managed.request_clipboard_paste(move |bytes| {
+        forwarded_clone.borrow_mut().push(bytes);
+    });
+
+    pump_events(100);
+    assert!(
+        forwarded.borrow().is_empty(),
+        "disconnected managed panes must not forward clipboard bytes"
+    );
+
+    window.close();
+}
+
 /// Close dialog for managed workspaces must not offer detach or terminate.
 /// Regression test for #195.
 #[test]
