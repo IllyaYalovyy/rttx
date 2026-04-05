@@ -10,7 +10,7 @@ use crate::ipc::{ClientConnection, Listener};
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
-use crate::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
+use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
 use crate::session::{
     AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Session,
     TerminationReason,
@@ -147,7 +147,12 @@ impl Server {
         for (session_id, pane_id, cwd, cols, rows) in panes_to_reconstruct {
             let pty_result = {
                 let s = server.lock().await;
-                let config = PaneSpawnConfig { command: vec![], cwd, cols, rows };
+                let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
+                if let Some(parent) = hist.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
+                let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
                 s.engine.spawn_pane(pane_id, &config)
             };
 
@@ -451,7 +456,13 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    let config = PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
+                    let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
+                    if let Some(parent) = hist.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
+                    let config =
+                        PaneSpawnConfig { command: vec![], cwd: None, env, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)
                 };
 

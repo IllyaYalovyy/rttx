@@ -22,6 +22,8 @@ pub struct PtyConfig {
     pub command: Vec<String>,
     /// Working directory.
     pub cwd: Option<PathBuf>,
+    /// Extra environment variables.
+    pub env: Vec<(String, String)>,
     /// Initial terminal size (cols).
     pub cols: u16,
     /// Initial terminal size (rows).
@@ -30,7 +32,7 @@ pub struct PtyConfig {
 
 impl Default for PtyConfig {
     fn default() -> Self {
-        Self { command: vec![default_shell()], cwd: None, cols: 80, rows: 24 }
+        Self { command: vec![default_shell()], cwd: None, env: Vec::new(), cols: 80, rows: 24 }
     }
 }
 
@@ -60,6 +62,9 @@ impl Pty {
             cmd = cmd.current_dir(cwd);
         }
         cmd = cmd.env("TERM", "xterm-256color");
+        for (key, val) in &config.env {
+            cmd = cmd.env(key, val);
+        }
 
         let child = cmd.spawn(pts)?;
         let (read_half, write_half) = pty.into_split();

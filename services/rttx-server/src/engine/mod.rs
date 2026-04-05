@@ -15,6 +15,8 @@ pub struct PaneSpawnConfig {
     pub command: Vec<String>,
     /// Working directory.
     pub cwd: Option<String>,
+    /// Extra environment variables.
+    pub env: Vec<(String, String)>,
     /// Terminal columns.
     pub cols: u16,
     /// Terminal rows.

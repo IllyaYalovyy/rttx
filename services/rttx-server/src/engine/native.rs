@@ -17,6 +17,7 @@ impl Engine for NativeEngine {
                 config.command.clone()
             },
             cwd: config.cwd.as_ref().map(std::path::PathBuf::from),
+            env: config.env.clone(),
             cols: config.cols,
             rows: config.rows,
         };

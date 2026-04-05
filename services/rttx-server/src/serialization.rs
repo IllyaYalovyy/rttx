@@ -76,6 +76,12 @@ pub fn scrollback_log_path(
     cache_dir.join("scrollback").join(session_id.to_string()).join(format!("{pane_id}.log"))
 }
 
+/// Return the shell history file path for a pane.
+#[must_use]
+pub fn history_path(cache_dir: &Path, session_id: uuid::Uuid, pane_id: uuid::Uuid) -> PathBuf {
+    cache_dir.join("history").join(session_id.to_string()).join(format!("{pane_id}.hist"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +264,18 @@ mod tests {
         let tmp_path = path.with_extension("tmp");
         assert!(!tmp_path.exists(), ".tmp file must be cleaned up after successful write");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn history_path_is_per_session_and_pane() {
+        let cache = std::path::Path::new("/cache");
+        let s1 = uuid::Uuid::new_v4();
+        let p1 = uuid::Uuid::new_v4();
+        let p2 = uuid::Uuid::new_v4();
+        let h1 = history_path(cache, s1, p1);
+        let h2 = history_path(cache, s1, p2);
+        assert_ne!(h1, h2, "different panes must have different history files");
+        assert!(h1.to_string_lossy().contains(&p1.to_string()));
+        assert!(h1.to_string_lossy().ends_with(".hist"));
     }
 }
