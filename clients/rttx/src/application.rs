@@ -60,7 +60,15 @@ pub fn run() -> glib::ExitCode {
             }
             .session-activity-idle {
                 opacity: 0.45;
-            }",
+            }
+            .accent-blue   { color: @blue_3; }
+            .accent-green  { color: @green_3; }
+            .accent-yellow { color: @yellow_3; }
+            .accent-red    { color: @red_3; }
+            .accent-purple { color: @purple_3; }
+            .accent-pink   { color: @pink_3; }
+            .accent-teal   { color: @teal_3; }
+            .accent-orange { color: @orange_3; }",
         );
         gtk4::style_context_add_provider_for_display(
             &display,

@@ -31,6 +31,7 @@ mod imp {
     pub struct SessionRow {
         pub uuid: RefCell<String>,
         pub name: RefCell<String>,
+        pub color_dot: gtk4::Image,
         pub position_label: gtk4::Label,
         pub activity_dot: gtk4::Image,
         pub terminal_count_label: gtk4::Label,
@@ -41,6 +42,9 @@ mod imp {
 
     impl Default for SessionRow {
         fn default() -> Self {
+            let color_dot = gtk4::Image::from_icon_name("circle-filled-symbolic");
+            color_dot.set_pixel_size(10);
+
             let activity_dot = gtk4::Image::from_icon_name("media-record-symbolic");
             activity_dot.set_pixel_size(8);
             activity_dot.set_visible(false);
@@ -52,6 +56,7 @@ mod imp {
             Self {
                 uuid: RefCell::new(String::new()),
                 name: RefCell::new(String::new()),
+                color_dot,
                 position_label,
                 activity_dot,
                 terminal_count_label: gtk4::Label::new(None),
@@ -83,6 +88,7 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.add_css_class("circular");
 
+            obj.add_prefix(&self.color_dot);
             obj.add_prefix(&self.position_label);
             obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.terminal_count_label);
@@ -126,6 +132,14 @@ impl SessionRow {
     pub fn set_session_name(&self, name: &str) {
         self.imp().name.replace(name.to_string());
         self.set_title(name);
+    }
+
+    pub fn set_color(&self, color: crate::session::SessionColor) {
+        let dot = &self.imp().color_dot;
+        for cls in crate::session::SessionColor::ALL {
+            dot.remove_css_class(cls.css_class());
+        }
+        dot.add_css_class(color.css_class());
     }
 
     pub fn update_terminal_count(&self, count: usize) {

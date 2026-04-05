@@ -5,7 +5,8 @@
 use crate::color_scheme::ColorScheme;
 use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 use crate::session::{
-    LayoutNode, PaneRecovery, SessionMode, SessionState, SplitOrientation, WindowState,
+    LayoutNode, PaneRecovery, SessionColor, SessionMode, SessionState, SplitOrientation,
+    WindowState,
 };
 use std::path::{Path, PathBuf};
 
@@ -73,6 +74,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
         input_sync: false,
         mode: SessionMode::default(),
         runtime: WorkspaceRuntime::default(),
+        color: SessionColor::default(),
     }
 }
 
@@ -122,6 +124,7 @@ pub fn managed_session_with_runtime(
             pane_bindings: std::collections::BTreeMap::default(),
             pending_layout_panes: std::collections::BTreeSet::default(),
         },
+        color: SessionColor::default(),
     };
     session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
     session.sync_legacy_mode_from_runtime();

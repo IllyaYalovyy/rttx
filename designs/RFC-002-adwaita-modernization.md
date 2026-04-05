@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted                |
+| Status        | Implemented              |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -159,12 +159,12 @@ avoid crashes when sessions are closed before the timer fires.
 
 ## Development Plan
 
-- [ ] **Window layout** — Replace `gtk4::Box` + `adw::HeaderBar` with `adw::ToolbarView`; add `adw::ToastOverlay` — *tracked in todo.md — GNOME / Adwaita*
-- [ ] **Two-tier notifications** — Implement `terminal_is_in_visible_session`; update `notify_process_completed` — *tracked in todo.md — GNOME / Adwaita*
+- [x] **Window layout** — Replace `gtk4::Box` + `adw::HeaderBar` with `adw::ToolbarView`; add `adw::ToastOverlay`
+- [x] **Two-tier notifications** — Implement `terminal_is_in_visible_session`; update `notify_process_completed`
 - [x] **SessionRow base** — Rewrite as `adw::ActionRow` subclass
 - [x] **Session renaming** — Inline popover with `adw::EntryRow`
-- [ ] **Activity indicator** — Wire `window_title_changed` signal; debounce timer; spinner vs dot — *tracked in todo.md — GNOME / Adwaita*
-- [ ] **Session color coding** — Assign colors on creation; CSS classes; color picker UI — *tracked in todo.md — GNOME / Adwaita*
+- [x] **Activity indicator** — Wire `window_title_changed` signal; debounce timer; spinner vs dot
+- [x] **Session color coding** — Assign colors on creation; CSS classes; color picker UI deferred (NG2)
 
 ---
 
