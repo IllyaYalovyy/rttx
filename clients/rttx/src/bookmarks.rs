@@ -95,6 +95,12 @@ impl Bookmark {
         }
     }
 
+    /// SSH host for remote workspace creation, if this bookmark targets a remote host.
+    #[must_use]
+    pub fn remote_host(&self) -> Option<&str> {
+        non_empty(self.ssh_target.as_deref())
+    }
+
     #[must_use]
     pub fn pane_target(&self) -> Option<PaneTarget> {
         let directory = non_empty(self.directory.as_deref()).map(str::to_string);
@@ -429,5 +435,26 @@ mod tests {
         let loaded = load_from(&path);
         let uuids: Vec<&str> = loaded.iter().map(|b| b.uuid.as_str()).collect();
         assert_eq!(uuids, vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn ssh_bookmark_reports_remote_host() {
+        let mut b = Bookmark::new("Remote");
+        b.ssh_target = Some("deploy@example.com".into());
+        assert_eq!(b.remote_host(), Some("deploy@example.com"));
+    }
+
+    #[test]
+    fn local_bookmark_reports_no_remote_host() {
+        let mut b = Bookmark::new("Local");
+        b.directory = Some("/home/user".into());
+        assert_eq!(b.remote_host(), None);
+    }
+
+    #[test]
+    fn empty_ssh_target_reports_no_remote_host() {
+        let mut b = Bookmark::new("Empty");
+        b.ssh_target = Some("  ".into());
+        assert_eq!(b.remote_host(), None);
     }
 }
