@@ -713,4 +713,31 @@ mod tests {
         assert_eq!(runtime.policy, WorkspacePolicy::Persistent);
         assert!(runtime.pending_layout_panes.contains("t1"));
     }
+
+    #[test]
+    fn ensure_placeholder_bindings_adds_new_pane_to_remote_runtime() {
+        let mut runtime =
+            WorkspaceRuntime::managed_remote("host", WorkspacePolicy::Persistent, &["t1".into()]);
+
+        runtime.ensure_placeholder_bindings(&["t1".into(), "t2".into()]);
+
+        assert!(runtime.pane_bindings.contains_key("t2"));
+        assert!(runtime.pending_layout_panes.contains("t2"));
+        assert_eq!(runtime.endpoint, RuntimeEndpoint::Remote { host: "host".into() });
+    }
+
+    #[test]
+    fn ensure_placeholder_bindings_removes_closed_pane() {
+        let mut runtime = WorkspaceRuntime::managed_remote(
+            "host",
+            WorkspacePolicy::Persistent,
+            &["t1".into(), "t2".into()],
+        );
+
+        runtime.ensure_placeholder_bindings(&["t1".into()]);
+
+        assert!(!runtime.pane_bindings.contains_key("t2"));
+        assert!(!runtime.pending_layout_panes.contains("t2"));
+        assert!(runtime.pane_bindings.contains_key("t1"));
+    }
 }
