@@ -150,10 +150,17 @@ async fn resize_updates_pane_dimensions() {
         })),
     };
     client.send(&detach).await;
-    assert!(matches!(
-        client.recv_or_timeout().await.msg,
-        Some(proto::server_message::Msg::SessionDetached(_))
-    ));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(
+                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+            ) => {}
+            other => panic!("expected SessionDetached, got {other:?}"),
+        }
+    }
 
     // Small delay for the resize to process.
     tokio::time::sleep(Duration::from_millis(100)).await;

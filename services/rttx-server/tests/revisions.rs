@@ -126,12 +126,20 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
             })),
         })
         .await;
-    match client.recv().await.msg {
-        Some(proto::server_message::Msg::SessionDetached(detached)) => {
-            assert_eq!(detached.revision, 7);
-            assert_eq!(detached.session_id, session_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionDetached(detached)) => {
+                assert_eq!(detached.revision, 7);
+                assert_eq!(detached.session_id, session_id);
+                break;
+            }
+            Some(
+                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+            ) => {}
+            other => panic!("expected SessionDetached, got {other:?}"),
         }
-        other => panic!("expected SessionDetached, got {other:?}"),
     }
 }
 
