@@ -1503,3 +1503,23 @@ fn managed_pane_banner_is_passive() {
     let _: fn(&str, &str) -> rttx::terminal::persistent_widget::PersistentPaneView =
         rttx::terminal::persistent_widget::PersistentPaneView::new;
 }
+
+/// The window must expose a `new-remote-workspace` action.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn window_has_new_remote_workspace_action() {
+    require_display!();
+
+    let app = adw::Application::builder()
+        .application_id("io.github.IllyaYalovyy.rttx.test.remote_action")
+        .build();
+    app.register(None::<&gtk4::gio::Cancellable>).unwrap();
+
+    let window = rttx::window::Window::new(&app);
+    let action_group: gtk4::gio::ActionGroup = window.clone().upcast();
+    assert!(
+        action_group.has_action("new-remote-workspace"),
+        "window must have new-remote-workspace action"
+    );
+    window.close();
+}

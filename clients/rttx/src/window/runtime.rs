@@ -9,6 +9,71 @@ impl Window {
         self.add_managed_session(WorkspacePolicy::Ephemeral);
     }
 
+    pub(super) fn show_new_remote_workspace_dialog(&self) {
+        let dialog =
+            adw::Dialog::builder().title("New Remote Workspace").content_width(440).build();
+        let header = adw::HeaderBar::new();
+        let create_button = gtk4::Button::with_label("Create");
+        create_button.add_css_class("suggested-action");
+        header.pack_end(&create_button);
+
+        let host_row = adw::EntryRow::builder().title("SSH host (e.g. user@host)").build();
+
+        let status_label = gtk4::Label::new(None);
+        status_label.set_xalign(0.0);
+        status_label.add_css_class("dim-label");
+
+        let group = adw::PreferencesGroup::new();
+        group.add(&host_row);
+
+        let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content_box.set_margin_start(18);
+        content_box.set_margin_end(18);
+        content_box.set_margin_top(18);
+        content_box.set_margin_bottom(18);
+        content_box.append(&group);
+        content_box.append(&status_label);
+
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
+        toolbar_view.set_content(Some(&content_box));
+        dialog.set_child(Some(&toolbar_view));
+
+        let dialog_ref = dialog.clone();
+        let win = self.clone();
+        create_button.connect_clicked(move |_| {
+            let host = host_row.text().trim().to_string();
+            if host.is_empty() {
+                status_label.set_text("SSH host is required");
+                return;
+            }
+            win.add_remote_managed_session(&host);
+            dialog_ref.close();
+        });
+
+        dialog.present(Some(self));
+    }
+
+    fn add_remote_managed_session(&self, host: &str) {
+        let imp = self.imp();
+        let count = imp.state.borrow().sessions.len() + 1;
+        let session_state = SessionState::new_managed_remote(
+            format!("Remote {count}"),
+            host,
+            WorkspacePolicy::Persistent,
+            None,
+        );
+        imp.state.borrow_mut().sessions.push(session_state.clone());
+        self.build_session(&session_state, false);
+        self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
+        self.connect_managed_workspace(&session_state);
+
+        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = imp.sidebar_list.row_at_index(index) {
+            imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
     pub(super) fn add_managed_session(&self, policy: WorkspacePolicy) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
