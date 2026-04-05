@@ -504,3 +504,31 @@ fn new_managed_remote_produces_remote_persistent_session() {
     assert!(!session.layout.terminal_uuids().is_empty());
     assert!(!session.runtime.pending_layout_panes.is_empty());
 }
+
+/// Remote managed session must round-trip through serialization.
+#[test]
+fn remote_managed_session_persists_and_restores() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::{SessionMode, SessionState};
+
+    let session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "dev@build-host",
+        WorkspacePolicy::Persistent,
+        Some("/home/dev/project".into()),
+    );
+
+    let json = serde_json::to_string(&session).unwrap();
+    let restored: SessionState = serde_json::from_str(&json).unwrap();
+
+    assert!(restored.runtime.is_managed());
+    assert_eq!(
+        restored.runtime.endpoint,
+        RuntimeEndpoint::Remote { host: "dev@build-host".into() }
+    );
+    assert!(matches!(restored.mode, SessionMode::RemotePersistent { .. }));
+    assert_eq!(
+        restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
+        Some("/home/dev/project")
+    );
+}

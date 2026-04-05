@@ -110,6 +110,7 @@ mod imp {
             let menu = gtk4::gio::Menu::new();
             menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
             menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
+            menu.append(Some("New Remote Workspace"), Some("win.new-remote-workspace"));
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -453,6 +454,7 @@ impl Window {
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
             ("new-ephemeral-workspace", &["<Ctrl><Shift><Alt>T"], Self::add_ephemeral_session),
+            ("new-remote-workspace", &[], Self::show_new_remote_workspace_dialog),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
