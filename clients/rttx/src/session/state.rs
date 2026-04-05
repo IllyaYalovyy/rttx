@@ -49,6 +49,50 @@ impl SessionMode {
     }
 }
 
+/// Accent color for a session's sidebar indicator dot.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionColor {
+    #[default]
+    Blue,
+    Green,
+    Yellow,
+    Red,
+    Purple,
+    Pink,
+    Teal,
+    Orange,
+}
+
+impl SessionColor {
+    /// All available colors in assignment order.
+    pub const ALL: [Self; 8] = [
+        Self::Blue,
+        Self::Green,
+        Self::Yellow,
+        Self::Red,
+        Self::Purple,
+        Self::Pink,
+        Self::Teal,
+        Self::Orange,
+    ];
+
+    /// CSS class name for the color dot.
+    #[must_use]
+    pub const fn css_class(self) -> &'static str {
+        match self {
+            Self::Blue => "accent-blue",
+            Self::Green => "accent-green",
+            Self::Yellow => "accent-yellow",
+            Self::Red => "accent-red",
+            Self::Purple => "accent-purple",
+            Self::Pink => "accent-pink",
+            Self::Teal => "accent-teal",
+            Self::Orange => "accent-orange",
+        }
+    }
+}
+
 /// State of a single terminal session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionState {
@@ -65,6 +109,8 @@ pub struct SessionState {
     pub mode: SessionMode,
     #[serde(default)]
     pub runtime: WorkspaceRuntime,
+    #[serde(default)]
+    pub color: SessionColor,
 }
 
 impl SessionState {
@@ -95,6 +141,7 @@ impl SessionState {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         }
     }
 
@@ -139,6 +186,7 @@ impl SessionState {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         }
     }
 }
@@ -322,6 +370,7 @@ mod tests {
             input_sync: true,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -579,6 +628,7 @@ mod tests {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         };
         session.layout = session.layout.remove_terminal("t2").unwrap();
         session.prune_recovery();
@@ -598,6 +648,7 @@ mod tests {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         };
         session.normalize_active_terminal();
         assert_eq!(session.active_terminal_uuid.as_deref(), Some("t1"));
@@ -629,6 +680,7 @@ mod tests {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -691,5 +743,37 @@ mod module_boundary_tests {
             session.layout.terminal_cwd(&session.layout.terminal_uuids()[0]).as_deref(),
             Some("/home/user")
         );
+    }
+
+    #[test]
+    fn session_color_survives_serde_roundtrip() {
+        let mut session = SessionState::new("Test".into());
+        session.color = SessionColor::Purple;
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.color, SessionColor::Purple);
+    }
+
+    #[test]
+    fn session_color_defaults_to_blue_for_old_state() {
+        let mut session = SessionState::new("Test".into());
+        session.color = SessionColor::Blue;
+        let json = serde_json::to_string(&session).unwrap();
+        // Remove color field to simulate old state.
+        let json = json.replace(r#","color":"blue""#, "");
+        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.color, SessionColor::Blue);
+    }
+
+    #[test]
+    fn session_color_all_has_eight_variants() {
+        assert_eq!(SessionColor::ALL.len(), 8);
+    }
+
+    #[test]
+    fn session_color_css_classes_are_unique() {
+        let classes: std::collections::HashSet<_> =
+            SessionColor::ALL.iter().map(|c| c.css_class()).collect();
+        assert_eq!(classes.len(), 8);
     }
 }

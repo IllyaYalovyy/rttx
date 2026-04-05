@@ -79,7 +79,7 @@ fn preferences_unknown_fields_are_ignored() {
 #[test]
 fn preferences_input_sync_persists_in_session_state() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::session::{LayoutNode, SessionMode, SessionState, WindowState};
+    use rttx::session::{LayoutNode, SessionColor, SessionMode, SessionState, WindowState};
 
     let state = WindowState {
         sessions: vec![SessionState {
@@ -91,6 +91,7 @@ fn preferences_input_sync_persists_in_session_state() {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         }],
         ..WindowState::default()
     };
@@ -129,7 +130,7 @@ fn preferences_backward_compat_missing_input_sync() {
 #[test]
 fn custom_title_persists_in_layout() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::session::{LayoutNode, SessionMode, SessionState, WindowState};
+    use rttx::session::{LayoutNode, SessionColor, SessionMode, SessionState, WindowState};
 
     let state = WindowState {
         sessions: vec![SessionState {
@@ -146,6 +147,7 @@ fn custom_title_persists_in_layout() {
             input_sync: false,
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
+            color: SessionColor::default(),
         }],
         ..WindowState::default()
     };

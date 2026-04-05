@@ -18,8 +18,8 @@ use crate::runtime::{
     workspace_connection_summary,
 };
 use crate::session::{
-    self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
-    SplitOrientation, StartupStep, WindowState,
+    self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionColor,
+    SessionState, SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::handle::TerminalHandle;
@@ -619,6 +619,7 @@ impl Window {
         } else {
             "Close workspace"
         }));
+        row.set_color(session_state.color);
 
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
@@ -1098,6 +1099,11 @@ impl Window {
         }
     }
 
+    fn next_session_color(&self) -> SessionColor {
+        let count = self.imp().state.borrow().sessions.len();
+        SessionColor::ALL[count % SessionColor::ALL.len()]
+    }
+
     pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
         let imp = self.imp();
         let initial_cwd = bookmark
@@ -1107,7 +1113,7 @@ impl Window {
             .map(str::to_string)
             .or_else(|| bookmark.session_initial_cwd().map(str::to_string));
 
-        let session_state = if let Some(host) = bookmark.remote_host() {
+        let mut session_state = if let Some(host) = bookmark.remote_host() {
             SessionState::new_managed_remote(
                 bookmark.name.clone(),
                 host,
@@ -1117,6 +1123,7 @@ impl Window {
         } else {
             SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd)
         };
+        session_state.color = self.next_session_color();
         let session_uuid = session_state.uuid.clone();
         let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
         imp.state.borrow_mut().sessions.push(session_state.clone());
@@ -2614,6 +2621,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2624,6 +2632,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -2668,6 +2677,7 @@ mod tests {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2705,6 +2715,7 @@ mod tests {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2730,6 +2741,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2745,6 +2757,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -3324,6 +3337,7 @@ mod tests {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -5523,6 +5537,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
                 SessionState {
                     uuid: second_uuid.clone(),
@@ -5533,6 +5548,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
             ],
             ..WindowState::default()

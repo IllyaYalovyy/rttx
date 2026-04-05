@@ -163,6 +163,7 @@ fn contract_any_constructible_state_roundtrips() {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             width: 1,
             height: 1,
@@ -179,6 +180,7 @@ fn contract_any_constructible_state_roundtrips() {
                 input_sync: true,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         },
@@ -198,6 +200,7 @@ fn contract_any_constructible_state_roundtrips() {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 }],
                 ..WindowState::default()
             }
@@ -214,6 +217,7 @@ fn contract_any_constructible_state_roundtrips() {
                     input_sync: i % 2 == 0,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 })
                 .collect();
             WindowState {
