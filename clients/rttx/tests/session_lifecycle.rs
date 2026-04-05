@@ -532,3 +532,44 @@ fn remote_managed_session_persists_and_restores() {
         Some("/home/dev/project")
     );
 }
+
+/// SSH bookmark must create a managed remote session, not a local direct one.
+/// Regression test for #243.
+#[test]
+fn ssh_bookmark_creates_managed_remote_session() {
+    use rttx::bookmarks::Bookmark;
+    use rttx::runtime::RuntimeEndpoint;
+    use rttx::session::SessionState;
+
+    let mut bookmark = Bookmark::new("Prod Server");
+    bookmark.ssh_target = Some("deploy@example.com".into());
+    bookmark.directory = Some("/srv/app".into());
+
+    // Simulate the decision logic from new_session_from_bookmark.
+    let host = bookmark.remote_host();
+    assert!(host.is_some(), "SSH bookmark must report a remote host");
+
+    let session = SessionState::new_managed_remote(
+        bookmark.name.clone(),
+        host.unwrap(),
+        rttx::runtime::WorkspacePolicy::Persistent,
+        bookmark.session_initial_cwd().map(str::to_string),
+    );
+
+    assert!(session.runtime.is_managed());
+    assert_eq!(
+        session.runtime.endpoint,
+        RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
+    );
+}
+
+/// Local bookmark must still create a direct session.
+#[test]
+fn local_bookmark_creates_direct_session() {
+    use rttx::bookmarks::Bookmark;
+
+    let mut bookmark = Bookmark::new("Projects");
+    bookmark.directory = Some("/home/user/projects".into());
+
+    assert!(bookmark.remote_host().is_none());
+}

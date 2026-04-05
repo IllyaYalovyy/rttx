@@ -1035,7 +1035,16 @@ impl Window {
             .map(str::to_string)
             .or_else(|| bookmark.session_initial_cwd().map(str::to_string));
 
-        let session_state = SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd);
+        let session_state = if let Some(host) = bookmark.remote_host() {
+            SessionState::new_managed_remote(
+                bookmark.name.clone(),
+                host,
+                WorkspacePolicy::Persistent,
+                initial_cwd,
+            )
+        } else {
+            SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd)
+        };
         let session_uuid = session_state.uuid.clone();
         let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
         imp.state.borrow_mut().sessions.push(session_state.clone());
@@ -1046,7 +1055,15 @@ impl Window {
             imp.sidebar_list.select_row(Some(&row));
         }
 
-        self.setup_bookmark_terminal(&terminal_uuid, bookmark);
+        if session_state.runtime.is_managed() {
+            self.set_workspace_connection_status(
+                &session_state.uuid,
+                &ConnectionStatus::Connecting,
+            );
+            self.connect_managed_workspace(&session_state);
+        } else {
+            self.setup_bookmark_terminal(&terminal_uuid, bookmark);
+        }
         self.imp().session_stack.set_visible_child_name(&session_uuid);
     }
 
