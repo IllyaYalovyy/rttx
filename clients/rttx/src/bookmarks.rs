@@ -101,6 +101,15 @@ impl Bookmark {
         non_empty(self.ssh_target.as_deref())
     }
 
+    /// Command to run on a remote pane that is already connected to the bookmark's host.
+    /// Returns the inner command (cd, tmux, etc.) without the SSH wrapper.
+    /// None if the bookmark has no SSH target or no inner command beyond just connecting.
+    #[must_use]
+    pub fn remote_command(&self) -> Option<String> {
+        non_empty(self.ssh_target.as_deref())?;
+        local_command(non_empty(self.directory.as_deref()), non_empty(self.tmux_session.as_deref()))
+    }
+
     #[must_use]
     pub fn pane_target(&self) -> Option<PaneTarget> {
         let directory = non_empty(self.directory.as_deref()).map(str::to_string);
@@ -456,5 +465,35 @@ mod tests {
         let mut b = Bookmark::new("Empty");
         b.ssh_target = Some("  ".into());
         assert_eq!(b.remote_host(), None);
+    }
+
+    #[test]
+    fn remote_command_returns_inner_command_without_ssh() {
+        let mut b = Bookmark::new("Deploy");
+        b.ssh_target = Some("deploy@example.com".into());
+        b.directory = Some("/srv/app".into());
+        b.tmux_session = Some("web".into());
+
+        let full = b.command().unwrap();
+        assert!(full.starts_with("ssh"), "full command should start with ssh: {full}");
+
+        let inner = b.remote_command().unwrap();
+        assert!(!inner.contains("ssh"), "remote_command must not contain ssh: {inner}");
+        assert!(inner.contains("/srv/app"), "remote_command must contain directory");
+        assert!(inner.contains("tmux"), "remote_command must contain tmux");
+    }
+
+    #[test]
+    fn remote_command_for_ssh_only_bookmark_is_none() {
+        let mut b = Bookmark::new("Shell");
+        b.ssh_target = Some("deploy@example.com".into());
+        assert!(b.remote_command().is_none(), "SSH-only bookmark has no inner command to run");
+    }
+
+    #[test]
+    fn remote_command_for_local_bookmark_is_none() {
+        let mut b = Bookmark::new("Local");
+        b.directory = Some("/home/user".into());
+        assert!(b.remote_command().is_none());
     }
 }
