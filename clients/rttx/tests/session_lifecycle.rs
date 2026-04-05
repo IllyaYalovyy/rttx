@@ -482,3 +482,25 @@ fn layout_cwd_survives_reconnect_cycle() {
     // Simulate disconnect: CWD should not be cleared.
     assert_eq!(session.layout.terminal_cwd(&uuid).as_deref(), Some("/project/dir"),);
 }
+
+/// `new_managed_remote` must produce a valid remote-persistent session.
+#[test]
+fn new_managed_remote_produces_remote_persistent_session() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::SessionState;
+
+    let session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "dev-box.internal",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+
+    assert!(session.runtime.is_managed());
+    assert_eq!(
+        session.runtime.endpoint,
+        RuntimeEndpoint::Remote { host: "dev-box.internal".into() }
+    );
+    assert!(!session.layout.terminal_uuids().is_empty());
+    assert!(!session.runtime.pending_layout_panes.is_empty());
+}

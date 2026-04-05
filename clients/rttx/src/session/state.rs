@@ -111,6 +111,20 @@ impl SessionState {
         session
     }
 
+    #[must_use]
+    pub fn new_managed_remote(
+        name: String,
+        host: &str,
+        policy: WorkspacePolicy,
+        initial_cwd: Option<String>,
+    ) -> Self {
+        let mut session = Self::new_with_initial_cwd(name, initial_cwd);
+        let layout_terminal_uuids = session.layout.terminal_uuids();
+        session.runtime = WorkspaceRuntime::managed_remote(host, policy, &layout_terminal_uuids);
+        session.sync_legacy_mode_from_runtime();
+        session
+    }
+
     #[cfg(test)]
     #[must_use]
     pub fn default_for_test() -> Self {
@@ -650,5 +664,32 @@ mod module_boundary_tests {
         assert_eq!(session.layout.terminal_count(), 1);
         assert!(session.recovery_for(&new_uuid).is_none());
         assert!(session.recovery_for(&uuid).is_some());
+    }
+
+    #[test]
+    fn new_managed_remote_sets_endpoint_and_mode() {
+        let session = SessionState::new_managed_remote(
+            "Work".into(),
+            "server.example.com",
+            WorkspacePolicy::Persistent,
+            Some("/home/user".into()),
+        );
+        assert!(session.runtime.is_managed());
+        assert_eq!(
+            session.runtime.endpoint,
+            RuntimeEndpoint::Remote { host: "server.example.com".into() }
+        );
+        assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
+        assert_eq!(
+            session.mode,
+            SessionMode::RemotePersistent {
+                host: "server.example.com".into(),
+                daemon_session_id: String::new(),
+            }
+        );
+        assert_eq!(
+            session.layout.terminal_cwd(&session.layout.terminal_uuids()[0]).as_deref(),
+            Some("/home/user")
+        );
     }
 }
