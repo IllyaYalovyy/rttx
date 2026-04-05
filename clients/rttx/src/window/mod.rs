@@ -1269,8 +1269,8 @@ impl Window {
             action_row.set_activatable(true);
 
             let new_session_button = gtk4::Button::builder()
-                .icon_name("window-new-symbolic")
-                .tooltip_text("New workspace from bookmark")
+                .icon_name(bookmark.new_workspace_icon())
+                .tooltip_text(bookmark.new_workspace_tooltip())
                 .valign(gtk4::Align::Center)
                 .build();
             new_session_button.add_css_class("flat");

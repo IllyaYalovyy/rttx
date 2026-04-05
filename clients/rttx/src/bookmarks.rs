@@ -101,6 +101,21 @@ impl Bookmark {
         non_empty(self.ssh_target.as_deref())
     }
 
+    /// Tooltip for the "New workspace" button.
+    #[must_use]
+    pub fn new_workspace_tooltip(&self) -> String {
+        self.remote_host().map_or_else(
+            || "New workspace from bookmark".into(),
+            |host| format!("New workspace on {host}"),
+        )
+    }
+
+    /// Icon name for the "New workspace" button.
+    #[must_use]
+    pub fn new_workspace_icon(&self) -> &'static str {
+        if self.remote_host().is_some() { "network-server-symbolic" } else { "window-new-symbolic" }
+    }
+
     /// Command to run on a remote pane that is already connected to the bookmark's host.
     /// Returns the inner command (cd, tmux, etc.) without the SSH wrapper.
     /// None if the bookmark has no SSH target or no inner command beyond just connecting.
@@ -465,6 +480,27 @@ mod tests {
         let mut b = Bookmark::new("Empty");
         b.ssh_target = Some("  ".into());
         assert_eq!(b.remote_host(), None);
+    }
+
+    #[test]
+    fn new_workspace_tooltip_includes_host_for_remote() {
+        let mut b = Bookmark::new("Deploy");
+        b.ssh_target = Some("deploy@example.com".into());
+        assert_eq!(b.new_workspace_tooltip(), "New workspace on deploy@example.com");
+    }
+
+    #[test]
+    fn new_workspace_tooltip_is_generic_for_local() {
+        let b = Bookmark::new("Local");
+        assert_eq!(b.new_workspace_tooltip(), "New workspace from bookmark");
+    }
+
+    #[test]
+    fn new_workspace_icon_differs_for_remote() {
+        let mut remote = Bookmark::new("Remote");
+        remote.ssh_target = Some("host".into());
+        let local = Bookmark::new("Local");
+        assert_ne!(remote.new_workspace_icon(), local.new_workspace_icon());
     }
 
     #[test]
