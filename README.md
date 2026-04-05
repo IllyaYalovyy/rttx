@@ -141,6 +141,12 @@ sudo update-desktop-database /usr/local/share/applications
 For a user-local install (no sudo), use `--prefix="$HOME/.local"` and ensure `~/.local/bin` is in
 your `$PATH`.
 
+To build and install both the GUI and `rttx-server` for your user in one step:
+
+```bash
+./install-user-local.sh
+```
+
 For VTE 0.76 systems, add `-Dvte_version=0.76` to `meson setup`.
 
 The daemon must be on `$PATH` for the client to auto-start it. Without it, daemon-backed
