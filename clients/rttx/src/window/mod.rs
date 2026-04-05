@@ -1142,7 +1142,8 @@ impl Window {
             return;
         };
 
-        let Some(command) = bookmark.command() else {
+        let command = self.resolve_bookmark_command(bookmark);
+        let Some(command) = command else {
             return;
         };
         self.set_terminal_recovery(
@@ -1154,6 +1155,27 @@ impl Window {
             },
         );
         self.send_input_to_terminal(&terminal_uuid, &format!("{command}\n"));
+    }
+
+    fn resolve_bookmark_command(&self, bookmark: &Bookmark) -> Option<String> {
+        let bookmark_host = bookmark.remote_host();
+        if let Some(bh) = bookmark_host {
+            let session_host = self.visible_session_remote_host();
+            if session_host.as_deref() == Some(bh) {
+                return bookmark.remote_command().or_else(|| bookmark.command());
+            }
+        }
+        bookmark.command()
+    }
+
+    fn visible_session_remote_host(&self) -> Option<String> {
+        let state = self.imp().state.borrow();
+        let visible = self.imp().session_stack.visible_child_name()?;
+        let session = state.sessions.iter().find(|s| s.uuid == visible.as_str())?;
+        match &session.runtime.endpoint {
+            RuntimeEndpoint::Remote { host } if session.runtime.is_managed() => Some(host.clone()),
+            _ => None,
+        }
     }
 
     fn switch_to_session(&self, index: usize) {
