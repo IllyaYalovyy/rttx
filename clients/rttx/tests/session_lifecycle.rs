@@ -573,3 +573,29 @@ fn local_bookmark_creates_direct_session() {
 
     assert!(bookmark.remote_host().is_none());
 }
+
+/// Updating a remote workspace endpoint must change the host and sync mode.
+#[test]
+fn update_remote_endpoint_changes_host_and_mode() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::{SessionMode, SessionState};
+
+    let mut session = SessionState::new_managed_remote(
+        "Remote".into(),
+        "old-host.example.com",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+
+    session.runtime.endpoint = RuntimeEndpoint::Remote { host: "new-host.example.com".into() };
+    session.sync_legacy_mode_from_runtime();
+
+    assert_eq!(
+        session.runtime.endpoint,
+        RuntimeEndpoint::Remote { host: "new-host.example.com".into() }
+    );
+    assert!(matches!(
+        session.mode,
+        SessionMode::RemotePersistent { ref host, .. } if host == "new-host.example.com"
+    ));
+}
