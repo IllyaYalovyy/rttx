@@ -54,6 +54,63 @@ impl Window {
         dialog.present(Some(self));
     }
 
+    pub(super) fn show_browse_remote_runtimes_dialog(&self) {
+        let dialog =
+            adw::Dialog::builder().title("Attach to Remote Runtime").content_width(440).build();
+        let header = adw::HeaderBar::new();
+        let connect_button = gtk4::Button::with_label("Connect");
+        connect_button.add_css_class("suggested-action");
+        header.pack_end(&connect_button);
+
+        let host_row = adw::EntryRow::builder().title("SSH host (e.g. user@host)").build();
+
+        let status_label = gtk4::Label::new(None);
+        status_label.set_xalign(0.0);
+        status_label.add_css_class("dim-label");
+        status_label.set_text("Existing runtimes on the host will appear in the sidebar.");
+
+        let group = adw::PreferencesGroup::new();
+        group.add(&host_row);
+
+        let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content_box.set_margin_start(18);
+        content_box.set_margin_end(18);
+        content_box.set_margin_top(18);
+        content_box.set_margin_bottom(18);
+        content_box.append(&group);
+        content_box.append(&status_label);
+
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
+        toolbar_view.set_content(Some(&content_box));
+        dialog.set_child(Some(&toolbar_view));
+
+        let dialog_ref = dialog.clone();
+        let win = self.clone();
+        connect_button.connect_clicked(move |_| {
+            let host = host_row.text().trim().to_string();
+            if host.is_empty() {
+                status_label.set_text("SSH host is required");
+                return;
+            }
+            win.browse_remote_runtimes(&host);
+            dialog_ref.close();
+        });
+
+        dialog.present(Some(self));
+    }
+
+    fn browse_remote_runtimes(&self, host: &str) {
+        if !self.ensure_connection_manager() {
+            return;
+        }
+        let endpoint = RuntimeEndpoint::Remote { host: host.into() };
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.refresh_inventory(&endpoint);
+        }
+        self.show_toast(&format!("Connecting to {host}…"));
+    }
+
     fn add_remote_managed_session(&self, host: &str) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
