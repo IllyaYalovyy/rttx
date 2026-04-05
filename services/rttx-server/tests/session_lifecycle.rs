@@ -4,6 +4,7 @@ mod common;
 
 use common::{TestClient, start_test_server};
 use rttx_proto::proto;
+use std::time::Duration;
 
 #[tokio::test]
 async fn create_session_and_list() {
@@ -88,10 +89,17 @@ async fn attach_and_detach_session() {
         })),
     };
     client.send(&detach).await;
-    assert!(matches!(
-        client.recv().await.msg,
-        Some(proto::server_message::Msg::SessionDetached(_))
-    ));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(
+                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+            ) => {}
+            other => panic!("expected SessionDetached, got {other:?}"),
+        }
+    }
 
     // Verify session still exists after detach.
     let list = proto::ClientMessage {

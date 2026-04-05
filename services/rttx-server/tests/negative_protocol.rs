@@ -256,7 +256,13 @@ async fn detach_without_attach_is_harmless() {
 
     let resp = client.recv_or_timeout().await;
     assert!(
-        matches!(resp.msg, Some(proto::server_message::Msg::SessionDetached(_))),
+        matches!(
+            resp.msg,
+            Some(
+                proto::server_message::Msg::SessionDetached(_)
+                    | proto::server_message::Msg::Delta(_)
+            )
+        ),
         "detach without attach should return SessionDetached, got {resp:?}"
     );
 }

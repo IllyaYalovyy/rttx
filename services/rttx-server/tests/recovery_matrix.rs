@@ -113,11 +113,19 @@ async fn persistent_explicit_detach_session_survives_unattached() {
         })),
     })
     .await;
-    match c.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionDetached(d)) => {
-            assert_eq!(d.session_id, session_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        match c.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionDetached(d)) => {
+                assert_eq!(d.session_id, session_id);
+                break;
+            }
+            Some(
+                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+            ) => {}
+            other => panic!("expected SessionDetached, got {other:?}"),
         }
-        other => panic!("expected SessionDetached, got {other:?}"),
     }
 
     let sessions = list_sessions(&mut c).await;
