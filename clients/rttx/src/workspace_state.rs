@@ -427,6 +427,16 @@ impl WindowState {
             })
             .collect::<Vec<_>>();
 
+        // Update layout CWDs from the snapshot so the rebuilt session
+        // carries the daemon's current CWD, not stale client-side values.
+        for restore in &snapshot_restores {
+            if !restore.cwd.is_empty() {
+                session
+                    .layout
+                    .set_terminal_cwd(&restore.layout_terminal_uuid, Some(restore.cwd.clone()));
+            }
+        }
+
         Some(ManagedWorkspaceOpenResult {
             session_state: session.clone(),
             panes_to_create,
@@ -1289,5 +1299,14 @@ mod tests {
 
         assert!(!transition.pane_snapshot_restores.is_empty());
         assert_eq!(transition.pane_snapshot_restores[0].cwd, "/new/project");
+
+        // The layout CWD must also be updated from the snapshot.
+        let session = state.sessions.iter().find(|s| s.uuid == "ws-1").unwrap();
+        let layout_uuid = &transition.pane_snapshot_restores[0].layout_terminal_uuid;
+        assert_eq!(
+            session.layout.terminal_cwd(layout_uuid).as_deref(),
+            Some("/new/project"),
+            "layout CWD must be updated from snapshot during workspace opened"
+        );
     }
 }
