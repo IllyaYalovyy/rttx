@@ -2364,10 +2364,22 @@ impl Window {
             format!("\"{title}\" exited with status {status}")
         };
 
-        let notification = gtk4::gio::Notification::new("Process completed");
-        notification.set_body(Some(&body));
-        if let Some(app) = self.application() {
-            app.send_notification(None, &notification);
+        let tier = {
+            let visible = self.imp().session_stack.visible_child_name();
+            let state = self.imp().state.borrow();
+            notification_tier(terminal_uuid, visible.as_deref(), self.is_active(), &state)
+        };
+
+        match tier {
+            NotificationTier::Suppress => {}
+            NotificationTier::Toast => self.show_toast(&body),
+            NotificationTier::Desktop => {
+                let notification = gtk4::gio::Notification::new("Process completed");
+                notification.set_body(Some(&body));
+                if let Some(app) = self.application() {
+                    app.send_notification(None, &notification);
+                }
+            }
         }
     }
 
@@ -2440,6 +2452,36 @@ fn terminal_is_in_background_session(
             .find(|s| s.uuid == visible)
             .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
     })
+}
+
+/// Notification tier for a process exit event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationTier {
+    /// Terminal is in the visible session — no notification needed.
+    Suppress,
+    /// Window is focused but terminal is in a background session — use toast.
+    Toast,
+    /// Window is not focused — use desktop notification.
+    Desktop,
+}
+
+#[must_use]
+fn notification_tier(
+    terminal_uuid: &str,
+    visible_session_uuid: Option<&str>,
+    window_active: bool,
+    state: &WindowState,
+) -> NotificationTier {
+    if let Some(visible_uuid) = visible_session_uuid
+        && state
+            .sessions
+            .iter()
+            .find(|s| s.uuid == visible_uuid)
+            .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
+    {
+        return NotificationTier::Suppress;
+    }
+    if window_active { NotificationTier::Toast } else { NotificationTier::Desktop }
 }
 
 fn preferred_command_target_uuid(
@@ -5783,5 +5825,40 @@ mod tests {
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn notification_tier_suppresses_for_visible_session() {
+        let state = WindowState::default();
+        let uuid = state.sessions[0].uuid.clone();
+        let terminal = state.sessions[0].layout.terminal_uuids()[0].clone();
+        assert_eq!(
+            notification_tier(&terminal, Some(&uuid), true, &state),
+            NotificationTier::Suppress
+        );
+    }
+
+    #[test]
+    fn notification_tier_toasts_for_background_session_when_focused() {
+        let mut state = WindowState::default();
+        state.sessions.push(SessionState::new("Background".into()));
+        let bg_terminal = state.sessions[1].layout.terminal_uuids()[0].clone();
+        let visible_uuid = state.sessions[0].uuid.clone();
+        assert_eq!(
+            notification_tier(&bg_terminal, Some(&visible_uuid), true, &state),
+            NotificationTier::Toast
+        );
+    }
+
+    #[test]
+    fn notification_tier_desktop_when_window_unfocused() {
+        let mut state = WindowState::default();
+        state.sessions.push(SessionState::new("Background".into()));
+        let bg_terminal = state.sessions[1].layout.terminal_uuids()[0].clone();
+        let visible_uuid = state.sessions[0].uuid.clone();
+        assert_eq!(
+            notification_tier(&bg_terminal, Some(&visible_uuid), false, &state),
+            NotificationTier::Desktop
+        );
     }
 }
