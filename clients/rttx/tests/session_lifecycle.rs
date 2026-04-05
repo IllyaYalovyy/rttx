@@ -619,3 +619,80 @@ fn ssh_bookmark_remote_command_strips_ssh_for_same_host() {
     assert!(inner.contains("/srv/app"));
     assert!(inner.contains("tmux"));
 }
+
+/// Splitting a pane in a remote managed session must preserve the remote
+/// endpoint and add the new pane to pending bindings. Issue #246.
+#[test]
+fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::layout::SplitOrientation;
+    use rttx::session::{PaneRecovery, SessionState};
+
+    let mut session = SessionState::new_managed_remote(
+        "Remote".into(),
+        "build-host.internal",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+
+    let original_uuid = session.layout.terminal_uuids()[0].clone();
+    assert_eq!(session.runtime.pending_layout_panes.len(), 1);
+
+    // Split — mirrors the logic in window/mod.rs split_terminal().
+    let (new_layout, new_uuid) = session
+        .layout
+        .split_terminal_with_new_uuid(&original_uuid, SplitOrientation::Horizontal)
+        .unwrap();
+    session.layout = new_layout;
+    session.set_recovery(&new_uuid, PaneRecovery::empty_shell());
+    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
+
+    // Endpoint must still be remote.
+    assert_eq!(
+        session.runtime.endpoint,
+        RuntimeEndpoint::Remote { host: "build-host.internal".into() },
+        "split must not change the workspace endpoint"
+    );
+
+    // Both panes must be in pending bindings.
+    assert!(
+        session.runtime.pending_layout_panes.contains(&new_uuid),
+        "new pane must be in pending_layout_panes"
+    );
+    assert_eq!(session.layout.terminal_count(), 2);
+    assert!(session.runtime.is_managed());
+}
+
+/// Splitting twice must keep all panes pending and endpoint unchanged.
+#[test]
+fn double_split_remote_session_keeps_all_panes_pending() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::layout::SplitOrientation;
+    use rttx::session::{PaneRecovery, SessionState};
+
+    let mut session = SessionState::new_managed_remote(
+        "Remote".into(),
+        "gpu-box",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+
+    let t1 = session.layout.terminal_uuids()[0].clone();
+
+    let (layout, t2) =
+        session.layout.split_terminal_with_new_uuid(&t1, SplitOrientation::Horizontal).unwrap();
+    session.layout = layout;
+    session.set_recovery(&t2, PaneRecovery::empty_shell());
+    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
+
+    let (layout, t3) =
+        session.layout.split_terminal_with_new_uuid(&t2, SplitOrientation::Vertical).unwrap();
+    session.layout = layout;
+    session.set_recovery(&t3, PaneRecovery::empty_shell());
+    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
+
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Remote { host: "gpu-box".into() });
+    assert_eq!(session.layout.terminal_count(), 3);
+    assert!(session.runtime.pending_layout_panes.contains(&t2));
+    assert!(session.runtime.pending_layout_panes.contains(&t3));
+}
