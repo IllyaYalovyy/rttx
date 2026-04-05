@@ -114,12 +114,13 @@ impl Window {
     fn add_remote_managed_session(&self, host: &str) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
-        let session_state = SessionState::new_managed_remote(
+        let mut session_state = SessionState::new_managed_remote(
             format!("Remote {count}"),
             host,
             WorkspacePolicy::Persistent,
             None,
         );
+        session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state, false);
         self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
@@ -135,8 +136,9 @@ impl Window {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();
-        let session_state =
+        let mut session_state =
             SessionState::new_managed_local(format!("Workspace {count}"), policy, initial_cwd);
+        session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state, false);
         self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);

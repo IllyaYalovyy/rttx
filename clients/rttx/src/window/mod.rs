@@ -18,8 +18,8 @@ use crate::runtime::{
     workspace_connection_summary,
 };
 use crate::session::{
-    self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionState,
-    SplitOrientation, StartupStep, WindowState,
+    self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionColor,
+    SessionState, SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::handle::TerminalHandle;
@@ -619,6 +619,7 @@ impl Window {
         } else {
             "Close workspace"
         }));
+        row.set_color(session_state.color);
 
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
@@ -1098,6 +1099,11 @@ impl Window {
         }
     }
 
+    fn next_session_color(&self) -> SessionColor {
+        let count = self.imp().state.borrow().sessions.len();
+        SessionColor::ALL[count % SessionColor::ALL.len()]
+    }
+
     pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
         let imp = self.imp();
         let initial_cwd = bookmark
@@ -1107,7 +1113,7 @@ impl Window {
             .map(str::to_string)
             .or_else(|| bookmark.session_initial_cwd().map(str::to_string));
 
-        let session_state = if let Some(host) = bookmark.remote_host() {
+        let mut session_state = if let Some(host) = bookmark.remote_host() {
             SessionState::new_managed_remote(
                 bookmark.name.clone(),
                 host,
@@ -1117,6 +1123,7 @@ impl Window {
         } else {
             SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd)
         };
+        session_state.color = self.next_session_color();
         let session_uuid = session_state.uuid.clone();
         let terminal_uuid = session_state.layout.terminal_uuids().into_iter().next().unwrap();
         imp.state.borrow_mut().sessions.push(session_state.clone());
@@ -2364,10 +2371,22 @@ impl Window {
             format!("\"{title}\" exited with status {status}")
         };
 
-        let notification = gtk4::gio::Notification::new("Process completed");
-        notification.set_body(Some(&body));
-        if let Some(app) = self.application() {
-            app.send_notification(None, &notification);
+        let tier = {
+            let visible = self.imp().session_stack.visible_child_name();
+            let state = self.imp().state.borrow();
+            notification_tier(terminal_uuid, visible.as_deref(), self.is_active(), &state)
+        };
+
+        match tier {
+            NotificationTier::Suppress => {}
+            NotificationTier::Toast => self.show_toast(&body),
+            NotificationTier::Desktop => {
+                let notification = gtk4::gio::Notification::new("Process completed");
+                notification.set_body(Some(&body));
+                if let Some(app) = self.application() {
+                    app.send_notification(None, &notification);
+                }
+            }
         }
     }
 
@@ -2440,6 +2459,36 @@ fn terminal_is_in_background_session(
             .find(|s| s.uuid == visible)
             .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
     })
+}
+
+/// Notification tier for a process exit event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationTier {
+    /// Terminal is in the visible session — no notification needed.
+    Suppress,
+    /// Window is focused but terminal is in a background session — use toast.
+    Toast,
+    /// Window is not focused — use desktop notification.
+    Desktop,
+}
+
+#[must_use]
+fn notification_tier(
+    terminal_uuid: &str,
+    visible_session_uuid: Option<&str>,
+    window_active: bool,
+    state: &WindowState,
+) -> NotificationTier {
+    if let Some(visible_uuid) = visible_session_uuid
+        && state
+            .sessions
+            .iter()
+            .find(|s| s.uuid == visible_uuid)
+            .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
+    {
+        return NotificationTier::Suppress;
+    }
+    if window_active { NotificationTier::Toast } else { NotificationTier::Desktop }
 }
 
 fn preferred_command_target_uuid(
@@ -2572,6 +2621,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2582,6 +2632,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -2626,6 +2677,7 @@ mod tests {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2663,6 +2715,7 @@ mod tests {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -2688,6 +2741,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2703,6 +2757,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -3282,6 +3337,7 @@ mod tests {
                 input_sync: false,
                 mode: Default::default(),
                 runtime: Default::default(),
+                color: Default::default(),
             }],
             ..WindowState::default()
         };
@@ -5481,6 +5537,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
                 SessionState {
                     uuid: second_uuid.clone(),
@@ -5491,6 +5548,7 @@ mod tests {
                     input_sync: false,
                     mode: Default::default(),
                     runtime: Default::default(),
+                    color: Default::default(),
                 },
             ],
             ..WindowState::default()
@@ -5783,5 +5841,40 @@ mod tests {
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    fn notification_tier_suppresses_for_visible_session() {
+        let state = WindowState::default();
+        let uuid = state.sessions[0].uuid.clone();
+        let terminal = state.sessions[0].layout.terminal_uuids()[0].clone();
+        assert_eq!(
+            notification_tier(&terminal, Some(&uuid), true, &state),
+            NotificationTier::Suppress
+        );
+    }
+
+    #[test]
+    fn notification_tier_toasts_for_background_session_when_focused() {
+        let mut state = WindowState::default();
+        state.sessions.push(SessionState::new("Background".into()));
+        let bg_terminal = state.sessions[1].layout.terminal_uuids()[0].clone();
+        let visible_uuid = state.sessions[0].uuid.clone();
+        assert_eq!(
+            notification_tier(&bg_terminal, Some(&visible_uuid), true, &state),
+            NotificationTier::Toast
+        );
+    }
+
+    #[test]
+    fn notification_tier_desktop_when_window_unfocused() {
+        let mut state = WindowState::default();
+        state.sessions.push(SessionState::new("Background".into()));
+        let bg_terminal = state.sessions[1].layout.terminal_uuids()[0].clone();
+        let visible_uuid = state.sessions[0].uuid.clone();
+        assert_eq!(
+            notification_tier(&bg_terminal, Some(&visible_uuid), false, &state),
+            NotificationTier::Desktop
+        );
     }
 }
