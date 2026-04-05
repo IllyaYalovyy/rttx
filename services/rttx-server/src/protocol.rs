@@ -94,7 +94,7 @@ fn pane_info(pane: &Pane) -> proto::PaneInfo {
     proto::PaneInfo {
         id: uuid_to_bytes(pane.id),
         title: pane.title.clone().unwrap_or_default(),
-        cwd: pane.cwd.clone().unwrap_or_default(),
+        cwd: pane.effective_cwd().unwrap_or_default(),
         cols: u32::from(pane.cols),
         rows: u32::from(pane.rows),
         exit_status: pane.exit_status,

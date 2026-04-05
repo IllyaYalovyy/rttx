@@ -153,6 +153,7 @@ impl Server {
 
             match pty_result {
                 Ok(pty) => {
+                    let child_pid = pty.pid();
                     let (reader, writer, child) = pty.into_parts();
                     let (kill_tx, kill_rx) = oneshot::channel();
                     {
@@ -162,6 +163,9 @@ impl Server {
                         // Clear exit status — fresh shell is running.
                         if let Some(session) = s.sessions.get_mut(&session_id) {
                             let _ = session.set_pane_exit_status(pane_id, None);
+                            if let Some(pane) = session.panes.get_mut(&pane_id) {
+                                pane.child_pid = child_pid;
+                            }
                         }
                     }
                     spawn_pty_read_loop(
@@ -340,7 +344,7 @@ impl Server {
                     .map(|pane| proto::PaneSnapshot {
                         pane_id: uuid_to_bytes(pane.id),
                         title: pane.title.clone().unwrap_or_default(),
-                        cwd: pane.cwd.clone().unwrap_or_default(),
+                        cwd: pane.effective_cwd().unwrap_or_default(),
                         cols: u32::from(pane.cols),
                         rows: u32::from(pane.rows),
                         scrollback: pane.screen.raw_bytes().to_vec(),
@@ -453,6 +457,7 @@ impl Server {
 
                 match pty_result {
                     Ok(pty) => {
+                        let child_pid = pty.pid();
                         let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
                         let revision = {
@@ -464,7 +469,9 @@ impl Server {
                                     "session not found".into(),
                                 ));
                             };
-                            session.add_pane(Pane::new(pane_id, 80, 24));
+                            let mut pane = Pane::new(pane_id, 80, 24);
+                            pane.child_pid = child_pid;
+                            session.add_pane(pane);
                             let revision = session.revision();
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));

@@ -36,6 +36,8 @@ pub struct Pane {
     pub scrollback_log_path: Option<PathBuf>,
     /// Bytes received since last flush to disk.
     pending_flush: Vec<u8>,
+    /// PID of the child process, used to read CWD from /proc.
+    pub child_pid: Option<u32>,
 }
 
 impl Pane {
@@ -53,6 +55,7 @@ impl Pane {
             reconstructed: false,
             scrollback_log_path: None,
             pending_flush: Vec::new(),
+            child_pid: None,
         }
     }
 
@@ -99,6 +102,22 @@ impl Pane {
         !self.pending_flush.is_empty()
     }
 
+    /// Read the child process CWD from /proc/<pid>/cwd.
+    /// Returns None if the PID is unknown or the read fails.
+    #[must_use]
+    pub fn read_proc_cwd(&self) -> Option<String> {
+        let pid = self.child_pid?;
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .and_then(|p| p.to_str().map(str::to_string))
+    }
+
+    /// Return the effective CWD: OSC 7 value if available, otherwise /proc fallback.
+    #[must_use]
+    pub fn effective_cwd(&self) -> Option<String> {
+        self.cwd.clone().or_else(|| self.read_proc_cwd())
+    }
+
     /// Mark the pane as exited.
     pub const fn set_exited(&mut self, status: i32) {
         self.exit_status = Some(status);
@@ -113,9 +132,10 @@ impl Pane {
     /// Build a persistable snapshot of this pane.
     #[must_use]
     pub fn to_persisted(&self) -> PersistedPane {
+        let cwd = self.cwd.clone().or_else(|| self.read_proc_cwd());
         PersistedPane {
             id: self.id,
-            cwd: self.cwd.clone(),
+            cwd,
             title: self.title.clone(),
             scrollback_log_path: self.scrollback_log_path.clone().unwrap_or_default(),
             exit_status: self.exit_status,
@@ -243,5 +263,19 @@ mod tests {
         let recovered: PersistedPane = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered.id, pane.id);
         assert_eq!(recovered.cols, 80);
+    }
+
+    #[test]
+    fn effective_cwd_prefers_osc7_over_proc() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.cwd = Some("/osc7/path".into());
+        pane.child_pid = Some(1); // won't be read
+        assert_eq!(pane.effective_cwd().as_deref(), Some("/osc7/path"));
+    }
+
+    #[test]
+    fn effective_cwd_returns_none_without_pid_or_osc7() {
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert!(pane.effective_cwd().is_none());
     }
 }
