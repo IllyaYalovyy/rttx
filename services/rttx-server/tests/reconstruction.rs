@@ -332,3 +332,53 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
         assert!(!cwd_b.is_empty(), "pane B CWD must not be empty after restart, got: '{cwd_b}'");
     }
 }
+
+/// Each pane must get a unique HISTFILE so shell history is per-pane.
+#[tokio::test]
+async fn pane_gets_unique_histfile() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&sock).await;
+    client.handshake().await;
+
+    let session_id =
+        create_session(&mut client, "hist-test", proto::RuntimePolicy::Persistent).await;
+    let pane_id = create_pane(&mut client, &session_id).await;
+    attach_rw(&mut client, &session_id).await;
+
+    // Ask the shell to print its HISTFILE.
+    send_input(&mut client, &session_id, &pane_id, b"echo HISTFILE=$HISTFILE\n").await;
+
+    // Poll for the output containing the history path.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut output = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
+            && let Some(proto::server_message::Msg::Delta(d)) = msg.msg
+        {
+            output.extend_from_slice(&d.data);
+            let text = String::from_utf8_lossy(&output);
+            if text.contains(".hist") {
+                break;
+            }
+        }
+    }
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains(".hist"),
+        "expected HISTFILE with .hist extension in output, got: {text}"
+    );
+}
+
+/// Sync gate evidence: history path must be unique per pane.
+#[test]
+fn history_path_unique_per_pane() {
+    let cache = std::path::Path::new("/tmp/test-cache");
+    let session = uuid::Uuid::new_v4();
+    let p1 = uuid::Uuid::new_v4();
+    let p2 = uuid::Uuid::new_v4();
+    let h1 = rttx_server::serialization::history_path(cache, session, p1);
+    let h2 = rttx_server::serialization::history_path(cache, session, p2);
+    assert_ne!(h1, h2);
+}

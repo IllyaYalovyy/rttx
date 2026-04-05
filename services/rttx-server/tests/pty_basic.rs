@@ -8,6 +8,7 @@ async fn spawn_shell_and_read_output() {
     let config = PtyConfig {
         command: vec!["/bin/sh".into(), "-c".into(), "echo hello".into()],
         cwd: None,
+        env: Vec::new(),
         cols: 80,
         rows: 24,
     };
@@ -33,7 +34,13 @@ async fn spawn_shell_and_read_output() {
 
 #[tokio::test]
 async fn pty_resize() {
-    let config = PtyConfig { command: vec!["/bin/sh".into()], cwd: None, cols: 80, rows: 24 };
+    let config = PtyConfig {
+        command: vec!["/bin/sh".into()],
+        cwd: None,
+        env: Vec::new(),
+        cols: 80,
+        rows: 24,
+    };
     let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("failed to spawn PTY");
 
     // Resize should not error.
@@ -48,6 +55,7 @@ async fn pty_exit_status() {
     let config = PtyConfig {
         command: vec!["/bin/sh".into(), "-c".into(), "exit 42".into()],
         cwd: None,
+        env: Vec::new(),
         cols: 80,
         rows: 24,
     };

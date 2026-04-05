@@ -10,7 +10,7 @@ use crate::ipc::{ClientConnection, Listener};
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
-use crate::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
+use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
 use crate::session::{
     AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Session,
     TerminationReason,
@@ -147,12 +147,18 @@ impl Server {
         for (session_id, pane_id, cwd, cols, rows) in panes_to_reconstruct {
             let pty_result = {
                 let s = server.lock().await;
-                let config = PaneSpawnConfig { command: vec![], cwd, cols, rows };
+                let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
+                if let Some(parent) = hist.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
+                let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
                 s.engine.spawn_pane(pane_id, &config)
             };
 
             match pty_result {
                 Ok(pty) => {
+                    let child_pid = pty.pid();
                     let (reader, writer, child) = pty.into_parts();
                     let (kill_tx, kill_rx) = oneshot::channel();
                     {
@@ -162,6 +168,9 @@ impl Server {
                         // Clear exit status — fresh shell is running.
                         if let Some(session) = s.sessions.get_mut(&session_id) {
                             let _ = session.set_pane_exit_status(pane_id, None);
+                            if let Some(pane) = session.panes.get_mut(&pane_id) {
+                                pane.child_pid = child_pid;
+                            }
                         }
                     }
                     spawn_pty_read_loop(
@@ -340,7 +349,7 @@ impl Server {
                     .map(|pane| proto::PaneSnapshot {
                         pane_id: uuid_to_bytes(pane.id),
                         title: pane.title.clone().unwrap_or_default(),
-                        cwd: pane.cwd.clone().unwrap_or_default(),
+                        cwd: pane.effective_cwd().unwrap_or_default(),
                         cols: u32::from(pane.cols),
                         rows: u32::from(pane.rows),
                         scrollback: pane.screen.raw_bytes().to_vec(),
@@ -447,12 +456,19 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    let config = PaneSpawnConfig { command: vec![], cwd: None, cols: 80, rows: 24 };
+                    let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
+                    if let Some(parent) = hist.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
+                    let config =
+                        PaneSpawnConfig { command: vec![], cwd: None, env, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)
                 };
 
                 match pty_result {
                     Ok(pty) => {
+                        let child_pid = pty.pid();
                         let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
                         let revision = {
@@ -464,7 +480,9 @@ impl Server {
                                     "session not found".into(),
                                 ));
                             };
-                            session.add_pane(Pane::new(pane_id, 80, 24));
+                            let mut pane = Pane::new(pane_id, 80, 24);
+                            pane.child_pid = child_pid;
+                            session.add_pane(pane);
                             let revision = session.revision();
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
