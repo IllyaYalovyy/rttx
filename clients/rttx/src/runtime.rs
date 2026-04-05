@@ -82,9 +82,27 @@ impl WorkspaceRuntime {
     /// Create managed local runtime metadata for a new workspace.
     #[must_use]
     pub fn managed_local(policy: WorkspacePolicy, layout_terminal_uuids: &[String]) -> Self {
+        Self::managed(RuntimeEndpoint::Local, policy, layout_terminal_uuids)
+    }
+
+    /// Create managed remote runtime metadata for a new workspace.
+    #[must_use]
+    pub fn managed_remote(
+        host: &str,
+        policy: WorkspacePolicy,
+        layout_terminal_uuids: &[String],
+    ) -> Self {
+        Self::managed(RuntimeEndpoint::Remote { host: host.into() }, policy, layout_terminal_uuids)
+    }
+
+    fn managed(
+        endpoint: RuntimeEndpoint,
+        policy: WorkspacePolicy,
+        layout_terminal_uuids: &[String],
+    ) -> Self {
         let mut runtime = Self {
             managed: true,
-            endpoint: RuntimeEndpoint::Local,
+            endpoint,
             policy,
             runtime_id: None,
             pane_bindings: BTreeMap::new(),
@@ -680,5 +698,19 @@ mod tests {
             assert!(!p.body.contains("Detach"), "body must not mention Detach: {}", p.body);
             assert!(!p.body.contains("Terminate"), "body must not mention Terminate: {}", p.body);
         }
+    }
+
+    #[test]
+    fn managed_remote_sets_endpoint_and_policy() {
+        let uuids = vec!["t1".into()];
+        let runtime = WorkspaceRuntime::managed_remote(
+            "server.example.com",
+            WorkspacePolicy::Persistent,
+            &uuids,
+        );
+        assert!(runtime.is_managed());
+        assert_eq!(runtime.endpoint, RuntimeEndpoint::Remote { host: "server.example.com".into() });
+        assert_eq!(runtime.policy, WorkspacePolicy::Persistent);
+        assert!(runtime.pending_layout_panes.contains("t1"));
     }
 }
