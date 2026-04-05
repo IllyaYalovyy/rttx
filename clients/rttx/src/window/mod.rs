@@ -111,6 +111,7 @@ mod imp {
             menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
             menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
             menu.append(Some("New Remote Workspace"), Some("win.new-remote-workspace"));
+            menu.append(Some("Attach to Remote Runtime"), Some("win.browse-remote-runtimes"));
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -455,6 +456,7 @@ impl Window {
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
             ("new-ephemeral-workspace", &["<Ctrl><Shift><Alt>T"], Self::add_ephemeral_session),
             ("new-remote-workspace", &[], Self::show_new_remote_workspace_dialog),
+            ("browse-remote-runtimes", &[], Self::show_browse_remote_runtimes_dialog),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());

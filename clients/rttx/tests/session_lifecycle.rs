@@ -734,3 +734,29 @@ fn close_remote_workspace_prevents_resurrection_on_reconnect() {
     );
     assert!(restored.sessions.is_empty());
 }
+
+/// Remote managed session must be ready for inventory binding after
+/// creation. Regression test for #249.
+#[test]
+fn remote_managed_session_is_ready_for_inventory_binding() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::state::WindowState;
+
+    let endpoint = RuntimeEndpoint::Remote { host: "gpu-box".into() };
+
+    let mut state = WindowState::default();
+    state.sessions.clear();
+    let session = rttx::session::SessionState::new_managed_remote(
+        "ML Training".into(),
+        "gpu-box",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    state.sessions.push(session);
+
+    let remote_session = &state.sessions[0];
+    assert!(remote_session.runtime.is_managed());
+    assert_eq!(remote_session.runtime.endpoint, endpoint);
+    assert!(remote_session.runtime.runtime_id.is_none());
+    assert!(!remote_session.runtime.pending_layout_panes.is_empty());
+}
