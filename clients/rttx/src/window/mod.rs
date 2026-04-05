@@ -660,6 +660,16 @@ impl Window {
         });
         row.add_controller(drop_target);
 
+        let win = self.clone();
+        let session_uuid_for_ctx = session_state.uuid.clone();
+        let ctx_gesture = gtk4::GestureClick::new();
+        ctx_gesture.set_button(3);
+        ctx_gesture.connect_released(move |gesture, _, _, _| {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            win.show_sidebar_context_menu(&session_uuid_for_ctx);
+        });
+        row.add_controller(ctx_gesture);
+
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
@@ -775,6 +785,66 @@ impl Window {
             return;
         }
         self.attempt_recovery_for_terminal(term, recovery);
+    }
+
+    fn show_sidebar_context_menu(&self, session_uuid: &str) {
+        let is_remote = {
+            let state = self.imp().state.borrow();
+            state
+                .sessions
+                .iter()
+                .find(|s| s.uuid == session_uuid)
+                .is_some_and(|s| matches!(s.runtime.endpoint, RuntimeEndpoint::Remote { .. }))
+        };
+        if !is_remote {
+            return;
+        }
+
+        let menu = gtk4::gio::Menu::new();
+        menu.append(Some("Edit Connection…"), Some("win.edit-connection"));
+        menu.append(Some("Retry Connection"), Some("win.retry-connection"));
+
+        let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+        popover.set_has_arrow(true);
+
+        let row = self
+            .sidebar_row_for_uuid(session_uuid)
+            .and_then(|r| r.parent())
+            .unwrap_or_else(|| self.imp().sidebar_list.clone().upcast());
+        popover.set_parent(&row);
+        popover.connect_closed(gtk4::prelude::WidgetExt::unparent);
+
+        let win = self.clone();
+        let uuid = session_uuid.to_string();
+        let edit_action = gtk4::gio::SimpleAction::new("edit-connection", None);
+        edit_action.connect_activate(move |_, _| {
+            win.show_edit_workspace_connection_dialog(&uuid);
+        });
+
+        let win2 = self.clone();
+        let uuid2 = session_uuid.to_string();
+        let retry_action = gtk4::gio::SimpleAction::new("retry-connection", None);
+        retry_action.connect_activate(move |_, _| {
+            win2.retry_workspace_connection(&uuid2);
+        });
+
+        self.add_action(&edit_action);
+        self.add_action(&retry_action);
+        popover.popup();
+    }
+
+    fn sidebar_row_for_uuid(&self, session_uuid: &str) -> Option<SessionRow> {
+        let imp = self.imp();
+        let mut idx = 0;
+        while let Some(row) = imp.sidebar_list.row_at_index(idx) {
+            if let Some(sr) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+                && sr.uuid() == session_uuid
+            {
+                return Some(sr);
+            }
+            idx += 1;
+        }
+        None
     }
 
     fn show_rename_session_popover(&self, row: &SessionRow, session_uuid: &str) {

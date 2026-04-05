@@ -189,7 +189,6 @@ impl Window {
         });
     }
 
-    #[allow(dead_code)] // Will be wired to sidebar actions in #196 follow-up
     pub(super) fn retry_workspace_connection(&self, workspace_id: &str) {
         let session_state = {
             let state = self.imp().state.borrow();
@@ -610,7 +609,6 @@ impl Window {
         Some(present_workspace_actions(policy, runtime_attached, session.layout.terminal_count()))
     }
 
-    #[allow(dead_code)] // Will be wired to sidebar actions in #196 follow-up
     pub(super) fn show_edit_workspace_connection_dialog(&self, workspace_id: &str) {
         let current_host = {
             let state = self.imp().state.borrow();
@@ -669,7 +667,6 @@ impl Window {
         dialog.present(Some(self));
     }
 
-    #[allow(dead_code)] // Will be wired to sidebar actions in #196 follow-up
     pub(super) fn update_workspace_endpoint(&self, workspace_id: &str, host: String) {
         let (session_state, previous_endpoint) = {
             let mut state = self.imp().state.borrow_mut();
