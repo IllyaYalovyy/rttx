@@ -1209,6 +1209,34 @@ mod tests {
         );
     }
 
+    /// Closing a remote workspace must prevent resurrection from the remote
+    /// daemon's inventory. Regression test for #248.
+    #[test]
+    fn dismissed_remote_runtime_is_not_resurrected_by_inventory() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_id = uuid::Uuid::new_v4().to_string();
+        let endpoint = RuntimeEndpoint::Remote { host: "build-host".into() };
+        let mut state = WindowState::default_for_test();
+
+        state.dismiss_runtime(&endpoint, &runtime_id);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+            endpoint: endpoint.clone(),
+            sessions: vec![session_info(
+                &runtime_id,
+                "Remote Work",
+                proto::RuntimePolicy::Persistent,
+                vec![pane_info(&pane_id, "bash", "/home/user")],
+                Some(&pane_id),
+            )],
+        });
+
+        assert!(
+            transition.recovered_workspaces.is_empty(),
+            "dismissed remote runtime must not be resurrected"
+        );
+    }
+
     #[test]
     fn dismissed_runtime_ids_survive_serde_roundtrip() {
         let mut state = WindowState::default_for_test();

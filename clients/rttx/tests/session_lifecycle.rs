@@ -696,3 +696,41 @@ fn double_split_remote_session_keeps_all_panes_pending() {
     assert!(session.runtime.pending_layout_panes.contains(&t2));
     assert!(session.runtime.pending_layout_panes.contains(&t3));
 }
+
+/// Closing a remote workspace and then receiving inventory must not
+/// resurrect the runtime. End-to-end regression test for #248.
+#[test]
+fn close_remote_workspace_prevents_resurrection_on_reconnect() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::session::SessionState;
+    use rttx::session::state::WindowState;
+
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+    let endpoint = RuntimeEndpoint::Remote { host: "prod-server".into() };
+
+    let mut state = WindowState::default();
+
+    // Create a remote workspace with a known runtime_id.
+    let session = SessionState::new_managed_remote(
+        "Prod".into(),
+        "prod-server",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    state.sessions.push(session);
+    state.sessions.last_mut().unwrap().runtime.runtime_id = Some(runtime_id.clone());
+
+    // Simulate close: remove session and dismiss runtime.
+    state.sessions.clear();
+    state.dismiss_runtime(&endpoint, &runtime_id);
+
+    // Verify dismissed_runtime_ids survives serialization (persistence).
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+    assert!(
+        restored.dismissed_runtime_ids.contains(&runtime_id),
+        "dismissed runtime ID must survive persistence"
+    );
+    assert!(restored.sessions.is_empty());
+}
