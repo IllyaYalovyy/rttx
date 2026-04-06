@@ -98,57 +98,102 @@ const fn encode_control_character(ch: char) -> Option<u8> {
     }
 }
 
+/// Compute xterm modifier parameter: 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0).
+/// Returns 0 when no modifiers are held (caller should use unmodified sequence).
+const fn xterm_modifier_param(state: gtk4::gdk::ModifierType) -> u8 {
+    let mut m: u8 = 0;
+    if state.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+        m += 1;
+    }
+    if state.contains(gtk4::gdk::ModifierType::ALT_MASK) {
+        m += 2;
+    }
+    if state.contains(gtk4::gdk::ModifierType::CONTROL_MASK) {
+        m += 4;
+    }
+    m
+}
+
+/// Encode a CSI-letter key: `\x1b[X` unmodified, `\x1b[1;{m}X` modified.
+fn csi_letter(suffix: u8, modifier: u8) -> Vec<u8> {
+    if modifier == 0 {
+        vec![0x1b, b'[', suffix]
+    } else {
+        format!("\x1b[1;{}{}", modifier + 1, suffix as char).into_bytes()
+    }
+}
+
+/// Encode a CSI-tilde key: `\x1b[N~` unmodified, `\x1b[N;{m}~` modified.
+fn csi_tilde(number: &str, modifier: u8) -> Vec<u8> {
+    if modifier == 0 {
+        format!("\x1b[{number}~").into_bytes()
+    } else {
+        format!("\x1b[{number};{}~", modifier + 1).into_bytes()
+    }
+}
+
+/// Encode an SS3-letter key: `\x1bOX` unmodified, `\x1b[1;{m}X` modified.
+fn ss3_or_csi(suffix: u8, modifier: u8) -> Vec<u8> {
+    if modifier == 0 {
+        vec![0x1b, b'O', suffix]
+    } else {
+        format!("\x1b[1;{}{}", modifier + 1, suffix as char).into_bytes()
+    }
+}
+
 fn encode_terminal_key_input(
     key: gtk4::gdk::Key,
     state: gtk4::gdk::ModifierType,
 ) -> Option<Vec<u8>> {
     let ctrl = state.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
     let alt = state.contains(gtk4::gdk::ModifierType::ALT_MASK);
-    let base = match key {
-        gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => Some(vec![b'\r']),
-        gtk4::gdk::Key::BackSpace => Some(vec![0x7f]),
-        gtk4::gdk::Key::Tab | gtk4::gdk::Key::KP_Tab => Some(vec![b'\t']),
-        gtk4::gdk::Key::ISO_Left_Tab => Some(b"\x1b[Z".to_vec()),
-        gtk4::gdk::Key::Escape => Some(vec![0x1b]),
-        gtk4::gdk::Key::Up | gtk4::gdk::Key::KP_Up => Some(b"\x1b[A".to_vec()),
-        gtk4::gdk::Key::Down | gtk4::gdk::Key::KP_Down => Some(b"\x1b[B".to_vec()),
-        gtk4::gdk::Key::Right | gtk4::gdk::Key::KP_Right => Some(b"\x1b[C".to_vec()),
-        gtk4::gdk::Key::Left | gtk4::gdk::Key::KP_Left => Some(b"\x1b[D".to_vec()),
-        gtk4::gdk::Key::Home | gtk4::gdk::Key::KP_Home => Some(b"\x1b[H".to_vec()),
-        gtk4::gdk::Key::End | gtk4::gdk::Key::KP_End => Some(b"\x1b[F".to_vec()),
-        gtk4::gdk::Key::Insert | gtk4::gdk::Key::KP_Insert => Some(b"\x1b[2~".to_vec()),
-        gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete => Some(b"\x1b[3~".to_vec()),
-        gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => Some(b"\x1b[5~".to_vec()),
-        gtk4::gdk::Key::Page_Down | gtk4::gdk::Key::KP_Page_Down => Some(b"\x1b[6~".to_vec()),
-        gtk4::gdk::Key::F1 => Some(b"\x1bOP".to_vec()),
-        gtk4::gdk::Key::F2 => Some(b"\x1bOQ".to_vec()),
-        gtk4::gdk::Key::F3 => Some(b"\x1bOR".to_vec()),
-        gtk4::gdk::Key::F4 => Some(b"\x1bOS".to_vec()),
-        gtk4::gdk::Key::F5 => Some(b"\x1b[15~".to_vec()),
-        gtk4::gdk::Key::F6 => Some(b"\x1b[17~".to_vec()),
-        gtk4::gdk::Key::F7 => Some(b"\x1b[18~".to_vec()),
-        gtk4::gdk::Key::F8 => Some(b"\x1b[19~".to_vec()),
-        gtk4::gdk::Key::F9 => Some(b"\x1b[20~".to_vec()),
-        gtk4::gdk::Key::F10 => Some(b"\x1b[21~".to_vec()),
-        gtk4::gdk::Key::F11 => Some(b"\x1b[23~".to_vec()),
-        gtk4::gdk::Key::F12 => Some(b"\x1b[24~".to_vec()),
+    let m = xterm_modifier_param(state);
+
+    let seq = match key {
+        gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => vec![b'\r'],
+        gtk4::gdk::Key::BackSpace => vec![0x7f],
+        gtk4::gdk::Key::Tab | gtk4::gdk::Key::KP_Tab => vec![b'\t'],
+        gtk4::gdk::Key::ISO_Left_Tab => b"\x1b[Z".to_vec(),
+        gtk4::gdk::Key::Escape => vec![0x1b],
+        gtk4::gdk::Key::Up | gtk4::gdk::Key::KP_Up => return Some(csi_letter(b'A', m)),
+        gtk4::gdk::Key::Down | gtk4::gdk::Key::KP_Down => return Some(csi_letter(b'B', m)),
+        gtk4::gdk::Key::Right | gtk4::gdk::Key::KP_Right => return Some(csi_letter(b'C', m)),
+        gtk4::gdk::Key::Left | gtk4::gdk::Key::KP_Left => return Some(csi_letter(b'D', m)),
+        gtk4::gdk::Key::Home | gtk4::gdk::Key::KP_Home => return Some(csi_letter(b'H', m)),
+        gtk4::gdk::Key::End | gtk4::gdk::Key::KP_End => return Some(csi_letter(b'F', m)),
+        gtk4::gdk::Key::Insert | gtk4::gdk::Key::KP_Insert => return Some(csi_tilde("2", m)),
+        gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete => return Some(csi_tilde("3", m)),
+        gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => return Some(csi_tilde("5", m)),
+        gtk4::gdk::Key::Page_Down | gtk4::gdk::Key::KP_Page_Down => {
+            return Some(csi_tilde("6", m));
+        }
+        gtk4::gdk::Key::F1 => return Some(ss3_or_csi(b'P', m)),
+        gtk4::gdk::Key::F2 => return Some(ss3_or_csi(b'Q', m)),
+        gtk4::gdk::Key::F3 => return Some(ss3_or_csi(b'R', m)),
+        gtk4::gdk::Key::F4 => return Some(ss3_or_csi(b'S', m)),
+        gtk4::gdk::Key::F5 => return Some(csi_tilde("15", m)),
+        gtk4::gdk::Key::F6 => return Some(csi_tilde("17", m)),
+        gtk4::gdk::Key::F7 => return Some(csi_tilde("18", m)),
+        gtk4::gdk::Key::F8 => return Some(csi_tilde("19", m)),
+        gtk4::gdk::Key::F9 => return Some(csi_tilde("20", m)),
+        gtk4::gdk::Key::F10 => return Some(csi_tilde("21", m)),
+        gtk4::gdk::Key::F11 => return Some(csi_tilde("23", m)),
+        gtk4::gdk::Key::F12 => return Some(csi_tilde("24", m)),
         _ => {
             let ch = key.to_unicode()?;
             if ctrl {
-                Some(vec![encode_control_character(ch)?])
+                vec![encode_control_character(ch)?]
+            } else if alt {
+                let mut prefixed = vec![0x1b];
+                prefixed.extend(ch.to_string().bytes());
+                return Some(prefixed);
             } else {
-                Some(ch.to_string().into_bytes())
+                ch.to_string().into_bytes()
             }
         }
-    }?;
+    };
 
-    if alt {
-        let mut prefixed = vec![0x1b];
-        prefixed.extend(base);
-        Some(prefixed)
-    } else {
-        Some(base)
-    }
+    Some(seq)
 }
 
 fn smart_clipboard_action(
@@ -451,12 +496,130 @@ mod tests {
         );
     }
 
-    /// Alt+F-key must prepend ESC to the F-key sequence. #293.
+    /// Alt+F-key must use xterm modifier param 3. #293.
     #[test]
-    fn alt_fkey_prepends_escape() {
+    fn alt_fkey_uses_modifier_encoding() {
         let result =
             encode_terminal_key_input(gtk4::gdk::Key::F2, gtk4::gdk::ModifierType::ALT_MASK);
-        assert_eq!(result.as_deref(), Some(b"\x1b\x1bOQ" as &[u8]));
+        assert_eq!(result.as_deref(), Some(b"\x1b[1;3Q" as &[u8]));
+    }
+
+    /// Ctrl+Arrow must use xterm modified key format. #295.
+    #[test]
+    fn ctrl_arrow_uses_xterm_modifier_encoding() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Right, ctrl).as_deref(),
+            Some(b"\x1b[1;5C" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Left, ctrl).as_deref(),
+            Some(b"\x1b[1;5D" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Up, ctrl).as_deref(),
+            Some(b"\x1b[1;5A" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Down, ctrl).as_deref(),
+            Some(b"\x1b[1;5B" as &[u8])
+        );
+    }
+
+    /// Shift+Arrow must use xterm modified key format. #295.
+    #[test]
+    fn shift_arrow_uses_xterm_modifier_encoding() {
+        let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Right, shift).as_deref(),
+            Some(b"\x1b[1;2C" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Left, shift).as_deref(),
+            Some(b"\x1b[1;2D" as &[u8])
+        );
+    }
+
+    /// Ctrl+Home/End must use xterm modified key format. #295.
+    #[test]
+    fn ctrl_home_end_uses_xterm_modifier_encoding() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Home, ctrl).as_deref(),
+            Some(b"\x1b[1;5H" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::End, ctrl).as_deref(),
+            Some(b"\x1b[1;5F" as &[u8])
+        );
+    }
+
+    /// Ctrl+Shift+Arrow must use modifier param 6. #295.
+    #[test]
+    fn ctrl_shift_arrow_uses_modifier_6() {
+        let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Right, mods).as_deref(),
+            Some(b"\x1b[1;6C" as &[u8])
+        );
+    }
+
+    /// Alt+Ctrl+Arrow must use modifier param 7 (Alt prefix NOT doubled). #295.
+    #[test]
+    fn alt_ctrl_arrow_uses_modifier_7() {
+        let mods = gtk4::gdk::ModifierType::ALT_MASK | gtk4::gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Right, mods).as_deref(),
+            Some(b"\x1b[1;7C" as &[u8])
+        );
+    }
+
+    /// Modifier+F-keys must use CSI modified format. #295.
+    #[test]
+    fn ctrl_fkey_uses_modified_format() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        // F5 = CSI 15~ → Ctrl+F5 = CSI 15;5~
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::F5, ctrl).as_deref(),
+            Some(b"\x1b[15;5~" as &[u8])
+        );
+        // F1 = SS3 P → Ctrl+F1 = CSI 1;5P
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::F1, ctrl).as_deref(),
+            Some(b"\x1b[1;5P" as &[u8])
+        );
+    }
+
+    /// Modifier+Insert/Delete/PageUp/PageDown must use modified tilde format. #295.
+    #[test]
+    fn ctrl_tilde_keys_use_modified_format() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Delete, ctrl).as_deref(),
+            Some(b"\x1b[3;5~" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Page_Up, ctrl).as_deref(),
+            Some(b"\x1b[5;5~" as &[u8])
+        );
+    }
+
+    /// Unmodified navigation keys must remain unchanged. #295.
+    #[test]
+    fn unmodified_navigation_keys_unchanged() {
+        let none = gtk4::gdk::ModifierType::empty();
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Right, none).as_deref(),
+            Some(b"\x1b[C" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Home, none).as_deref(),
+            Some(b"\x1b[H" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::F1, none).as_deref(),
+            Some(b"\x1bOP" as &[u8])
+        );
     }
 }
 
