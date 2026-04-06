@@ -44,6 +44,7 @@ message TerminateSession {
 
 message CreatePane {
     bytes session_id = 1;
+    optional string cwd = 2;
 }
 
 message ClosePane {

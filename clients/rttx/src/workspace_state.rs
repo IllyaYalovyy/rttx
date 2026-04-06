@@ -52,6 +52,7 @@ pub struct ManagedPaneCreateRequest {
     pub endpoint: RuntimeEndpoint,
     pub runtime_id: String,
     pub layout_terminal_uuid: String,
+    pub cwd: Option<String>,
 }
 
 /// Pure outcome of reconciling a daemon endpoint event against app state.
@@ -117,11 +118,13 @@ impl WindowState {
                 transition.pane_snapshot_restores = snapshot_restores;
 
                 for layout_terminal_uuid in panes_to_create {
+                    let cwd = session_state.layout.terminal_cwd(&layout_terminal_uuid);
                     transition.pane_create_requests.push(ManagedPaneCreateRequest {
                         workspace_id: workspace_id.clone(),
                         endpoint: session_state.runtime.endpoint.clone(),
                         runtime_id: runtime_id.clone(),
                         layout_terminal_uuid,
+                        cwd,
                     });
                 }
             }
@@ -1044,6 +1047,7 @@ mod tests {
                 endpoint: RuntimeEndpoint::Local,
                 runtime_id: runtime_id.clone(),
                 layout_terminal_uuid: second_terminal_uuid,
+                cwd: None,
             }],
         );
         assert_eq!(
@@ -1335,6 +1339,35 @@ mod tests {
             session.layout.terminal_cwd(layout_uuid).as_deref(),
             Some("/new/project"),
             "layout CWD must be updated from snapshot during workspace opened"
+        );
+    }
+
+    /// Pane create requests must carry the layout node's CWD. #297.
+    #[test]
+    fn reconcile_workspace_opened_propagates_layout_cwd_to_pane_create_request() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let existing_uuid = uuid::Uuid::new_v4().to_string();
+        let new_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session(
+            "ws-1",
+            "Workspace",
+            hsplit(term(&existing_uuid), term_full(&new_uuid, "/srv/project", "Shell")),
+        )]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(
+                &runtime_id,
+                vec![pane_snapshot(&existing_uuid, "Shell", "/home", b"")],
+            ),
+        });
+
+        assert_eq!(transition.pane_create_requests.len(), 1);
+        assert_eq!(
+            transition.pane_create_requests[0].cwd.as_deref(),
+            Some("/srv/project"),
+            "pane create request must carry layout CWD"
         );
     }
 }

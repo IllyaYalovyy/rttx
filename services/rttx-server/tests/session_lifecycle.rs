@@ -141,6 +141,7 @@ async fn create_and_close_pane() {
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
             session_id: session_id.clone(),
+            cwd: None,
         })),
     };
     client.send(&create_pane).await;

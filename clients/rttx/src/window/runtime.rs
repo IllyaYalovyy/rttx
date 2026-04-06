@@ -359,6 +359,7 @@ impl Window {
                     &request.endpoint,
                     &request.runtime_id,
                     &request.layout_terminal_uuid,
+                    request.cwd.clone(),
                 );
             }
         }

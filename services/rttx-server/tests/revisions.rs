@@ -48,6 +48,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
+                cwd: None,
             })),
         })
         .await;
@@ -173,6 +174,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id: session_id.clone(),
+                    cwd: None,
                 })),
             })
             .await;
@@ -263,6 +265,7 @@ async fn failed_close_pane_returns_error_without_revision_change() {
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
+                cwd: None,
             })),
         })
         .await;

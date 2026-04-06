@@ -42,6 +42,7 @@ async fn gui_restore_flow_no_duplicates() {
             c.send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id: sid.clone(),
+                    cwd: None,
                 })),
             })
             .await;

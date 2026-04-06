@@ -461,8 +461,8 @@ impl Server {
                         let _ = std::fs::create_dir_all(parent);
                     }
                     let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
-                    let config =
-                        PaneSpawnConfig { command: vec![], cwd: None, env, cols: 80, rows: 24 };
+                    let cwd = req.cwd;
+                    let config = PaneSpawnConfig { command: vec![], cwd, env, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)
                 };
 

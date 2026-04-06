@@ -168,6 +168,7 @@ mod tests {
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id: session_id.clone(),
+                    cwd: None,
                 })),
             },
             proto::ClientMessage {
