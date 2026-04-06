@@ -31,6 +31,8 @@ enum Command {
     },
     /// Stop the running daemon
     Stop,
+    /// Show daemon status and active runtimes
+    Status,
     /// Serve one client over stdin/stdout (for SSH)
     AttachStdio,
 }
@@ -41,6 +43,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Start { foreground: false }) {
         Command::Start { foreground } => start(foreground),
         Command::Stop => stop(),
+        Command::Status => status(),
         Command::AttachStdio => attach_stdio(),
     }
 }
@@ -177,6 +180,109 @@ fn stop() -> anyhow::Result<()> {
         println!("Shutdown signal sent");
         Ok(())
     })
+}
+
+fn status() -> anyhow::Result<()> {
+    use bytes::BytesMut;
+    use rttx_proto::{decode_frame, encode_frame};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let os = UnixOs;
+    let socket_path = os.runtime_dir().join("rttx-server.sock");
+
+    println!("rttx-server {}", env!("CARGO_PKG_VERSION"));
+    println!("Socket: {}", socket_path.display());
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        if !ipc::is_server_running(&socket_path).await {
+            println!("Status: not running");
+            return Ok(());
+        }
+
+        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
+        let mut buf = BytesMut::new();
+        let mut read_buf = BytesMut::with_capacity(8192);
+
+        // Hello.
+        let hello = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+                protocol_version: rttx_proto::PROTOCOL_VERSION,
+                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+            })),
+        };
+        encode_frame(&hello, &mut buf)?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        // Read HelloAck.
+        loop {
+            stream.read_buf(&mut read_buf).await?;
+            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
+                break;
+            }
+        }
+
+        // ListSessions.
+        buf.clear();
+        let list = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        };
+        encode_frame(&list, &mut buf)?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        // Read SessionList.
+        let resp: proto::ServerMessage = loop {
+            stream.read_buf(&mut read_buf).await?;
+            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
+                Ok(msg) => break msg,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => anyhow::bail!("decode error: {e}"),
+            }
+        };
+
+        if let Some(proto::server_message::Msg::SessionList(sl)) = resp.msg {
+            println!("Status: running");
+            println!("Runtimes: {}", sl.sessions.len());
+
+            let total_panes: usize = sl.sessions.iter().map(|s| s.panes.len()).sum();
+            let total_clients: u32 = sl.sessions.iter().map(|s| s.attached_client_count).sum();
+            println!("Panes: {total_panes}");
+            println!("Connected clients: {total_clients}");
+
+            if !sl.sessions.is_empty() {
+                println!();
+                println!(
+                    "{:<38} {:<20} {:<12} {:<6} {:<8}",
+                    "ID", "NAME", "POLICY", "PANES", "CLIENTS"
+                );
+                for session in &sl.sessions {
+                    let id = rttx_proto::bytes_to_uuid(&session.id)
+                        .map_or_else(|_| "?".into(), |u| u.to_string());
+                    let policy = match proto::RuntimePolicy::try_from(session.policy) {
+                        Ok(proto::RuntimePolicy::Persistent) => "persistent",
+                        Ok(proto::RuntimePolicy::Ephemeral) => "ephemeral",
+                        _ => "unknown",
+                    };
+                    println!(
+                        "{:<38} {:<20} {:<12} {:<6} {:<8}",
+                        id,
+                        truncate(&session.name, 20),
+                        policy,
+                        session.panes.len(),
+                        session.attached_client_count,
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    })
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max - 1]) }
 }
 
 /// Check if a daemon is running by reading the PID file and probing the process.

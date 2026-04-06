@@ -284,4 +284,13 @@ mod tests {
         let sock_path = tmp.path().join("rttx-server.sock");
         assert!(!sock_path.exists(), "socket must not exist in empty dir");
     }
+
+    /// Status command uses `is_server_running` to check daemon availability. #271.
+    #[test]
+    fn is_server_running_returns_false_for_nonexistent_path() {
+        let tmp = TempDir::new().unwrap();
+        let sock_path = tmp.path().join("rttx-server.sock");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(!rt.block_on(is_server_running(&sock_path)));
+    }
 }

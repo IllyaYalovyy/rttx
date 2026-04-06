@@ -1729,6 +1729,12 @@ impl Window {
             self.append_session_row(session_state);
         }
 
+        // Re-apply connection status subtitles lost during row rebuild.
+        let statuses = imp.workspace_connection_status.borrow().clone();
+        for (workspace_id, status) in &statuses {
+            self.refresh_workspace_row_status(workspace_id, status);
+        }
+
         // Re-select the previously visible session.
         if let Some(uuid) = &visible_uuid {
             let state = imp.state.borrow();
