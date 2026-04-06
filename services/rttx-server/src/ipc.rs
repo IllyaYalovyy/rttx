@@ -293,4 +293,12 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         assert!(!rt.block_on(is_server_running(&sock_path)));
     }
+
+    /// `GIT_HASH` env var must be set by `build.rs` for version tracking.
+    #[test]
+    fn git_hash_env_is_set_at_build_time() {
+        let hash = env!("GIT_HASH");
+        // Hash may be empty in non-git builds (tarballs), but must be set.
+        assert!(hash.len() <= 40, "git hash should be at most 40 chars");
+    }
 }
