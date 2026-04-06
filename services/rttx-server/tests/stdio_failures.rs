@@ -11,12 +11,39 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
-async fn spawn_stdio(tmp: &TempDir) -> Child {
+async fn spawn_daemon(tmp: &TempDir) -> Child {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let runtime_dir = tmp.path().join("runtime");
     let cache_dir = tmp.path().join("cache");
     tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
     tokio::fs::create_dir_all(&cache_dir).await.unwrap();
+
+    let child = Command::new(bin)
+        .arg("start")
+        .arg("--foreground")
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("XDG_CACHE_HOME", &cache_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn daemon");
+
+    let socket = runtime_dir.join("rttx-server").join("v1").join("rttx-server.sock");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        if socket.exists() {
+            return child;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("daemon socket did not appear");
+}
+
+fn spawn_stdio(tmp: &TempDir) -> Child {
+    let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let runtime_dir = tmp.path().join("runtime");
+    let cache_dir = tmp.path().join("cache");
 
     Command::new(bin)
         .arg("attach-stdio")
@@ -82,7 +109,8 @@ async fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
 #[tokio::test]
 async fn stdin_close_before_handshake_exits_cleanly() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let stdin = child.stdin.take().unwrap();
 
     // Close stdin immediately without sending anything.
@@ -95,7 +123,8 @@ async fn stdin_close_before_handshake_exits_cleanly() {
 #[tokio::test]
 async fn stdin_close_after_handshake_exits_cleanly() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let mut read_buf = BytesMut::with_capacity(4096);
@@ -112,7 +141,8 @@ async fn stdin_close_after_handshake_exits_cleanly() {
 #[tokio::test]
 async fn stdin_close_after_session_create_exits_cleanly() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let mut read_buf = BytesMut::with_capacity(4096);
@@ -141,7 +171,8 @@ async fn stdin_close_after_session_create_exits_cleanly() {
 #[tokio::test]
 async fn wrong_protocol_version_returns_error_over_stdio() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let mut read_buf = BytesMut::with_capacity(4096);
@@ -172,7 +203,8 @@ async fn wrong_protocol_version_returns_error_over_stdio() {
 #[tokio::test]
 async fn garbage_bytes_on_stdin_exits_without_hang() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let mut stdin = child.stdin.take().unwrap();
 
     // Send random garbage, not a valid protobuf frame.
@@ -188,7 +220,8 @@ async fn garbage_bytes_on_stdin_exits_without_hang() {
 #[tokio::test]
 async fn truncated_frame_on_stdin_exits_without_hang() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let mut stdin = child.stdin.take().unwrap();
 
     // Write a length prefix claiming 1000 bytes, then close stdin.
@@ -207,7 +240,8 @@ async fn truncated_frame_on_stdin_exits_without_hang() {
 #[tokio::test]
 async fn empty_message_returns_error_over_stdio() {
     let tmp = TempDir::new().unwrap();
-    let mut child = spawn_stdio(&tmp).await;
+    let mut _daemon = spawn_daemon(&tmp).await;
+    let mut child = spawn_stdio(&tmp);
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let mut read_buf = BytesMut::with_capacity(4096);

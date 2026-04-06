@@ -122,43 +122,37 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 /// Serve a single client over stdin/stdout.
 ///
 /// Intended to be invoked via SSH: `ssh host rttx-server attach-stdio`.
-/// The daemon must already be running on the remote host. This process
-/// connects to the local daemon socket and bridges the client's
-/// stdin/stdout to it, but that would add latency. Instead, we load
-/// state and serve directly — the stdio process IS the server for this
-/// client.
+/// Connects to the already-running local daemon and bridges the client's
+/// stdin/stdout to the daemon socket. The daemon keeps running after the
+/// SSH connection drops, so PTYs and runtimes survive GUI restarts.
 fn attach_stdio() -> anyhow::Result<()> {
-    // Stderr is available for logging (stdout is the protocol channel).
     let dev_mode = rttx_server::os::unix::dev_mode_enabled();
     init_tracing(dev_mode);
 
     let os = UnixOs;
+    let socket_path = os.runtime_dir().join("rttx-server.sock");
+
+    if !socket_path.exists() {
+        anyhow::bail!(
+            "daemon socket not found at {}. Start the daemon first with: rttx-server start",
+            socket_path.display()
+        );
+    }
+
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let server = Arc::new(Mutex::new(Server::new(Box::new(os))));
+        let daemon = tokio::net::UnixStream::connect(&socket_path).await?;
+        let (mut daemon_read, mut daemon_write) = tokio::io::split(daemon);
 
-        {
-            let mut s = server.lock().await;
-            s.load_persisted_state();
+        let mut stdin = tokio::io::stdin();
+        let mut stdout = tokio::io::stdout();
+
+        tokio::select! {
+            r = tokio::io::copy(&mut stdin, &mut daemon_write) => { r?; }
+            r = tokio::io::copy(&mut daemon_read, &mut stdout) => { r?; }
         }
 
-        Server::reconstruct_sessions(&server).await;
-
-        let ser_server = Arc::clone(&server);
-        let mut ser_shutdown_rx = {
-            let s = server.lock().await;
-            s.shutdown_rx()
-        };
-        tokio::spawn(async move {
-            rttx_server::server::serialization_loop(
-                ser_server,
-                std::time::Duration::from_secs(1),
-                &mut ser_shutdown_rx,
-            )
-            .await;
-        });
-
-        rttx_server::server::handle_stdio_client(server).await
+        Ok(())
     })
 }
 
