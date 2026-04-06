@@ -389,6 +389,11 @@ impl Window {
         if transition.persist_window_state {
             self.save_state();
         }
+
+        if !transition.rebuilt_workspaces.is_empty() || !transition.recovered_workspaces.is_empty()
+        {
+            self.sync_sidebar_to_visible_session();
+        }
     }
 
     pub(super) fn restore_managed_snapshot(&self, restore: &WorkspacePaneRestore) {

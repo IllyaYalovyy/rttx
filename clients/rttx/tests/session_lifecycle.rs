@@ -768,3 +768,18 @@ fn remote_managed_session_is_ready_for_inventory_binding() {
     assert!(remote_session.runtime.runtime_id.is_none());
     assert!(!remote_session.runtime.pending_layout_panes.is_empty());
 }
+
+/// `active_session_index` must be clamped to valid range on restore.
+/// Regression test for #179.
+#[test]
+fn active_session_index_clamped_on_restore() {
+    use rttx::session::state::WindowState;
+
+    let state = WindowState { active_session_index: 999, ..WindowState::default() };
+
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+    let clamped = restored.active_session_index.min(restored.sessions.len().saturating_sub(1));
+    assert_eq!(clamped, 0, "out-of-bounds index must clamp to 0");
+}

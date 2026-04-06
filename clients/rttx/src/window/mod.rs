@@ -311,7 +311,7 @@ impl Window {
 
     fn load_state(&self) {
         let state = session::load_window_state();
-        let active_index = state.active_session_index;
+        let active_index = state.active_session_index.min(state.sessions.len().saturating_sub(1));
         let is_maximized = state.is_maximized;
         let width = state.width;
         let height = state.height;
@@ -676,6 +676,29 @@ impl Window {
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
+    }
+
+    fn sync_sidebar_to_visible_session(&self) {
+        let imp = self.imp();
+        let Some(visible_uuid) = imp.session_stack.visible_child_name() else {
+            return;
+        };
+        let already_synced = imp
+            .sidebar_list
+            .selected_row()
+            .and_then(|r| r.child())
+            .and_then(|c| c.downcast::<SessionRow>().ok())
+            .is_some_and(|sr| sr.uuid() == visible_uuid.as_str());
+        if already_synced {
+            return;
+        }
+        let state = imp.state.borrow();
+        if let Some(idx) = state.sessions.iter().position(|s| s.uuid == visible_uuid.as_str()) {
+            drop(state);
+            if let Some(row) = imp.sidebar_list.row_at_index(idx as i32) {
+                imp.sidebar_list.select_row(Some(&row));
+            }
+        }
     }
 
     fn renumber_session_rows(&self) {
@@ -1971,6 +1994,7 @@ impl Window {
         session::schedule_initial_paned_ratios(&content, &session_state.layout);
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
+        self.sync_sidebar_to_visible_session();
     }
 
     fn detach_terminals_from_detached_tree(widget: &gtk4::Widget) {
