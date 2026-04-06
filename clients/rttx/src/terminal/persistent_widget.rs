@@ -358,8 +358,15 @@ impl PersistentPaneView {
     }
 
     /// Feed a snapshot's scrollback bytes into VTE to restore state on attach.
+    /// Bell characters are stripped to prevent historical bells from ringing.
     pub fn feed_snapshot(&self, scrollback: &[u8]) {
-        if !scrollback.is_empty() {
+        if scrollback.is_empty() {
+            return;
+        }
+        if scrollback.contains(&0x07) {
+            let filtered: Vec<u8> = scrollback.iter().copied().filter(|&b| b != 0x07).collect();
+            self.imp().vte.feed(&filtered);
+        } else {
             self.imp().vte.feed(scrollback);
         }
     }
@@ -973,5 +980,19 @@ mod tests {
         );
 
         window.close();
+    }
+
+    #[test]
+    fn bell_bytes_are_stripped_from_snapshot_data() {
+        let input = b"\x07prompt$ \x07cmd\r\n\x07prompt$ ";
+        let filtered: Vec<u8> = input.iter().copied().filter(|&b| b != 0x07).collect();
+        assert_eq!(filtered, b"prompt$ cmd\r\nprompt$ ");
+        assert!(!filtered.contains(&0x07));
+    }
+
+    #[test]
+    fn snapshot_without_bells_passes_through_unchanged() {
+        let input = b"prompt$ cmd\r\nprompt$ ";
+        assert!(!input.contains(&0x07));
     }
 }
