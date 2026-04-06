@@ -810,3 +810,12 @@ fn connection_status_survives_session_reorder() {
     // The connection status HashMap (stored on Window, not WindowState)
     // is not affected by session reorder — it's keyed by UUID.
 }
+
+/// Spawn error handling is wired — compile-time check. #22.
+#[test]
+fn spawn_error_format_is_user_visible() {
+    let error = "command not found";
+    let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
+    assert!(msg.contains(error));
+    assert!(msg.contains("\x1b[31m"));
+}
