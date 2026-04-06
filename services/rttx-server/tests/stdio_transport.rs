@@ -175,3 +175,22 @@ fn attach_stdio_requires_running_daemon() {
         "error should mention missing socket, got: {stderr}"
     );
 }
+
+/// The status command must show version and socket path even when daemon is not running.
+#[test]
+fn status_command_shows_not_running_when_no_daemon() {
+    let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runtime_dir = tmp.path().join("runtime");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+
+    let output = std::process::Command::new(bin)
+        .arg("status")
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .output()
+        .expect("failed to run status");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("rttx-server"), "must show version line");
+    assert!(stdout.contains("not running"), "must report not running");
+}
