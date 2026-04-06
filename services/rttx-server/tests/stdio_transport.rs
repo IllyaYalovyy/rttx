@@ -194,3 +194,14 @@ fn status_command_shows_not_running_when_no_daemon() {
     assert!(stdout.contains("rttx-server"), "must show version line");
     assert!(stdout.contains("not running"), "must report not running");
 }
+
+/// Version string must include git hash. Regression for version tracking.
+#[test]
+fn version_includes_git_hash() {
+    let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let output =
+        std::process::Command::new(bin).arg("--version").output().expect("failed to run --version");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("rttx-server"), "must show binary name");
+    assert!(stdout.contains('('), "must include git hash in parens");
+}

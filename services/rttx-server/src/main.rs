@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(
     name = "rttx-server",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"),
     about = "Daemon runtime service for the rttx terminal emulator"
 )]
 struct Cli {
@@ -190,7 +190,7 @@ fn status() -> anyhow::Result<()> {
     let os = UnixOs;
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 
-    println!("rttx-server {}", env!("CARGO_PKG_VERSION"));
+    println!("rttx-server {} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
     println!("Socket: {}", socket_path.display());
 
     let rt = tokio::runtime::Runtime::new()?;
