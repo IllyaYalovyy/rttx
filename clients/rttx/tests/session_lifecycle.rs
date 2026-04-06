@@ -850,3 +850,24 @@ fn connection_status_lifecycle_is_deterministic() {
     );
     assert!(matches!(s, ConnectionStatus::Blocked(_)));
 }
+
+/// F-keys must produce xterm escape sequences for managed terminals. Regression for #293.
+#[test]
+fn managed_fkeys_encode_to_escape_sequences() {
+    use rttx::terminal::encode_terminal_key_input_for_test;
+
+    let fkeys = [
+        (gtk4::gdk::Key::F1, b"\x1bOP".as_slice()),
+        (gtk4::gdk::Key::F5, b"\x1b[15~".as_slice()),
+        (gtk4::gdk::Key::F10, b"\x1b[21~".as_slice()),
+        (gtk4::gdk::Key::F12, b"\x1b[24~".as_slice()),
+    ];
+    for (key, expected) in fkeys {
+        let result = encode_terminal_key_input_for_test(key, gtk4::gdk::ModifierType::empty());
+        assert_eq!(
+            result.as_deref(),
+            Some(expected),
+            "F-key {key:?} must encode to escape sequence"
+        );
+    }
+}
