@@ -1898,6 +1898,7 @@ impl Window {
                         &session_state.runtime.endpoint,
                         runtime_id,
                         &new_terminal_uuid,
+                        source_cwd,
                     );
                 }
             }

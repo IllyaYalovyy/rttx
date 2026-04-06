@@ -38,6 +38,7 @@ async fn reconstruct_session_after_restart() {
         let create_pane = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
+                cwd: None,
             })),
         };
         client.send(&create_pane).await;
@@ -160,6 +161,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id: session_id.clone(),
+                    cwd: None,
                 })),
             })
             .await;

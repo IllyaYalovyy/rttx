@@ -223,10 +223,20 @@ pub async fn attach_ro(client: &mut TestClient, session_id: &[u8]) -> proto::Sna
 
 /// Create a pane, draining interleaved Deltas until `PaneCreated` arrives.
 pub async fn create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
+    create_pane_with_cwd(client, session_id, None).await
+}
+
+/// Create a pane with an optional CWD, draining interleaved Deltas until `PaneCreated` arrives.
+pub async fn create_pane_with_cwd(
+    client: &mut TestClient,
+    session_id: &[u8],
+    cwd: Option<String>,
+) -> Vec<u8> {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.to_vec(),
+                cwd,
             })),
         })
         .await;

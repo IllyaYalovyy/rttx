@@ -147,6 +147,7 @@ async fn create_pane_in_nonexistent_session_returns_error() {
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
             session_id: bogus_uuid(),
+            cwd: None,
         })),
     };
     client.send(&msg).await;
@@ -352,6 +353,7 @@ async fn attach_and_create_pane(client: &mut TestClient, session_id: &[u8]) -> V
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
             session_id: session_id.to_vec(),
+            cwd: None,
         })),
     };
     client.send(&msg).await;
