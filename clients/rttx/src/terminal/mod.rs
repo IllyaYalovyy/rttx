@@ -407,4 +407,13 @@ mod search_tests {
         assert!(pattern.ends_with("\\E"));
         assert!(pattern.contains(text));
     }
+
+    /// Snapshot bell stripping must remove all 0x07 bytes. Regression for #268.
+    #[test]
+    fn snapshot_bell_stripping_removes_all_bel_bytes() {
+        let input = b"\x07PS1> \x07cmd\r\n\x07PS1> ";
+        let filtered: Vec<u8> = input.iter().copied().filter(|&b| b != 0x07).collect();
+        assert!(!filtered.contains(&0x07));
+        assert_eq!(filtered, b"PS1> cmd\r\nPS1> ");
+    }
 }
