@@ -61,7 +61,7 @@ impl Pty {
         if let Some(ref cwd) = config.cwd {
             cmd = cmd.current_dir(cwd);
         }
-        cmd = cmd.env("TERM", "xterm-256color");
+        cmd = cmd.env("TERM", "xterm-256color").env("COLORTERM", "truecolor");
         for (key, val) in &config.env {
             cmd = cmd.env(key, val);
         }
@@ -130,4 +130,33 @@ impl Pty {
 /// Determine the user's default shell.
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawned_pty_child_inherits_colorterm() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let config = PtyConfig {
+                command: vec!["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+                ..PtyConfig::default()
+            };
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let pid = pty.pid().expect("child must be running");
+            let environ = std::fs::read_to_string(format!("/proc/{pid}/environ"))
+                .expect("read /proc environ");
+            assert!(
+                environ.contains("COLORTERM=truecolor"),
+                "PTY child must have COLORTERM=truecolor in its environment"
+            );
+            assert!(
+                environ.contains("TERM=xterm-256color"),
+                "PTY child must have TERM=xterm-256color in its environment"
+            );
+            pty.kill().expect("kill must succeed");
+        });
+    }
 }
