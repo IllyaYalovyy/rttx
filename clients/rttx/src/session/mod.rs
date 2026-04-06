@@ -125,9 +125,8 @@ where
             };
             let paned = gtk4::Paned::new(gtk_orientation);
             paned.set_wide_handle(true);
-            paned.set_resize_start_child(false);
-            paned.set_resize_end_child(false);
-            paned.set_position(200);
+            paned.set_resize_start_child(true);
+            paned.set_resize_end_child(true);
 
             let first_widget = build_layout_widget(first, make_terminal);
             let second_widget = build_layout_widget(second, make_terminal);
