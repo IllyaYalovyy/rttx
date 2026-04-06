@@ -146,3 +146,32 @@ async fn attach_stdio_hello_and_create_session() {
 
     daemon.kill().await.ok();
 }
+
+/// Gate evidence: attach-stdio is a proxy, not a standalone server.
+#[test]
+fn attach_stdio_requires_running_daemon() {
+    let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runtime_dir = tmp.path().join("runtime");
+    let cache_dir = tmp.path().join("cache");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    // No daemon running — attach-stdio should fail.
+    let output = std::process::Command::new(bin)
+        .arg("attach-stdio")
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("XDG_CACHE_HOME", &cache_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("failed to run attach-stdio");
+
+    assert!(!output.status.success(), "attach-stdio must fail without a running daemon");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("daemon socket not found") || stderr.contains("socket"),
+        "error should mention missing socket, got: {stderr}"
+    );
+}
