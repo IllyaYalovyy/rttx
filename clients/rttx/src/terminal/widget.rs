@@ -487,6 +487,8 @@ impl TerminalWidget {
             }
         });
 
+        let vte_for_spawn = vte.clone();
+        let widget_ref = self.downgrade();
         vte.spawn_async(
             vte4::PtyFlags::DEFAULT,
             cwd_path.as_deref(),
@@ -496,7 +498,19 @@ impl TerminalWidget {
             || {},
             -1,
             gtk4::gio::Cancellable::NONE,
-            move |_result| {},
+            move |result| {
+                if let Err(error) = result {
+                    log::error!("Failed to spawn shell: {error}");
+                    let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
+                    vte_for_spawn.feed(msg.as_bytes());
+                    if let Some(widget) = widget_ref.upgrade()
+                        && let Some(root) = widget.root()
+                        && let Some(window) = root.downcast_ref::<crate::window::Window>()
+                    {
+                        window.show_toast(&format!("Shell spawn failed: {error}"));
+                    }
+                }
+            },
         );
     }
 
@@ -777,5 +791,15 @@ mod tests {
         );
 
         window.close();
+    }
+
+    /// Spawn error message must be visible in the terminal pane. #22.
+    #[test]
+    fn spawn_error_message_format_contains_ansi_red() {
+        let error = "No such file or directory";
+        let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
+        assert!(msg.contains("\x1b[31m"), "error must use red ANSI color");
+        assert!(msg.contains(error));
+        assert!(msg.contains("\x1b[0m"), "error must reset ANSI color");
     }
 }

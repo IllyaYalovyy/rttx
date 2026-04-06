@@ -2311,7 +2311,7 @@ impl Window {
         }
     }
 
-    fn show_toast(&self, message: &str) {
+    pub(crate) fn show_toast(&self, message: &str) {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
     }
 
