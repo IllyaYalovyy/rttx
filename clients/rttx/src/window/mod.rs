@@ -2087,7 +2087,11 @@ impl Window {
             stack.remove(&target);
             let branch = build_branch();
             if let Some(p) = branch.downcast_ref::<gtk4::Paned>() {
-                p.set_position(pre_split_position);
+                let pos = pre_split_position;
+                p.set_position(pos);
+                p.connect_realize(move |paned| {
+                    paned.set_position(pos);
+                });
             }
             stack.add_named(&branch, Some(session_uuid));
             stack.set_visible_child_name(session_uuid);
@@ -2122,7 +2126,11 @@ impl Window {
 
         let branch = build_branch();
         if let Some(p) = branch.downcast_ref::<gtk4::Paned>() {
-            p.set_position(pre_split_position);
+            let pos = pre_split_position;
+            p.set_position(pos);
+            p.connect_realize(move |paned| {
+                paned.set_position(pos);
+            });
         }
         if is_start {
             paned.set_start_child(Some(&branch));

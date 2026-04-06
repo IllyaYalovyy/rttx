@@ -1523,3 +1523,54 @@ fn window_has_new_remote_workspace_action() {
     );
     window.close();
 }
+
+/// `schedule_initial_paned_ratios` must set position on realize to avoid
+/// a visible jump. Regression test for #23.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn paned_ratio_applied_on_realize_not_just_idle() {
+    require_display!();
+
+    use rttx::session::{
+        LayoutNode, SplitOrientation, build_layout_widget, schedule_initial_paned_ratios,
+    };
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t2".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget = build_layout_widget(&layout, &|_uuid, _cwd, _profile, _title| {
+        gtk4::Label::new(Some("terminal")).upcast()
+    });
+
+    schedule_initial_paned_ratios(&widget, &layout);
+
+    // The realize handler should be connected. When the widget is realized,
+    // the position should be set before the first paint.
+    let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    paned.set_size_request(800, 600);
+
+    // Force realization by adding to a window.
+    let window = gtk4::Window::new();
+    window.set_child(Some(paned));
+    window.present();
+    pump_events(100);
+
+    let position = paned.position();
+    assert!(position > 0, "paned position must be set after realize, got {position}");
+
+    window.close();
+}

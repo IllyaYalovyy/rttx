@@ -194,14 +194,12 @@ pub fn schedule_initial_paned_ratios(content: &gtk4::Widget, layout: &LayoutNode
         return;
     }
 
-    let idle_layout = layout.clone();
-    glib::idle_add_local_once(glib::clone!(
-        #[weak]
-        content,
-        move || {
-            apply_initial_paned_ratios(&idle_layout, &content);
-        }
-    ));
+    // Apply ratios on realize — before the first paint — to avoid a visible
+    // jump from the default paned position to the target ratio.
+    let realize_layout = layout.clone();
+    content.connect_realize(move |widget| {
+        apply_initial_paned_ratios(&realize_layout, widget);
+    });
 
     let tick_layout = layout.clone();
     content.add_tick_callback(move |widget, _| {
