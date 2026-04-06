@@ -113,8 +113,8 @@ pub fn builtin_color_schemes() -> Vec<ColorScheme> {
         "#4B5563", "#FF8F88", "#A7D79B", "#F4D48B", "#9BC3FF", "#D4ACFF", "#86DDE8", "#F5F7FA",
     ];
     const DAYBREAK: [&str; 16] = [
-        "#1F2430", "#C74E39", "#4F8A4F", "#B0832F", "#3B74C5", "#8A56BF", "#2C8A8E", "#D9D3C7",
-        "#5C6370", "#E06C50", "#6AA76A", "#C79A3A", "#4F8EE8", "#A06BE0", "#3AA3A8", "#FFFDF8",
+        "#2B2F36", "#B2472F", "#2F6B3C", "#8A6318", "#2F5FAE", "#7B4CB0", "#1E6F79", "#687281",
+        "#768090", "#CC5A3C", "#3F7D4D", "#A97A1F", "#4B7BD0", "#9562C7", "#2B8791", "#37414F",
     ];
 
     vec![
@@ -132,14 +132,14 @@ pub fn builtin_color_schemes() -> Vec<ColorScheme> {
         ),
         builtin_scheme(
             BUILTIN_LIGHT_SCHEME_NAME,
-            "A warm paper-light terminal designed to sit comfortably inside GNOME light mode.",
-            "#243039",
-            "#F7F4EC",
+            "A warm paper-light terminal with stronger ANSI contrast for modern CLI apps.",
+            "#26323B",
+            "#FAF7F0",
             &DAYBREAK,
-            "#F7F4EC",
-            "#B14D32",
-            "#243039",
-            "#D9E7FF",
+            "#FAF7F0",
+            "#B2472F",
+            "#26323B",
+            "#D8E6FF",
             "#111827",
         ),
     ]
@@ -203,6 +203,24 @@ mod tests {
     use crate::test_helpers::*;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
+
+    fn srgb_channel_to_linear(value: f32) -> f32 {
+        if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+    }
+
+    fn relative_luminance(color: &gdk::RGBA) -> f32 {
+        let red = srgb_channel_to_linear(color.red());
+        let green = srgb_channel_to_linear(color.green());
+        let blue = srgb_channel_to_linear(color.blue());
+        0.0722f32.mul_add(blue, 0.2126f32.mul_add(red, 0.7152 * green))
+    }
+
+    fn contrast_ratio(a: &gdk::RGBA, b: &gdk::RGBA) -> f32 {
+        let a_luma = relative_luminance(a);
+        let b_luma = relative_luminance(b);
+        let (lighter, darker) = if a_luma >= b_luma { (a_luma, b_luma) } else { (b_luma, a_luma) };
+        (lighter + 0.05) / (darker + 0.05)
+    }
 
     #[test]
     fn scheme_serialization_roundtrip() {
@@ -329,6 +347,28 @@ mod tests {
         assert!(dark.background_rgba().is_some());
         assert!(light.foreground_rgba().is_some());
         assert!(light.background_rgba().is_some());
+    }
+
+    #[test]
+    fn builtin_light_scheme_palette_stays_readable_for_cli_apps() {
+        let scheme = builtin_color_schemes()
+            .into_iter()
+            .find(|scheme| scheme.name == BUILTIN_LIGHT_SCHEME_NAME)
+            .expect("light builtin scheme must be present");
+        let background = scheme.background_rgba().expect("light builtin background must parse");
+        let foreground = scheme.foreground_rgba().expect("light builtin foreground must parse");
+
+        assert!(
+            contrast_ratio(&foreground, &background) >= 10.0,
+            "default foreground must remain comfortably readable on the light background"
+        );
+
+        for (index, color) in scheme.palette_rgba().iter().enumerate() {
+            assert!(
+                contrast_ratio(color, &background) >= 3.5,
+                "palette slot {index} lost too much contrast against the light background"
+            );
+        }
     }
 
     #[test]
