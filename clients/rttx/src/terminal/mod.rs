@@ -4,6 +4,16 @@ pub mod links;
 pub mod persistent_widget;
 pub mod widget;
 
+/// Test-only re-export of `encode_terminal_key_input`.
+#[doc(hidden)]
+#[must_use]
+pub fn encode_terminal_key_input_for_test(
+    key: gtk4::gdk::Key,
+    state: gtk4::gdk::ModifierType,
+) -> Option<Vec<u8>> {
+    encode_terminal_key_input(key, state)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalInputBackend {
     Direct,
