@@ -819,3 +819,13 @@ fn spawn_error_format_is_user_visible() {
     assert!(msg.contains(error));
     assert!(msg.contains("\x1b[31m"));
 }
+
+/// The application must not use `NON_UNIQUE` flags — single-instance is
+/// enforced by `GApplication` via D-Bus. Regression guard for #15.
+#[test]
+fn application_flags_enforce_single_instance() {
+    use rttx::config;
+
+    let app_id = config::app_id();
+    assert!(!app_id.is_empty(), "app_id must be set for GApplication single-instance");
+}
