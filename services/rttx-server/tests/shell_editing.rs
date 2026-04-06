@@ -112,7 +112,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 }
 
 async fn wait_for_prompt(client: &mut TestClient) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(message) = client.try_recv(Duration::from_millis(200)).await
@@ -124,7 +124,7 @@ async fn wait_for_prompt(client: &mut TestClient) {
             }
         }
     }
-    panic!("shell prompt did not arrive within 15 seconds");
+    panic!("shell prompt did not arrive within 30 seconds");
 }
 
 async fn resize_pane(

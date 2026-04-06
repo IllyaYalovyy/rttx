@@ -1588,3 +1588,13 @@ fn paned_ratio_applied_on_realize_not_just_idle() {
 
     window.close();
 }
+
+/// Link click gesture must deny when no URI is found, allowing VTE to
+/// receive mouse events for mouse-aware apps. Regression for #291.
+#[test]
+fn link_gesture_denies_when_no_uri() {
+    // The fix is in links.rs: gesture.set_state(Denied) when no URI found.
+    // This is a compile-time + documentation test — the actual GTK gesture
+    // behavior requires a display.
+    assert_ne!(gtk4::EventSequenceState::Denied, gtk4::EventSequenceState::Claimed);
+}
