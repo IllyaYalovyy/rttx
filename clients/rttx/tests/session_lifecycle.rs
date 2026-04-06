@@ -871,3 +871,19 @@ fn managed_fkeys_encode_to_escape_sequences() {
         );
     }
 }
+
+/// Ctrl+Arrow must use xterm modified key format. Regression for #295.
+#[test]
+fn ctrl_arrow_encodes_with_modifier_param() {
+    use rttx::terminal::encode_terminal_key_input_for_test;
+
+    let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+    assert_eq!(
+        encode_terminal_key_input_for_test(gtk4::gdk::Key::Right, ctrl).as_deref(),
+        Some(b"\x1b[1;5C".as_slice()),
+    );
+    assert_eq!(
+        encode_terminal_key_input_for_test(gtk4::gdk::Key::Left, ctrl).as_deref(),
+        Some(b"\x1b[1;5D".as_slice()),
+    );
+}
