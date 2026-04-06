@@ -1084,7 +1084,7 @@ impl Window {
         about.set_transient_for(Some(self));
         about.set_application_name(config::display_name());
         about.set_application_icon(config::icon_name());
-        about.set_version(env!("CARGO_PKG_VERSION"));
+        about.set_version(&format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH")));
         about.set_developer_name(config::DEVELOPER_NAME);
         about.set_developers(&[config::DEVELOPER_NAME]);
         about.set_website(config::PROJECT_WEBSITE);
