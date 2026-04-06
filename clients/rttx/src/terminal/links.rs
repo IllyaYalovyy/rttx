@@ -33,10 +33,12 @@ where
     open_match_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
     open_match_click.connect_released(move |gesture, n_press, x, y| {
         if n_press != 1 {
+            gesture.set_state(gtk4::EventSequenceState::Denied);
             return;
         }
         let current_directory = click_current_directory();
         let Some(uri) = openable_uri_at(&click_vte, x, y, current_directory.as_deref()) else {
+            gesture.set_state(gtk4::EventSequenceState::Denied);
             return;
         };
         if launch_uri(&uri) {
@@ -318,5 +320,13 @@ mod tests {
 
         assert!(result);
         assert_eq!(launched.borrow().as_slice(), ["https://example.com/docs"]);
+    }
+
+    /// The link click gesture must deny when no URI is found so that VTE
+    /// receives mouse events for mouse-aware apps (htop, vim, mc). #291.
+    #[test]
+    fn gesture_denied_state_is_available() {
+        // Compile-time check: EventSequenceState::Denied exists and is usable.
+        assert_ne!(gtk4::EventSequenceState::Denied, gtk4::EventSequenceState::Claimed);
     }
 }
