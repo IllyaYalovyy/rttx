@@ -1181,6 +1181,20 @@ fn persistent_pane_view_feed_snapshot_restores_content() {
     pane.feed_snapshot(b"");
 }
 
+/// Snapshot feed must strip bell characters to prevent historical bells
+/// from ringing on connect/reconnect. Regression test for #268.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_view_feed_snapshot_strips_bells() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    // Feed scrollback containing bell characters — should not crash or ring.
+    pane.feed_snapshot(b"\x07prompt$ \x07command\r\n\x07prompt$ ");
+    // The content should be present without the bells.
+    // (We can't easily assert VTE content, but the test verifies no panic.)
+}
+
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn persistent_pane_view_feed_snapshot_restores_cursor_after_inline_motion() {
