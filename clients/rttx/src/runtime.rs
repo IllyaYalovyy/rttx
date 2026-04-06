@@ -740,4 +740,102 @@ mod tests {
         assert!(!runtime.pending_layout_panes.contains("t2"));
         assert!(runtime.pane_bindings.contains_key("t1"));
     }
+
+    // ── bind_runtime_pane / is_layout_pane_pending ──────────────
+
+    #[test]
+    fn bind_runtime_pane_clears_pending_and_sets_binding() {
+        let mut runtime =
+            WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent, &["t1".into()]);
+        assert!(runtime.is_layout_pane_pending("t1"));
+
+        runtime.bind_runtime_pane("t1", "runtime-pane-abc");
+
+        assert!(!runtime.is_layout_pane_pending("t1"));
+        assert_eq!(runtime.pane_bindings.get("t1").unwrap(), "runtime-pane-abc");
+    }
+
+    #[test]
+    fn is_layout_pane_pending_false_for_unknown_uuid() {
+        let runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent, &["t1".into()]);
+        assert!(!runtime.is_layout_pane_pending("unknown"));
+    }
+
+    // ── advance_connection_status ───────────────────────────────
+
+    #[test]
+    fn advance_connection_status_full_lifecycle() {
+        let s = advance_connection_status(&ConnectionStatus::Connecting, ConnectionEvent::Started);
+        assert_eq!(s, ConnectionStatus::Starting);
+
+        let s = advance_connection_status(&s, ConnectionEvent::Connected);
+        assert_eq!(s, ConnectionStatus::Connected);
+
+        let s = advance_connection_status(&s, ConnectionEvent::Lost);
+        assert_eq!(s, ConnectionStatus::Disconnected);
+
+        let s = advance_connection_status(
+            &s,
+            ConnectionEvent::RetryScheduled { attempt: 1, retry_in_secs: 5 },
+        );
+        assert!(matches!(s, ConnectionStatus::Reconnecting { attempt: 1, .. }));
+
+        let s = advance_connection_status(&s, ConnectionEvent::Recovered);
+        assert_eq!(s, ConnectionStatus::Recovered);
+    }
+
+    #[test]
+    fn advance_connection_status_failed_produces_blocked() {
+        let s = advance_connection_status(
+            &ConnectionStatus::Connecting,
+            ConnectionEvent::Failed(ConnectionProblem::PermissionDenied),
+        );
+        assert!(matches!(s, ConnectionStatus::Blocked(_)));
+    }
+
+    // ── ConnectionStatus::accepts_input ─────────────────────────
+
+    #[test]
+    fn connection_status_accepts_input_only_when_connected_or_recovered() {
+        assert!(ConnectionStatus::Connected.accepts_input());
+        assert!(ConnectionStatus::Recovered.accepts_input());
+        assert!(!ConnectionStatus::Connecting.accepts_input());
+        assert!(!ConnectionStatus::Disconnected.accepts_input());
+        assert!(!ConnectionStatus::Starting.accepts_input());
+    }
+
+    // ── ConnectionProblem properties ────────────────────────────
+
+    #[test]
+    fn connection_problem_transient_vs_blocked() {
+        assert!(ConnectionProblem::DaemonUnavailable.is_transient());
+        assert!(!ConnectionProblem::VersionMismatch.is_transient());
+        assert!(!ConnectionProblem::OwnershipConflict.is_transient());
+        assert!(!ConnectionProblem::PermissionDenied.is_transient());
+    }
+
+    #[test]
+    fn connection_problem_labels_are_nonempty() {
+        for problem in [
+            ConnectionProblem::DaemonUnavailable,
+            ConnectionProblem::VersionMismatch,
+            ConnectionProblem::OwnershipConflict,
+            ConnectionProblem::PermissionDenied,
+            ConnectionProblem::Protocol("test".into()),
+            ConnectionProblem::UserActionRequired("test".into()),
+        ] {
+            assert!(!problem.label().is_empty(), "label empty for {problem:?}");
+        }
+    }
+
+    // ── RuntimeEndpoint::key ────────────────────────────────────
+
+    #[test]
+    fn endpoint_key_distinguishes_local_and_remote() {
+        let local = RuntimeEndpoint::Local;
+        let remote = RuntimeEndpoint::Remote { host: "host".into() };
+        assert_ne!(local.key(), remote.key());
+        assert_eq!(local.key(), "local");
+        assert!(remote.key().contains("host"));
+    }
 }
