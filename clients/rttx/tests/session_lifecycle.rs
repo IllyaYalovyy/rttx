@@ -887,3 +887,67 @@ fn ctrl_arrow_encodes_with_modifier_param() {
         Some(b"\x1b[1;5D".as_slice()),
     );
 }
+
+/// Split pane CWD must propagate through reconciliation pane create requests. #297.
+#[test]
+fn split_pane_cwd_propagates_through_reconciliation_create_request() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::WorkspacePolicy;
+    use rttx::session::*;
+
+    let first_uuid = uuid::Uuid::new_v4().to_string();
+    let second_uuid = uuid::Uuid::new_v4().to_string();
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+
+    // Build a managed workspace with two panes, second has a CWD from a prior split.
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: first_uuid.clone(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: second_uuid,
+            profile: None,
+            cwd: Some("/srv/project".into()),
+            custom_title: None,
+        }),
+    };
+
+    let mut session =
+        SessionState::new_managed_local("Workspace".into(), WorkspacePolicy::Persistent, None);
+    session.layout = layout;
+
+    let mut state = WindowState { sessions: vec![session], ..Default::default() };
+
+    // Simulate daemon reporting only the first pane exists.
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+        workspace_id: state.sessions[0].uuid.clone(),
+        runtime_id: runtime_id.clone(),
+        snapshot: rttx_proto::proto::Snapshot {
+            session_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
+            panes: vec![rttx_proto::proto::PaneSnapshot {
+                pane_id: rttx_proto::uuid_to_bytes(first_uuid.parse().unwrap()),
+                title: "Shell".into(),
+                cwd: "/home".into(),
+                scrollback: vec![],
+                cols: 80,
+                rows: 24,
+                exit_status: None,
+            }],
+            revision: 0,
+            current_client_role: 0,
+        },
+    });
+
+    // The second pane should be requested with the layout CWD.
+    assert_eq!(transition.pane_create_requests.len(), 1);
+    assert_eq!(
+        transition.pane_create_requests[0].cwd.as_deref(),
+        Some("/srv/project"),
+        "reconciliation must carry layout CWD to pane create request"
+    );
+}
