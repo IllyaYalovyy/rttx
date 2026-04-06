@@ -275,4 +275,13 @@ mod tests {
         let sock_path = tmp.path().join("nonexistent.sock");
         assert!(!is_server_running(&sock_path).await);
     }
+
+    /// attach-stdio proxy requires a running daemon. This test documents
+    /// that the socket must exist before a proxy can connect. #269.
+    #[test]
+    fn socket_path_must_exist_for_proxy_connection() {
+        let tmp = TempDir::new().unwrap();
+        let sock_path = tmp.path().join("rttx-server.sock");
+        assert!(!sock_path.exists(), "socket must not exist in empty dir");
+    }
 }

@@ -1,8 +1,8 @@
 //! Integration test for the attach-stdio transport.
 //!
 //! Verifies that the protocol works over a pipe (simulating SSH stdio)
-//! by spawning the server binary with `attach-stdio` and communicating
-//! over its stdin/stdout.
+//! by starting a daemon, then spawning `attach-stdio` as a proxy and
+//! communicating over its stdin/stdout.
 
 use bytes::BytesMut;
 use rttx_proto::{
@@ -13,15 +13,60 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
-/// Spawn `rttx-server attach-stdio` and speak the protocol over pipes.
+async fn start_daemon(
+    bin: &str,
+    runtime_dir: &std::path::Path,
+    cache_dir: &std::path::Path,
+) -> tokio::process::Child {
+    let child = Command::new(bin)
+        .arg("start")
+        .arg("--foreground")
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env("XDG_CACHE_HOME", cache_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn daemon");
+
+    // Wait for socket to appear.
+    let socket = runtime_dir.join("rttx-server").join("v1").join("rttx-server.sock");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        if socket.exists() {
+            return child;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("daemon socket did not appear at {}", socket.display());
+}
+
+async fn read_response(
+    stdout: &mut tokio::process::ChildStdout,
+    read_buf: &mut BytesMut,
+) -> proto::ServerMessage {
+    loop {
+        let n = stdout.read_buf(read_buf).await.unwrap();
+        assert!(n > 0, "unexpected EOF");
+        match decode_frame::<proto::ServerMessage>(read_buf) {
+            Ok(msg) => return msg,
+            Err(rttx_proto::FrameError::Incomplete) => {}
+            Err(e) => panic!("decode error: {e}"),
+        }
+    }
+}
+
+/// Spawn `rttx-server attach-stdio` against a running daemon and speak the protocol.
 #[tokio::test]
 async fn attach_stdio_hello_and_create_session() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
-    let tmp = TempDir::new().expect("failed to create temp dir");
+    let tmp = TempDir::new().unwrap();
     let runtime_dir = tmp.path().join("runtime");
     let cache_dir = tmp.path().join("cache");
-    tokio::fs::create_dir_all(&runtime_dir).await.expect("failed to create isolated runtime dir");
-    tokio::fs::create_dir_all(&cache_dir).await.expect("failed to create isolated cache dir");
+    tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
+    tokio::fs::create_dir_all(&cache_dir).await.unwrap();
+
+    let mut daemon = start_daemon(bin, &runtime_dir, &cache_dir).await;
 
     let mut child = Command::new(bin)
         .arg("attach-stdio")
@@ -31,12 +76,13 @@ async fn attach_stdio_hello_and_create_session() {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("failed to spawn rttx-server attach-stdio");
+        .expect("failed to spawn attach-stdio");
 
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
+    let mut read_buf = BytesMut::with_capacity(4096);
 
-    // Send Hello.
+    // Hello.
     let hello = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Hello(proto::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -48,23 +94,10 @@ async fn attach_stdio_hello_and_create_session() {
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
-    // Read HelloAck.
-    let mut read_buf = BytesMut::with_capacity(4096);
-    let ack: proto::ServerMessage = loop {
-        let n = stdout.read_buf(&mut read_buf).await.unwrap();
-        assert!(n > 0, "unexpected EOF waiting for HelloAck");
-        match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-            Ok(msg) => break msg,
-            Err(rttx_proto::FrameError::Incomplete) => {}
-            Err(e) => panic!("decode error: {e}"),
-        }
-    };
-    assert!(
-        matches!(ack.msg, Some(proto::server_message::Msg::HelloAck(_))),
-        "expected HelloAck, got {ack:?}"
-    );
+    let ack = read_response(&mut stdout, &mut read_buf).await;
+    assert!(matches!(ack.msg, Some(proto::server_message::Msg::HelloAck(_))));
 
-    // Create a session.
+    // Create session.
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
             name: "stdio-test".into(),
@@ -76,16 +109,7 @@ async fn attach_stdio_hello_and_create_session() {
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
-    // Read SessionCreated.
-    let resp: proto::ServerMessage = loop {
-        let n = stdout.read_buf(&mut read_buf).await.unwrap();
-        assert!(n > 0, "unexpected EOF waiting for SessionCreated");
-        match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-            Ok(msg) => break msg,
-            Err(rttx_proto::FrameError::Incomplete) => {}
-            Err(e) => panic!("decode error: {e}"),
-        }
-    };
+    let resp = read_response(&mut stdout, &mut read_buf).await;
     let session_id = match resp.msg {
         Some(proto::server_message::Msg::SessionCreated(sc)) => {
             bytes_to_uuid(&sc.session_id).unwrap()
@@ -94,7 +118,7 @@ async fn attach_stdio_hello_and_create_session() {
     };
     assert!(!session_id.is_nil());
 
-    // List sessions — should have one.
+    // List sessions.
     let list = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
     };
@@ -103,15 +127,7 @@ async fn attach_stdio_hello_and_create_session() {
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
-    let resp: proto::ServerMessage = loop {
-        let n = stdout.read_buf(&mut read_buf).await.unwrap();
-        assert!(n > 0, "unexpected EOF waiting for SessionList");
-        match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-            Ok(msg) => break msg,
-            Err(rttx_proto::FrameError::Incomplete) => {}
-            Err(e) => panic!("decode error: {e}"),
-        }
-    };
+    let resp = read_response(&mut stdout, &mut read_buf).await;
     match resp.msg {
         Some(proto::server_message::Msg::SessionList(sl)) => {
             assert_eq!(sl.sessions.len(), 1);
@@ -120,11 +136,42 @@ async fn attach_stdio_hello_and_create_session() {
         other => panic!("expected SessionList, got {other:?}"),
     }
 
-    // Close stdin to disconnect — the process should exit.
+    // Disconnect — process should exit.
     drop(stdin);
     let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
         .await
-        .expect("timed out waiting for process exit")
+        .expect("timed out")
         .expect("wait failed");
-    assert!(status.success() || status.code() == Some(0), "unexpected exit: {status}");
+    assert!(status.success() || status.code() == Some(0));
+
+    daemon.kill().await.ok();
+}
+
+/// Gate evidence: attach-stdio is a proxy, not a standalone server.
+#[test]
+fn attach_stdio_requires_running_daemon() {
+    let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runtime_dir = tmp.path().join("runtime");
+    let cache_dir = tmp.path().join("cache");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    // No daemon running — attach-stdio should fail.
+    let output = std::process::Command::new(bin)
+        .arg("attach-stdio")
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("XDG_CACHE_HOME", &cache_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("failed to run attach-stdio");
+
+    assert!(!output.status.success(), "attach-stdio must fail without a running daemon");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("daemon socket not found") || stderr.contains("socket"),
+        "error should mention missing socket, got: {stderr}"
+    );
 }
