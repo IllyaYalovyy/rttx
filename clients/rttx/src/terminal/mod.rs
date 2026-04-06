@@ -110,6 +110,18 @@ fn encode_terminal_key_input(
         gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete => Some(b"\x1b[3~".to_vec()),
         gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => Some(b"\x1b[5~".to_vec()),
         gtk4::gdk::Key::Page_Down | gtk4::gdk::Key::KP_Page_Down => Some(b"\x1b[6~".to_vec()),
+        gtk4::gdk::Key::F1 => Some(b"\x1bOP".to_vec()),
+        gtk4::gdk::Key::F2 => Some(b"\x1bOQ".to_vec()),
+        gtk4::gdk::Key::F3 => Some(b"\x1bOR".to_vec()),
+        gtk4::gdk::Key::F4 => Some(b"\x1bOS".to_vec()),
+        gtk4::gdk::Key::F5 => Some(b"\x1b[15~".to_vec()),
+        gtk4::gdk::Key::F6 => Some(b"\x1b[17~".to_vec()),
+        gtk4::gdk::Key::F7 => Some(b"\x1b[18~".to_vec()),
+        gtk4::gdk::Key::F8 => Some(b"\x1b[19~".to_vec()),
+        gtk4::gdk::Key::F9 => Some(b"\x1b[20~".to_vec()),
+        gtk4::gdk::Key::F10 => Some(b"\x1b[21~".to_vec()),
+        gtk4::gdk::Key::F11 => Some(b"\x1b[23~".to_vec()),
+        gtk4::gdk::Key::F12 => Some(b"\x1b[24~".to_vec()),
         _ => {
             let ch = key.to_unicode()?;
             if ctrl {
@@ -384,6 +396,57 @@ mod tests {
             ),
             TerminalKeyAction::CopySelection
         );
+    }
+
+    /// F-keys must produce xterm escape sequences for managed terminals. #293.
+    #[test]
+    fn fkeys_produce_escape_sequences() {
+        let expected: &[(gtk4::gdk::Key, &[u8])] = &[
+            (gtk4::gdk::Key::F1, b"\x1bOP"),
+            (gtk4::gdk::Key::F2, b"\x1bOQ"),
+            (gtk4::gdk::Key::F3, b"\x1bOR"),
+            (gtk4::gdk::Key::F4, b"\x1bOS"),
+            (gtk4::gdk::Key::F5, b"\x1b[15~"),
+            (gtk4::gdk::Key::F6, b"\x1b[17~"),
+            (gtk4::gdk::Key::F7, b"\x1b[18~"),
+            (gtk4::gdk::Key::F8, b"\x1b[19~"),
+            (gtk4::gdk::Key::F9, b"\x1b[20~"),
+            (gtk4::gdk::Key::F10, b"\x1b[21~"),
+            (gtk4::gdk::Key::F11, b"\x1b[23~"),
+            (gtk4::gdk::Key::F12, b"\x1b[24~"),
+        ];
+        for (key, seq) in expected {
+            let result = encode_terminal_key_input(*key, gtk4::gdk::ModifierType::empty());
+            assert_eq!(
+                result.as_deref(),
+                Some(*seq as &[u8]),
+                "F-key {key:?} should produce escape sequence"
+            );
+        }
+    }
+
+    /// F-keys must be forwarded to PTY in managed mode, not dropped. #293.
+    #[test]
+    fn managed_terminal_forwards_fkeys_to_pty() {
+        let action = terminal_key_action(
+            TerminalInputBackend::Managed,
+            gtk4::gdk::Key::F1,
+            gtk4::gdk::ModifierType::empty(),
+            false,
+            false,
+        );
+        assert!(
+            matches!(action, TerminalKeyAction::ForwardToPty(_)),
+            "F1 must be ForwardToPty in managed mode, got {action:?}"
+        );
+    }
+
+    /// Alt+F-key must prepend ESC to the F-key sequence. #293.
+    #[test]
+    fn alt_fkey_prepends_escape() {
+        let result =
+            encode_terminal_key_input(gtk4::gdk::Key::F2, gtk4::gdk::ModifierType::ALT_MASK);
+        assert_eq!(result.as_deref(), Some(b"\x1b\x1bOQ" as &[u8]));
     }
 }
 
