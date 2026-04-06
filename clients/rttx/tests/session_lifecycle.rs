@@ -829,3 +829,24 @@ fn application_flags_enforce_single_instance() {
     let app_id = config::app_id();
     assert!(!app_id.is_empty(), "app_id must be set for GApplication single-instance");
 }
+
+/// Connection status lifecycle must follow the expected state machine.
+/// Integration evidence for #132.
+#[test]
+fn connection_status_lifecycle_is_deterministic() {
+    use rttx::runtime::{
+        ConnectionEvent, ConnectionProblem, ConnectionStatus, advance_connection_status,
+    };
+
+    let s = advance_connection_status(&ConnectionStatus::Connecting, ConnectionEvent::Connected);
+    assert_eq!(s, ConnectionStatus::Connected);
+
+    let s = advance_connection_status(&s, ConnectionEvent::Lost);
+    assert_eq!(s, ConnectionStatus::Disconnected);
+
+    let s = advance_connection_status(
+        &s,
+        ConnectionEvent::Failed(ConnectionProblem::OwnershipConflict),
+    );
+    assert!(matches!(s, ConnectionStatus::Blocked(_)));
+}
