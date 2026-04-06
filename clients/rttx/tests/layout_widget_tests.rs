@@ -428,3 +428,42 @@ fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
 
     window.close();
 }
+
+/// `build_layout_widget` must not set a hardcoded position on the paned.
+/// A magic default (e.g. 200) would corrupt the proportional-resize ratio
+/// if a user happened to drag the divider to exactly that pixel value.
+/// Position application is deferred to `schedule_initial_paned_ratios`.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn build_layout_widget_does_not_set_magic_paned_position() {
+    require_display!();
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+        second: Box::new(LayoutNode::Terminal {
+            uuid: "t2".into(),
+            profile: None,
+            cwd: None,
+            custom_title: None,
+        }),
+    };
+
+    let widget =
+        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+
+    let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
+    // Before realize, position must be 0 (GTK default) — not a magic sentinel.
+    assert_eq!(
+        paned.position(),
+        0,
+        "build_layout_widget must not set a hardcoded paned position; \
+         position application is deferred to schedule_initial_paned_ratios"
+    );
+}
