@@ -360,11 +360,33 @@ impl WindowState {
         let layout_terminal_uuids = session.layout.terminal_uuids();
         let runtime_pane_uuids =
             snapshot.panes.iter().filter_map(snapshot_pane_id).collect::<Vec<_>>();
-        let reconciliation = reconcile_bindings(
+        let mut reconciliation = reconcile_bindings(
             &layout_terminal_uuids,
             &session.runtime.pane_bindings,
             &runtime_pane_uuids,
         );
+
+        // When all bindings were placeholders (state saved before PaneCreated
+        // events arrived), match disconnected layout terminals to unclaimed
+        // runtime panes by position so the panes reconnect instead of staying
+        // blank.
+        if had_only_placeholder_bindings
+            && !reconciliation.disconnected_layout_panes.is_empty()
+            && !reconciliation.recovered_runtime_panes.is_empty()
+        {
+            let mut recovered = reconciliation.recovered_runtime_panes.drain(..).collect::<Vec<_>>();
+            let mut still_disconnected = Vec::new();
+            for layout_uuid in reconciliation.disconnected_layout_panes.drain(..) {
+                if let Some(runtime_pane_id) = recovered.first().cloned() {
+                    recovered.remove(0);
+                    reconciliation.bindings.insert(layout_uuid, runtime_pane_id);
+                } else {
+                    still_disconnected.push(layout_uuid);
+                }
+            }
+            reconciliation.disconnected_layout_panes = still_disconnected;
+            reconciliation.recovered_runtime_panes = recovered;
+        }
 
         session.runtime.pane_bindings = reconciliation.bindings;
         session.runtime.pending_layout_panes =
@@ -377,7 +399,10 @@ impl WindowState {
                     .retain(|layout_terminal_uuid| layout_terminal_uuid != initial_terminal_uuid);
             }
             placeholders
-        } else if snapshot.panes.is_empty() && had_only_placeholder_bindings {
+        } else if had_only_placeholder_bindings {
+            // Placeholder-only bindings: state was saved before PaneCreated
+            // events arrived. Create panes for any layout terminals that
+            // couldn't be matched to existing runtime panes.
             reconciliation.disconnected_layout_panes.clone()
         } else {
             Vec::new()
@@ -1369,5 +1394,107 @@ mod tests {
             Some("/srv/project"),
             "pane create request must carry layout CWD"
         );
+    }
+
+    /// When a workspace has `runtime_id` but only placeholder bindings (e.g.
+    /// state saved before `PaneCreated` events arrived), reattaching to a
+    /// runtime with existing panes must bind disconnected layout terminals
+    /// to unclaimed runtime panes by position instead of leaving them blank.
+    #[test]
+    fn placeholder_bindings_reattach_matches_layout_to_runtime_panes_by_position() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let runtime_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let runtime_pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+
+        // Workspace has runtime_id but only placeholder bindings (left→left, right→right).
+        let session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Remote { host: "cdt2".into() },
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        // managed_session_with_runtime already calls ensure_placeholder_bindings,
+        // so pane_bindings = { "left": "left", "right": "right" }.
+        assert_eq!(session.runtime.pane_bindings.get("left").map(String::as_str), Some("left"));
+        assert_eq!(session.runtime.pane_bindings.get("right").map(String::as_str), Some("right"));
+
+        let mut state = window_state(vec![session]);
+        let snap = snapshot(
+            runtime_id,
+            vec![
+                pane_snapshot(runtime_pane_a, "Shell", "/home", b"$ ls"),
+                pane_snapshot(runtime_pane_b, "Logs", "/var/log", b"tail"),
+            ],
+        );
+
+        let opened = state
+            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
+            .expect("workspace open should succeed");
+
+        // Both layout terminals should be bound to runtime panes.
+        assert_eq!(
+            opened.session_state.runtime.pane_bindings.get("left").map(String::as_str),
+            Some(runtime_pane_a),
+            "first layout terminal should bind to first runtime pane by position",
+        );
+        assert_eq!(
+            opened.session_state.runtime.pane_bindings.get("right").map(String::as_str),
+            Some(runtime_pane_b),
+            "second layout terminal should bind to second runtime pane by position",
+        );
+
+        // No new panes should be created — the runtime already has matching panes.
+        assert!(
+            opened.panes_to_create.is_empty(),
+            "should not create new panes when runtime already has panes for each layout terminal",
+        );
+
+        // No runtime panes should be skipped or recovered into new layout terminals.
+        assert!(
+            opened.skipped_runtime_panes.is_empty(),
+            "all runtime panes should be claimed by layout terminals",
+        );
+
+        // Snapshot restores should be emitted for both panes.
+        assert_eq!(opened.snapshot_restores.len(), 2);
+    }
+
+    /// When placeholder-only bindings reattach to a runtime with fewer panes
+    /// than layout terminals, the excess layout terminals must request new
+    /// daemon panes so they don't stay blank.
+    #[test]
+    fn placeholder_bindings_reattach_creates_panes_for_excess_layout_terminals() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let runtime_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+
+        // 2 layout terminals, but runtime only has 1 pane.
+        let session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Remote { host: "cdt2".into() },
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        let mut state = window_state(vec![session]);
+        let snap = snapshot(
+            runtime_id,
+            vec![pane_snapshot(runtime_pane_a, "Shell", "/home", b"$ ls")],
+        );
+
+        let opened = state
+            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
+            .expect("workspace open should succeed");
+
+        // First layout terminal should bind to the runtime pane.
+        assert_eq!(
+            opened.session_state.runtime.pane_bindings.get("left").map(String::as_str),
+            Some(runtime_pane_a),
+        );
+
+        // Second layout terminal should request a new pane.
+        assert_eq!(opened.panes_to_create, vec!["right".to_string()]);
     }
 }
