@@ -374,7 +374,8 @@ impl WindowState {
             && !reconciliation.disconnected_layout_panes.is_empty()
             && !reconciliation.recovered_runtime_panes.is_empty()
         {
-            let mut recovered = reconciliation.recovered_runtime_panes.drain(..).collect::<Vec<_>>();
+            let mut recovered =
+                reconciliation.recovered_runtime_panes.drain(..).collect::<Vec<_>>();
             let mut still_disconnected = Vec::new();
             for layout_uuid in reconciliation.disconnected_layout_panes.drain(..) {
                 if let Some(runtime_pane_id) = recovered.first().cloned() {
@@ -1479,10 +1480,8 @@ mod tests {
             Some(runtime_id),
         );
         let mut state = window_state(vec![session]);
-        let snap = snapshot(
-            runtime_id,
-            vec![pane_snapshot(runtime_pane_a, "Shell", "/home", b"$ ls")],
-        );
+        let snap =
+            snapshot(runtime_id, vec![pane_snapshot(runtime_pane_a, "Shell", "/home", b"$ ls")]);
 
         let opened = state
             .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
