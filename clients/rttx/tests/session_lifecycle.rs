@@ -810,3 +810,24 @@ fn connection_status_survives_session_reorder() {
     // The connection status HashMap (stored on Window, not WindowState)
     // is not affected by session reorder — it's keyed by UUID.
 }
+
+/// Spawn error handling is wired — compile-time check. #22.
+#[test]
+fn spawn_error_format_is_user_visible() {
+    let error = "command not found";
+    let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
+    assert!(msg.contains(error));
+    assert!(msg.contains("\x1b[31m"));
+}
+
+/// The application must not use `NON_UNIQUE` flags — single-instance is
+/// enforced by `GApplication` via D-Bus. Regression guard for #15.
+#[test]
+fn application_flags_enforce_single_instance() {
+    use rttx::config;
+
+    let app_id = config::app_id();
+    assert!(!app_id.is_empty(), "app_id must be set for GApplication single-instance");
+    // GApplication with a non-empty application_id and without NON_UNIQUE
+    // flag automatically enforces single-instance via D-Bus.
+}

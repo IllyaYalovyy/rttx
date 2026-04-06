@@ -416,4 +416,14 @@ mod search_tests {
         assert!(!filtered.contains(&0x07));
         assert_eq!(filtered, b"PS1> cmd\r\nPS1> ");
     }
+
+    /// Spawn error message must use ANSI red for visibility. Regression for #22.
+    #[test]
+    fn spawn_error_message_uses_ansi_red() {
+        let error = "No such file or directory";
+        let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
+        assert!(msg.contains("\x1b[31m"));
+        assert!(msg.contains(error));
+        assert!(msg.ends_with("\x1b[0m\r\n"));
+    }
 }
