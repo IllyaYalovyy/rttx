@@ -888,4 +888,11 @@ mod tests {
         assert_eq!(local.key(), "local");
         assert!(remote.key().contains("host"));
     }
+
+    #[test]
+    fn connection_presentation_for_starting_shows_starting_label() {
+        let p = present_connection_status(&ConnectionStatus::Starting);
+        assert_eq!(p.header_label, "Starting");
+        assert!(!p.input_enabled);
+    }
 }
