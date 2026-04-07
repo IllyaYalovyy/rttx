@@ -1,5 +1,5 @@
 /// Integration tests for preferences persistence.
-use rttx::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
+use rttx::preferences::{self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode};
 use tempfile::TempDir;
 
 #[test]
@@ -28,6 +28,7 @@ fn preferences_roundtrip_all_fields() {
         visual_bell: true,
         smart_clipboard: true,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
+        pane_navigation_keys: PaneNavigationKeys::AltArrow,
     };
 
     preferences::save_to(&prefs, &path).unwrap();

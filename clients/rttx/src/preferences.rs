@@ -21,6 +21,27 @@ pub enum DefaultSessionFolder {
     Custom(String),
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PaneNavigationKeys {
+    #[default]
+    AltArrow,
+    CtrlShiftArrow,
+}
+
+impl PaneNavigationKeys {
+    /// GTK accelerator strings for (left, right, up, down).
+    #[must_use]
+    pub const fn accels(&self) -> (&str, &str, &str, &str) {
+        match self {
+            Self::AltArrow => ("<Alt>Left", "<Alt>Right", "<Alt>Up", "<Alt>Down"),
+            Self::CtrlShiftArrow => {
+                ("<Ctrl><Shift>Left", "<Ctrl><Shift>Right", "<Ctrl><Shift>Up", "<Ctrl><Shift>Down")
+            }
+        }
+    }
+}
+
 const fn default_session_folder() -> DefaultSessionFolder {
     DefaultSessionFolder::Home
 }
@@ -54,6 +75,8 @@ pub struct Preferences {
     pub smart_clipboard: bool,
     #[serde(default = "default_session_folder")]
     pub default_session_folder: DefaultSessionFolder,
+    #[serde(default)]
+    pub pane_navigation_keys: PaneNavigationKeys,
 }
 
 fn default_font() -> String {
@@ -93,6 +116,7 @@ impl Default for Preferences {
             visual_bell: true,
             smart_clipboard: false,
             default_session_folder: default_session_folder(),
+            pane_navigation_keys: PaneNavigationKeys::default(),
         }
     }
 }
@@ -142,6 +166,8 @@ struct PreferencesDisk {
     smart_clipboard: bool,
     #[serde(default = "default_session_folder")]
     default_session_folder: DefaultSessionFolder,
+    #[serde(default)]
+    pane_navigation_keys: PaneNavigationKeys,
 }
 
 impl From<PreferencesDisk> for Preferences {
@@ -172,6 +198,7 @@ impl From<PreferencesDisk> for Preferences {
             visual_bell: raw.visual_bell,
             smart_clipboard: raw.smart_clipboard,
             default_session_folder: raw.default_session_folder,
+            pane_navigation_keys: raw.pane_navigation_keys,
         }
     }
 }
@@ -379,5 +406,33 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.default_session_folder, DefaultSessionFolder::Home);
+    }
+
+    #[test]
+    fn pane_navigation_keys_defaults_to_alt_arrow() {
+        let prefs = Preferences::default();
+        assert_eq!(prefs.pane_navigation_keys, PaneNavigationKeys::AltArrow);
+    }
+
+    #[test]
+    fn pane_navigation_keys_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        let prefs = Preferences {
+            pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
+            ..Default::default()
+        };
+        save_to(&prefs, &path).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
+    }
+
+    #[test]
+    fn missing_pane_navigation_keys_defaults_to_alt_arrow() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{}").unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
     }
 }

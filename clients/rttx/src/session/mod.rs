@@ -2,7 +2,7 @@ pub mod layout;
 pub mod recovery;
 pub mod state;
 
-pub use layout::{LayoutNode, MAX_SPLIT_DEPTH, SplitOrientation};
+pub use layout::{Direction, LayoutNode, MAX_SPLIT_DEPTH, SplitOrientation};
 pub use recovery::{PaneRecovery, PaneSource, PaneTarget, StartupStep};
 pub use state::{SessionColor, SessionMode, SessionState, WindowState};
 
