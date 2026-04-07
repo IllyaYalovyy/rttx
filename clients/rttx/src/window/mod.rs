@@ -385,12 +385,15 @@ impl Window {
         }
 
         for session in &mut state.sessions {
-            if let Some(content) = imp.session_stack.child_by_name(&session.uuid) {
+            if !session.is_zoomed()
+                && let Some(content) = imp.session_stack.child_by_name(&session.uuid)
+            {
                 session::capture_paned_ratios(&mut session.layout, &content);
             }
             session.prune_recovery();
             session.normalize_active_terminal();
             session.sync_legacy_mode_from_runtime();
+            session.zoomed_terminal_uuid = None;
         }
 
         {
@@ -453,6 +456,7 @@ impl Window {
             ("zoom-in", &["<Ctrl>plus", "<Ctrl>equal"], |w| w.zoom_focused(1)),
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
+            ("toggle-pane-zoom", &["<Ctrl><Shift>Z"], Self::toggle_pane_zoom),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
             ("new-ephemeral-workspace", &["<Ctrl><Shift><Alt>T"], Self::add_ephemeral_session),
             ("new-remote-workspace", &[], Self::show_new_remote_workspace_dialog),
@@ -729,6 +733,21 @@ impl Window {
     }
 
     fn build_session_content(&self, session_state: &SessionState) -> gtk4::Widget {
+        if let Some(ref zoomed_uuid) = session_state.zoomed_terminal_uuid {
+            let zoomed_layout = LayoutNode::Terminal {
+                uuid: zoomed_uuid.clone(),
+                profile: None,
+                cwd: session_state.layout.terminal_cwd(zoomed_uuid),
+                custom_title: session_state.layout.terminal_custom_title(zoomed_uuid),
+            };
+            let win = self.clone();
+            return session::build_layout_widget(
+                &zoomed_layout,
+                &move |uuid, cwd, _, custom_title| {
+                    win.materialize_terminal(session_state, uuid, cwd, custom_title)
+                },
+            );
+        }
         let win = self.clone();
         session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
             win.materialize_terminal(session_state, uuid, cwd, custom_title)
@@ -1839,6 +1858,18 @@ impl Window {
     }
 
     fn split_terminal(&self, terminal_uuid: &str, orientation: SplitOrientation) {
+        // Unzoom before splitting so the full layout is visible.
+        {
+            let state = self.imp().state.borrow();
+            if let Some(session) =
+                state.sessions.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
+                && session.is_zoomed()
+            {
+                drop(state);
+                self.toggle_pane_zoom();
+            }
+        }
+
         let imp = self.imp();
 
         let source_cwd =
@@ -1913,6 +1944,19 @@ impl Window {
             CloseSession(String),
             Rebuild { session_uuid: String, session_state: SessionState },
         }
+
+        // Unzoom before closing so the full layout is visible for removal.
+        {
+            let state = self.imp().state.borrow();
+            if let Some(session) =
+                state.sessions.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
+                && session.is_zoomed()
+            {
+                drop(state);
+                self.toggle_pane_zoom();
+            }
+        }
+
         let imp = self.imp();
 
         let action = {
@@ -1999,7 +2043,9 @@ impl Window {
             .filter(|visible_uuid| imp.session_stack.child_by_name(visible_uuid).is_some())
             .unwrap_or(session_uuid);
         imp.session_stack.set_visible_child_name(visible_after_rebuild);
-        session::schedule_initial_paned_ratios(&content, &session_state.layout);
+        if !session_state.is_zoomed() {
+            session::schedule_initial_paned_ratios(&content, &session_state.layout);
+        }
 
         self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
         self.sync_sidebar_to_visible_session();
@@ -2373,6 +2419,34 @@ impl Window {
         }
     }
 
+    fn toggle_pane_zoom(&self) {
+        let Some(session_uuid) =
+            self.imp().session_stack.visible_child_name().map(|n| n.to_string())
+        else {
+            return;
+        };
+        let session_state = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) = state.sessions.iter_mut().find(|s| s.uuid == session_uuid) else {
+                return;
+            };
+            if session.is_zoomed() {
+                session.zoomed_terminal_uuid = None;
+            } else {
+                let Some(focused) = self.focused_terminal_uuid() else {
+                    return;
+                };
+                if session.layout.terminal_count() < 2 {
+                    return;
+                }
+                session.zoomed_terminal_uuid = Some(focused);
+            }
+            session.clone()
+        };
+        self.rebuild_session_content(&session_uuid, &session_state);
+        self.focus_session_terminal(&session_uuid);
+    }
+
     fn mark_session_activity(&self, terminal_uuid: &str) {
         let imp = self.imp();
         let visible_session = imp.session_stack.visible_child_name();
@@ -2662,6 +2736,7 @@ mod tests {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2673,6 +2748,7 @@ mod tests {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 },
             ],
             ..WindowState::default()
@@ -2718,6 +2794,7 @@ mod tests {
                 mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
+                zoomed_terminal_uuid: None,
             }],
             ..WindowState::default()
         };
@@ -2756,6 +2833,7 @@ mod tests {
                 mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
+                zoomed_terminal_uuid: None,
             }],
             ..WindowState::default()
         };
@@ -2782,6 +2860,7 @@ mod tests {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2798,6 +2877,7 @@ mod tests {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 },
             ],
             ..WindowState::default()
@@ -3378,6 +3458,7 @@ mod tests {
                 mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
+                zoomed_terminal_uuid: None,
             }],
             ..WindowState::default()
         };
@@ -5578,6 +5659,7 @@ mod tests {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 },
                 SessionState {
                     uuid: second_uuid.clone(),
@@ -5589,6 +5671,7 @@ mod tests {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 },
             ],
             ..WindowState::default()

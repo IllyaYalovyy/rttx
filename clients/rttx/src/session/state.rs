@@ -111,6 +111,8 @@ pub struct SessionState {
     pub runtime: WorkspaceRuntime,
     #[serde(default)]
     pub color: SessionColor,
+    #[serde(default)]
+    pub zoomed_terminal_uuid: Option<String>,
 }
 
 impl SessionState {
@@ -142,6 +144,7 @@ impl SessionState {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         }
     }
 
@@ -187,6 +190,7 @@ impl SessionState {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         }
     }
 }
@@ -195,6 +199,11 @@ impl SessionState {
     #[must_use]
     pub const fn uses_managed_runtime(&self) -> bool {
         self.runtime.is_managed() || self.mode.is_persistent()
+    }
+
+    #[must_use]
+    pub const fn is_zoomed(&self) -> bool {
+        self.zoomed_terminal_uuid.is_some()
     }
 
     pub fn normalize_runtime_metadata(&mut self) {
@@ -371,6 +380,7 @@ mod tests {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -629,6 +639,7 @@ mod tests {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         };
         session.layout = session.layout.remove_terminal("t2").unwrap();
         session.prune_recovery();
@@ -649,6 +660,7 @@ mod tests {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         };
         session.normalize_active_terminal();
         assert_eq!(session.active_terminal_uuid.as_deref(), Some("t1"));
@@ -681,10 +693,35 @@ mod tests {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
         assert_eq!(session, restored);
+    }
+
+    #[test]
+    fn zoom_state_defaults_to_none_for_backward_compat() {
+        let json = r#"{"uuid":"s1","name":"W","layout":{"Terminal":{"uuid":"t1"}}}"#;
+        let session: SessionState = serde_json::from_str(json).unwrap();
+        assert!(session.zoomed_terminal_uuid.is_none());
+    }
+
+    #[test]
+    fn zoom_state_roundtrips_through_serde() {
+        let mut session = SessionState::default_for_test();
+        session.zoomed_terminal_uuid = Some("test-terminal-uuid".to_string());
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.zoomed_terminal_uuid.as_deref(), Some("test-terminal-uuid"));
+    }
+
+    #[test]
+    fn is_zoomed_reflects_zoom_state() {
+        let mut session = SessionState::default_for_test();
+        assert!(!session.is_zoomed());
+        session.zoomed_terminal_uuid = Some("test-terminal-uuid".to_string());
+        assert!(session.is_zoomed());
     }
 }
 
