@@ -754,3 +754,20 @@ fn connection_icon_distinguishes_local_from_remote() {
     assert_eq!(disconnected.css_class, "warning");
     assert_ne!(connected.icon_name, disconnected.icon_name);
 }
+
+/// Contract: ConnectionPresentation contains only header_label and input_enabled.
+///
+/// The banner fields were removed in #305. The pane header status label and
+/// input gating are the only remaining presentation concerns.
+#[test]
+fn connection_presentation_has_no_banner_fields() {
+    use rttx::runtime::{ConnectionStatus, present_connection_status};
+
+    let p = present_connection_status(&ConnectionStatus::Disconnected);
+    assert_eq!(p.header_label, "Disconnected");
+    assert!(!p.input_enabled);
+
+    let p = present_connection_status(&ConnectionStatus::Connected);
+    assert_eq!(p.header_label, "Connected");
+    assert!(p.input_enabled);
+}
