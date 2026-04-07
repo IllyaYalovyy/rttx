@@ -4,7 +4,9 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::color_scheme;
-use crate::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
+use crate::preferences::{
+    self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode,
+};
 
 /// Build and present the preferences window.
 pub fn show(parent: &impl IsA<gtk4::Window>) {
@@ -133,12 +135,26 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     session_group.add(&folder_mode_row);
     session_group.add(&custom_folder_row);
 
+    let keyboard_group = adw::PreferencesGroup::new();
+    keyboard_group.set_title("Keyboard");
+
+    let nav_keys_row = adw::ComboRow::builder().title("Pane navigation keys").build();
+    let nav_keys_names = ["Alt + Arrow", "Ctrl + Shift + Arrow"];
+    let nav_keys_model = gtk4::StringList::new(&nav_keys_names);
+    nav_keys_row.set_model(Some(&nav_keys_model));
+    nav_keys_row.set_selected(match prefs.pane_navigation_keys {
+        PaneNavigationKeys::AltArrow => 0,
+        PaneNavigationKeys::CtrlShiftArrow => 1,
+    });
+    keyboard_group.add(&nav_keys_row);
+
     let page = adw::PreferencesPage::new();
     page.set_icon_name(Some("preferences-system-symbolic"));
     page.set_title("General");
     page.add(&appearance_group);
     page.add(&terminal_group);
     page.add(&session_group);
+    page.add(&keyboard_group);
     window.add(&page);
 
     let parent_window = parent.as_ref().clone();
@@ -177,6 +193,10 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
                 1 => DefaultSessionFolder::CurrentSession,
                 2 => DefaultSessionFolder::Custom(custom_folder_row.text().to_string()),
                 _ => DefaultSessionFolder::Home,
+            },
+            pane_navigation_keys: match nav_keys_row.selected() {
+                1 => PaneNavigationKeys::CtrlShiftArrow,
+                _ => PaneNavigationKeys::AltArrow,
             },
         };
         if let Err(e) = preferences::save(&new_prefs) {

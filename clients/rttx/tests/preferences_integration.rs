@@ -1,5 +1,7 @@
 /// Integration tests for preferences persistence.
-use rttx::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
+use rttx::preferences::{
+    self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -28,6 +30,7 @@ fn preferences_roundtrip_all_fields() {
         visual_bell: true,
         smart_clipboard: true,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
+        pane_navigation_keys: PaneNavigationKeys::AltArrow,
     };
 
     preferences::save_to(&prefs, &path).unwrap();
@@ -181,4 +184,23 @@ fn custom_title_backward_compat_null() {
     if let rttx::session::LayoutNode::Terminal { custom_title, .. } = &state.sessions[0].layout {
         assert_eq!(*custom_title, None);
     }
+}
+
+#[test]
+fn pane_navigation_keys_persists_across_save_load() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+
+    let prefs = Preferences {
+        pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
+        ..Default::default()
+    };
+    preferences::save_to(&prefs, &path).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
+
+    // Verify backward compatibility: old JSON without the field defaults to AltArrow.
+    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
 }

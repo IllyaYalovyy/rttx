@@ -18,8 +18,8 @@ use crate::runtime::{
     workspace_connection_summary,
 };
 use crate::session::{
-    self, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget, SessionColor,
-    SessionState, SplitOrientation, StartupStep, WindowState,
+    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget,
+    SessionColor, SessionState, SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::handle::TerminalHandle;
@@ -557,6 +557,26 @@ impl Window {
             win.show_about_window();
         });
         self.add_action(&about_action);
+
+        // Pane navigation — shortcuts are configurable via preferences.
+        {
+            let nav_keys = crate::preferences::load().pane_navigation_keys;
+            let (left, right, up, down) = nav_keys.accels();
+            let nav_actions: &[(&str, &str, Direction)] = &[
+                ("navigate-left", left, Direction::Left),
+                ("navigate-right", right, Direction::Right),
+                ("navigate-up", up, Direction::Up),
+                ("navigate-down", down, Direction::Down),
+            ];
+            for (name, accel, direction) in nav_actions {
+                let action = gtk4::gio::SimpleAction::new(name, None);
+                let win = self.clone();
+                let dir = *direction;
+                action.connect_activate(move |_, _| win.navigate_focused(dir));
+                self.add_action(&action);
+                app.set_accels_for_action(&format!("win.{name}"), &[accel]);
+            }
+        }
 
         for number in 1_u8..=9 {
             let action_name = format!("switch-to-session-{number}");
@@ -2249,6 +2269,20 @@ impl Window {
 
     pub(crate) fn reapply_terminal_preferences(&self) {
         let prefs = preferences::load();
+
+        // Update pane navigation shortcuts in case the keybinding changed.
+        if let Some(app) = self.application().and_downcast::<adw::Application>() {
+            let (left, right, up, down) = prefs.pane_navigation_keys.accels();
+            for (name, accel) in [
+                ("navigate-left", left),
+                ("navigate-right", right),
+                ("navigate-up", up),
+                ("navigate-down", down),
+            ] {
+                app.set_accels_for_action(&format!("win.{name}"), &[accel]);
+            }
+        }
+
         let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
         let is_dark = adw::StyleManager::default().is_dark();
         let effective_name = prefs.effective_color_scheme_name(is_dark);
@@ -2356,6 +2390,28 @@ impl Window {
     fn split_focused(&self, orientation: SplitOrientation) {
         if let Some(uuid) = self.focused_terminal_uuid() {
             self.split_terminal(&uuid, orientation);
+        }
+    }
+
+    fn navigate_focused(&self, direction: Direction) {
+        let Some(current_uuid) = self.focused_terminal_uuid() else { return };
+        let adjacent_uuid = {
+            let state = self.imp().state.borrow();
+            state
+                .sessions
+                .iter()
+                .find(|s| s.layout.contains_terminal(&current_uuid))
+                .and_then(|s| s.layout.find_adjacent(&current_uuid, direction))
+        };
+        if let Some(target_uuid) = adjacent_uuid
+            && let Some(terminal) = self.terminal_handle(&target_uuid)
+        {
+            let win = self.clone();
+            glib::idle_add_local_once(move || {
+                if terminal.grab_focus() {
+                    win.set_focused_terminal(Some(&target_uuid));
+                }
+            });
         }
     }
 

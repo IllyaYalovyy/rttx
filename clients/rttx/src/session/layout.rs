@@ -45,6 +45,14 @@ pub enum SplitOrientation {
     Vertical,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 impl LayoutNode {
     #[must_use]
     pub fn new_terminal() -> Self {
@@ -368,12 +376,90 @@ impl LayoutNode {
             }
         }
     }
+
+    /// Return the UUID of the terminal adjacent to `target_uuid` in `direction`.
+    ///
+    /// Navigation walks up from the target to find the nearest split whose
+    /// orientation matches the direction, crosses to the sibling subtree, then
+    /// descends to the nearest terminal on the edge closest to the origin.
+    #[must_use]
+    pub fn find_adjacent(&self, target_uuid: &str, direction: Direction) -> Option<String> {
+        self.find_adjacent_inner(target_uuid, direction).0
+    }
+
+    /// Returns `(adjacent_uuid, target_is_in_this_subtree)`.
+    fn find_adjacent_inner(
+        &self,
+        target_uuid: &str,
+        direction: Direction,
+    ) -> (Option<String>, bool) {
+        match self {
+            Self::Terminal { uuid, .. } => (None, uuid == target_uuid),
+            Self::Split { orientation, first, second, .. } => {
+                // Recurse into children first — inner splits get priority.
+                let (found, in_first) = first.find_adjacent_inner(target_uuid, direction);
+                if found.is_some() {
+                    return (found, true);
+                }
+                let (found, in_second) = second.find_adjacent_inner(target_uuid, direction);
+                if found.is_some() {
+                    return (found, true);
+                }
+
+                if !in_first && !in_second {
+                    return (None, false);
+                }
+
+                let matches_axis = matches!(
+                    (orientation, direction),
+                    (SplitOrientation::Horizontal, Direction::Left | Direction::Right)
+                        | (SplitOrientation::Vertical, Direction::Up | Direction::Down)
+                );
+                if !matches_axis {
+                    return (None, true);
+                }
+
+                let toward_first = matches!(direction, Direction::Left | Direction::Up);
+                let adjacent = if toward_first && in_second {
+                    Some(first.edge_terminal(direction))
+                } else if !toward_first && in_first {
+                    Some(second.edge_terminal(direction))
+                } else {
+                    None
+                };
+                (adjacent, true)
+            }
+        }
+    }
+
+    /// Return the terminal UUID at the edge of this subtree closest to `direction`.
+    ///
+    /// When navigating left, we want the rightmost terminal in the sibling subtree
+    /// (the one closest to the boundary we crossed). When navigating right, we want
+    /// the leftmost terminal.
+    fn edge_terminal(&self, direction: Direction) -> String {
+        match self {
+            Self::Terminal { uuid, .. } => uuid.clone(),
+            Self::Split { orientation, first, second, .. } => {
+                let pick_first = !matches!(
+                    (orientation, direction),
+                    (SplitOrientation::Horizontal, Direction::Left)
+                        | (SplitOrientation::Vertical, Direction::Up)
+                );
+                if pick_first {
+                    first.edge_terminal(direction)
+                } else {
+                    second.edge_terminal(direction)
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{hsplit, split_ratio, term};
+    use crate::test_helpers::{hsplit, split_ratio, term, vsplit};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
@@ -829,6 +915,95 @@ mod tests {
         assert_eq!(layout.terminal_cwd("t2").as_deref(), Some("/tmp"));
         assert_eq!(layout.terminal_custom_title("t2").as_deref(), Some("build"));
     }
+
+    // ── Directional navigation ──────────────────────────────────
+
+    #[test]
+    fn navigate_right_in_horizontal_split() {
+        let layout = hsplit(term("t1"), term("t2"));
+        assert_eq!(layout.find_adjacent("t1", Direction::Right).as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn navigate_left_in_horizontal_split() {
+        let layout = hsplit(term("t1"), term("t2"));
+        assert_eq!(layout.find_adjacent("t2", Direction::Left).as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn navigate_down_in_vertical_split() {
+        let layout = vsplit(term("t1"), term("t2"));
+        assert_eq!(layout.find_adjacent("t1", Direction::Down).as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn navigate_up_in_vertical_split() {
+        let layout = vsplit(term("t1"), term("t2"));
+        assert_eq!(layout.find_adjacent("t2", Direction::Up).as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn navigate_returns_none_at_boundary() {
+        let layout = hsplit(term("t1"), term("t2"));
+        assert!(layout.find_adjacent("t1", Direction::Left).is_none());
+        assert!(layout.find_adjacent("t2", Direction::Right).is_none());
+        assert!(layout.find_adjacent("t1", Direction::Up).is_none());
+        assert!(layout.find_adjacent("t1", Direction::Down).is_none());
+    }
+
+    #[test]
+    fn navigate_single_terminal_returns_none() {
+        let layout = term("t1");
+        assert!(layout.find_adjacent("t1", Direction::Right).is_none());
+    }
+
+    #[test]
+    fn navigate_nonexistent_terminal_returns_none() {
+        let layout = hsplit(term("t1"), term("t2"));
+        assert!(layout.find_adjacent("missing", Direction::Right).is_none());
+    }
+
+    #[test]
+    fn navigate_across_nested_splits() {
+        // [t1 | [t2 / t3]]  (horizontal outer, vertical inner)
+        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        // Right from t1 → enters the vertical split, picks topmost = t2
+        assert_eq!(layout.find_adjacent("t1", Direction::Right).as_deref(), Some("t2"));
+        // Left from t2 → crosses to t1
+        assert_eq!(layout.find_adjacent("t2", Direction::Left).as_deref(), Some("t1"));
+        // Left from t3 → crosses to t1
+        assert_eq!(layout.find_adjacent("t3", Direction::Left).as_deref(), Some("t1"));
+        // Down from t2 → t3 (within the vertical split)
+        assert_eq!(layout.find_adjacent("t2", Direction::Down).as_deref(), Some("t3"));
+        // Up from t3 → t2
+        assert_eq!(layout.find_adjacent("t3", Direction::Up).as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn navigate_picks_nearest_edge_terminal() {
+        // [[t1 / t2] | [t3 / t4]]  (horizontal outer, vertical inners)
+        let layout = hsplit(vsplit(term("t1"), term("t2")), vsplit(term("t3"), term("t4")));
+        // Right from t1 → enters right vsplit, cross-axis picks first = t3
+        assert_eq!(layout.find_adjacent("t1", Direction::Right).as_deref(), Some("t3"));
+        // Right from t2 → enters right vsplit, cross-axis picks first = t3
+        assert_eq!(layout.find_adjacent("t2", Direction::Right).as_deref(), Some("t3"));
+        // Left from t3 → enters left vsplit, cross-axis picks first = t1
+        assert_eq!(layout.find_adjacent("t3", Direction::Left).as_deref(), Some("t1"));
+        // Left from t4 → enters left vsplit, cross-axis picks first = t1
+        assert_eq!(layout.find_adjacent("t4", Direction::Left).as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn navigate_deeply_nested() {
+        // [t1 | [t2 | [t3 | t4]]]
+        let layout = hsplit(term("t1"), hsplit(term("t2"), hsplit(term("t3"), term("t4"))));
+        assert_eq!(layout.find_adjacent("t1", Direction::Right).as_deref(), Some("t2"));
+        assert_eq!(layout.find_adjacent("t2", Direction::Right).as_deref(), Some("t3"));
+        assert_eq!(layout.find_adjacent("t3", Direction::Right).as_deref(), Some("t4"));
+        assert_eq!(layout.find_adjacent("t4", Direction::Left).as_deref(), Some("t3"));
+        assert_eq!(layout.find_adjacent("t3", Direction::Left).as_deref(), Some("t2"));
+        assert_eq!(layout.find_adjacent("t2", Direction::Left).as_deref(), Some("t1"));
+    }
 }
 
 #[cfg(test)]
@@ -942,6 +1117,18 @@ pub mod proptests {
             {
                 let restored = restored_layout.terminal_uuids();
                 prop_assert_eq!(original_uuids, restored, "Split+remove must restore original UUID set");
+            }
+        }
+
+        #[test]
+        fn find_adjacent_returns_valid_terminal(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            let target = &uuids[0];
+            for dir in [Direction::Left, Direction::Right, Direction::Up, Direction::Down] {
+                if let Some(adj) = layout.find_adjacent(target, dir) {
+                    prop_assert!(uuids.contains(&adj), "Adjacent UUID must exist in layout");
+                    prop_assert_ne!(&adj, target, "Adjacent must differ from target");
+                }
             }
         }
     }
