@@ -1,5 +1,7 @@
 /// Integration tests for preferences persistence.
-use rttx::preferences::{self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode};
+use rttx::preferences::{
+    self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode,
+};
 use tempfile::TempDir;
 
 #[test]
