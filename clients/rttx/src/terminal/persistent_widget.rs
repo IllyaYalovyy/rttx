@@ -652,9 +652,10 @@ mod tests {
 
         let pane = PersistentPaneView::new("pane-1", "runtime-1");
 
-        let reconnecting = present_connection_status(
-            &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
-        );
+        let reconnecting = present_connection_status(&ConnectionStatus::Reconnecting {
+            attempt: 2,
+            retry_in_secs: 4,
+        });
         pane.set_connection_presentation(
             &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
             &reconnecting,
@@ -662,14 +663,12 @@ mod tests {
         assert_eq!(pane.status_label_text_for_test(), "Retry 4s");
         assert!(!pane.input_enabled_for_test());
 
-        let connected =
-            present_connection_status(&ConnectionStatus::Connected);
+        let connected = present_connection_status(&ConnectionStatus::Connected);
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
         assert!(pane.input_enabled_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Connected");
 
-        let recovered =
-            present_connection_status(&ConnectionStatus::Recovered);
+        let recovered = present_connection_status(&ConnectionStatus::Recovered);
         pane.set_connection_presentation(&ConnectionStatus::Recovered, &recovered);
         assert_eq!(pane.status_label_text_for_test(), "Connected");
     }
@@ -844,8 +843,7 @@ mod tests {
             gtk4::gdk::Display::default().expect("display should be available for GTK tests");
         display.clipboard().set_text("managed pasted text");
         pane.feed_output(b"managed copied text\r\n");
-        let connected =
-            present_connection_status(&ConnectionStatus::Connected);
+        let connected = present_connection_status(&ConnectionStatus::Connected);
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
 
         let forwarded = Rc::new(RefCell::new(Vec::new()));
@@ -909,8 +907,7 @@ mod tests {
             gtk4::gdk::Display::default().expect("display should be available for GTK tests");
         display.clipboard().set_text("window action paste");
 
-        let connected =
-            present_connection_status(&ConnectionStatus::Connected);
+        let connected = present_connection_status(&ConnectionStatus::Connected);
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
 
         let forwarded = Rc::new(RefCell::new(Vec::new()));

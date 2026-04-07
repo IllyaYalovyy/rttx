@@ -567,34 +567,31 @@ mod tests {
 
     #[test]
     fn connection_presentation_header_and_input_for_connected_states() {
-        let connected =
-            present_connection_status(&ConnectionStatus::Connected);
+        let connected = present_connection_status(&ConnectionStatus::Connected);
         assert_eq!(connected.header_label, "Connected");
         assert!(connected.input_enabled);
 
-        let recovered =
-            present_connection_status(&ConnectionStatus::Recovered);
+        let recovered = present_connection_status(&ConnectionStatus::Recovered);
         assert_eq!(recovered.header_label, "Connected");
         assert!(recovered.input_enabled);
     }
 
     #[test]
     fn connection_presentation_disables_input_for_disconnected_states() {
-        let reconnecting = present_connection_status(
-            &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
-        );
+        let reconnecting = present_connection_status(&ConnectionStatus::Reconnecting {
+            attempt: 2,
+            retry_in_secs: 4,
+        });
         assert_eq!(reconnecting.header_label, "Retry 4s");
         assert!(!reconnecting.input_enabled);
 
-        let blocked = present_connection_status(
-            &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
-        );
+        let blocked = present_connection_status(&ConnectionStatus::Blocked(
+            ConnectionProblem::PermissionDenied,
+        ));
         assert_eq!(blocked.header_label, "Action Required");
         assert!(!blocked.input_enabled);
 
-        let disconnected = present_connection_status(
-            &ConnectionStatus::Disconnected,
-        );
+        let disconnected = present_connection_status(&ConnectionStatus::Disconnected);
         assert_eq!(disconnected.header_label, "Disconnected");
         assert!(!disconnected.input_enabled);
     }
