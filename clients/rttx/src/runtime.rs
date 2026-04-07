@@ -551,6 +551,20 @@ mod tests {
         );
     }
 
+    /// `ERR_PANE_NOT_FOUND` (code 6) classifies as non-transient `UserActionRequired`.
+    ///
+    /// The `daemon_bridge` handles this specially for `ClosePane` by emitting
+    /// `PaneClosed` instead of blocking the workspace (see #309).
+    #[test]
+    fn classify_pane_not_found_is_non_transient_user_action() {
+        let problem = classify_connection_problem(&DaemonError::ServerError {
+            code: 6,
+            message: "pane not found".into(),
+        });
+        assert!(!problem.is_transient());
+        assert_eq!(problem, ConnectionProblem::UserActionRequired("pane not found".into()));
+    }
+
     #[test]
     fn connection_state_machine_distinguishes_retryable_and_blocked_failures() {
         let reconnecting = advance_connection_status(

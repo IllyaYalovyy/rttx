@@ -365,3 +365,43 @@ async fn attach_and_create_pane(client: &mut TestClient, session_id: &[u8]) -> V
         other => panic!("expected PaneCreated, got {other:?}"),
     }
 }
+
+/// Closing an already-closed pane must return `ERR_PANE_NOT_FOUND` (code 6).
+///
+/// Regression test for #309: the client must recognise code 6 on `ClosePane`
+/// and treat it as a successful close instead of blocking the workspace.
+#[test]
+fn close_already_closed_pane_returns_pane_not_found() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let (socket_path, _handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&socket_path).await;
+        client.handshake().await;
+
+        let session_id =
+            create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+        attach_session(&mut client, &session_id).await;
+        let pane_id = create_pane(&mut client, &session_id).await;
+
+        // First close succeeds.
+        let close_msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+                session_id: session_id.clone(),
+                pane_id: pane_id.clone(),
+            })),
+        };
+        client.send(&close_msg).await;
+        let resp = client.recv_or_timeout().await;
+        match resp.msg {
+            Some(proto::server_message::Msg::PaneClosed(_)) => {}
+            other => panic!("expected PaneClosed on first close, got {other:?}"),
+        }
+
+        // Second close must return ERR_PANE_NOT_FOUND (code 6).
+        client.send(&close_msg).await;
+        let resp = client.recv_or_timeout().await;
+        let err = expect_error(&resp);
+        assert_eq!(err.code, 6, "expected ERR_PANE_NOT_FOUND (6), got code {}", err.code);
+    });
+}
