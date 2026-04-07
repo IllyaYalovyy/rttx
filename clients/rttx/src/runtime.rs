@@ -289,16 +289,10 @@ pub fn advance_connection_status(
     }
 }
 
-/// UI-facing connection banner configuration.
+/// UI-facing connection state for pane headers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionPresentation {
     pub header_label: String,
-    pub banner_title: String,
-    pub banner_body: String,
-    pub banner_visible: bool,
-    pub show_retry: bool,
-    pub show_close: bool,
-    pub show_edit_connection: bool,
     pub input_enabled: bool,
 }
 
@@ -358,53 +352,11 @@ pub fn present_workspace_actions(
     }
 }
 
-/// Render a connection state into user-facing copy and control visibility.
+/// Render a connection state into pane header label and input availability.
 #[must_use]
-pub fn present_connection_status(
-    endpoint: &RuntimeEndpoint,
-    status: &ConnectionStatus,
-) -> ConnectionPresentation {
-    let endpoint_label = match endpoint {
-        RuntimeEndpoint::Local => "local daemon".to_string(),
-        RuntimeEndpoint::Remote { host } => host.clone(),
-    };
-    let show_edit_connection = matches!(endpoint, RuntimeEndpoint::Remote { .. })
-        && matches!(status, ConnectionStatus::Blocked(_));
-
-    let (banner_title, banner_body, banner_visible, show_retry, show_close) = match status {
-        ConnectionStatus::Starting
-        | ConnectionStatus::Connecting
-        | ConnectionStatus::Connected
-        | ConnectionStatus::Recovered => (String::new(), String::new(), false, false, false),
-        ConnectionStatus::Reconnecting { attempt, retry_in_secs } => (
-            format!("Reconnecting in {retry_in_secs}s"),
-            format!(
-                "The runtime connection dropped. rttx will retry automatically (attempt {attempt})."
-            ),
-            true,
-            true,
-            true,
-        ),
-        ConnectionStatus::Blocked(problem) => {
-            (format!("Action required for {endpoint_label}"), problem.label(), true, true, true)
-        }
-        ConnectionStatus::Disconnected => (
-            format!("Disconnected from {endpoint_label}"),
-            "The runtime is unavailable right now.".into(),
-            true,
-            true,
-            true,
-        ),
-    };
-
+pub fn present_connection_status(status: &ConnectionStatus) -> ConnectionPresentation {
     ConnectionPresentation {
         header_label: status.short_label(),
-        banner_title,
-        banner_body,
-        banner_visible,
-        show_retry,
-        show_close,
-        show_edit_connection,
         input_enabled: status.accepts_input(),
     }
 }
@@ -614,53 +566,37 @@ mod tests {
     }
 
     #[test]
-    fn connection_presentation_hides_banner_for_compact_states() {
-        let presentation =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
-        assert!(!presentation.banner_visible);
-        assert!(presentation.input_enabled);
-        assert!(!presentation.show_retry);
+    fn connection_presentation_header_and_input_for_connected_states() {
+        let connected =
+            present_connection_status(&ConnectionStatus::Connected);
+        assert_eq!(connected.header_label, "Connected");
+        assert!(connected.input_enabled);
 
         let recovered =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered);
-        assert!(!recovered.banner_visible);
+            present_connection_status(&ConnectionStatus::Recovered);
         assert_eq!(recovered.header_label, "Connected");
-
-        let connecting =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connecting);
-        assert!(!connecting.banner_visible);
+        assert!(recovered.input_enabled);
     }
 
     #[test]
-    fn connection_presentation_for_reconnecting_remote_shows_countdown_and_controls() {
-        let presentation = present_connection_status(
-            &RuntimeEndpoint::Remote { host: "builder.example".into() },
+    fn connection_presentation_disables_input_for_disconnected_states() {
+        let reconnecting = present_connection_status(
             &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
         );
+        assert_eq!(reconnecting.header_label, "Retry 4s");
+        assert!(!reconnecting.input_enabled);
 
-        assert_eq!(presentation.header_label, "Retry 4s");
-        assert_eq!(presentation.banner_title, "Reconnecting in 4s");
-        assert!(presentation.banner_body.contains("attempt 2"));
-        assert!(presentation.banner_visible);
-        assert!(presentation.show_retry);
-        assert!(presentation.show_close);
-        assert!(!presentation.show_edit_connection);
-        assert!(!presentation.input_enabled);
-    }
-
-    #[test]
-    fn connection_presentation_for_blocked_remote_allows_editing() {
-        let presentation = present_connection_status(
-            &RuntimeEndpoint::Remote { host: "builder.example".into() },
+        let blocked = present_connection_status(
             &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
         );
+        assert_eq!(blocked.header_label, "Action Required");
+        assert!(!blocked.input_enabled);
 
-        assert!(presentation.banner_visible);
-        assert!(presentation.show_retry);
-        assert!(presentation.show_close);
-        assert!(presentation.show_edit_connection);
-        assert!(!presentation.input_enabled);
-        assert!(presentation.banner_body.contains("Permission denied"));
+        let disconnected = present_connection_status(
+            &ConnectionStatus::Disconnected,
+        );
+        assert_eq!(disconnected.header_label, "Disconnected");
+        assert!(!disconnected.input_enabled);
     }
 
     #[test]

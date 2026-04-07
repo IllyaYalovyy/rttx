@@ -36,9 +36,6 @@ mod imp {
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
         pub header: gtk4::Box,
-        pub connection_banner: gtk4::Box,
-        pub connection_title_label: gtk4::Label,
-        pub connection_body_label: gtk4::Label,
         pub title_label: gtk4::Label,
         pub close_button: gtk4::Button,
         pub split_h_button: gtk4::Button,
@@ -63,9 +60,6 @@ mod imp {
                 vte: vte4::Terminal::new(),
                 terminal_scroller: gtk4::ScrolledWindow::new(),
                 header: gtk4::Box::default(),
-                connection_banner: gtk4::Box::default(),
-                connection_title_label: gtk4::Label::default(),
-                connection_body_label: gtk4::Label::default(),
                 title_label: gtk4::Label::default(),
                 close_button: gtk4::Button::default(),
                 split_h_button: gtk4::Button::default(),
@@ -155,26 +149,6 @@ mod imp {
             self.terminal_scroller.set_child(Some(&self.vte));
 
             obj.append(&self.header);
-            self.connection_banner.set_orientation(gtk4::Orientation::Vertical);
-            self.connection_banner.set_spacing(6);
-            self.connection_banner.set_margin_start(8);
-            self.connection_banner.set_margin_end(8);
-            self.connection_banner.set_margin_top(6);
-            self.connection_banner.set_margin_bottom(6);
-            self.connection_banner.add_css_class("toolbar");
-            self.connection_banner.set_visible(false);
-
-            self.connection_title_label.set_xalign(0.0);
-            self.connection_title_label.add_css_class("heading");
-
-            self.connection_body_label.set_xalign(0.0);
-            self.connection_body_label.set_wrap(true);
-            self.connection_body_label.add_css_class("dim-label");
-
-            self.connection_banner.append(&self.connection_title_label);
-            self.connection_banner.append(&self.connection_body_label);
-
-            obj.append(&self.connection_banner);
             obj.append(&self.search_bar);
             obj.append(&self.terminal_scroller);
 
@@ -390,7 +364,7 @@ impl PersistentPaneView {
         self.imp().status_label.set_tooltip_text(Some(&status.label()));
     }
 
-    /// Render the inline connection banner and update input availability.
+    /// Update the pane header status label and input availability.
     pub fn set_connection_presentation(
         &self,
         status: &ConnectionStatus,
@@ -401,9 +375,6 @@ impl PersistentPaneView {
             .set(matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered));
         self.imp().status_label.set_label(&presentation.header_label);
         self.imp().status_label.set_tooltip_text(Some(&status.label()));
-        self.imp().connection_title_label.set_label(&presentation.banner_title);
-        self.imp().connection_body_label.set_label(&presentation.banner_body);
-        self.imp().connection_banner.set_visible(presentation.banner_visible);
         self.imp().accepts_input.set(presentation.input_enabled);
     }
 
@@ -610,12 +581,6 @@ impl PersistentPaneView {
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn connection_banner_visible_for_test(&self) -> bool {
-        self.imp().connection_banner.is_visible()
-    }
-
-    #[cfg(test)]
-    #[must_use]
     pub(crate) fn input_enabled_for_test(&self) -> bool {
         self.imp().accepts_input.get()
     }
@@ -624,12 +589,6 @@ impl PersistentPaneView {
     #[must_use]
     pub(crate) fn status_label_text_for_test(&self) -> String {
         self.imp().status_label.label().to_string()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn connection_title_for_test(&self) -> String {
-        self.imp().connection_title_label.label().to_string()
     }
 
     #[cfg(test)]
@@ -651,7 +610,7 @@ impl PersistentPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{ConnectionProblem, RuntimeEndpoint, present_connection_status};
+    use crate::runtime::present_connection_status;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::time::{Duration, Instant};
@@ -688,44 +647,30 @@ mod tests {
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
-    fn connection_presentation_controls_banner_and_input_state() {
+    fn connection_presentation_controls_header_and_input_state() {
         require_display!();
 
         let pane = PersistentPaneView::new("pane-1", "runtime-1");
 
         let reconnecting = present_connection_status(
-            &RuntimeEndpoint::Local,
             &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
         );
         pane.set_connection_presentation(
             &ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 4 },
             &reconnecting,
         );
-
-        assert!(pane.connection_banner_visible_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Retry 4s");
-        assert_eq!(pane.connection_title_for_test(), "Reconnecting in 4s");
         assert!(!pane.input_enabled_for_test());
 
-        let blocked = present_connection_status(
-            &RuntimeEndpoint::Remote { host: "builder.example".into() },
-            &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
-        );
-        pane.set_connection_presentation(
-            &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
-            &blocked,
-        );
-
         let connected =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+            present_connection_status(&ConnectionStatus::Connected);
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
-        assert!(!pane.connection_banner_visible_for_test());
         assert!(pane.input_enabled_for_test());
+        assert_eq!(pane.status_label_text_for_test(), "Connected");
 
         let recovered =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered);
+            present_connection_status(&ConnectionStatus::Recovered);
         pane.set_connection_presentation(&ConnectionStatus::Recovered, &recovered);
-        assert!(!pane.connection_banner_visible_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Connected");
     }
 
@@ -900,7 +845,7 @@ mod tests {
         display.clipboard().set_text("managed pasted text");
         pane.feed_output(b"managed copied text\r\n");
         let connected =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+            present_connection_status(&ConnectionStatus::Connected);
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
 
         let forwarded = Rc::new(RefCell::new(Vec::new()));
@@ -965,7 +910,7 @@ mod tests {
         display.clipboard().set_text("window action paste");
 
         let connected =
-            present_connection_status(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+            present_connection_status(&ConnectionStatus::Connected);
         pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
 
         let forwarded = Rc::new(RefCell::new(Vec::new()));

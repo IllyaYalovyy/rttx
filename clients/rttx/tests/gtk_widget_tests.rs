@@ -1448,7 +1448,6 @@ fn managed_terminal_request_clipboard_paste_delivers_bytes() {
         rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
     let window = present_widget(&managed);
     let connected = rttx::runtime::present_connection_status(
-        &rttx::runtime::RuntimeEndpoint::Local,
         &rttx::runtime::ConnectionStatus::Connected,
     );
     managed.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);

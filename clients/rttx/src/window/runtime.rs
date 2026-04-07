@@ -200,8 +200,7 @@ impl Window {
             .get(&session_state.uuid)
             .cloned()
             .unwrap_or(ConnectionStatus::Connecting);
-        let presentation =
-            self.connection_presentation_for_workspace(&session_state.runtime.endpoint, &status);
+        let presentation = self.connection_presentation_for_workspace(&status);
         pane_view.set_connection_presentation(&status, &presentation);
 
         let win = self.clone();
@@ -513,10 +512,9 @@ impl Window {
 
     pub(super) fn connection_presentation_for_workspace(
         &self,
-        endpoint: &RuntimeEndpoint,
         status: &ConnectionStatus,
     ) -> ConnectionPresentation {
-        present_connection_status(endpoint, status)
+        present_connection_status(status)
     }
 
     pub(super) fn refresh_workspace_row_status(
@@ -557,15 +555,15 @@ impl Window {
         workspace_id: &str,
         status: &ConnectionStatus,
     ) {
-        let (endpoint, terminal_uuids) = {
+        let terminal_uuids = {
             let state = self.imp().state.borrow();
             let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };
-            (session.runtime.endpoint.clone(), session.layout.terminal_uuids())
+            session.layout.terminal_uuids()
         };
-        let presentation = self.connection_presentation_for_workspace(&endpoint, status);
+        let presentation = self.connection_presentation_for_workspace(status);
 
         let panes = self.imp().persistent_terminals.borrow();
         for terminal_uuid in terminal_uuids {
