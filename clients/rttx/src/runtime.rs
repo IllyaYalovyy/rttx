@@ -751,11 +751,9 @@ mod tests {
     #[test]
     fn connection_icon_error_for_remote_blocked() {
         let ep = RuntimeEndpoint::Remote { host: "h".into() };
-        let icon = connection_icon(
-            &ep,
-            &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
-        )
-        .unwrap();
+        let icon =
+            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied))
+                .unwrap();
         assert_eq!(icon.icon_name, "network-offline-symbolic");
         assert_eq!(icon.css_class, "error");
     }
