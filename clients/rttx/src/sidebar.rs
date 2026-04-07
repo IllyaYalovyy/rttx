@@ -33,6 +33,7 @@ mod imp {
         pub name: RefCell<String>,
         pub color_dot: gtk4::Image,
         pub position_label: gtk4::Label,
+        pub connection_icon: gtk4::Image,
         pub activity_dot: gtk4::Image,
         pub close_button: gtk4::Button,
         pub activity_state: Cell<ActivityState>,
@@ -43,6 +44,10 @@ mod imp {
         fn default() -> Self {
             let color_dot = gtk4::Image::from_icon_name("circle-filled-symbolic");
             color_dot.set_pixel_size(10);
+
+            let connection_icon = gtk4::Image::new();
+            connection_icon.set_pixel_size(16);
+            connection_icon.set_visible(false);
 
             let activity_dot = gtk4::Image::from_icon_name("media-record-symbolic");
             activity_dot.set_pixel_size(8);
@@ -57,6 +62,7 @@ mod imp {
                 name: RefCell::new(String::new()),
                 color_dot,
                 position_label,
+                connection_icon,
                 activity_dot,
                 close_button: gtk4::Button::from_icon_name("window-close-symbolic"),
                 activity_state: Cell::new(ActivityState::None),
@@ -85,6 +91,7 @@ mod imp {
 
             obj.add_prefix(&self.color_dot);
             obj.add_prefix(&self.position_label);
+            obj.add_suffix(&self.connection_icon);
             obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.close_button);
         }
@@ -133,6 +140,22 @@ impl SessionRow {
             dot.remove_css_class(cls.css_class());
         }
         dot.add_css_class(color.css_class());
+    }
+
+    pub fn set_connection_icon(&self, icon: Option<&crate::runtime::ConnectionIcon>) {
+        const ICON_CSS_CLASSES: &[&str] = &["accent", "dim-label", "warning", "error"];
+        let widget = &self.imp().connection_icon;
+        for cls in ICON_CSS_CLASSES {
+            widget.remove_css_class(cls);
+        }
+        match icon {
+            Some(icon) => {
+                widget.set_icon_name(Some(icon.icon_name));
+                widget.add_css_class(icon.css_class);
+                widget.set_visible(true);
+            }
+            None => widget.set_visible(false),
+        }
     }
 
     fn set_activity_state_internal(&self, state: ActivityState) {
@@ -289,6 +312,57 @@ mod tests {
 
         row.set_subtitle("1 pane");
         assert_eq!(row.subtitle().unwrap().as_str(), "1 pane");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn connection_icon_hidden_by_default() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+        assert!(!row.imp().connection_icon.is_visible());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn connection_icon_shows_and_hides() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+
+        let icon = crate::runtime::ConnectionIcon {
+            icon_name: "network-server-symbolic",
+            css_class: "accent",
+        };
+        row.set_connection_icon(Some(&icon));
+        assert!(row.imp().connection_icon.is_visible());
+        assert_eq!(row.imp().connection_icon.icon_name().unwrap(), "network-server-symbolic");
+        assert!(row.imp().connection_icon.has_css_class("accent"));
+
+        row.set_connection_icon(None);
+        assert!(!row.imp().connection_icon.is_visible());
+        assert!(!row.imp().connection_icon.has_css_class("accent"));
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn connection_icon_switches_css_class() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+
+        let connected = crate::runtime::ConnectionIcon {
+            icon_name: "network-server-symbolic",
+            css_class: "accent",
+        };
+        row.set_connection_icon(Some(&connected));
+        assert!(row.imp().connection_icon.has_css_class("accent"));
+
+        let disconnected = crate::runtime::ConnectionIcon {
+            icon_name: "network-offline-symbolic",
+            css_class: "warning",
+        };
+        row.set_connection_icon(Some(&disconnected));
+        assert!(!row.imp().connection_icon.has_css_class("accent"));
+        assert!(row.imp().connection_icon.has_css_class("warning"));
+        assert_eq!(row.imp().connection_icon.icon_name().unwrap(), "network-offline-symbolic");
     }
 
     #[test]

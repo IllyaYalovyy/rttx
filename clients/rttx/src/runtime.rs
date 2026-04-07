@@ -409,7 +409,33 @@ pub fn present_connection_status(
     }
 }
 
-/// Render a compact workspace-row summary for connection state.
+/// Icon and CSS class for the sidebar connection status indicator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionIcon {
+    pub icon_name: &'static str,
+    pub css_class: &'static str,
+}
+
+/// Returns the connection icon for a workspace row, or `None` for local endpoints.
+#[must_use]
+pub const fn connection_icon(
+    endpoint: &RuntimeEndpoint,
+    status: &ConnectionStatus,
+) -> Option<ConnectionIcon> {
+    if matches!(endpoint, RuntimeEndpoint::Local) {
+        return None;
+    }
+    let (icon_name, css_class) = match status {
+        ConnectionStatus::Connected | ConnectionStatus::Recovered => {
+            ("network-server-symbolic", "accent")
+        }
+        ConnectionStatus::Disconnected => ("network-offline-symbolic", "warning"),
+        ConnectionStatus::Blocked(_) => ("network-offline-symbolic", "error"),
+        _ => ("network-server-symbolic", "dim-label"),
+    };
+    Some(ConnectionIcon { icon_name, css_class })
+}
+
 #[must_use]
 pub fn workspace_connection_summary(
     endpoint: &RuntimeEndpoint,
@@ -682,6 +708,62 @@ mod tests {
         assert!(workspace_connection_summary(&ep, &status, 1).ends_with("1 pane"));
         assert!(workspace_connection_summary(&ep, &status, 2).ends_with("2 panes"));
         assert!(workspace_connection_summary(&ep, &status, 10).ends_with("10 panes"));
+    }
+
+    #[test]
+    fn connection_icon_none_for_local() {
+        assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
+        assert!(
+            connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected).is_none()
+        );
+    }
+
+    #[test]
+    fn connection_icon_accent_for_remote_connected() {
+        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        let icon = connection_icon(&ep, &ConnectionStatus::Connected).unwrap();
+        assert_eq!(icon.icon_name, "network-server-symbolic");
+        assert_eq!(icon.css_class, "accent");
+    }
+
+    #[test]
+    fn connection_icon_dim_for_remote_connecting() {
+        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        for status in [
+            ConnectionStatus::Starting,
+            ConnectionStatus::Connecting,
+            ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 5 },
+        ] {
+            let icon = connection_icon(&ep, &status).unwrap();
+            assert_eq!(icon.icon_name, "network-server-symbolic");
+            assert_eq!(icon.css_class, "dim-label");
+        }
+    }
+
+    #[test]
+    fn connection_icon_warning_for_remote_disconnected() {
+        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        let icon = connection_icon(&ep, &ConnectionStatus::Disconnected).unwrap();
+        assert_eq!(icon.icon_name, "network-offline-symbolic");
+        assert_eq!(icon.css_class, "warning");
+    }
+
+    #[test]
+    fn connection_icon_error_for_remote_blocked() {
+        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        let icon =
+            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied))
+                .unwrap();
+        assert_eq!(icon.icon_name, "network-offline-symbolic");
+        assert_eq!(icon.css_class, "error");
+    }
+
+    #[test]
+    fn connection_icon_accent_for_remote_recovered() {
+        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        let icon = connection_icon(&ep, &ConnectionStatus::Recovered).unwrap();
+        assert_eq!(icon.icon_name, "network-server-symbolic");
+        assert_eq!(icon.css_class, "accent");
     }
 
     #[test]

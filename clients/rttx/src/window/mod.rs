@@ -14,7 +14,7 @@ use crate::config;
 use crate::preferences::{self, Preferences};
 use crate::runtime::{
     ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
-    WorkspacePolicy, present_connection_status, present_workspace_actions,
+    WorkspacePolicy, connection_icon, present_connection_status, present_workspace_actions,
     workspace_connection_summary,
 };
 use crate::session::{
