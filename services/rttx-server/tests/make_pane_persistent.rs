@@ -52,6 +52,7 @@ async fn make_pane_persistent_flow() {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
             session_id: session_id.clone(),
             cwd: None,
+            dark_background: None,
         })),
     })
     .await;

@@ -1899,6 +1899,7 @@ impl Window {
                         runtime_id,
                         &new_terminal_uuid,
                         source_cwd,
+                        adw::StyleManager::default().is_dark(),
                     );
                 }
             }

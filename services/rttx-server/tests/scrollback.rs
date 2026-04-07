@@ -31,6 +31,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
             session_id: session_id.clone(),
             cwd: None,
+            dark_background: None,
         })),
     };
     client.send(&create_pane).await;

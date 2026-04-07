@@ -107,3 +107,38 @@ async fn pty_exit_status() {
     let status = pty.wait().await.expect("wait failed");
     assert_eq!(status, 42);
 }
+
+#[test]
+fn pty_propagates_colorfgbg_from_env() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        let config = PtyConfig {
+            command: vec!["/bin/sh".into(), "-c".into(), "echo COLORFGBG=$COLORFGBG".into()],
+            cwd: None,
+            env: vec![("COLORFGBG".into(), "0;15".into())],
+            cols: 80,
+            rows: 24,
+        };
+        let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("failed to spawn PTY");
+
+        let mut output = Vec::new();
+        let mut buf = [0u8; 1024];
+        let needle = b"COLORFGBG=0;15";
+
+        for _ in 0..50 {
+            match pty.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => output.extend_from_slice(&buf[..n]),
+            }
+            if output.windows(needle.len()).any(|w| w == needle) {
+                break;
+            }
+        }
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(
+            text.contains("COLORFGBG=0;15"),
+            "PTY must propagate COLORFGBG from env config, got: {text}"
+        );
+    });
+}

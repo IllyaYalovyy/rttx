@@ -43,6 +43,7 @@ async fn reconnect_restores_scrollback() {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
                 cwd: None,
+                dark_background: None,
             })),
         })
         .await;
@@ -216,6 +217,7 @@ async fn restart_preserves_session_count_and_scrollback() {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
                 cwd: None,
+                dark_background: None,
             })),
         })
         .await;

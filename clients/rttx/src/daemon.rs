@@ -293,11 +293,13 @@ impl DaemonConnection {
         &mut self,
         session_id: Uuid,
         cwd: Option<String>,
+        dark_background: Option<bool>,
     ) -> Result<Uuid, DaemonError> {
         let msg = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: uuid_to_bytes(session_id),
                 cwd,
+                dark_background,
             })),
         };
         self.send(&msg).await?;

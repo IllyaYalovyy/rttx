@@ -128,6 +128,7 @@ async fn read_only_attach_cannot_mutate_runtime() {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
                 cwd: None,
+                dark_background: None,
             })),
         })
         .await;

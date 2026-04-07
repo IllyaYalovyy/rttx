@@ -360,6 +360,7 @@ impl Window {
                     &request.runtime_id,
                     &request.layout_terminal_uuid,
                     request.cwd.clone(),
+                    adw::StyleManager::default().is_dark(),
                 );
             }
         }

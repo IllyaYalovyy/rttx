@@ -32,6 +32,7 @@ async fn list_sessions_includes_runtime_inventory_metadata() {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
                 cwd: None,
+                dark_background: None,
             })),
         })
         .await;
@@ -180,6 +181,7 @@ async fn list_sessions_marks_restored_runtime_and_panes_as_reconstructed() {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id: session_id.clone(),
                     cwd: None,
+                    dark_background: None,
                 })),
             })
             .await;

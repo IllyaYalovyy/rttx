@@ -169,6 +169,7 @@ mod tests {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id: session_id.clone(),
                     cwd: None,
+                    dark_background: None,
                 })),
             },
             proto::ClientMessage {
@@ -369,5 +370,28 @@ mod tests {
         let mut buf = BytesMut::new();
         buf.put_u32_le(MAX_MESSAGE_SIZE + 1);
         assert!(matches!(decode_frame::<proto::Hello>(&mut buf), Err(FrameError::TooLarge(_))));
+    }
+
+    #[test]
+    fn create_pane_dark_background_roundtrip() {
+        let session_id = uuid_to_bytes(uuid::Uuid::new_v4());
+
+        for dark in [Some(true), Some(false), None] {
+            let msg = proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                    session_id: session_id.clone(),
+                    cwd: Some("/tmp".into()),
+                    dark_background: dark,
+                })),
+            };
+            let mut buf = BytesMut::new();
+            encode_frame(&msg, &mut buf).unwrap();
+            let decoded: proto::ClientMessage = decode_frame(&mut buf).unwrap();
+            if let Some(proto::client_message::Msg::CreatePane(cp)) = decoded.msg {
+                assert_eq!(cp.dark_background, dark);
+            } else {
+                panic!("expected CreatePane");
+            }
+        }
     }
 }
