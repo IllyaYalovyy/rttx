@@ -633,11 +633,7 @@ impl Window {
 
     fn append_session_row(&self, session_state: &SessionState) {
         let imp = self.imp();
-        let row = SessionRow::new(
-            &session_state.uuid,
-            &session_state.name,
-            session_state.layout.terminal_count(),
-        );
+        let row = SessionRow::new(&session_state.uuid, &session_state.name);
         row.close_button().set_tooltip_text(Some(if session_state.uses_managed_runtime() {
             "Workspace actions"
         } else {
@@ -2227,12 +2223,31 @@ impl Window {
 
     fn update_sidebar_count(&self, session_uuid: &str, count: usize) {
         let imp = self.imp();
+        let subtitle = {
+            let state = imp.state.borrow();
+            let Some(session) = state.sessions.iter().find(|s| s.uuid == session_uuid) else {
+                return;
+            };
+            if session.uses_managed_runtime() {
+                let status = imp
+                    .workspace_connection_status
+                    .borrow()
+                    .get(session_uuid)
+                    .cloned()
+                    .unwrap_or(ConnectionStatus::Connecting);
+                workspace_connection_summary(&session.runtime.endpoint, &status, count)
+            } else if count == 1 {
+                "1 pane".to_string()
+            } else {
+                format!("{count} panes")
+            }
+        };
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
             if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
                 && session_row.uuid() == session_uuid
             {
-                session_row.update_terminal_count(count);
+                session_row.set_subtitle(&subtitle);
                 return;
             }
             idx += 1;

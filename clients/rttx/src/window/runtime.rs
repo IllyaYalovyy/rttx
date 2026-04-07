@@ -529,7 +529,11 @@ impl Window {
         else {
             return;
         };
-        let summary = workspace_connection_summary(&session.runtime.endpoint, status);
+        let summary = workspace_connection_summary(
+            &session.runtime.endpoint,
+            status,
+            session.layout.terminal_count(),
+        );
         drop(state);
 
         let list = &self.imp().sidebar_list;

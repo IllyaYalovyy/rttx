@@ -414,18 +414,25 @@ pub fn present_connection_status(
 pub fn workspace_connection_summary(
     endpoint: &RuntimeEndpoint,
     status: &ConnectionStatus,
+    pane_count: usize,
 ) -> String {
     let endpoint_label = match endpoint {
         RuntimeEndpoint::Local => "Local".to_string(),
         RuntimeEndpoint::Remote { host } => host.clone(),
     };
 
-    match status {
+    let base = match status {
         ConnectionStatus::Connected => match endpoint {
             RuntimeEndpoint::Local => "Local runtime".into(),
             RuntimeEndpoint::Remote { .. } => endpoint_label,
         },
         _ => format!("{endpoint_label} · {}", status.label()),
+    };
+
+    if pane_count == 1 {
+        format!("{base} · 1 pane")
+    } else {
+        format!("{base} · {pane_count} panes")
     }
 }
 
@@ -631,21 +638,26 @@ mod tests {
     }
 
     #[test]
-    fn workspace_connection_summary_omits_policy_and_keeps_recovery_compact() {
+    fn workspace_connection_summary_includes_pane_count() {
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Connected),
-            "Local runtime"
+            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, 3),
+            "Local runtime · 3 panes"
         );
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered),
-            "Local · Recovered"
+            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, 1),
+            "Local runtime · 1 pane"
+        );
+        assert_eq!(
+            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered, 2),
+            "Local · Recovered · 2 panes"
         );
         assert_eq!(
             workspace_connection_summary(
                 &RuntimeEndpoint::Remote { host: "builder.example".into() },
                 &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
+                1,
             ),
-            "builder.example · Action Required: Permission denied"
+            "builder.example · Action Required: Permission denied · 1 pane"
         );
     }
 
@@ -654,13 +666,22 @@ mod tests {
         let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
 
         assert_eq!(
-            workspace_connection_summary(&endpoint, &ConnectionStatus::Connected),
-            "builder.example"
+            workspace_connection_summary(&endpoint, &ConnectionStatus::Connected, 1),
+            "builder.example · 1 pane"
         );
         assert_eq!(
-            workspace_connection_summary(&endpoint, &ConnectionStatus::Disconnected),
-            "builder.example · Disconnected"
+            workspace_connection_summary(&endpoint, &ConnectionStatus::Disconnected, 2),
+            "builder.example · Disconnected · 2 panes"
         );
+    }
+
+    #[test]
+    fn workspace_connection_summary_pane_count_singular_plural() {
+        let ep = RuntimeEndpoint::Local;
+        let status = ConnectionStatus::Connected;
+        assert!(workspace_connection_summary(&ep, &status, 1).ends_with("1 pane"));
+        assert!(workspace_connection_summary(&ep, &status, 2).ends_with("2 panes"));
+        assert!(workspace_connection_summary(&ep, &status, 10).ends_with("10 panes"));
     }
 
     #[test]
