@@ -5916,4 +5916,73 @@ mod tests {
             NotificationTier::Desktop
         );
     }
+
+    /// When `split_terminal_in_place` fails (target widget has no parent),
+    /// `split_terminal` must fall back to `rebuild_session_content` and
+    /// produce a correct widget tree with a Paned containing two terminals.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn split_fallback_rebuild_produces_correct_widget_tree() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.split-fallback-test")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+        let window = Window::new(&app);
+        window.set_default_size(1200, 800);
+        window.present();
+        pump_events(100);
+
+        // Create a fresh direct session so the test is independent of
+        // whatever state was loaded from disk.
+        let fresh = SessionState::new("Fallback Test".into());
+        let session_uuid = fresh.uuid.clone();
+        let t1_uuid = fresh.layout.terminal_uuids().into_iter().next().unwrap();
+        {
+            let mut state = window.imp().state.borrow_mut();
+            state.sessions.push(fresh.clone());
+        }
+        window.build_session(&fresh, false);
+        pump_events(50);
+
+        // Remove the session content from the stack so the terminal widget
+        // has no parent. This forces split_terminal_in_place to fail
+        // (target.parent() returns None → returns false), triggering the
+        // fallback to rebuild_session_content.
+        if let Some(content) = window.imp().session_stack.child_by_name(&session_uuid) {
+            window.imp().session_stack.remove(&content);
+        }
+
+        window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+        pump_events(100);
+
+        let content = window
+            .imp()
+            .session_stack
+            .child_by_name(&session_uuid)
+            .expect("rebuild must re-add the session page to the stack");
+
+        let paned = content
+            .downcast_ref::<gtk4::Paned>()
+            .expect("rebuilt content must be a Paned after split");
+
+        assert!(paned.start_child().is_some(), "Paned must have a start child");
+        assert!(paned.end_child().is_some(), "Paned must have an end child");
+
+        let state = window.imp().state.borrow();
+        let session = state
+            .sessions
+            .iter()
+            .find(|s| s.uuid == session_uuid)
+            .expect("session must still exist after split");
+        assert_eq!(session.layout.terminal_count(), 2, "layout must have 2 terminals after split");
+
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
 }
