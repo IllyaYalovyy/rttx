@@ -633,10 +633,7 @@ impl Window {
 
     fn append_session_row(&self, session_state: &SessionState) {
         let imp = self.imp();
-        let row = SessionRow::new(
-            &session_state.uuid,
-            &session_state.name,
-        );
+        let row = SessionRow::new(&session_state.uuid, &session_state.name);
         row.close_button().set_tooltip_text(Some(if session_state.uses_managed_runtime() {
             "Workspace actions"
         } else {
