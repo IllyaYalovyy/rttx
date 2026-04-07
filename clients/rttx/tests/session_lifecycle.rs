@@ -75,6 +75,7 @@ fn workflow_multi_session_state() {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         },
         SessionState {
             uuid: "s2".into(),
@@ -86,6 +87,7 @@ fn workflow_multi_session_state() {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         },
         SessionState {
             uuid: "s3".into(),
@@ -97,6 +99,7 @@ fn workflow_multi_session_state() {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         },
     ];
 
@@ -154,6 +157,7 @@ fn workflow_persist_and_restore_with_cwds() {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         }],
         active_session_index: 0,
         width: 1200,
@@ -240,6 +244,7 @@ fn empty_session_name_is_valid() {
         mode: SessionMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
+        zoomed_terminal_uuid: None,
     };
     let json = serde_json::to_string(&session).unwrap();
     let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -260,6 +265,7 @@ fn session_order_persists_through_serialization() {
                 mode: SessionMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: SessionColor::default(),
+                zoomed_terminal_uuid: None,
             },
             SessionState {
                 uuid: "s1".into(),
@@ -271,6 +277,7 @@ fn session_order_persists_through_serialization() {
                 mode: SessionMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: SessionColor::default(),
+                zoomed_terminal_uuid: None,
             },
             SessionState {
                 uuid: "s2".into(),
@@ -282,6 +289,7 @@ fn session_order_persists_through_serialization() {
                 mode: SessionMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: SessionColor::default(),
+                zoomed_terminal_uuid: None,
             },
         ],
         active_session_index: 1,
@@ -950,4 +958,109 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
         Some("/srv/project"),
         "reconciliation must carry layout CWD to pane create request"
     );
+}
+
+// ── Zoom state ──────────────────────────────────────────────────
+
+#[test]
+fn zoom_toggle_sets_and_clears_zoomed_terminal() {
+    let mut session = SessionState {
+        uuid: "s1".into(),
+        name: "Work".into(),
+        layout: hsplit(term("t1"), term("t2")),
+        terminal_recovery: std::collections::BTreeMap::default(),
+        active_terminal_uuid: Some("t1".into()),
+        input_sync: false,
+        mode: SessionMode::default(),
+        runtime: WorkspaceRuntime::default(),
+        color: SessionColor::default(),
+        zoomed_terminal_uuid: None,
+    };
+
+    // Zoom in
+    session.zoomed_terminal_uuid = Some("t1".into());
+    assert!(session.is_zoomed());
+    assert_eq!(session.zoomed_terminal_uuid.as_deref(), Some("t1"));
+
+    // Zoom out
+    session.zoomed_terminal_uuid = None;
+    assert!(!session.is_zoomed());
+
+    // Layout is unchanged throughout
+    assert_eq!(session.layout.terminal_count(), 2);
+}
+
+#[test]
+fn zoom_state_not_persisted_when_cleared_before_save() {
+    let mut session = SessionState {
+        uuid: "s1".into(),
+        name: "Work".into(),
+        layout: hsplit(term("t1"), term("t2")),
+        terminal_recovery: std::collections::BTreeMap::default(),
+        active_terminal_uuid: Some("t1".into()),
+        input_sync: false,
+        mode: SessionMode::default(),
+        runtime: WorkspaceRuntime::default(),
+        color: SessionColor::default(),
+        zoomed_terminal_uuid: Some("t1".into()),
+    };
+
+    // Simulate save_state clearing zoom
+    session.zoomed_terminal_uuid = None;
+    let json = serde_json::to_string(&session).unwrap();
+    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    assert!(!restored.is_zoomed());
+    assert_eq!(restored.layout.terminal_count(), 2);
+}
+
+#[test]
+fn zoom_on_single_pane_session_is_noop() {
+    let session = SessionState {
+        uuid: "s1".into(),
+        name: "Work".into(),
+        layout: term("t1"),
+        terminal_recovery: std::collections::BTreeMap::default(),
+        active_terminal_uuid: Some("t1".into()),
+        input_sync: false,
+        mode: SessionMode::default(),
+        runtime: WorkspaceRuntime::default(),
+        color: SessionColor::default(),
+        zoomed_terminal_uuid: None,
+    };
+
+    // Single pane — zoom should not be set (enforced by toggle_pane_zoom)
+    assert!(!session.is_zoomed());
+    assert_eq!(session.layout.terminal_count(), 1);
+}
+
+#[test]
+fn zoom_preserves_layout_tree_integrity() {
+    let layout = hsplit(vsplit(term("t1"), term("t2")), term("t3"));
+    let mut session = SessionState {
+        uuid: "s1".into(),
+        name: "Work".into(),
+        layout: layout.clone(),
+        terminal_recovery: std::collections::BTreeMap::default(),
+        active_terminal_uuid: Some("t2".into()),
+        input_sync: false,
+        mode: SessionMode::default(),
+        runtime: WorkspaceRuntime::default(),
+        color: SessionColor::default(),
+        zoomed_terminal_uuid: None,
+    };
+
+    // Zoom t2
+    session.zoomed_terminal_uuid = Some("t2".into());
+    assert!(session.is_zoomed());
+
+    // Layout tree is completely unchanged
+    assert_eq!(session.layout, layout);
+    assert_eq!(session.layout.terminal_count(), 3);
+    assert!(session.layout.contains_terminal("t1"));
+    assert!(session.layout.contains_terminal("t2"));
+    assert!(session.layout.contains_terminal("t3"));
+
+    // Unzoom
+    session.zoomed_terminal_uuid = None;
+    assert_eq!(session.layout, layout);
 }

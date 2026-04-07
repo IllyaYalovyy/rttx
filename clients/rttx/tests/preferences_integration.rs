@@ -92,6 +92,7 @@ fn preferences_input_sync_persists_in_session_state() {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         }],
         ..WindowState::default()
     };
@@ -148,6 +149,7 @@ fn custom_title_persists_in_layout() {
             mode: SessionMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
+            zoomed_terminal_uuid: None,
         }],
         ..WindowState::default()
     };

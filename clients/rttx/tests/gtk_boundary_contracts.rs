@@ -164,6 +164,7 @@ fn contract_any_constructible_state_roundtrips() {
                 mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
+                zoomed_terminal_uuid: None,
             }],
             width: 1,
             height: 1,
@@ -181,6 +182,7 @@ fn contract_any_constructible_state_roundtrips() {
                 mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
+                zoomed_terminal_uuid: None,
             }],
             ..WindowState::default()
         },
@@ -201,6 +203,7 @@ fn contract_any_constructible_state_roundtrips() {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 }],
                 ..WindowState::default()
             }
@@ -218,6 +221,7 @@ fn contract_any_constructible_state_roundtrips() {
                     mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
+                    zoomed_terminal_uuid: None,
                 })
                 .collect();
             WindowState {
@@ -656,4 +660,51 @@ fn contract_empty_sessions_is_handled_without_panic() {
 
     // Direct index would panic — callers must use get() or guard on len()
     assert!(loaded.sessions.is_empty());
+}
+
+// ── Zoom state contracts ────────────────────────────────────────
+
+/// Zoomed state must survive serialization roundtrip when set.
+#[test]
+fn zoom_state_survives_serialization_roundtrip() {
+    let state = WindowState {
+        active_session_index: 0,
+        width: 800,
+        height: 600,
+        is_maximized: false,
+        sessions: vec![SessionState {
+            uuid: "s1".into(),
+            name: "Work".into(),
+            layout: hsplit(term("t1"), term("t2")),
+            terminal_recovery: Default::default(),
+            active_terminal_uuid: Some("t1".into()),
+            input_sync: false,
+            mode: Default::default(),
+            runtime: Default::default(),
+            color: Default::default(),
+            zoomed_terminal_uuid: Some("t1".into()),
+        }],
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.sessions[0].zoomed_terminal_uuid.as_deref(), Some("t1"));
+}
+
+/// Old persisted state without zoom field must deserialize with zoom = None.
+#[test]
+fn old_state_without_zoom_field_deserializes_cleanly() {
+    let json = r#"{
+        "sessions": [{
+            "uuid": "s1",
+            "name": "Work",
+            "layout": {"Terminal": {"uuid": "t1"}}
+        }],
+        "active_session_index": 0,
+        "width": 800,
+        "height": 600,
+        "is_maximized": false
+    }"#;
+    let state: WindowState = serde_json::from_str(json).unwrap();
+    assert!(state.sessions[0].zoomed_terminal_uuid.is_none());
 }
