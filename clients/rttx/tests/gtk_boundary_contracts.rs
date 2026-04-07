@@ -708,3 +708,33 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
     let state: WindowState = serde_json::from_str(json).unwrap();
     assert!(state.sessions[0].zoomed_terminal_uuid.is_none());
 }
+
+/// Contract: workspace_connection_summary includes pane count in subtitle text.
+///
+/// The sidebar row subtitle must always contain the pane count so users can see
+/// how many panes a workspace has without expanding it. Singular/plural must be
+/// correct.
+#[test]
+fn workspace_connection_summary_includes_pane_count_in_subtitle() {
+    use rttx::runtime::{
+        workspace_connection_summary, ConnectionStatus, RuntimeEndpoint,
+    };
+
+    let local = RuntimeEndpoint::Local;
+    let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
+
+    assert!(
+        workspace_connection_summary(&local, &ConnectionStatus::Connected, 3).ends_with("3 panes")
+    );
+    assert!(
+        workspace_connection_summary(&local, &ConnectionStatus::Connected, 1).ends_with("1 pane")
+    );
+    assert!(
+        workspace_connection_summary(&remote, &ConnectionStatus::Connected, 2)
+            .ends_with("2 panes")
+    );
+    assert!(
+        workspace_connection_summary(&remote, &ConnectionStatus::Disconnected, 1)
+            .contains("1 pane")
+    );
+}
