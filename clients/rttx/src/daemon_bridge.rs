@@ -588,6 +588,20 @@ impl EndpointActor {
                                 runtime_pane_id,
                             });
                         }
+                        Some(proto::server_message::Msg::Error(e)) if e.code == 6 => {
+                            // ERR_PANE_NOT_FOUND: the pane is already gone on the
+                            // daemon, so treat this as a successful close.
+                            log::info!(
+                                "ClosePane for {workspace_id}: pane already removed on daemon, \
+                                 treating as closed"
+                            );
+                            let _ = self.event_tx.send(EndpointEvent::PaneClosed {
+                                workspace_id,
+                                layout_terminal_uuid,
+                                runtime_id,
+                                runtime_pane_id,
+                            });
+                        }
                         Some(proto::server_message::Msg::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
@@ -1323,5 +1337,82 @@ mod tests {
             .expect("split transport should support AttachSession");
         assert_eq!(rttx_proto::bytes_to_uuid(&snapshot.session_id).unwrap(), runtime_id);
         server.await.expect("fake server task should complete");
+    }
+
+    fn make_actor_with_events(
+        reader: DaemonReader,
+        writer: DaemonWriter,
+    ) -> (EndpointActor, mpsc::UnboundedReceiver<EndpointEvent>) {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::new(),
+            reconnect_attempt: 0,
+        };
+        (actor, event_rx)
+    }
+
+    #[tokio::test]
+    async fn close_pane_not_found_emits_pane_closed() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+
+        let runtime_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+        let workspace_id = "ws-1".to_string();
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
+            match request.msg {
+                Some(proto::client_message::Msg::ClosePane(_)) => {}
+                other => panic!("expected ClosePane, got {other:?}"),
+            }
+            // Respond with ERR_PANE_NOT_FOUND (code 6).
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Error(proto::Error {
+                        code: 6,
+                        message: "pane not found".into(),
+                    })),
+                },
+            )
+            .await;
+        });
+
+        actor
+            .handle_command(EndpointCommand::ClosePane {
+                workspace_id: workspace_id.clone(),
+                runtime_id: runtime_id.to_string(),
+                layout_terminal_uuid: "layout-t1".into(),
+                runtime_pane_id: pane_id.to_string(),
+            })
+            .await;
+
+        server.await.expect("fake server task should complete");
+
+        // Must emit PaneClosed, not WorkspaceError.
+        let mut found_pane_closed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                EndpointEvent::PaneClosed { workspace_id: ref ws, .. } if ws == "ws-1" => {
+                    found_pane_closed = true;
+                }
+                EndpointEvent::WorkspaceError { ref detail, .. } => {
+                    panic!("should not emit WorkspaceError, got: {detail}");
+                }
+                _ => {}
+            }
+        }
+        assert!(found_pane_closed, "expected PaneClosed event for pane-not-found response");
     }
 }
