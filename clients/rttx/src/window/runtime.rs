@@ -534,6 +534,7 @@ impl Window {
             status,
             session.layout.terminal_count(),
         );
+        let icon = connection_icon(&session.runtime.endpoint, status);
         drop(state);
 
         let list = &self.imp().sidebar_list;
@@ -544,6 +545,7 @@ impl Window {
                 && session_row.uuid() == workspace_id
             {
                 session_row.set_subtitle(&summary);
+                session_row.set_connection_icon(icon.as_ref());
                 break;
             }
             idx += 1;

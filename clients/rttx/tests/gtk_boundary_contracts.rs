@@ -735,3 +735,22 @@ fn workspace_connection_summary_includes_pane_count_in_subtitle() {
             .contains("1 pane")
     );
 }
+
+/// Contract: connection_icon returns None for local, Some for remote endpoints.
+///
+/// The sidebar row must show a connection icon only for remote workspaces.
+/// The icon and CSS class must change based on connection status.
+#[test]
+fn connection_icon_distinguishes_local_from_remote() {
+    use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
+
+    assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
+
+    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+    let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();
+    assert_eq!(connected.css_class, "accent");
+
+    let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected).unwrap();
+    assert_eq!(disconnected.css_class, "warning");
+    assert_ne!(connected.icon_name, disconnected.icon_name);
+}
