@@ -204,3 +204,4 @@ fn pane_navigation_keys_persists_across_save_load() {
     let loaded = preferences::load_from(&path);
     assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
 }
+
