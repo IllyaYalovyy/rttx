@@ -185,3 +185,22 @@ fn custom_title_backward_compat_null() {
         assert_eq!(*custom_title, None);
     }
 }
+
+#[test]
+fn pane_navigation_keys_persists_across_save_load() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+
+    let prefs = Preferences {
+        pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
+        ..Default::default()
+    };
+    preferences::save_to(&prefs, &path).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
+
+    // Verify backward compatibility: old JSON without the field defaults to AltArrow.
+    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
+}
