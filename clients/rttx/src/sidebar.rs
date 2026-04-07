@@ -34,7 +34,6 @@ mod imp {
         pub color_dot: gtk4::Image,
         pub position_label: gtk4::Label,
         pub activity_dot: gtk4::Image,
-        pub terminal_count_label: gtk4::Label,
         pub close_button: gtk4::Button,
         pub activity_state: Cell<ActivityState>,
         pub idle_transition_source: RefCell<Option<glib::SourceId>>,
@@ -59,7 +58,6 @@ mod imp {
                 color_dot,
                 position_label,
                 activity_dot,
-                terminal_count_label: gtk4::Label::new(None),
                 close_button: gtk4::Button::from_icon_name("window-close-symbolic"),
                 activity_state: Cell::new(ActivityState::None),
                 idle_transition_source: RefCell::new(None),
@@ -82,16 +80,12 @@ mod imp {
             obj.set_selectable(true);
             obj.set_title_lines(1);
 
-            self.terminal_count_label.add_css_class("dim-label");
-            self.terminal_count_label.add_css_class("caption");
-
             self.close_button.add_css_class("flat");
             self.close_button.add_css_class("circular");
 
             obj.add_prefix(&self.color_dot);
             obj.add_prefix(&self.position_label);
             obj.add_suffix(&self.activity_dot);
-            obj.add_suffix(&self.terminal_count_label);
             obj.add_suffix(&self.close_button);
         }
     }
@@ -110,12 +104,11 @@ glib::wrapper! {
 
 impl SessionRow {
     #[must_use]
-    pub fn new(uuid: &str, name: &str, terminal_count: usize) -> Self {
+    pub fn new(uuid: &str, name: &str) -> Self {
         let obj: Self = glib::Object::builder().build();
         obj.imp().uuid.replace(uuid.to_string());
         obj.imp().name.replace(name.to_string());
         obj.set_title(name);
-        obj.update_terminal_count(terminal_count);
         obj
     }
 
@@ -140,10 +133,6 @@ impl SessionRow {
             dot.remove_css_class(cls.css_class());
         }
         dot.add_css_class(color.css_class());
-    }
-
-    pub fn update_terminal_count(&self, count: usize) {
-        self.imp().terminal_count_label.set_label(&format!("{count}"));
     }
 
     fn set_activity_state_internal(&self, state: ActivityState) {
@@ -270,26 +259,36 @@ mod tests {
     fn session_row_is_an_action_row() {
         require_display!();
 
-        let row = SessionRow::new("session-1", "Session 1", 3);
+        let row = SessionRow::new("session-1", "Session 1");
 
         assert!(row.is::<adw::ActionRow>());
         assert!(row.is::<gtk4::ListBoxRow>());
         assert_eq!(row.title().as_str(), "Session 1");
-        assert_eq!(row.imp().terminal_count_label.label().as_str(), "3");
     }
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
-    fn session_row_updates_title_and_count() {
+    fn session_row_updates_title() {
         require_display!();
 
-        let row = SessionRow::new("session-1", "Session 1", 1);
+        let row = SessionRow::new("session-1", "Session 1");
         row.set_session_name("Renamed");
-        row.update_terminal_count(5);
 
         assert_eq!(row.session_name(), "Renamed");
         assert_eq!(row.title().as_str(), "Renamed");
-        assert_eq!(row.imp().terminal_count_label.label().as_str(), "5");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn session_row_subtitle_shows_pane_count() {
+        require_display!();
+
+        let row = SessionRow::new("session-1", "Session 1");
+        row.set_subtitle("Local runtime · 3 panes");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime · 3 panes");
+
+        row.set_subtitle("1 pane");
+        assert_eq!(row.subtitle().unwrap().as_str(), "1 pane");
     }
 
     #[test]
@@ -297,7 +296,7 @@ mod tests {
     fn activity_indicator_toggles() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session", 1);
+        let row = SessionRow::new("s1", "Session");
         assert_eq!(row.activity_state(), ActivityState::None);
         assert!(!row.has_activity(), "activity should be off initially");
 
@@ -321,7 +320,7 @@ mod tests {
     fn repeated_activity_refreshes_idle_timer() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session", 1);
+        let row = SessionRow::new("s1", "Session");
 
         row.mark_activity();
         pump_events(ACTIVITY_IDLE_DELAY_MS / 2);
@@ -347,7 +346,7 @@ mod tests {
     fn clear_activity_cancels_pending_idle_transition() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session", 1);
+        let row = SessionRow::new("s1", "Session");
 
         row.mark_activity();
         assert_eq!(row.activity_state(), ActivityState::Active);
@@ -368,7 +367,7 @@ mod tests {
     fn position_label_shows_number() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session", 1);
+        let row = SessionRow::new("s1", "Session");
         row.set_position(0);
         assert_eq!(row.position_label_text(), "1");
 
@@ -381,7 +380,7 @@ mod tests {
     fn position_label_hidden_beyond_nine() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session", 1);
+        let row = SessionRow::new("s1", "Session");
         row.set_position(0);
         assert!(row.imp().position_label.is_visible());
 
