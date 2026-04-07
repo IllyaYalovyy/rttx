@@ -5360,8 +5360,8 @@ mod tests {
             .cloned()
             .expect("managed pane should be present");
 
-        assert!(pane.connection_banner_visible_for_test());
         assert!(!pane.input_enabled_for_test());
+        assert_eq!(pane.status_label_text_for_test(), "Action Required");
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -5799,7 +5799,7 @@ mod tests {
             .get("managed-pane")
             .cloned()
             .expect("managed pane should be present");
-        assert!(!pane.connection_banner_visible_for_test());
+        assert!(pane.input_enabled_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Connected");
 
         let row = session_row_for_uuid(&window, &session_state.uuid);
