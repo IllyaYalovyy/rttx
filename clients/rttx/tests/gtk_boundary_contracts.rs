@@ -716,9 +716,7 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
 /// correct.
 #[test]
 fn workspace_connection_summary_includes_pane_count_in_subtitle() {
-    use rttx::runtime::{
-        workspace_connection_summary, ConnectionStatus, RuntimeEndpoint,
-    };
+    use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, workspace_connection_summary};
 
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
@@ -730,8 +728,7 @@ fn workspace_connection_summary_includes_pane_count_in_subtitle() {
         workspace_connection_summary(&local, &ConnectionStatus::Connected, 1).ends_with("1 pane")
     );
     assert!(
-        workspace_connection_summary(&remote, &ConnectionStatus::Connected, 2)
-            .ends_with("2 panes")
+        workspace_connection_summary(&remote, &ConnectionStatus::Connected, 2).ends_with("2 panes")
     );
     assert!(
         workspace_connection_summary(&remote, &ConnectionStatus::Disconnected, 1)

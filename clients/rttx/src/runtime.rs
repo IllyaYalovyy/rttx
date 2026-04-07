@@ -676,6 +676,15 @@ mod tests {
     }
 
     #[test]
+    fn workspace_connection_summary_pane_count_singular_plural() {
+        let ep = RuntimeEndpoint::Local;
+        let status = ConnectionStatus::Connected;
+        assert!(workspace_connection_summary(&ep, &status, 1).ends_with("1 pane"));
+        assert!(workspace_connection_summary(&ep, &status, 2).ends_with("2 panes"));
+        assert!(workspace_connection_summary(&ep, &status, 10).ends_with("10 panes"));
+    }
+
+    #[test]
     fn workspace_actions_for_attached_managed_workspace_shows_destructive_close() {
         let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
 
