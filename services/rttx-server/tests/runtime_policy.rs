@@ -155,6 +155,7 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                     session_id,
                     cwd: None,
+                    dark_background: None,
                 })),
             })
             .await;

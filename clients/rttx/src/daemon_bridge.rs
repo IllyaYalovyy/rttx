@@ -96,6 +96,7 @@ enum EndpointCommand {
         runtime_id: String,
         layout_terminal_uuid: String,
         cwd: Option<String>,
+        dark_background: bool,
     },
     ClosePane {
         workspace_id: String,
@@ -205,12 +206,14 @@ impl EndpointConnectionManager {
         runtime_id: &str,
         layout_terminal_uuid: &str,
         cwd: Option<String>,
+        dark_background: bool,
     ) {
         let _ = self.endpoint_handle(endpoint).send(EndpointCommand::CreatePane {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             layout_terminal_uuid: layout_terminal_uuid.to_string(),
             cwd,
+            dark_background,
         });
     }
 
@@ -451,6 +454,7 @@ impl EndpointActor {
                             runtime_id,
                             layout_terminal_uuid,
                             cwd: None,
+                            dark_background: true,
                         });
                     } else {
                         self.emit_status(&workspace_id, ConnectionStatus::Connected);
@@ -459,7 +463,13 @@ impl EndpointActor {
                     self.emit_status(&workspace_id, ConnectionStatus::Connected);
                 }
             }
-            EndpointCommand::CreatePane { workspace_id, runtime_id, layout_terminal_uuid, cwd } => {
+            EndpointCommand::CreatePane {
+                workspace_id,
+                runtime_id,
+                layout_terminal_uuid,
+                cwd,
+                dark_background,
+            } => {
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
                     self.emit_error(
                         &workspace_id,
@@ -482,6 +492,7 @@ impl EndpointActor {
                     msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                         session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         cwd,
+                        dark_background: Some(dark_background),
                     })),
                 };
                 if let Err(error) = self.send_message(&msg).await {

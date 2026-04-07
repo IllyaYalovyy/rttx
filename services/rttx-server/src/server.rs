@@ -151,7 +151,10 @@ impl Server {
                 if let Some(parent) = hist.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
+                let env = vec![
+                    ("HISTFILE".into(), hist.to_string_lossy().into_owned()),
+                    ("COLORFGBG".into(), "15;0".into()),
+                ];
                 let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
                 s.engine.spawn_pane(pane_id, &config)
             };
@@ -460,7 +463,12 @@ impl Server {
                     if let Some(parent) = hist.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let env = vec![("HISTFILE".into(), hist.to_string_lossy().into_owned())];
+                    let colorfgbg =
+                        if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
+                    let env = vec![
+                        ("HISTFILE".into(), hist.to_string_lossy().into_owned()),
+                        ("COLORFGBG".into(), colorfgbg.into()),
+                    ];
                     let cwd = req.cwd;
                     let config = PaneSpawnConfig { command: vec![], cwd, env, cols: 80, rows: 24 };
                     s.engine.spawn_pane(pane_id, &config)

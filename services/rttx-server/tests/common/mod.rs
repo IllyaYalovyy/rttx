@@ -237,6 +237,7 @@ pub async fn create_pane_with_cwd(
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.to_vec(),
                 cwd,
+                dark_background: None,
             })),
         })
         .await;

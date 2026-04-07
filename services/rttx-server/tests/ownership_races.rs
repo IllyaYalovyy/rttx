@@ -67,6 +67,7 @@ async fn readers_observe_pane_created_push() {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
                 session_id: session_id.clone(),
                 cwd: None,
+                dark_background: None,
             })),
         })
         .await;
