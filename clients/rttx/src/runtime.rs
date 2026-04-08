@@ -369,18 +369,19 @@ pub struct ConnectionIcon {
     pub tooltip: &'static str,
 }
 
-/// Returns the connection icon for a workspace row, or `None` for local endpoints.
+/// Returns the connection icon for a workspace row. Always returns an icon.
 #[must_use]
 pub const fn connection_icon(
     endpoint: &RuntimeEndpoint,
     status: &ConnectionStatus,
-) -> Option<ConnectionIcon> {
+) -> ConnectionIcon {
     let (icon_name, css_class, tooltip) = match status {
         ConnectionStatus::Connected => {
             if matches!(endpoint, RuntimeEndpoint::Local) {
-                return None;
+                ("computer-symbolic", "dim-label", "Local workspace")
+            } else {
+                ("network-server-symbolic", "accent", "Connected to remote host")
             }
-            ("network-server-symbolic", "accent", "Connected to remote host")
         }
         ConnectionStatus::Recovered => ("emblem-ok-symbolic", "accent", "Connection recovered"),
         ConnectionStatus::Disconnected => {
@@ -395,7 +396,7 @@ pub const fn connection_icon(
             }
         }
     };
-    Some(ConnectionIcon { icon_name, css_class, tooltip })
+    ConnectionIcon { icon_name, css_class, tooltip }
 }
 
 #[must_use]
@@ -403,14 +404,12 @@ pub fn workspace_connection_summary(
     endpoint: &RuntimeEndpoint,
     active_pane_info: Option<&str>,
 ) -> String {
-    let base = match endpoint {
-        RuntimeEndpoint::Local => "Local",
-        RuntimeEndpoint::Remote { host } => host.as_str(),
-    };
-
-    match active_pane_info {
-        Some(info) if !info.is_empty() => format!("{base} · {info}"),
-        _ => base.to_string(),
+    match endpoint {
+        RuntimeEndpoint::Local => active_pane_info.unwrap_or("").to_string(),
+        RuntimeEndpoint::Remote { host } => match active_pane_info {
+            Some(info) if !info.is_empty() => format!("{host} · {info}"),
+            _ => host.clone(),
+        },
     }
 }
 
@@ -615,10 +614,10 @@ mod tests {
     fn workspace_connection_summary_with_pane_info() {
         assert_eq!(
             workspace_connection_summary(&RuntimeEndpoint::Local, Some("vim main.rs")),
-            "Local · vim main.rs"
+            "vim main.rs"
         );
-        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local");
-        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("")), "Local");
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "");
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("")), "");
         assert_eq!(
             workspace_connection_summary(
                 &RuntimeEndpoint::Remote { host: "builder.example".into() },
@@ -658,32 +657,33 @@ mod tests {
     }
 
     #[test]
-    fn connection_icon_none_for_local_connected() {
-        assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
+    fn connection_icon_computer_for_local_connected() {
+        let icon = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+        assert_eq!(icon.icon_name, "computer-symbolic");
+        assert_eq!(icon.css_class, "dim-label");
     }
 
     #[test]
     fn connection_icon_shown_for_local_non_connected() {
         let ep = RuntimeEndpoint::Local;
-        let icon = connection_icon(&ep, &ConnectionStatus::Disconnected).unwrap();
+        let icon = connection_icon(&ep, &ConnectionStatus::Disconnected);
         assert_eq!(icon.css_class, "warning");
 
-        let icon = connection_icon(&ep, &ConnectionStatus::Recovered).unwrap();
+        let icon = connection_icon(&ep, &ConnectionStatus::Recovered);
         assert_eq!(icon.css_class, "accent");
 
         let icon =
-            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable))
-                .unwrap();
+            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable));
         assert_eq!(icon.css_class, "error");
 
-        let icon = connection_icon(&ep, &ConnectionStatus::Connecting).unwrap();
+        let icon = connection_icon(&ep, &ConnectionStatus::Connecting);
         assert_eq!(icon.css_class, "dim-label");
     }
 
     #[test]
     fn connection_icon_accent_for_remote_connected() {
         let ep = RuntimeEndpoint::Remote { host: "h".into() };
-        let icon = connection_icon(&ep, &ConnectionStatus::Connected).unwrap();
+        let icon = connection_icon(&ep, &ConnectionStatus::Connected);
         assert_eq!(icon.icon_name, "network-server-symbolic");
         assert_eq!(icon.css_class, "accent");
     }
@@ -696,7 +696,7 @@ mod tests {
             ConnectionStatus::Connecting,
             ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 5 },
         ] {
-            let icon = connection_icon(&ep, &status).unwrap();
+            let icon = connection_icon(&ep, &status);
             assert_eq!(icon.icon_name, "network-server-symbolic");
             assert_eq!(icon.css_class, "dim-label");
         }
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn connection_icon_warning_for_remote_disconnected() {
         let ep = RuntimeEndpoint::Remote { host: "h".into() };
-        let icon = connection_icon(&ep, &ConnectionStatus::Disconnected).unwrap();
+        let icon = connection_icon(&ep, &ConnectionStatus::Disconnected);
         assert_eq!(icon.icon_name, "network-offline-symbolic");
         assert_eq!(icon.css_class, "warning");
     }
@@ -714,8 +714,7 @@ mod tests {
     fn connection_icon_error_for_remote_blocked() {
         let ep = RuntimeEndpoint::Remote { host: "h".into() };
         let icon =
-            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied))
-                .unwrap();
+            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied));
         assert_eq!(icon.icon_name, "network-offline-symbolic");
         assert_eq!(icon.css_class, "error");
     }
@@ -723,7 +722,7 @@ mod tests {
     #[test]
     fn connection_icon_accent_for_remote_recovered() {
         let ep = RuntimeEndpoint::Remote { host: "h".into() };
-        let icon = connection_icon(&ep, &ConnectionStatus::Recovered).unwrap();
+        let icon = connection_icon(&ep, &ConnectionStatus::Recovered);
         assert_eq!(icon.icon_name, "emblem-ok-symbolic");
         assert_eq!(icon.css_class, "accent");
     }
@@ -733,17 +732,25 @@ mod tests {
         let remote = RuntimeEndpoint::Remote { host: "h".into() };
         let local = RuntimeEndpoint::Local;
 
-        let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();
+        let connected = connection_icon(&remote, &ConnectionStatus::Connected);
         assert_eq!(connected.tooltip, "Connected to remote host");
 
-        let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected).unwrap();
+        let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected);
         assert_eq!(disconnected.tooltip, "Disconnected from runtime");
 
-        let connecting_local = connection_icon(&local, &ConnectionStatus::Connecting).unwrap();
+        let connecting_local = connection_icon(&local, &ConnectionStatus::Connecting);
         assert_eq!(connecting_local.tooltip, "Connecting to local runtime");
 
-        let connecting_remote = connection_icon(&remote, &ConnectionStatus::Connecting).unwrap();
+        let connecting_remote = connection_icon(&remote, &ConnectionStatus::Connecting);
         assert_eq!(connecting_remote.tooltip, "Connecting to remote host");
+
+        let local_connected = connection_icon(&local, &ConnectionStatus::Connected);
+        assert_eq!(local_connected.tooltip, "Local workspace");
+    }
+
+    #[test]
+    fn workspace_connection_summary_local_returns_empty_without_pane_info() {
+        assert!(workspace_connection_summary(&RuntimeEndpoint::Local, None).is_empty());
     }
 
     #[test]

@@ -43,7 +43,6 @@ mod imp {
         fn default() -> Self {
             let connection_icon = gtk4::Image::new();
             connection_icon.set_pixel_size(16);
-            connection_icon.set_visible(false);
 
             let activity_dot = gtk4::Image::from_icon_name("media-record-symbolic");
             activity_dot.set_pixel_size(8);
@@ -84,8 +83,8 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.add_css_class("circular");
 
+            obj.add_prefix(&self.connection_icon);
             obj.add_prefix(&self.position_label);
-            obj.add_suffix(&self.connection_icon);
             obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.close_button);
 
@@ -131,21 +130,15 @@ impl SessionRow {
         self.set_title(name);
     }
 
-    pub fn set_connection_icon(&self, icon: Option<&crate::runtime::ConnectionIcon>) {
+    pub fn set_connection_icon(&self, icon: &crate::runtime::ConnectionIcon) {
         const ICON_CSS_CLASSES: &[&str] = &["accent", "dim-label", "warning", "error"];
         let widget = &self.imp().connection_icon;
         for cls in ICON_CSS_CLASSES {
             widget.remove_css_class(cls);
         }
-        if let Some(icon) = icon {
-            widget.set_icon_name(Some(icon.icon_name));
-            widget.add_css_class(icon.css_class);
-            widget.set_tooltip_text(Some(icon.tooltip));
-            widget.set_visible(true);
-        } else {
-            widget.set_tooltip_text(None);
-            widget.set_visible(false);
-        }
+        widget.set_icon_name(Some(icon.icon_name));
+        widget.add_css_class(icon.css_class);
+        widget.set_tooltip_text(Some(icon.tooltip));
     }
 
     fn set_activity_state_internal(&self, state: ActivityState) {
@@ -302,24 +295,24 @@ mod tests {
         require_display!();
 
         let row = SessionRow::new("session-1", "Session 1");
-        row.set_subtitle("Local · vim main.rs");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local · vim main.rs");
+        row.set_subtitle("vim main.rs");
+        assert_eq!(row.subtitle().unwrap().as_str(), "vim main.rs");
 
-        row.set_subtitle("Local");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local");
+        row.set_subtitle("");
+        assert_eq!(row.subtitle().unwrap().as_str(), "");
     }
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
-    fn connection_icon_hidden_by_default() {
+    fn connection_icon_visible_by_default() {
         require_display!();
         let row = SessionRow::new("s1", "Session");
-        assert!(!row.imp().connection_icon.is_visible());
+        assert!(row.imp().connection_icon.is_visible());
     }
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
-    fn connection_icon_shows_and_hides() {
+    fn connection_icon_shows_and_updates() {
         require_display!();
         let row = SessionRow::new("s1", "Session");
 
@@ -328,14 +321,21 @@ mod tests {
             css_class: "accent",
             tooltip: "Connected to remote host",
         };
-        row.set_connection_icon(Some(&icon));
+        row.set_connection_icon(&icon);
         assert!(row.imp().connection_icon.is_visible());
         assert_eq!(row.imp().connection_icon.icon_name().unwrap(), "network-server-symbolic");
         assert!(row.imp().connection_icon.has_css_class("accent"));
 
-        row.set_connection_icon(None);
-        assert!(!row.imp().connection_icon.is_visible());
+        let local = crate::runtime::ConnectionIcon {
+            icon_name: "computer-symbolic",
+            css_class: "dim-label",
+            tooltip: "Local workspace",
+        };
+        row.set_connection_icon(&local);
+        assert!(row.imp().connection_icon.is_visible());
+        assert_eq!(row.imp().connection_icon.icon_name().unwrap(), "computer-symbolic");
         assert!(!row.imp().connection_icon.has_css_class("accent"));
+        assert!(row.imp().connection_icon.has_css_class("dim-label"));
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
             css_class: "accent",
             tooltip: "Connected to remote host",
         };
-        row.set_connection_icon(Some(&connected));
+        row.set_connection_icon(&connected);
         assert!(row.imp().connection_icon.has_css_class("accent"));
 
         let disconnected = crate::runtime::ConnectionIcon {
@@ -357,7 +357,7 @@ mod tests {
             css_class: "warning",
             tooltip: "Disconnected from runtime",
         };
-        row.set_connection_icon(Some(&disconnected));
+        row.set_connection_icon(&disconnected);
         assert!(!row.imp().connection_icon.has_css_class("accent"));
         assert!(row.imp().connection_icon.has_css_class("warning"));
         assert_eq!(row.imp().connection_icon.icon_name().unwrap(), "network-offline-symbolic");
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
-    fn connection_icon_tooltip_set_and_cleared() {
+    fn connection_icon_tooltip_updates() {
         require_display!();
         let row = SessionRow::new("s1", "Session");
 
@@ -471,14 +471,19 @@ mod tests {
             css_class: "accent",
             tooltip: "Connected to remote host",
         };
-        row.set_connection_icon(Some(&icon));
+        row.set_connection_icon(&icon);
         assert_eq!(
             row.imp().connection_icon.tooltip_text().unwrap().as_str(),
             "Connected to remote host"
         );
 
-        row.set_connection_icon(None);
-        assert!(row.imp().connection_icon.tooltip_text().is_none());
+        let local = crate::runtime::ConnectionIcon {
+            icon_name: "computer-symbolic",
+            css_class: "dim-label",
+            tooltip: "Local workspace",
+        };
+        row.set_connection_icon(&local);
+        assert_eq!(row.imp().connection_icon.tooltip_text().unwrap().as_str(), "Local workspace");
     }
 
     #[test]

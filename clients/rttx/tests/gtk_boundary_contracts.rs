@@ -714,10 +714,11 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
     assert!(state.sessions[0].zoomed_terminal_uuid.is_none());
 }
 
-/// Contract: workspace_connection_summary shows endpoint and optional pane info.
+/// Contract: workspace_connection_summary shows just pane info for local,
+/// host · pane info for remote.
 ///
-/// The sidebar row subtitle shows the endpoint label and, when available, the
-/// active pane's command or path.
+/// The sidebar row subtitle shows the active pane's command or path for local
+/// workspaces, and host · pane info for remote workspaces.
 #[test]
 fn workspace_connection_summary_shows_endpoint_and_pane_info() {
     use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
@@ -725,53 +726,37 @@ fn workspace_connection_summary_shows_endpoint_and_pane_info() {
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
 
-    assert_eq!(workspace_connection_summary(&local, Some("vim")), "Local · vim");
-    assert_eq!(workspace_connection_summary(&local, None), "Local");
+    assert_eq!(workspace_connection_summary(&local, Some("vim")), "vim");
+    assert_eq!(workspace_connection_summary(&local, None), "");
     assert_eq!(workspace_connection_summary(&remote, Some("~/src")), "dev@host · ~/src");
     assert_eq!(workspace_connection_summary(&remote, None), "dev@host");
 }
 
-/// Contract: connection_icon returns None for local, Some for remote endpoints.
+/// Contract: connection_icon always returns an icon for every endpoint/status.
 ///
-/// The sidebar row shows a connection icon for non-connected states (any endpoint)
-/// and for remote endpoints when connected. Local+Connected returns None.
+/// Local connected gets computer-symbolic, remote connected gets network-server-symbolic,
+/// and error/warning states get appropriate icons.
 #[test]
-fn connection_icon_distinguishes_local_from_remote() {
+fn connection_icon_always_returns_icon() {
     use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
 
-    assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
-    assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected).is_some());
+    let local_connected = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+    assert_eq!(local_connected.icon_name, "computer-symbolic");
+
+    let local_disconnected =
+        connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected);
+    assert_eq!(local_disconnected.css_class, "warning");
 
     let remote = RuntimeEndpoint::Remote { host: "h".into() };
-    let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();
+    let connected = connection_icon(&remote, &ConnectionStatus::Connected);
     assert_eq!(connected.css_class, "accent");
 
-    let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected).unwrap();
+    let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected);
     assert_eq!(disconnected.css_class, "warning");
     assert_ne!(connected.icon_name, disconnected.icon_name);
 }
 
-/// Contract: local endpoints show status icons for non-Connected states.
-///
-/// Before #329, local endpoints never showed connection icons. Now they show
-/// icons for Disconnected, Recovered, Blocked, and transient states so the
-/// sidebar subtitle can stay clean (endpoint + pane count only).
-#[test]
-fn connection_icon_shown_for_local_non_connected_states() {
-    use rttx::runtime::{ConnectionProblem, ConnectionStatus, RuntimeEndpoint, connection_icon};
-
-    let local = RuntimeEndpoint::Local;
-    assert!(connection_icon(&local, &ConnectionStatus::Connected).is_none());
-    assert!(connection_icon(&local, &ConnectionStatus::Disconnected).is_some());
-    assert!(connection_icon(&local, &ConnectionStatus::Recovered).is_some());
-    assert!(
-        connection_icon(&local, &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable))
-            .is_some()
-    );
-    assert!(connection_icon(&local, &ConnectionStatus::Connecting).is_some());
-}
-
-/// Contract: every visible connection icon carries a non-empty tooltip.
+/// Contract: every connection icon carries a non-empty tooltip.
 ///
 /// Tooltips differentiate connection state from activity state in the sidebar.
 #[test]
@@ -785,18 +770,32 @@ fn connection_icon_always_has_tooltip() {
         (&remote, ConnectionStatus::Connected),
         (&remote, ConnectionStatus::Disconnected),
         (&remote, ConnectionStatus::Connecting),
+        (&local, ConnectionStatus::Connected),
         (&local, ConnectionStatus::Disconnected),
         (&local, ConnectionStatus::Connecting),
         (&remote, ConnectionStatus::Recovered),
         (&remote, ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied)),
     ] {
-        if let Some(icon) = connection_icon(endpoint, &status) {
-            assert!(
-                !icon.tooltip.is_empty(),
-                "connection_icon for {status:?} should have a non-empty tooltip"
-            );
-        }
+        let icon = connection_icon(endpoint, &status);
+        assert!(
+            !icon.tooltip.is_empty(),
+            "connection_icon for {status:?} should have a non-empty tooltip"
+        );
     }
+}
+
+/// Contract: local workspace subtitle contains no endpoint prefix.
+///
+/// The connection icon in the prefix communicates local vs remote,
+/// so the subtitle should contain only pane info.
+#[test]
+fn workspace_connection_summary_local_has_no_prefix() {
+    use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
+
+    let local = RuntimeEndpoint::Local;
+    let summary = workspace_connection_summary(&local, Some("vim"));
+    assert!(!summary.contains("Local"), "local subtitle should not contain 'Local' prefix");
+    assert_eq!(summary, "vim");
 }
 
 /// Contract: workspace_connection_summary never contains status text.

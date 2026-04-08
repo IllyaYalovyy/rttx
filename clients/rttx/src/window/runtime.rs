@@ -542,7 +542,7 @@ impl Window {
                 row.child().and_then(|child| child.downcast::<SessionRow>().ok())
                 && session_row.uuid() == workspace_id
             {
-                session_row.set_connection_icon(icon.as_ref());
+                session_row.set_connection_icon(&icon);
                 break;
             }
             idx += 1;
