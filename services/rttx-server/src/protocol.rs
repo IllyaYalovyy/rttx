@@ -37,6 +37,12 @@ pub fn hello_ack(server_id: Uuid) -> proto::ServerMessage {
     }
 }
 
+/// Build a `Pong` response.
+#[must_use]
+pub const fn pong(nonce: u64) -> proto::ServerMessage {
+    proto::ServerMessage { msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce })) }
+}
+
 /// Build a `SessionList` response.
 #[must_use]
 pub const fn session_list(sessions: Vec<proto::SessionInfo>) -> proto::ServerMessage {

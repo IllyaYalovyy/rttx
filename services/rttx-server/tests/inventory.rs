@@ -41,6 +41,10 @@ async fn list_sessions_includes_runtime_inventory_metadata() {
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
+    // Let the interactive shell emit its initial prompt/title traffic before
+    // asserting a later manual SetPaneTitle update.
+    let _ = client.drain(Duration::from_millis(500)).await;
+
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {

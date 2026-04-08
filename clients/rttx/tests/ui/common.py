@@ -231,6 +231,8 @@ class TestEnvironment:
         """Environment for the private weston/client/daemon processes."""
         env = os.environ.copy()
         env["WAYLAND_DISPLAY"] = self.wayland_socket
+        env["GDK_DEBUG"] = "no-portals"
+        env["ADW_DISABLE_PORTAL"] = "1"
         env["GDK_BACKEND"] = "wayland"
         env["RTTX_DEV_MODE"] = "1"
         env["XDG_RUNTIME_DIR"] = self.runtime_dir
