@@ -840,6 +840,33 @@ mod module_boundary_tests {
     }
 
     #[test]
+    fn app_css_has_dark_and_light_rules_for_every_color() {
+        let css = crate::application::APP_CSS;
+        assert!(css.contains("prefers-color-scheme: dark"), "missing dark media query");
+        assert!(css.contains("prefers-color-scheme: light"), "missing light media query");
+        for color in SessionColor::ALL {
+            let cls = color.css_class();
+            assert!(
+                css.matches(&format!(".{cls}")).count() >= 2,
+                ".{cls} should appear in both dark and light sections"
+            );
+        }
+    }
+
+    #[test]
+    fn app_css_uses_different_palette_tiers_for_light_and_dark() {
+        let css = crate::application::APP_CSS;
+        // Dark mode uses _3 variants (good contrast on dark backgrounds)
+        assert!(css.contains("dark") && css.contains("@blue_3"));
+        // Light mode uses _5 variants (good contrast on light backgrounds)
+        assert!(css.contains("light") && css.contains("@blue_5"));
+        // Verify no _3 appears after the light query starts
+        let light_start = css.find("prefers-color-scheme: light").unwrap();
+        let light_section = &css[light_start..];
+        assert!(!light_section.contains("_3;"), "light section should not use _3 tier");
+    }
+
+    #[test]
     fn auto_name_from_cwd_uses_basename() {
         let ep = RuntimeEndpoint::Local;
         assert_eq!(
