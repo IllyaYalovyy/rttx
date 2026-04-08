@@ -267,10 +267,10 @@ quality pipeline simple and fast. It will run on a schedule (nightly) rather tha
 
 - [ ] **W1** — Add `[package.metadata.deb]` to `Cargo.toml` for `cargo-deb`
 - [ ] **W2** — Add `[package.metadata.generate-rpm]` to `Cargo.toml` for `cargo-generate-rpm`
-- [ ] **W3** — Create `.github/workflows/quality.yml` — fmt, clippy, test, manifest validation
-- [ ] **W4** — Create `.github/workflows/release.yml` — scaffold with build-flatpak, build-deb, build-rpm, github-release, copr-submit jobs
-- [ ] **W5** — Set `COPR_API_TOKEN` as a repository secret
-- [ ] **W6** — Validate Flatpak runtime caching on first release run; tune cache key
-- [ ] **W7** — Add nightly `ui-tests.yml` job for AT-SPI2 suite once weston headless setup is worked out
+- [x] **W3** — Create `.github/workflows/quality.yml` — fmt, clippy, test, manifest validation
+- [x] **W4** — Create `.github/workflows/release.yml` — scaffold with build-flatpak, build-deb, build-rpm, github-release, copr-submit jobs
+- [x] **W5** — Set `COPR_API_TOKEN` as a repository secret
+- [x] **W6** — Validate Flatpak runtime caching on first release run; tune cache key
+- [x] **W7** — AT-SPI behavioral UI tests running in CI on every PR via Weston headless compositor
 
 ---

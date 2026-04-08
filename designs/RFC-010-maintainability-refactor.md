@@ -400,7 +400,7 @@ seams already exist.
 - [x] **Step 3** — Share direct/managed terminal shortcut policy and add regression coverage (`#187`, `#201`) *(prerequisite: Step 2)*
 - [ ] **Step 4** — Add black-box client+daemon GTK integration coverage for restore/restart/selection sync (`#185`) *(prerequisite: Steps 1–3 can land incrementally)*
 - [ ] **Step 5** — Fix terminal retry/title-sync lifecycle and remaining low-risk correctness cleanup *(prerequisite: Step 2)*
-- [ ] **Step 6** — Split `window.rs` into `build`, `actions`, `runtime`, `sessions`, `recovery`, and `sidebars` modules (`#98`, `#204` partial) *(prerequisite: Steps 1–5)*
+- [x] **Step 6** — Split `window.rs` into module directory with `actions`, `runtime`, `sidebar`, `terminal`, `dialogs`, `input` modules (`#98`, `#204`) — `mod.rs` still large but core concerns are separated
 - [x] **Step 7** — Split `session/layout.rs` into layout tree, state, and recovery modules (`#101`, `#205`) *(prerequisite: Step 6)*
 - [x] **Step 8** — Tighten the terminal widget API and finish or remove inactive search UI (`#24`, `#221`) *(prerequisite: Step 7)*
 - [x] **Step 9** — Promote daemon-backed stability coverage into routine CI gating (`#109`→`#220`, `#147`→`#209`, `#153`→`#219`) *(prerequisite: Step 4)*

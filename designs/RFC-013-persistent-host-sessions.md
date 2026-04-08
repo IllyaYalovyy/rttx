@@ -282,28 +282,28 @@ where replayable context is useful.
 
 ## Development Plan
 
-1. **Terminology and doc cleanup**
-   Align product docs on `Workspace`, `Runtime`, `Endpoint`, `Policy`, and the no-fallback rule.
-2. **Endpoint connection manager**
-   Replace synchronous bridge calls with an endpoint-scoped async manager and a pure connection
-   state machine.
-3. **Workspace/runtime binding model**
-   Persist stable ids and a binding map so restore and reconcile do not depend on layout position.
-4. **Homogeneous workspace policy**
-   Enforce one endpoint and one runtime policy per workspace while allowing mixed workspaces in the
-   same window.
-5. **Explicit connection UX**
-   Add `Connecting`, `Reconnecting`, `Blocked`, and `Recovered` UI states with one control surface
-   per workspace in the tab/sidebar row.
-6. **Shared terminal abstraction**
-   Make search, zoom, copy, paste, cwd/title tracking, and notifications operate through one
-   terminal abstraction for all managed workspaces.
-7. **Authoritative workspace lifecycle**
-   Make `Close Workspace` destructive and final, keep attach explicit, and demote or remove
-   advanced daemon lifecycle actions from the normal close flow.
-8. **Test strategy**
-   Push most workflow logic into pure reducer/state-machine tests; keep GTK tests for wiring and
-   widget contracts only.
+1. **Terminology and doc cleanup** ✅
+   Product docs aligned on `Workspace`, `Runtime`, `Endpoint`, `Policy`, and the no-fallback rule.
+2. **Endpoint connection manager** — partially done
+   `runtime.rs` holds pure connection-state logic; `workspace_state.rs` owns managed-workspace
+   transitions. Full async manager extraction remains.
+3. **Workspace/runtime binding model** ✅
+   Stable ids and binding map persist; restore and reconcile do not depend on layout position.
+4. **Homogeneous workspace policy** ✅
+   One endpoint and one runtime policy per workspace enforced.
+5. **Explicit connection UX** ✅
+   `Connecting`, `Reconnecting`, `Blocked`, and `Recovered` UI states with connection icon in
+   sidebar prefix and state-specific icons/colors.
+6. **Shared terminal abstraction** ✅
+   `terminal/handle.rs` provides unified search, zoom, copy, paste, cwd/title tracking for both
+   direct and managed terminals.
+7. **Authoritative workspace lifecycle** ✅
+   `Close Workspace` is destructive and final (#192). Attach is explicit (#194). Advanced daemon
+   lifecycle actions removed from normal close flow (#195).
+8. **Test strategy** — partially done
+   Pure state tests in `runtime.rs` and `workspace_state.rs`. Runtime behavior gate enforces
+   coverage on every PR. GTK integration tests cover wiring and widget contracts. Deeper
+   client+daemon end-to-end coverage remains a gap.
 
 ---
 
@@ -324,12 +324,16 @@ implementation:
 
 ## Backlog
 
-1. `#191` — Simplify managed workspace lifecycle UX: close means gone, attach is explicit, tabs own reconnect state
-2. `#192` — Make `Close Workspace` destructive for managed runtimes and suppress inventory resurrection
-3. `#194` — Add explicit `Attach to Existing Runtime` flow and stop implicit attach during `New Workspace`
-4. `#195` — Remove terminate/detach from the normal managed workspace close flow
-5. `#196` — Move managed reconnect and connection actions from panes to workspace tabs
-6. `#193` — Add regression coverage for managed workspace close, attach, and reconnect UX
+All original backlog items have been completed:
+
+1. ~~`#191` — Simplify managed workspace lifecycle UX~~ ✅
+2. ~~`#192` — Make `Close Workspace` destructive for managed runtimes~~ ✅
+3. ~~`#194` — Add explicit `Attach to Existing Runtime` flow~~ ✅
+4. ~~`#195` — Remove terminate/detach from normal close flow~~ ✅
+5. ~~`#196` — Move managed reconnect/connection actions from panes to workspace tabs~~ ✅
+6. ~~`#193` — Add regression coverage for managed workspace close, attach, and reconnect UX~~ ✅
+
+Remaining work tracked in RFC-010 (Steps 1, 2, 4) and test issues #318, #319.
 
 ---
 

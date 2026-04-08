@@ -176,8 +176,6 @@ non-main threads).
 - **GAP2** — Add more real client+daemon restart/reconcile coverage now that both live in one repo
 - **GAP3** — Expand daemon adversarial tests: malformed protocol input, persistence failure
   injection, race-heavy ownership, stress/load, and leak-oriented lifecycle loops
-- **GAP4** — Add the deferred nightly AT-SPI job so accessibility-level UI regressions run
-  continuously in GitHub Actions
 
 ---
 
@@ -201,9 +199,9 @@ non-main threads).
 - [x] Activity indicator timer regression coverage
 - [x] Nested split ratio restore regression coverage
 - [x] Runtime-affecting PR gate requiring pure-state plus behavior-layer evidence
+- [x] AT-SPI behavioral UI tests running in CI on every PR (Weston headless)
 - [ ] Deterministic plain-harness GTK execution
 - [ ] Deeper client+daemon restart/reconcile integration coverage
 - [ ] Expanded daemon adversarial test matrix
-- [ ] Nightly AT-SPI GitHub Actions job
 
 ---
