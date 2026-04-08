@@ -1913,7 +1913,7 @@ impl Window {
         let session_idx = state
             .sessions
             .iter()
-            .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
+            .position(|s| s.layout.contains_terminal(terminal_uuid));
 
         if let Some(idx) = session_idx {
             let at_limit = state.sessions[idx]
@@ -1997,7 +1997,7 @@ impl Window {
             let session_idx = state
                 .sessions
                 .iter()
-                .position(|s| s.layout.terminal_uuids().contains(&terminal_uuid.to_string()));
+                .position(|s| s.layout.contains_terminal(terminal_uuid));
             let Some(idx) = session_idx else { return };
 
             if state.sessions[idx].uses_managed_runtime()
@@ -2378,7 +2378,7 @@ impl Window {
         let session = state
             .sessions
             .iter()
-            .find(|s| s.input_sync && s.layout.terminal_uuids().contains(&source_uuid.to_string()));
+            .find(|s| s.input_sync && s.layout.contains_terminal(source_uuid));
         let Some(session) = session else { return };
         let uuids = session.layout.terminal_uuids();
         drop(state);
