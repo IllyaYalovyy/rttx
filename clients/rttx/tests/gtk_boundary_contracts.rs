@@ -752,6 +752,48 @@ fn connection_icon_distinguishes_local_from_remote() {
     assert_ne!(connected.icon_name, disconnected.icon_name);
 }
 
+/// Contract: local endpoints show status icons for non-Connected states.
+///
+/// Before #329, local endpoints never showed connection icons. Now they show
+/// icons for Disconnected, Recovered, Blocked, and transient states so the
+/// sidebar subtitle can stay clean (endpoint + pane count only).
+#[test]
+fn connection_icon_shown_for_local_non_connected_states() {
+    use rttx::runtime::{ConnectionProblem, ConnectionStatus, RuntimeEndpoint, connection_icon};
+
+    let local = RuntimeEndpoint::Local;
+    assert!(connection_icon(&local, &ConnectionStatus::Connected).is_none());
+    assert!(connection_icon(&local, &ConnectionStatus::Disconnected).is_some());
+    assert!(connection_icon(&local, &ConnectionStatus::Recovered).is_some());
+    assert!(
+        connection_icon(&local, &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable))
+            .is_some()
+    );
+    assert!(connection_icon(&local, &ConnectionStatus::Connecting).is_some());
+}
+
+/// Contract: workspace_connection_summary never contains status text.
+///
+/// Status is conveyed by the connection icon, not the subtitle string.
+#[test]
+fn workspace_connection_summary_contains_no_status_text() {
+    use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
+
+    let local = RuntimeEndpoint::Local;
+    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+
+    for (ep, count) in [(&local, 1), (&local, 3), (&remote, 1), (&remote, 2)] {
+        let summary = workspace_connection_summary(ep, count);
+        for keyword in ["Recovered", "Disconnected", "Action Required", "Reconnecting", "Blocked"]
+        {
+            assert!(
+                !summary.contains(keyword),
+                "subtitle should not contain status text '{keyword}': {summary}"
+            );
+        }
+    }
+}
+
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.
 ///
 /// The banner fields were removed in #305. The pane header status label and
