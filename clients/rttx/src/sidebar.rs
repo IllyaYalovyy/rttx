@@ -31,7 +31,6 @@ mod imp {
     pub struct SessionRow {
         pub uuid: RefCell<String>,
         pub name: RefCell<String>,
-        pub color_dot: gtk4::Image,
         pub position_label: gtk4::Label,
         pub connection_icon: gtk4::Image,
         pub activity_dot: gtk4::Image,
@@ -42,9 +41,6 @@ mod imp {
 
     impl Default for SessionRow {
         fn default() -> Self {
-            let color_dot = gtk4::Image::from_icon_name("circle-filled-symbolic");
-            color_dot.set_pixel_size(10);
-
             let connection_icon = gtk4::Image::new();
             connection_icon.set_pixel_size(16);
             connection_icon.set_visible(false);
@@ -60,7 +56,6 @@ mod imp {
             Self {
                 uuid: RefCell::new(String::new()),
                 name: RefCell::new(String::new()),
-                color_dot,
                 position_label,
                 connection_icon,
                 activity_dot,
@@ -89,11 +84,13 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.add_css_class("circular");
 
-            obj.add_prefix(&self.color_dot);
             obj.add_prefix(&self.position_label);
             obj.add_suffix(&self.connection_icon);
             obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.close_button);
+
+            obj.set_subtitle_lines(1);
+            obj.add_css_class("session-row");
         }
     }
 
@@ -134,27 +131,20 @@ impl SessionRow {
         self.set_title(name);
     }
 
-    pub fn set_color(&self, color: crate::session::SessionColor) {
-        let dot = &self.imp().color_dot;
-        for cls in crate::session::SessionColor::ALL {
-            dot.remove_css_class(cls.css_class());
-        }
-        dot.add_css_class(color.css_class());
-    }
-
     pub fn set_connection_icon(&self, icon: Option<&crate::runtime::ConnectionIcon>) {
         const ICON_CSS_CLASSES: &[&str] = &["accent", "dim-label", "warning", "error"];
         let widget = &self.imp().connection_icon;
         for cls in ICON_CSS_CLASSES {
             widget.remove_css_class(cls);
         }
-        match icon {
-            Some(icon) => {
-                widget.set_icon_name(Some(icon.icon_name));
-                widget.add_css_class(icon.css_class);
-                widget.set_visible(true);
-            }
-            None => widget.set_visible(false),
+        if let Some(icon) = icon {
+            widget.set_icon_name(Some(icon.icon_name));
+            widget.add_css_class(icon.css_class);
+            widget.set_tooltip_text(Some(icon.tooltip));
+            widget.set_visible(true);
+        } else {
+            widget.set_tooltip_text(None);
+            widget.set_visible(false);
         }
     }
 
@@ -240,6 +230,11 @@ impl SessionRow {
     pub fn close_button(&self) -> &gtk4::Button {
         &self.imp().close_button
     }
+
+    /// Switch the close button to a menu icon for managed workspaces.
+    pub fn set_managed_actions_style(&self) {
+        self.imp().close_button.set_icon_name("view-more-symbolic");
+    }
 }
 
 #[cfg(test)]
@@ -307,11 +302,11 @@ mod tests {
         require_display!();
 
         let row = SessionRow::new("session-1", "Session 1");
-        row.set_subtitle("Local runtime · vim main.rs");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime · vim main.rs");
+        row.set_subtitle("Local · vim main.rs");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local · vim main.rs");
 
-        row.set_subtitle("Local runtime");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime");
+        row.set_subtitle("Local");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local");
     }
 
     #[test]
@@ -331,6 +326,7 @@ mod tests {
         let icon = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
             css_class: "accent",
+            tooltip: "Connected to remote host",
         };
         row.set_connection_icon(Some(&icon));
         assert!(row.imp().connection_icon.is_visible());
@@ -351,6 +347,7 @@ mod tests {
         let connected = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
             css_class: "accent",
+            tooltip: "Connected to remote host",
         };
         row.set_connection_icon(Some(&connected));
         assert!(row.imp().connection_icon.has_css_class("accent"));
@@ -358,6 +355,7 @@ mod tests {
         let disconnected = crate::runtime::ConnectionIcon {
             icon_name: "network-offline-symbolic",
             css_class: "warning",
+            tooltip: "Disconnected from runtime",
         };
         row.set_connection_icon(Some(&disconnected));
         assert!(!row.imp().connection_icon.has_css_class("accent"));
@@ -460,5 +458,46 @@ mod tests {
 
         row.set_position(9);
         assert!(!row.imp().position_label.is_visible(), "positions >= 9 should hide the label");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn connection_icon_tooltip_set_and_cleared() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+
+        let icon = crate::runtime::ConnectionIcon {
+            icon_name: "network-server-symbolic",
+            css_class: "accent",
+            tooltip: "Connected to remote host",
+        };
+        row.set_connection_icon(Some(&icon));
+        assert_eq!(
+            row.imp().connection_icon.tooltip_text().unwrap().as_str(),
+            "Connected to remote host"
+        );
+
+        row.set_connection_icon(None);
+        assert!(row.imp().connection_icon.tooltip_text().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn managed_actions_style_changes_button_icon() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+        assert_eq!(row.close_button().icon_name().unwrap(), "window-close-symbolic");
+
+        row.set_managed_actions_style();
+        assert_eq!(row.close_button().icon_name().unwrap(), "view-more-symbolic");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn session_row_has_css_class_and_subtitle_truncation() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+        assert!(row.has_css_class("session-row"));
+        assert_eq!(row.subtitle_lines(), 1);
     }
 }

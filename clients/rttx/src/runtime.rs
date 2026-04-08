@@ -366,6 +366,7 @@ pub fn present_connection_status(status: &ConnectionStatus) -> ConnectionPresent
 pub struct ConnectionIcon {
     pub icon_name: &'static str,
     pub css_class: &'static str,
+    pub tooltip: &'static str,
 }
 
 /// Returns the connection icon for a workspace row, or `None` for local endpoints.
@@ -374,25 +375,27 @@ pub const fn connection_icon(
     endpoint: &RuntimeEndpoint,
     status: &ConnectionStatus,
 ) -> Option<ConnectionIcon> {
-    let (icon_name, css_class) = match status {
+    let (icon_name, css_class, tooltip) = match status {
         ConnectionStatus::Connected => {
             if matches!(endpoint, RuntimeEndpoint::Local) {
                 return None;
             }
-            ("network-server-symbolic", "accent")
+            ("network-server-symbolic", "accent", "Connected to remote host")
         }
-        ConnectionStatus::Recovered => ("emblem-ok-symbolic", "accent"),
-        ConnectionStatus::Disconnected => ("network-offline-symbolic", "warning"),
-        ConnectionStatus::Blocked(_) => ("network-offline-symbolic", "error"),
+        ConnectionStatus::Recovered => ("emblem-ok-symbolic", "accent", "Connection recovered"),
+        ConnectionStatus::Disconnected => {
+            ("network-offline-symbolic", "warning", "Disconnected from runtime")
+        }
+        ConnectionStatus::Blocked(_) => ("network-offline-symbolic", "error", "Connection blocked"),
         _ => {
             if matches!(endpoint, RuntimeEndpoint::Local) {
-                ("content-loading-symbolic", "dim-label")
+                ("content-loading-symbolic", "dim-label", "Connecting to local runtime")
             } else {
-                ("network-server-symbolic", "dim-label")
+                ("network-server-symbolic", "dim-label", "Connecting to remote host")
             }
         }
     };
-    Some(ConnectionIcon { icon_name, css_class })
+    Some(ConnectionIcon { icon_name, css_class, tooltip })
 }
 
 #[must_use]
@@ -401,7 +404,7 @@ pub fn workspace_connection_summary(
     active_pane_info: Option<&str>,
 ) -> String {
     let base = match endpoint {
-        RuntimeEndpoint::Local => "Local runtime",
+        RuntimeEndpoint::Local => "Local",
         RuntimeEndpoint::Remote { host } => host.as_str(),
     };
 
@@ -612,13 +615,10 @@ mod tests {
     fn workspace_connection_summary_with_pane_info() {
         assert_eq!(
             workspace_connection_summary(&RuntimeEndpoint::Local, Some("vim main.rs")),
-            "Local runtime · vim main.rs"
+            "Local · vim main.rs"
         );
-        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local runtime");
-        assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, Some("")),
-            "Local runtime"
-        );
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local");
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("")), "Local");
         assert_eq!(
             workspace_connection_summary(
                 &RuntimeEndpoint::Remote { host: "builder.example".into() },
@@ -726,6 +726,24 @@ mod tests {
         let icon = connection_icon(&ep, &ConnectionStatus::Recovered).unwrap();
         assert_eq!(icon.icon_name, "emblem-ok-symbolic");
         assert_eq!(icon.css_class, "accent");
+    }
+
+    #[test]
+    fn connection_icon_tooltips_describe_state() {
+        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let local = RuntimeEndpoint::Local;
+
+        let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();
+        assert_eq!(connected.tooltip, "Connected to remote host");
+
+        let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected).unwrap();
+        assert_eq!(disconnected.tooltip, "Disconnected from runtime");
+
+        let connecting_local = connection_icon(&local, &ConnectionStatus::Connecting).unwrap();
+        assert_eq!(connecting_local.tooltip, "Connecting to local runtime");
+
+        let connecting_remote = connection_icon(&remote, &ConnectionStatus::Connecting).unwrap();
+        assert_eq!(connecting_remote.tooltip, "Connecting to remote host");
     }
 
     #[test]

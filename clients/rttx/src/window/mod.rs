@@ -474,12 +474,12 @@ impl Window {
     fn append_session_row(&self, session_state: &SessionState) {
         let imp = self.imp();
         let row = SessionRow::new(&session_state.uuid, &session_state.name);
-        row.close_button().set_tooltip_text(Some(if session_state.uses_managed_runtime() {
-            "Workspace actions"
+        if session_state.uses_managed_runtime() {
+            row.set_managed_actions_style();
+            row.close_button().set_tooltip_text(Some("Workspace actions"));
         } else {
-            "Close workspace"
-        }));
-        row.set_color(session_state.color);
+            row.close_button().set_tooltip_text(Some("Close workspace"));
+        }
 
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
