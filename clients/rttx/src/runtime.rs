@@ -399,33 +399,59 @@ pub const fn connection_icon(
     ConnectionIcon { icon_name, css_class, tooltip }
 }
 
+/// Build a structured subtitle for a workspace row.
+///
+/// Format: `[connection ·] [user@host ·] leaf-path`
+/// - For remote managed: `host · leaf-path`
+/// - For local managed: `leaf-path`
+/// - For direct: `user@host · leaf-path` or just `leaf-path`
 #[must_use]
 pub fn workspace_connection_summary(
     endpoint: &RuntimeEndpoint,
     active_pane_info: Option<&str>,
 ) -> String {
+    let pane_part = active_pane_info.filter(|s| !s.is_empty()).unwrap_or("");
     match endpoint {
-        RuntimeEndpoint::Local => active_pane_info.unwrap_or("").to_string(),
-        RuntimeEndpoint::Remote { host } => match active_pane_info {
-            Some(info) if !info.is_empty() => format!("{host} · {info}"),
-            _ => host.clone(),
-        },
+        RuntimeEndpoint::Local => pane_part.to_string(),
+        RuntimeEndpoint::Remote { host } => {
+            if pane_part.is_empty() {
+                host.clone()
+            } else {
+                format!("{host} · {pane_part}")
+            }
+        }
     }
 }
 
-/// Extract a compact pane description from its title and working directory.
+/// Extract a compact pane description for the sidebar subtitle.
 ///
-/// Prefers the title when it carries useful information (i.e. not just the shell
-/// name). Falls back to the CWD basename.
+/// Prioritizes the CWD leaf folder. Only falls back to the VTE title when
+/// no CWD is available and the title carries useful information (not a
+/// generic shell name or "Terminal (persistent)" noise).
 #[must_use]
 pub fn pane_description(title: Option<&str>, cwd: Option<&str>) -> Option<String> {
-    if let Some(title) = title {
-        let trimmed = title.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
+    // Prefer CWD leaf — this is always meaningful.
+    if let Some(leaf) = cwd.and_then(|c| {
+        let name = c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c);
+        if name.is_empty() { None } else { Some(name.to_string()) }
+    }) {
+        return Some(leaf);
     }
-    cwd.map(|c| c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c).to_string())
+    // Fall back to title only if it's not generic noise.
+    if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty() && !is_generic_title(t)) {
+        return Some(t.to_string());
+    }
+    None
+}
+
+/// Returns true for VTE titles that carry no useful information.
+fn is_generic_title(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    lower.contains("terminal")
+        || lower == "bash"
+        || lower == "zsh"
+        || lower == "sh"
+        || lower == "fish"
 }
 
 /// Deterministic, non-destructive binding reconciliation result.
@@ -636,11 +662,23 @@ mod tests {
     }
 
     #[test]
-    fn pane_description_prefers_title_over_cwd() {
+    fn pane_description_prefers_cwd_over_title() {
         assert_eq!(
             pane_description(Some("vim main.rs"), Some("/home/user/project")),
-            Some("vim main.rs".into())
+            Some("project".into())
         );
+    }
+
+    #[test]
+    fn pane_description_falls_back_to_useful_title() {
+        assert_eq!(pane_description(Some("vim main.rs"), None), Some("vim main.rs".into()));
+    }
+
+    #[test]
+    fn pane_description_filters_generic_titles() {
+        assert_eq!(pane_description(Some("Terminal (persistent)"), None), None);
+        assert_eq!(pane_description(Some("bash"), None), None);
+        assert_eq!(pane_description(Some("zsh"), None), None);
     }
 
     #[test]

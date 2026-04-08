@@ -312,6 +312,18 @@ pub fn auto_name_for_workspace(endpoint: &RuntimeEndpoint, cwd: Option<&str>) ->
     if name.is_empty() { None } else { Some(name.to_string()) }
 }
 
+/// Produce a workspace name, always returning a value.
+/// Uses `auto_name_for_workspace` when possible, otherwise falls back to
+/// "Workspace N" where N is the 1-based count.
+#[must_use]
+pub fn workspace_display_name(
+    endpoint: &RuntimeEndpoint,
+    cwd: Option<&str>,
+    count: usize,
+) -> String {
+    auto_name_for_workspace(endpoint, cwd).unwrap_or_else(|| format!("Workspace {count}"))
+}
+
 const fn default_left_sidebar_width() -> i32 {
     220
 }
@@ -907,6 +919,25 @@ mod module_boundary_tests {
     fn auto_name_home_directory() {
         let ep = RuntimeEndpoint::Local;
         assert_eq!(auto_name_for_workspace(&ep, Some("/home/user")), Some("user".into()));
+    }
+
+    #[test]
+    fn workspace_display_name_uses_cwd_basename() {
+        assert_eq!(
+            workspace_display_name(&RuntimeEndpoint::Local, Some("/home/user/projects"), 1),
+            "projects"
+        );
+    }
+
+    #[test]
+    fn workspace_display_name_falls_back_to_counter() {
+        assert_eq!(workspace_display_name(&RuntimeEndpoint::Local, None, 3), "Workspace 3");
+    }
+
+    #[test]
+    fn workspace_display_name_uses_hostname_for_remote() {
+        let ep = RuntimeEndpoint::Remote { host: "user@builder.example.com".into() };
+        assert_eq!(workspace_display_name(&ep, None, 1), "builder");
     }
 
     #[test]

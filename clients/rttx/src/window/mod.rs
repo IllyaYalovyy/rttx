@@ -474,6 +474,15 @@ impl Window {
     fn append_session_row(&self, session_state: &SessionState) {
         let imp = self.imp();
         let row = SessionRow::new(&session_state.uuid, &session_state.name);
+
+        let initial_status = if session_state.uses_managed_runtime() {
+            ConnectionStatus::Connecting
+        } else {
+            ConnectionStatus::Connected
+        };
+        let icon = connection_icon(&session_state.runtime.endpoint, &initial_status);
+        row.set_connection_icon(&icon);
+
         if session_state.uses_managed_runtime() {
             row.set_managed_actions_style();
             row.close_button().set_tooltip_text(Some("Workspace actions"));

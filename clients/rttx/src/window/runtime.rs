@@ -115,8 +115,7 @@ impl Window {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
-        let name = crate::session::state::auto_name_for_workspace(&endpoint, None)
-            .unwrap_or_else(|| format!("Remote {count}"));
+        let name = crate::session::state::workspace_display_name(&endpoint, None, count);
         let mut session_state =
             SessionState::new_managed_remote(name, host, WorkspacePolicy::Persistent, None);
         session_state.color = self.next_session_color();
@@ -135,11 +134,11 @@ impl Window {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();
-        let name = crate::session::state::auto_name_for_workspace(
+        let name = crate::session::state::workspace_display_name(
             &RuntimeEndpoint::Local,
             initial_cwd.as_deref(),
-        )
-        .unwrap_or_else(|| format!("Workspace {count}"));
+            count,
+        );
         let mut session_state = SessionState::new_managed_local(name, policy, initial_cwd);
         session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());

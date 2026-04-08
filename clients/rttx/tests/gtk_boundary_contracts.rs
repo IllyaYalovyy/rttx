@@ -828,9 +828,41 @@ fn workspace_connection_summary_contains_no_status_text() {
 fn pane_description_extracts_compact_label() {
     use rttx::runtime::pane_description;
 
-    assert_eq!(pane_description(Some("vim"), Some("/home/user")), Some("vim".into()));
+    // CWD leaf is preferred over title.
+    assert_eq!(pane_description(Some("vim"), Some("/home/user")), Some("user".into()));
     assert_eq!(pane_description(None, Some("/home/user/project")), Some("project".into()));
+    // Title used only when no CWD and title is not generic.
+    assert_eq!(pane_description(Some("vim"), None), Some("vim".into()));
+    // Generic titles are filtered.
+    assert_eq!(pane_description(Some("bash"), None), None);
     assert_eq!(pane_description(None, None), None);
+}
+
+/// Contract: pane_description filters generic VTE titles and prefers CWD.
+///
+/// Prevents 'Terminal (persistent)' and shell names from appearing in the
+/// sidebar subtitle. CWD leaf folder is always preferred when available.
+#[test]
+fn pane_description_subtitle_structure_regression() {
+    use rttx::runtime::{RuntimeEndpoint, pane_description, workspace_connection_summary};
+
+    // CWD leaf preferred over any title.
+    assert_eq!(
+        pane_description(Some("Terminal (persistent)"), Some("/home/user/rttx")),
+        Some("rttx".into())
+    );
+    // Generic titles filtered when no CWD.
+    assert_eq!(pane_description(Some("Terminal (persistent)"), None), None);
+    assert_eq!(pane_description(Some("fish"), None), None);
+    // Useful title kept when no CWD.
+    assert_eq!(pane_description(Some("htop"), None), Some("htop".into()));
+
+    // Local subtitle is just the pane info.
+    assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("rttx")), "rttx");
+    // Remote subtitle includes host.
+    let remote = RuntimeEndpoint::Remote { host: "dev-box".into() };
+    assert_eq!(workspace_connection_summary(&remote, Some("rttx")), "dev-box · rttx");
+    assert_eq!(workspace_connection_summary(&remote, None), "dev-box");
 }
 
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.

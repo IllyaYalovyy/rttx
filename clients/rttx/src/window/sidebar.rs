@@ -330,11 +330,7 @@ impl Window {
                 let handle = self.terminal_handle(uuid)?;
                 pane_description(Some(&handle.title()), handle.current_directory().as_deref())
             });
-            if session.uses_managed_runtime() {
-                workspace_connection_summary(endpoint, pane_info.as_deref())
-            } else {
-                pane_info.unwrap_or_default()
-            }
+            workspace_connection_summary(endpoint, pane_info.as_deref())
         };
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
