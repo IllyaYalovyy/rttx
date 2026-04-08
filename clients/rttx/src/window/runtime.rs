@@ -532,7 +532,6 @@ impl Window {
         };
         let summary = workspace_connection_summary(
             &session.runtime.endpoint,
-            status,
             session.layout.terminal_count(),
         );
         let icon = connection_icon(&session.runtime.endpoint, status);

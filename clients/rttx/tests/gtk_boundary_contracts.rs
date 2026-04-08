@@ -721,35 +721,27 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
 /// correct.
 #[test]
 fn workspace_connection_summary_includes_pane_count_in_subtitle() {
-    use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, workspace_connection_summary};
+    use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
 
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
 
-    assert!(
-        workspace_connection_summary(&local, &ConnectionStatus::Connected, 3).ends_with("3 panes")
-    );
-    assert!(
-        workspace_connection_summary(&local, &ConnectionStatus::Connected, 1).ends_with("1 pane")
-    );
-    assert!(
-        workspace_connection_summary(&remote, &ConnectionStatus::Connected, 2).ends_with("2 panes")
-    );
-    assert!(
-        workspace_connection_summary(&remote, &ConnectionStatus::Disconnected, 1)
-            .contains("1 pane")
-    );
+    assert!(workspace_connection_summary(&local, 3).ends_with("3 panes"));
+    assert!(workspace_connection_summary(&local, 1).ends_with("1 pane"));
+    assert!(workspace_connection_summary(&remote, 2).ends_with("2 panes"));
+    assert!(workspace_connection_summary(&remote, 1).contains("1 pane"));
 }
 
 /// Contract: connection_icon returns None for local, Some for remote endpoints.
 ///
-/// The sidebar row must show a connection icon only for remote workspaces.
-/// The icon and CSS class must change based on connection status.
+/// The sidebar row shows a connection icon for non-connected states (any endpoint)
+/// and for remote endpoints when connected. Local+Connected returns None.
 #[test]
 fn connection_icon_distinguishes_local_from_remote() {
     use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
 
     assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
+    assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected).is_some());
 
     let remote = RuntimeEndpoint::Remote { host: "h".into() };
     let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();

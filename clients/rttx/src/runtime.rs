@@ -374,37 +374,32 @@ pub const fn connection_icon(
     endpoint: &RuntimeEndpoint,
     status: &ConnectionStatus,
 ) -> Option<ConnectionIcon> {
-    if matches!(endpoint, RuntimeEndpoint::Local) {
-        return None;
-    }
     let (icon_name, css_class) = match status {
-        ConnectionStatus::Connected | ConnectionStatus::Recovered => {
+        ConnectionStatus::Connected => {
+            if matches!(endpoint, RuntimeEndpoint::Local) {
+                return None;
+            }
             ("network-server-symbolic", "accent")
         }
+        ConnectionStatus::Recovered => ("emblem-ok-symbolic", "accent"),
         ConnectionStatus::Disconnected => ("network-offline-symbolic", "warning"),
         ConnectionStatus::Blocked(_) => ("network-offline-symbolic", "error"),
-        _ => ("network-server-symbolic", "dim-label"),
+        _ => {
+            if matches!(endpoint, RuntimeEndpoint::Local) {
+                ("content-loading-symbolic", "dim-label")
+            } else {
+                ("network-server-symbolic", "dim-label")
+            }
+        }
     };
     Some(ConnectionIcon { icon_name, css_class })
 }
 
 #[must_use]
-pub fn workspace_connection_summary(
-    endpoint: &RuntimeEndpoint,
-    status: &ConnectionStatus,
-    pane_count: usize,
-) -> String {
-    let endpoint_label = match endpoint {
-        RuntimeEndpoint::Local => "Local".to_string(),
-        RuntimeEndpoint::Remote { host } => host.clone(),
-    };
-
-    let base = match status {
-        ConnectionStatus::Connected => match endpoint {
-            RuntimeEndpoint::Local => "Local runtime".into(),
-            RuntimeEndpoint::Remote { .. } => endpoint_label,
-        },
-        _ => format!("{endpoint_label} · {}", status.label()),
+pub fn workspace_connection_summary(endpoint: &RuntimeEndpoint, pane_count: usize) -> String {
+    let base = match endpoint {
+        RuntimeEndpoint::Local => "Local runtime",
+        RuntimeEndpoint::Remote { host } => host.as_str(),
     };
 
     if pane_count == 1 {
@@ -599,24 +594,23 @@ mod tests {
     #[test]
     fn workspace_connection_summary_includes_pane_count() {
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, 3),
+            workspace_connection_summary(&RuntimeEndpoint::Local, 3),
             "Local runtime · 3 panes"
         );
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, 1),
+            workspace_connection_summary(&RuntimeEndpoint::Local, 1),
             "Local runtime · 1 pane"
         );
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, &ConnectionStatus::Recovered, 2),
-            "Local · Recovered · 2 panes"
+            workspace_connection_summary(&RuntimeEndpoint::Local, 2),
+            "Local runtime · 2 panes"
         );
         assert_eq!(
             workspace_connection_summary(
                 &RuntimeEndpoint::Remote { host: "builder.example".into() },
-                &ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
                 1,
             ),
-            "builder.example · Action Required: Permission denied · 1 pane"
+            "builder.example · 1 pane"
         );
     }
 
@@ -624,31 +618,39 @@ mod tests {
     fn workspace_connection_summary_for_connected_remote_stays_compact() {
         let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
 
-        assert_eq!(
-            workspace_connection_summary(&endpoint, &ConnectionStatus::Connected, 1),
-            "builder.example · 1 pane"
-        );
-        assert_eq!(
-            workspace_connection_summary(&endpoint, &ConnectionStatus::Disconnected, 2),
-            "builder.example · Disconnected · 2 panes"
-        );
+        assert_eq!(workspace_connection_summary(&endpoint, 1), "builder.example · 1 pane");
+        assert_eq!(workspace_connection_summary(&endpoint, 2), "builder.example · 2 panes");
     }
 
     #[test]
     fn workspace_connection_summary_pane_count_singular_plural() {
         let ep = RuntimeEndpoint::Local;
-        let status = ConnectionStatus::Connected;
-        assert!(workspace_connection_summary(&ep, &status, 1).ends_with("1 pane"));
-        assert!(workspace_connection_summary(&ep, &status, 2).ends_with("2 panes"));
-        assert!(workspace_connection_summary(&ep, &status, 10).ends_with("10 panes"));
+        assert!(workspace_connection_summary(&ep, 1).ends_with("1 pane"));
+        assert!(workspace_connection_summary(&ep, 2).ends_with("2 panes"));
+        assert!(workspace_connection_summary(&ep, 10).ends_with("10 panes"));
     }
 
     #[test]
-    fn connection_icon_none_for_local() {
+    fn connection_icon_none_for_local_connected() {
         assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
-        assert!(
-            connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected).is_none()
-        );
+    }
+
+    #[test]
+    fn connection_icon_shown_for_local_non_connected() {
+        let ep = RuntimeEndpoint::Local;
+        let icon = connection_icon(&ep, &ConnectionStatus::Disconnected).unwrap();
+        assert_eq!(icon.css_class, "warning");
+
+        let icon = connection_icon(&ep, &ConnectionStatus::Recovered).unwrap();
+        assert_eq!(icon.css_class, "accent");
+
+        let icon =
+            connection_icon(&ep, &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable))
+                .unwrap();
+        assert_eq!(icon.css_class, "error");
+
+        let icon = connection_icon(&ep, &ConnectionStatus::Connecting).unwrap();
+        assert_eq!(icon.css_class, "dim-label");
     }
 
     #[test]
@@ -695,7 +697,7 @@ mod tests {
     fn connection_icon_accent_for_remote_recovered() {
         let ep = RuntimeEndpoint::Remote { host: "h".into() };
         let icon = connection_icon(&ep, &ConnectionStatus::Recovered).unwrap();
-        assert_eq!(icon.icon_name, "network-server-symbolic");
+        assert_eq!(icon.icon_name, "emblem-ok-symbolic");
         assert_eq!(icon.css_class, "accent");
     }
 
