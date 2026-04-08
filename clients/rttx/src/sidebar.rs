@@ -226,6 +226,11 @@ impl SessionRow {
     pub fn close_button(&self) -> &gtk4::Button {
         &self.imp().close_button
     }
+
+    /// Switch the close button to a menu icon for managed workspaces.
+    pub fn set_managed_actions_style(&self) {
+        self.imp().close_button.set_icon_name("view-more-symbolic");
+    }
 }
 
 #[cfg(test)]
