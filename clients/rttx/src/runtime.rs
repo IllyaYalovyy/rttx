@@ -366,6 +366,7 @@ pub fn present_connection_status(status: &ConnectionStatus) -> ConnectionPresent
 pub struct ConnectionIcon {
     pub icon_name: &'static str,
     pub css_class: &'static str,
+    pub tooltip: &'static str,
 }
 
 /// Returns the connection icon for a workspace row, or `None` for local endpoints.
@@ -374,25 +375,27 @@ pub const fn connection_icon(
     endpoint: &RuntimeEndpoint,
     status: &ConnectionStatus,
 ) -> Option<ConnectionIcon> {
-    let (icon_name, css_class) = match status {
+    let (icon_name, css_class, tooltip) = match status {
         ConnectionStatus::Connected => {
             if matches!(endpoint, RuntimeEndpoint::Local) {
                 return None;
             }
-            ("network-server-symbolic", "accent")
+            ("network-server-symbolic", "accent", "Connected to remote host")
         }
-        ConnectionStatus::Recovered => ("emblem-ok-symbolic", "accent"),
-        ConnectionStatus::Disconnected => ("network-offline-symbolic", "warning"),
-        ConnectionStatus::Blocked(_) => ("network-offline-symbolic", "error"),
+        ConnectionStatus::Recovered => ("emblem-ok-symbolic", "accent", "Connection recovered"),
+        ConnectionStatus::Disconnected => {
+            ("network-offline-symbolic", "warning", "Disconnected from runtime")
+        }
+        ConnectionStatus::Blocked(_) => ("network-offline-symbolic", "error", "Connection blocked"),
         _ => {
             if matches!(endpoint, RuntimeEndpoint::Local) {
-                ("content-loading-symbolic", "dim-label")
+                ("content-loading-symbolic", "dim-label", "Connecting to local runtime")
             } else {
-                ("network-server-symbolic", "dim-label")
+                ("network-server-symbolic", "dim-label", "Connecting to remote host")
             }
         }
     };
-    Some(ConnectionIcon { icon_name, css_class })
+    Some(ConnectionIcon { icon_name, css_class, tooltip })
 }
 
 #[must_use]

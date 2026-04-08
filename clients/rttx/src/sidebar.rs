@@ -134,13 +134,14 @@ impl SessionRow {
         for cls in ICON_CSS_CLASSES {
             widget.remove_css_class(cls);
         }
-        match icon {
-            Some(icon) => {
-                widget.set_icon_name(Some(icon.icon_name));
-                widget.add_css_class(icon.css_class);
-                widget.set_visible(true);
-            }
-            None => widget.set_visible(false),
+        if let Some(icon) = icon {
+            widget.set_icon_name(Some(icon.icon_name));
+            widget.add_css_class(icon.css_class);
+            widget.set_tooltip_text(Some(icon.tooltip));
+            widget.set_visible(true);
+        } else {
+            widget.set_tooltip_text(None);
+            widget.set_visible(false);
         }
     }
 
@@ -322,6 +323,7 @@ mod tests {
         let icon = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
             css_class: "accent",
+            tooltip: "Connected to remote host",
         };
         row.set_connection_icon(Some(&icon));
         assert!(row.imp().connection_icon.is_visible());
@@ -342,6 +344,7 @@ mod tests {
         let connected = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
             css_class: "accent",
+            tooltip: "Connected to remote host",
         };
         row.set_connection_icon(Some(&connected));
         assert!(row.imp().connection_icon.has_css_class("accent"));
@@ -349,6 +352,7 @@ mod tests {
         let disconnected = crate::runtime::ConnectionIcon {
             icon_name: "network-offline-symbolic",
             css_class: "warning",
+            tooltip: "Disconnected from runtime",
         };
         row.set_connection_icon(Some(&disconnected));
         assert!(!row.imp().connection_icon.has_css_class("accent"));
