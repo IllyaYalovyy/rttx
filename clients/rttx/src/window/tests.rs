@@ -3052,7 +3052,7 @@ fn recovered_workspace_uses_compact_sidebar_status_without_banner() {
 
     let row = session_row_for_uuid(&window, &session_state.uuid);
     let subtitle = row.subtitle().map(|value| value.to_string());
-    assert_eq!(subtitle.as_deref(), Some("Local runtime · Terminal (persistent)"));
+    assert_eq!(subtitle.as_deref(), Some("Local · Terminal (persistent)"));
     assert!(row.imp().connection_icon.is_visible());
     assert!(
         !subtitle.as_deref().is_some_and(|value| value.contains("Recovered")),

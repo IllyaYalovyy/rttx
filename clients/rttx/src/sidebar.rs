@@ -307,11 +307,11 @@ mod tests {
         require_display!();
 
         let row = SessionRow::new("session-1", "Session 1");
-        row.set_subtitle("Local runtime · vim main.rs");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime · vim main.rs");
+        row.set_subtitle("Local · vim main.rs");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local · vim main.rs");
 
-        row.set_subtitle("Local runtime");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime");
+        row.set_subtitle("Local");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local");
     }
 
     #[test]

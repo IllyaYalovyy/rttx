@@ -725,8 +725,8 @@ fn workspace_connection_summary_shows_endpoint_and_pane_info() {
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
 
-    assert_eq!(workspace_connection_summary(&local, Some("vim")), "Local runtime · vim");
-    assert_eq!(workspace_connection_summary(&local, None), "Local runtime");
+    assert_eq!(workspace_connection_summary(&local, Some("vim")), "Local · vim");
+    assert_eq!(workspace_connection_summary(&local, None), "Local");
     assert_eq!(workspace_connection_summary(&remote, Some("~/src")), "dev@host · ~/src");
     assert_eq!(workspace_connection_summary(&remote, None), "dev@host");
 }

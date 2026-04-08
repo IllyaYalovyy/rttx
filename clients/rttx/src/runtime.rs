@@ -401,7 +401,7 @@ pub fn workspace_connection_summary(
     active_pane_info: Option<&str>,
 ) -> String {
     let base = match endpoint {
-        RuntimeEndpoint::Local => "Local runtime",
+        RuntimeEndpoint::Local => "Local",
         RuntimeEndpoint::Remote { host } => host.as_str(),
     };
 
@@ -612,12 +612,12 @@ mod tests {
     fn workspace_connection_summary_with_pane_info() {
         assert_eq!(
             workspace_connection_summary(&RuntimeEndpoint::Local, Some("vim main.rs")),
-            "Local runtime · vim main.rs"
+            "Local · vim main.rs"
         );
-        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local runtime");
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local");
         assert_eq!(
             workspace_connection_summary(&RuntimeEndpoint::Local, Some("")),
-            "Local runtime"
+            "Local"
         );
         assert_eq!(
             workspace_connection_summary(
