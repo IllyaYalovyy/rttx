@@ -828,9 +828,11 @@ fn workspace_connection_summary_contains_no_status_text() {
 fn pane_description_extracts_compact_label() {
     use rttx::runtime::pane_description;
 
-    // CWD leaf is preferred over title.
-    assert_eq!(pane_description(Some("vim"), Some("/home/user")), Some("user".into()));
-    assert_eq!(pane_description(None, Some("/home/user/project")), Some("project".into()));
+    // Full CWD + useful title → both shown.
+    assert!(pane_description(Some("vim"), Some("/tmp/work")).unwrap().contains("/tmp/work"));
+    assert!(pane_description(Some("vim"), Some("/tmp/work")).unwrap().contains("vim"));
+    // Full CWD shown, generic title filtered.
+    assert_eq!(pane_description(Some("bash"), Some("/tmp/work")), Some("/tmp/work".into()));
     // Title used only when no CWD and title is not generic.
     assert_eq!(pane_description(Some("vim"), None), Some("vim".into()));
     // Generic titles are filtered.
@@ -838,18 +840,18 @@ fn pane_description_extracts_compact_label() {
     assert_eq!(pane_description(None, None), None);
 }
 
-/// Contract: pane_description filters generic VTE titles and prefers CWD.
+/// Contract: pane_description filters generic VTE titles and shows full path.
 ///
 /// Prevents 'Terminal (persistent)' and shell names from appearing in the
-/// sidebar subtitle. CWD leaf folder is always preferred when available.
+/// sidebar subtitle. Full CWD path is always shown when available.
 #[test]
 fn pane_description_subtitle_structure_regression() {
     use rttx::runtime::{RuntimeEndpoint, pane_description, workspace_connection_summary};
 
-    // CWD leaf preferred over any title.
+    // Full path shown, generic title filtered.
     assert_eq!(
-        pane_description(Some("Terminal (persistent)"), Some("/home/user/rttx")),
-        Some("rttx".into())
+        pane_description(Some("Terminal (persistent)"), Some("/tmp/rttx")),
+        Some("/tmp/rttx".into())
     );
     // Generic titles filtered when no CWD.
     assert_eq!(pane_description(Some("Terminal (persistent)"), None), None);
@@ -858,10 +860,13 @@ fn pane_description_subtitle_structure_regression() {
     assert_eq!(pane_description(Some("htop"), None), Some("htop".into()));
 
     // Local subtitle is just the pane info.
-    assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("rttx")), "rttx");
+    assert_eq!(
+        workspace_connection_summary(&RuntimeEndpoint::Local, Some("/tmp/rttx")),
+        "/tmp/rttx"
+    );
     // Remote subtitle includes host.
     let remote = RuntimeEndpoint::Remote { host: "dev-box".into() };
-    assert_eq!(workspace_connection_summary(&remote, Some("rttx")), "dev-box · rttx");
+    assert_eq!(workspace_connection_summary(&remote, Some("/tmp/rttx")), "dev-box · /tmp/rttx");
     assert_eq!(workspace_connection_summary(&remote, None), "dev-box");
 }
 

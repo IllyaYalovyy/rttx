@@ -401,10 +401,8 @@ pub const fn connection_icon(
 
 /// Build a structured subtitle for a workspace row.
 ///
-/// Format: `[connection ·] [user@host ·] leaf-path`
-/// - For remote managed: `host · leaf-path`
-/// - For local managed: `leaf-path`
-/// - For direct: `user@host · leaf-path` or just `leaf-path`
+/// - Local: pane info (full path, optional command)
+/// - Remote: `host · pane-info`
 #[must_use]
 pub fn workspace_connection_summary(
     endpoint: &RuntimeEndpoint,
@@ -423,25 +421,38 @@ pub fn workspace_connection_summary(
     }
 }
 
-/// Extract a compact pane description for the sidebar subtitle.
+/// Build a pane description for the sidebar subtitle.
 ///
-/// Prioritizes the CWD leaf folder. Only falls back to the VTE title when
-/// no CWD is available and the title carries useful information (not a
-/// generic shell name or "Terminal (persistent)" noise).
+/// Shows the full CWD path (tilde-collapsed). When the VTE title carries
+/// useful info (a running command, not a generic shell name), it is
+/// appended after a newline so both path and command are visible.
 #[must_use]
 pub fn pane_description(title: Option<&str>, cwd: Option<&str>) -> Option<String> {
-    // Prefer CWD leaf — this is always meaningful.
-    if let Some(leaf) = cwd.and_then(|c| {
-        let name = c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c);
-        if name.is_empty() { None } else { Some(name.to_string()) }
-    }) {
-        return Some(leaf);
+    let path = cwd.map(|c| collapse_home(c.trim()));
+    let useful_title = title.map(str::trim).filter(|t| !t.is_empty() && !is_generic_title(t));
+
+    match (path, useful_title) {
+        (Some(p), Some(t)) if !p.is_empty() => Some(format!("{p}\n{t}")),
+        (Some(p), _) if !p.is_empty() => Some(p),
+        (_, Some(t)) => Some(t.to_string()),
+        _ => None,
     }
-    // Fall back to title only if it's not generic noise.
-    if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty() && !is_generic_title(t)) {
-        return Some(t.to_string());
+}
+
+/// Collapse `/home/<user>/…` to `~/…`.
+fn collapse_home(path: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = home.to_string_lossy();
+        if let Some(rest) = path.strip_prefix(home.as_ref()) {
+            if rest.is_empty() {
+                return "~".into();
+            }
+            if rest.starts_with('/') {
+                return format!("~{rest}");
+            }
+        }
     }
-    None
+    path.to_string()
 }
 
 /// Returns true for VTE titles that carry no useful information.
@@ -662,11 +673,16 @@ mod tests {
     }
 
     #[test]
-    fn pane_description_prefers_cwd_over_title() {
-        assert_eq!(
-            pane_description(Some("vim main.rs"), Some("/home/user/project")),
-            Some("project".into())
-        );
+    fn pane_description_shows_full_path_and_command() {
+        // Full path + useful title → both on separate lines.
+        let desc = pane_description(Some("vim main.rs"), Some("/tmp/project"));
+        assert_eq!(desc, Some("/tmp/project\nvim main.rs".into()));
+    }
+
+    #[test]
+    fn pane_description_path_only_when_title_is_generic() {
+        let desc = pane_description(Some("bash"), Some("/tmp/project"));
+        assert_eq!(desc, Some("/tmp/project".into()));
     }
 
     #[test]
@@ -682,9 +698,8 @@ mod tests {
     }
 
     #[test]
-    fn pane_description_falls_back_to_cwd_basename() {
-        assert_eq!(pane_description(None, Some("/home/user/project")), Some("project".into()));
-        assert_eq!(pane_description(None, Some("/home/user/project/")), Some("project".into()));
+    fn pane_description_shows_full_cwd() {
+        assert_eq!(pane_description(None, Some("/tmp/project")), Some("/tmp/project".into()));
         assert_eq!(pane_description(None, Some("/")), Some("/".into()));
     }
 
