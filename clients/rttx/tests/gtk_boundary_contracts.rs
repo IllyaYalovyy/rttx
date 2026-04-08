@@ -721,35 +721,27 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
 /// correct.
 #[test]
 fn workspace_connection_summary_includes_pane_count_in_subtitle() {
-    use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, workspace_connection_summary};
+    use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
 
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
 
-    assert!(
-        workspace_connection_summary(&local, &ConnectionStatus::Connected, 3).ends_with("3 panes")
-    );
-    assert!(
-        workspace_connection_summary(&local, &ConnectionStatus::Connected, 1).ends_with("1 pane")
-    );
-    assert!(
-        workspace_connection_summary(&remote, &ConnectionStatus::Connected, 2).ends_with("2 panes")
-    );
-    assert!(
-        workspace_connection_summary(&remote, &ConnectionStatus::Disconnected, 1)
-            .contains("1 pane")
-    );
+    assert!(workspace_connection_summary(&local, 3).ends_with("3 panes"));
+    assert!(workspace_connection_summary(&local, 1).ends_with("1 pane"));
+    assert!(workspace_connection_summary(&remote, 2).ends_with("2 panes"));
+    assert!(workspace_connection_summary(&remote, 1).contains("1 pane"));
 }
 
 /// Contract: connection_icon returns None for local, Some for remote endpoints.
 ///
-/// The sidebar row must show a connection icon only for remote workspaces.
-/// The icon and CSS class must change based on connection status.
+/// The sidebar row shows a connection icon for non-connected states (any endpoint)
+/// and for remote endpoints when connected. Local+Connected returns None.
 #[test]
 fn connection_icon_distinguishes_local_from_remote() {
     use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
 
     assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected).is_none());
+    assert!(connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected).is_some());
 
     let remote = RuntimeEndpoint::Remote { host: "h".into() };
     let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();
@@ -758,6 +750,47 @@ fn connection_icon_distinguishes_local_from_remote() {
     let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected).unwrap();
     assert_eq!(disconnected.css_class, "warning");
     assert_ne!(connected.icon_name, disconnected.icon_name);
+}
+
+/// Contract: local endpoints show status icons for non-Connected states.
+///
+/// Before #329, local endpoints never showed connection icons. Now they show
+/// icons for Disconnected, Recovered, Blocked, and transient states so the
+/// sidebar subtitle can stay clean (endpoint + pane count only).
+#[test]
+fn connection_icon_shown_for_local_non_connected_states() {
+    use rttx::runtime::{ConnectionProblem, ConnectionStatus, RuntimeEndpoint, connection_icon};
+
+    let local = RuntimeEndpoint::Local;
+    assert!(connection_icon(&local, &ConnectionStatus::Connected).is_none());
+    assert!(connection_icon(&local, &ConnectionStatus::Disconnected).is_some());
+    assert!(connection_icon(&local, &ConnectionStatus::Recovered).is_some());
+    assert!(
+        connection_icon(&local, &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable))
+            .is_some()
+    );
+    assert!(connection_icon(&local, &ConnectionStatus::Connecting).is_some());
+}
+
+/// Contract: workspace_connection_summary never contains status text.
+///
+/// Status is conveyed by the connection icon, not the subtitle string.
+#[test]
+fn workspace_connection_summary_contains_no_status_text() {
+    use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
+
+    let local = RuntimeEndpoint::Local;
+    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+
+    for (ep, count) in [(&local, 1), (&local, 3), (&remote, 1), (&remote, 2)] {
+        let summary = workspace_connection_summary(ep, count);
+        for keyword in ["Recovered", "Disconnected", "Action Required", "Reconnecting", "Blocked"] {
+            assert!(
+                !summary.contains(keyword),
+                "subtitle should not contain status text '{keyword}': {summary}"
+            );
+        }
+    }
 }
 
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.

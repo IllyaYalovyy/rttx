@@ -2230,13 +2230,7 @@ impl Window {
                 return;
             };
             if session.uses_managed_runtime() {
-                let status = imp
-                    .workspace_connection_status
-                    .borrow()
-                    .get(session_uuid)
-                    .cloned()
-                    .unwrap_or(ConnectionStatus::Connecting);
-                workspace_connection_summary(&session.runtime.endpoint, &status, count)
+                workspace_connection_summary(&session.runtime.endpoint, count)
             } else if count == 1 {
                 "1 pane".to_string()
             } else {
@@ -5815,10 +5809,11 @@ mod tests {
 
         let row = session_row_for_uuid(&window, &session_state.uuid);
         let subtitle = row.subtitle().map(|value| value.to_string());
-        assert_eq!(subtitle.as_deref(), Some("Local · Recovered"));
+        assert_eq!(subtitle.as_deref(), Some("Local runtime · 1 pane"));
+        assert!(row.imp().connection_icon.is_visible());
         assert!(
-            !subtitle.as_deref().is_some_and(|value| value.contains("Persistent")),
-            "workspace row status should no longer include the policy label"
+            !subtitle.as_deref().is_some_and(|value| value.contains("Recovered")),
+            "status text should be conveyed by icon, not subtitle"
         );
 
         window.close();
