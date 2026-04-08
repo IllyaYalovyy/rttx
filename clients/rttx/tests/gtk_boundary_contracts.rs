@@ -844,7 +844,7 @@ fn pane_description_extracts_compact_label() {
 /// sidebar subtitle. CWD leaf folder is always preferred when available.
 #[test]
 fn pane_description_subtitle_structure_regression() {
-    use rttx::runtime::{pane_description, workspace_connection_summary, RuntimeEndpoint};
+    use rttx::runtime::{RuntimeEndpoint, pane_description, workspace_connection_summary};
 
     // CWD leaf preferred over any title.
     assert_eq!(
