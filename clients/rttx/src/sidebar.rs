@@ -33,7 +33,6 @@ mod imp {
         pub name: RefCell<String>,
         pub position_label: gtk4::Label,
         pub connection_icon: gtk4::Image,
-        pub activity_dot: gtk4::Image,
         pub close_button: gtk4::Button,
         pub activity_state: Cell<ActivityState>,
         pub idle_transition_source: RefCell<Option<glib::SourceId>>,
@@ -44,10 +43,6 @@ mod imp {
             let connection_icon = gtk4::Image::new();
             connection_icon.set_pixel_size(16);
 
-            let activity_dot = gtk4::Image::from_icon_name("media-record-symbolic");
-            activity_dot.set_pixel_size(8);
-            activity_dot.set_visible(false);
-
             let position_label = gtk4::Label::new(None);
             position_label.add_css_class("dim-label");
             position_label.add_css_class("caption");
@@ -57,7 +52,6 @@ mod imp {
                 name: RefCell::new(String::new()),
                 position_label,
                 connection_icon,
-                activity_dot,
                 close_button: gtk4::Button::from_icon_name("window-close-symbolic"),
                 activity_state: Cell::new(ActivityState::None),
                 idle_transition_source: RefCell::new(None),
@@ -85,7 +79,6 @@ mod imp {
 
             obj.add_prefix(&self.connection_icon);
             obj.add_prefix(&self.position_label);
-            obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.close_button);
 
             obj.set_subtitle_lines(1);
@@ -144,25 +137,20 @@ impl SessionRow {
     fn set_activity_state_internal(&self, state: ActivityState) {
         let imp = self.imp();
         imp.activity_state.set(state);
+        let obj = imp.obj();
+        obj.remove_css_class("session-activity-active");
+        obj.remove_css_class("session-activity-idle");
         match state {
             ActivityState::None => {
-                imp.activity_dot.remove_css_class("accent");
-                imp.activity_dot.remove_css_class("session-activity-idle");
-                imp.activity_dot.set_tooltip_text(None);
-                imp.activity_dot.set_visible(false);
+                obj.set_tooltip_text(None);
             }
             ActivityState::Active => {
-                imp.activity_dot.remove_css_class("session-activity-idle");
-                imp.activity_dot.add_css_class("accent");
-                imp.activity_dot.set_tooltip_text(Some("Background activity is ongoing"));
-                imp.activity_dot.set_visible(true);
+                obj.add_css_class("session-activity-active");
+                obj.set_tooltip_text(Some("Background activity is ongoing"));
             }
             ActivityState::Idle => {
-                imp.activity_dot.remove_css_class("accent");
-                imp.activity_dot.add_css_class("session-activity-idle");
-                imp.activity_dot
-                    .set_tooltip_text(Some("Unread activity is waiting in this workspace"));
-                imp.activity_dot.set_visible(true);
+                obj.add_css_class("session-activity-idle");
+                obj.set_tooltip_text(Some("Unread activity in this workspace"));
             }
         }
     }
@@ -371,20 +359,27 @@ mod tests {
         let row = SessionRow::new("s1", "Session");
         assert_eq!(row.activity_state(), ActivityState::None);
         assert!(!row.has_activity(), "activity should be off initially");
+        assert!(!row.has_css_class("session-activity-active"));
+        assert!(!row.has_css_class("session-activity-idle"));
 
         row.mark_activity();
         assert!(row.has_activity());
         assert_eq!(row.activity_state(), ActivityState::Active);
+        assert!(row.has_css_class("session-activity-active"));
 
         assert!(
             wait_until(250, || row.activity_state() == ActivityState::Idle),
             "activity should settle to idle after output stops"
         );
         assert!(row.has_activity());
+        assert!(row.has_css_class("session-activity-idle"));
+        assert!(!row.has_css_class("session-activity-active"));
 
         row.clear_activity();
         assert!(!row.has_activity());
         assert_eq!(row.activity_state(), ActivityState::None);
+        assert!(!row.has_css_class("session-activity-active"));
+        assert!(!row.has_css_class("session-activity-idle"));
     }
 
     #[test]
