@@ -729,6 +729,24 @@ mod tests {
     }
 
     #[test]
+    fn connection_icon_tooltips_describe_state() {
+        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let local = RuntimeEndpoint::Local;
+
+        let connected = connection_icon(&remote, &ConnectionStatus::Connected).unwrap();
+        assert_eq!(connected.tooltip, "Connected to remote host");
+
+        let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected).unwrap();
+        assert_eq!(disconnected.tooltip, "Disconnected from runtime");
+
+        let connecting_local = connection_icon(&local, &ConnectionStatus::Connecting).unwrap();
+        assert_eq!(connecting_local.tooltip, "Connecting to local runtime");
+
+        let connecting_remote = connection_icon(&remote, &ConnectionStatus::Connecting).unwrap();
+        assert_eq!(connecting_remote.tooltip, "Connecting to remote host");
+    }
+
+    #[test]
     fn workspace_actions_for_attached_managed_workspace_shows_destructive_close() {
         let presentation = present_workspace_actions(Some(WorkspacePolicy::Persistent), true, 2);
 

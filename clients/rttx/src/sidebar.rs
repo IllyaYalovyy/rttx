@@ -459,4 +459,45 @@ mod tests {
         row.set_position(9);
         assert!(!row.imp().position_label.is_visible(), "positions >= 9 should hide the label");
     }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn connection_icon_tooltip_set_and_cleared() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+
+        let icon = crate::runtime::ConnectionIcon {
+            icon_name: "network-server-symbolic",
+            css_class: "accent",
+            tooltip: "Connected to remote host",
+        };
+        row.set_connection_icon(Some(&icon));
+        assert_eq!(
+            row.imp().connection_icon.tooltip_text().unwrap().as_str(),
+            "Connected to remote host"
+        );
+
+        row.set_connection_icon(None);
+        assert!(row.imp().connection_icon.tooltip_text().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn managed_actions_style_changes_button_icon() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+        assert_eq!(row.close_button().icon_name().unwrap(), "window-close-symbolic");
+
+        row.set_managed_actions_style();
+        assert_eq!(row.close_button().icon_name().unwrap(), "view-more-symbolic");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn session_row_has_css_class_and_subtitle_truncation() {
+        require_display!();
+        let row = SessionRow::new("s1", "Session");
+        assert!(row.has_css_class("session-row"));
+        assert_eq!(row.subtitle_lines(), 1);
+    }
 }
