@@ -300,9 +300,7 @@ fn build_layout_widget_sets_position_after_allocation() {
         }),
     };
 
-    let widget = build_layout_widget(&layout, &|_uuid, _cwd, _profile, _title| {
-        gtk4::Label::new(Some("terminal")).upcast()
-    });
+    let widget = build_layout_widget(&layout, &|_spec| gtk4::Label::new(Some("terminal")).upcast());
 
     let outer = widget.downcast_ref::<gtk4::Paned>().expect("Root must be Paned");
 
@@ -366,9 +364,7 @@ fn triple_nested_split_all_paneds_nonzero() {
         }),
     };
 
-    let widget = build_layout_widget(&layout, &|_uuid, _cwd, _profile, _title| {
-        gtk4::Label::new(Some("terminal")).upcast()
-    });
+    let widget = build_layout_widget(&layout, &|_spec| gtk4::Label::new(Some("terminal")).upcast());
 
     let root = widget.downcast_ref::<gtk4::Paned>().unwrap();
     root.set_size_request(800, 600);
@@ -635,9 +631,9 @@ fn build_layout_widget_calls_make_terminal_exactly_once_per_uuid() {
     let call_counts: Rc<RefCell<HashMap<String, usize>>> = Rc::new(RefCell::new(HashMap::new()));
     let counts_clone = call_counts.clone();
 
-    build_layout_widget(&layout, &|uuid, _cwd, _profile, _title| {
-        *counts_clone.borrow_mut().entry(uuid.to_string()).or_insert(0) += 1;
-        gtk4::Label::new(Some(uuid)).upcast()
+    build_layout_widget(&layout, &|spec| {
+        *counts_clone.borrow_mut().entry(spec.uuid.to_string()).or_insert(0) += 1;
+        gtk4::Label::new(Some(spec.uuid)).upcast()
     });
 
     let counts = call_counts.borrow();
@@ -816,7 +812,7 @@ fn paned_extreme_but_valid_ratios_produce_nonzero_positions() {
         };
 
         let widget =
-            build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+            build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
 
         let paned = widget.downcast_ref::<gtk4::Paned>().expect("Root must be Paned");
 
@@ -1564,9 +1560,7 @@ fn paned_ratio_applied_on_realize_not_just_idle() {
         }),
     };
 
-    let widget = build_layout_widget(&layout, &|_uuid, _cwd, _profile, _title| {
-        gtk4::Label::new(Some("terminal")).upcast()
-    });
+    let widget = build_layout_widget(&layout, &|_spec| gtk4::Label::new(Some("terminal")).upcast());
 
     schedule_initial_paned_ratios(&widget, &layout);
 

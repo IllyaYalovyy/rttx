@@ -427,13 +427,16 @@ impl Window {
 
         let build_branch = move || {
             if win_weak.upgrade().is_some() {
-                session::build_layout_widget(&branch_layout_clone, &|uuid, _, _, _| {
-                    if uuid == target_uuid_str {
+                session::build_layout_widget(&branch_layout_clone, &|spec| {
+                    if spec.uuid == target_uuid_str {
                         target_clone.clone().upcast()
-                    } else if uuid == new_terminal_uuid_str {
+                    } else if spec.uuid == new_terminal_uuid_str {
                         new_term_clone.clone().upcast()
                     } else {
-                        unreachable!("split branch builder requested unexpected uuid {uuid}");
+                        unreachable!(
+                            "split branch builder requested unexpected uuid {}",
+                            spec.uuid
+                        );
                     }
                 })
             } else {

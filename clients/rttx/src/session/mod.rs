@@ -109,15 +109,27 @@ pub fn capture_paned_ratios(layout: &mut LayoutNode, widget: &gtk4::Widget) {
     }
 }
 
+/// Terminal properties passed to the `build_layout_widget` closure.
+#[derive(Debug)]
+pub struct TerminalSpec<'a> {
+    pub uuid: &'a str,
+    pub cwd: Option<&'a str>,
+    pub profile: Option<&'a str>,
+    pub custom_title: Option<&'a str>,
+}
+
 /// Build a tree of `GtkPaned` widgets matching the `LayoutNode` structure.
 pub fn build_layout_widget<F>(layout: &LayoutNode, make_terminal: &F) -> gtk4::Widget
 where
-    F: Fn(&str, Option<&str>, Option<&str>, Option<&str>) -> gtk4::Widget,
+    F: Fn(TerminalSpec<'_>) -> gtk4::Widget,
 {
     match layout {
-        LayoutNode::Terminal { uuid, cwd, profile, custom_title } => {
-            make_terminal(uuid, cwd.as_deref(), profile.as_deref(), custom_title.as_deref())
-        }
+        LayoutNode::Terminal { uuid, cwd, profile, custom_title } => make_terminal(TerminalSpec {
+            uuid,
+            cwd: cwd.as_deref(),
+            profile: profile.as_deref(),
+            custom_title: custom_title.as_deref(),
+        }),
         LayoutNode::Split { orientation, ratio, first, second } => {
             let gtk_orientation = match orientation {
                 SplitOrientation::Horizontal => gtk4::Orientation::Horizontal,
@@ -399,7 +411,7 @@ mod tests {
         };
 
         let widget =
-            build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+            build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
 
         let outer = widget.downcast_ref::<gtk4::Paned>().expect("root widget should be a Paned");
         outer.set_size_request(1000, 800);

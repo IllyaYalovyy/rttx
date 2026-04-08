@@ -180,9 +180,9 @@ fn test_terminal_rebuild_integrity_simple() {
         Rc::new(RefCell::new(HashMap::new()));
 
     let build_session = |layout: &LayoutNode| {
-        build_layout_widget(layout, &|uuid, _cwd, _profile, _title| {
+        build_layout_widget(layout, &|spec| {
             let mut map = terminals.borrow_mut();
-            if let Some(existing) = map.get(uuid) {
+            if let Some(existing) = map.get(spec.uuid) {
                 let existing = existing.clone();
                 drop(map);
                 if existing.parent().is_some() {
@@ -192,8 +192,8 @@ fn test_terminal_rebuild_integrity_simple() {
             }
 
             let term: TerminalWidget = glib::Object::builder().build();
-            term.set_title(uuid);
-            map.insert(uuid.to_string(), term.clone());
+            term.set_title(spec.uuid);
+            map.insert(spec.uuid.to_string(), term.clone());
             term.upcast()
         })
     };
