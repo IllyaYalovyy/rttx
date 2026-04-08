@@ -531,7 +531,8 @@ impl Window {
         else {
             return;
         };
-        let icon = connection_icon(&session.runtime.endpoint, status);
+        let icon =
+            connection_icon(&session.runtime.endpoint, status, session.uses_managed_runtime());
         drop(state);
 
         let list = &self.imp().sidebar_list;
