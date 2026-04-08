@@ -828,10 +828,9 @@ fn workspace_connection_summary_contains_no_status_text() {
 fn pane_description_extracts_compact_label() {
     use rttx::runtime::pane_description;
 
-    // Full CWD + useful title → both shown.
-    assert!(pane_description(Some("vim"), Some("/tmp/work")).unwrap().contains("/tmp/work"));
-    assert!(pane_description(Some("vim"), Some("/tmp/work")).unwrap().contains("vim"));
-    // Full CWD shown, generic title filtered.
+    // CWD always wins — title ignored when CWD present.
+    assert_eq!(pane_description(Some("vim"), Some("/tmp/work")), Some("/tmp/work".into()));
+    // Generic title filtered.
     assert_eq!(pane_description(Some("bash"), Some("/tmp/work")), Some("/tmp/work".into()));
     // Title used only when no CWD and title is not generic.
     assert_eq!(pane_description(Some("vim"), None), Some("vim".into()));
@@ -870,23 +869,36 @@ fn pane_description_subtitle_structure_regression() {
     assert_eq!(workspace_connection_summary(&remote, None), "dev-box");
 }
 
-/// Contract: pane_description shows full path with running command on second line.
+/// Contract: pane_description shows CWD only, title never leaks into subtitle.
 ///
-/// Prevents regression to leaf-only or title-only subtitle.
+/// Prevents prompt-set VTE titles (user@host:path) from appearing.
 #[test]
 fn pane_description_full_path_and_command_regression() {
     use rttx::runtime::pane_description;
 
-    // Full path + command → two lines.
+    // CWD present → only path shown, title ignored entirely.
     let desc = pane_description(Some("htop"), Some("/tmp/work")).unwrap();
-    assert!(desc.contains("/tmp/work"), "must show full path");
-    assert!(desc.contains("htop"), "must show running command");
-    assert!(desc.contains('\n'), "path and command on separate lines");
-
-    // Generic title → path only, no second line.
-    let desc = pane_description(Some("bash"), Some("/tmp/work")).unwrap();
-    assert!(!desc.contains('\n'), "generic title should not add a line");
     assert_eq!(desc, "/tmp/work");
+    assert!(!desc.contains('\n'), "no multi-line subtitle");
+
+    // Prompt-set title ignored when CWD present.
+    let desc = pane_description(Some("user@host:~/work"), Some("/tmp/work")).unwrap();
+    assert_eq!(desc, "/tmp/work");
+}
+
+/// Contract: ConnectionPresentation contains only header_label and input_enabled.
+/// Contract: prompt-set VTE titles never appear in subtitle when CWD is available.
+#[test]
+fn pane_description_never_shows_prompt_title_with_cwd() {
+    use rttx::runtime::pane_description;
+
+    // user@host:path prompt title — always redundant with CWD.
+    assert_eq!(
+        pane_description(Some("user@host:~/work"), Some("/home/user/work")),
+        Some("/home/user/work".into())
+    );
+    // Even a "useful" title is ignored when CWD is present.
+    assert_eq!(pane_description(Some("vim"), Some("/tmp/project")), Some("/tmp/project".into()));
 }
 
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.
