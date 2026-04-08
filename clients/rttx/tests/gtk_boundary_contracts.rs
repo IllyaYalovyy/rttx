@@ -714,22 +714,21 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
     assert!(state.sessions[0].zoomed_terminal_uuid.is_none());
 }
 
-/// Contract: workspace_connection_summary includes pane count in subtitle text.
+/// Contract: workspace_connection_summary shows endpoint and optional pane info.
 ///
-/// The sidebar row subtitle must always contain the pane count so users can see
-/// how many panes a workspace has without expanding it. Singular/plural must be
-/// correct.
+/// The sidebar row subtitle shows the endpoint label and, when available, the
+/// active pane's command or path.
 #[test]
-fn workspace_connection_summary_includes_pane_count_in_subtitle() {
+fn workspace_connection_summary_shows_endpoint_and_pane_info() {
     use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
 
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
 
-    assert!(workspace_connection_summary(&local, 3).ends_with("3 panes"));
-    assert!(workspace_connection_summary(&local, 1).ends_with("1 pane"));
-    assert!(workspace_connection_summary(&remote, 2).ends_with("2 panes"));
-    assert!(workspace_connection_summary(&remote, 1).contains("1 pane"));
+    assert_eq!(workspace_connection_summary(&local, Some("vim")), "Local runtime · vim");
+    assert_eq!(workspace_connection_summary(&local, None), "Local runtime");
+    assert_eq!(workspace_connection_summary(&remote, Some("~/src")), "dev@host · ~/src");
+    assert_eq!(workspace_connection_summary(&remote, None), "dev@host");
 }
 
 /// Contract: connection_icon returns None for local, Some for remote endpoints.
@@ -782,8 +781,10 @@ fn workspace_connection_summary_contains_no_status_text() {
     let local = RuntimeEndpoint::Local;
     let remote = RuntimeEndpoint::Remote { host: "h".into() };
 
-    for (ep, count) in [(&local, 1), (&local, 3), (&remote, 1), (&remote, 2)] {
-        let summary = workspace_connection_summary(ep, count);
+    for (ep, info) in
+        [(&local, Some("bash")), (&local, None), (&remote, Some("vim")), (&remote, None)]
+    {
+        let summary = workspace_connection_summary(ep, info);
         for keyword in ["Recovered", "Disconnected", "Action Required", "Reconnecting", "Blocked"] {
             assert!(
                 !summary.contains(keyword),
@@ -791,6 +792,18 @@ fn workspace_connection_summary_contains_no_status_text() {
             );
         }
     }
+}
+
+/// Contract: pane_description extracts a compact label from title and CWD.
+///
+/// The sidebar subtitle uses this to show what the active pane is doing.
+#[test]
+fn pane_description_extracts_compact_label() {
+    use rttx::runtime::pane_description;
+
+    assert_eq!(pane_description(Some("vim"), Some("/home/user")), Some("vim".into()));
+    assert_eq!(pane_description(None, Some("/home/user/project")), Some("project".into()));
+    assert_eq!(pane_description(None, None), None);
 }
 
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.
