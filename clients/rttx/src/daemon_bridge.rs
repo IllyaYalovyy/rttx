@@ -20,6 +20,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+#[cfg(test)]
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(20);
+#[cfg(not(test))]
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Operation type for manager error reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagerOperation {
@@ -311,6 +316,61 @@ struct EndpointActor {
     ssh_handle: Option<SshHandle>,
     tracked_workspaces: HashMap<String, String>,
     reconnect_attempt: u32,
+    heartbeat: HeartbeatMonitor,
+    heartbeat_timer: tokio::time::Interval,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeartbeatAction {
+    SendPing { nonce: u64 },
+    DeclareLost,
+}
+
+#[derive(Debug, Default)]
+struct HeartbeatMonitor {
+    pending_nonce: Option<u64>,
+    next_nonce: u64,
+}
+
+impl HeartbeatMonitor {
+    const fn on_tick(&mut self) -> HeartbeatAction {
+        if self.pending_nonce.is_some() {
+            return HeartbeatAction::DeclareLost;
+        }
+        let nonce = self.next_nonce;
+        self.next_nonce = self.next_nonce.saturating_add(1);
+        self.pending_nonce = Some(nonce);
+        HeartbeatAction::SendPing { nonce }
+    }
+
+    fn observe_inbound(&mut self, msg: &proto::ServerMessage) -> bool {
+        match &msg.msg {
+            Some(proto::server_message::Msg::Pong(pong)) => {
+                if self.pending_nonce == Some(pong.nonce) {
+                    self.pending_nonce = None;
+                }
+                true
+            }
+            Some(_) => {
+                self.pending_nonce = None;
+                false
+            }
+            None => false,
+        }
+    }
+
+    const fn reset(&mut self) {
+        self.pending_nonce = None;
+    }
+}
+
+fn new_heartbeat_interval() -> tokio::time::Interval {
+    let mut interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + HEARTBEAT_INTERVAL,
+        HEARTBEAT_INTERVAL,
+    );
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
 }
 
 impl EndpointActor {
@@ -331,21 +391,35 @@ impl EndpointActor {
             ssh_handle: None,
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_timer: new_heartbeat_interval(),
         }
     }
 
     async fn run(mut self) {
+        enum LoopEvent {
+            Command(Option<EndpointCommand>),
+            Message(Result<Option<proto::ServerMessage>, DaemonError>),
+            HeartbeatTick,
+        }
+
         loop {
             if let Some(reader) = self.reader.as_mut() {
-                tokio::select! {
+                let track_heartbeat = !self.tracked_workspaces.is_empty();
+                let event = tokio::select! {
                     biased;
-                    command = self.cmd_rx.recv() => {
+                    command = self.cmd_rx.recv() => LoopEvent::Command(command),
+                    message = reader.recv() => LoopEvent::Message(message),
+                    _ = self.heartbeat_timer.tick(), if track_heartbeat => LoopEvent::HeartbeatTick,
+                };
+
+                match event {
+                    LoopEvent::Command(command) => {
                         let Some(command) = command else { break };
                         self.handle_command(command).await;
                     }
-                    message = reader.recv() => {
-                        self.handle_runtime_message(message);
-                    }
+                    LoopEvent::Message(message) => self.handle_runtime_message(message),
+                    LoopEvent::HeartbeatTick => self.handle_heartbeat_tick().await,
                 }
             } else {
                 let Some(command) = self.cmd_rx.recv().await else { break };
@@ -359,7 +433,13 @@ impl EndpointActor {
             let (reader, writer) = conn.into_split();
             self.reader = Some(reader);
             self.writer = Some(writer);
+            self.restart_heartbeat_timer();
         }
+    }
+
+    fn restart_heartbeat_timer(&mut self) {
+        self.heartbeat.reset();
+        self.heartbeat_timer = new_heartbeat_interval();
     }
 
     async fn send_message(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
@@ -388,6 +468,9 @@ impl EndpointActor {
                 Some(proto::server_message::Msg::SessionTerminated(_)) => !expect_terminated,
                 _ => false,
             };
+            if self.observe_inbound_message(&msg) {
+                continue;
+            }
             if is_push {
                 self.dispatch_push(msg);
             } else {
@@ -1096,6 +1179,9 @@ impl EndpointActor {
     ) {
         match message {
             Ok(Some(message)) => {
+                if self.observe_inbound_message(&message) {
+                    return;
+                }
                 if let Some(proto::server_message::Msg::SessionTerminated(terminated)) =
                     &message.msg
                     && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id)
@@ -1116,11 +1202,34 @@ impl EndpointActor {
             .send(EndpointEvent::RuntimeMessage { endpoint: self.endpoint.clone(), message });
     }
 
+    fn observe_inbound_message(&mut self, message: &proto::ServerMessage) -> bool {
+        self.heartbeat.observe_inbound(message)
+    }
+
+    async fn handle_heartbeat_tick(&mut self) {
+        match self.heartbeat.on_tick() {
+            HeartbeatAction::SendPing { nonce } => {
+                let Some(writer) = self.writer.as_mut() else {
+                    return;
+                };
+                if let Err(error) = writer.send_ping(nonce).await {
+                    log::warn!("Heartbeat ping failed for {}: {error}", self.endpoint.key());
+                    self.handle_disconnect();
+                }
+            }
+            HeartbeatAction::DeclareLost => {
+                log::warn!("Heartbeat timed out for {}", self.endpoint.key());
+                self.handle_disconnect();
+            }
+        }
+    }
+
     fn handle_disconnect(&mut self) {
         self.connection = None;
         self.reader = None;
         self.writer = None;
         self.ssh_handle = None;
+        self.heartbeat.reset();
         if self.tracked_workspaces.is_empty() {
             return;
         }
@@ -1216,6 +1325,7 @@ mod tests {
     use super::*;
     use bytes::BytesMut;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::mpsc::error::TryRecvError;
 
     fn split_duplex_connection() -> ((DaemonReader, DaemonWriter), tokio::io::DuplexStream) {
         let (client, server) = tokio::io::duplex(4096);
@@ -1262,6 +1372,8 @@ mod tests {
             ssh_handle: None,
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_timer: new_heartbeat_interval(),
         }
     }
 
@@ -1356,8 +1468,47 @@ mod tests {
             ssh_handle: None,
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_timer: new_heartbeat_interval(),
         };
         (actor, event_rx)
+    }
+
+    #[test]
+    fn heartbeat_monitor_declares_loss_after_missed_pong() {
+        let mut heartbeat = HeartbeatMonitor::default();
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::DeclareLost);
+    }
+
+    #[test]
+    fn heartbeat_monitor_resets_after_any_inbound_message() {
+        let mut heartbeat = HeartbeatMonitor::default();
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        assert!(
+            !heartbeat.observe_inbound(&proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+                    session_id: vec![],
+                    pane_id: vec![],
+                    data: b"output".to_vec(),
+                })),
+            }),
+            "non-heartbeat traffic should not be swallowed"
+        );
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 1 });
+    }
+
+    #[test]
+    fn heartbeat_monitor_consumes_matching_pong() {
+        let mut heartbeat = HeartbeatMonitor::default();
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        assert!(
+            heartbeat.observe_inbound(&proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 0 })),
+            }),
+            "heartbeat pong should stay internal to the actor"
+        );
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 1 });
     }
 
     #[tokio::test]
@@ -1414,5 +1565,99 @@ mod tests {
             }
         }
         assert!(found_pane_closed, "expected PaneClosed event for pane-not-found response");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_timeout_marks_workspace_disconnected() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+
+        let actor_task = tokio::spawn(async move { actor.run().await });
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
+            match request.msg {
+                Some(proto::client_message::Msg::Ping(ping)) => assert_eq!(ping.nonce, 0),
+                other => panic!("expected Ping request, got {other:?}"),
+            }
+        });
+
+        let mut saw_disconnected = false;
+        let mut saw_reconnecting = false;
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(HEARTBEAT_INTERVAL.as_millis() as u64 * 8);
+        while tokio::time::Instant::now() < deadline && !(saw_disconnected && saw_reconnecting) {
+            if let Ok(Some(EndpointEvent::WorkspaceConnectionChanged { workspace_id, status })) =
+                tokio::time::timeout(Duration::from_millis(25), event_rx.recv()).await
+            {
+                assert_eq!(workspace_id, "ws-1");
+                match status {
+                    ConnectionStatus::Disconnected => saw_disconnected = true,
+                    ConnectionStatus::Reconnecting { .. } => saw_reconnecting = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_disconnected, "heartbeat timeout should emit Disconnected");
+        assert!(saw_reconnecting, "heartbeat timeout should schedule reconnect");
+
+        actor_task.abort();
+        let _ = actor_task.await;
+        server.await.expect("server task should capture the heartbeat ping");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_pong_keeps_workspace_connected() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+
+        let actor_task = tokio::spawn(async move { actor.run().await });
+        let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
+            let nonce = match request.msg {
+                Some(proto::client_message::Msg::Ping(ping)) => ping.nonce,
+                other => panic!("expected Ping request, got {other:?}"),
+            };
+            assert_eq!(nonce, 0);
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce })),
+                },
+            )
+            .await;
+            let _ = pong_tx.send(());
+            let _ = release_rx.await;
+        });
+
+        pong_rx.await.expect("server task should answer the heartbeat ping");
+        tokio::time::sleep(HEARTBEAT_INTERVAL / 2).await;
+
+        loop {
+            match event_rx.try_recv() {
+                Ok(EndpointEvent::WorkspaceConnectionChanged { status, .. }) => match status {
+                    ConnectionStatus::Disconnected | ConnectionStatus::Reconnecting { .. } => {
+                        panic!("workspace should stay connected after a heartbeat pong");
+                    }
+                    _ => {}
+                },
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    panic!("actor event channel should stay connected while the actor is alive");
+                }
+            }
+        }
+
+        let _ = release_tx.send(());
+        server.await.expect("server task should stay alive until released");
+        actor_task.abort();
+        let _ = actor_task.await;
     }
 }
