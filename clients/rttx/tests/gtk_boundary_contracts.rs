@@ -771,6 +771,34 @@ fn connection_icon_shown_for_local_non_connected_states() {
     assert!(connection_icon(&local, &ConnectionStatus::Connecting).is_some());
 }
 
+/// Contract: every visible connection icon carries a non-empty tooltip.
+///
+/// Tooltips differentiate connection state from activity state in the sidebar.
+#[test]
+fn connection_icon_always_has_tooltip() {
+    use rttx::runtime::{ConnectionProblem, ConnectionStatus, RuntimeEndpoint, connection_icon};
+
+    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+    let local = RuntimeEndpoint::Local;
+
+    for (endpoint, status) in [
+        (&remote, ConnectionStatus::Connected),
+        (&remote, ConnectionStatus::Disconnected),
+        (&remote, ConnectionStatus::Connecting),
+        (&local, ConnectionStatus::Disconnected),
+        (&local, ConnectionStatus::Connecting),
+        (&remote, ConnectionStatus::Recovered),
+        (&remote, ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied)),
+    ] {
+        if let Some(icon) = connection_icon(endpoint, &status) {
+            assert!(
+                !icon.tooltip.is_empty(),
+                "connection_icon for {status:?} should have a non-empty tooltip"
+            );
+        }
+    }
+}
+
 /// Contract: workspace_connection_summary never contains status text.
 ///
 /// Status is conveyed by the connection icon, not the subtitle string.
