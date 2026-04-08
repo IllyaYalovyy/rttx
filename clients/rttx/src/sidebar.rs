@@ -81,7 +81,7 @@ mod imp {
             obj.add_prefix(&self.position_label);
             obj.add_suffix(&self.close_button);
 
-            obj.set_subtitle_lines(1);
+            obj.set_subtitle_lines(2);
             obj.add_css_class("session-row");
         }
     }
@@ -498,6 +498,6 @@ mod tests {
         require_display!();
         let row = SessionRow::new("s1", "Session");
         assert!(row.has_css_class("session-row"));
-        assert_eq!(row.subtitle_lines(), 1);
+        assert_eq!(row.subtitle_lines(), 2);
     }
 }
