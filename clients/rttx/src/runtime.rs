@@ -847,6 +847,24 @@ mod tests {
     }
 
     #[test]
+    fn connection_icon_shape_never_changes_with_status_regression() {
+        let local = RuntimeEndpoint::Local;
+        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let statuses = [
+            ConnectionStatus::Connected,
+            ConnectionStatus::Disconnected,
+            ConnectionStatus::Recovered,
+            ConnectionStatus::Connecting,
+            ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+        ];
+        for s in &statuses {
+            assert_eq!(connection_icon(&local, s, true).icon_name, "computer-symbolic");
+            assert_eq!(connection_icon(&remote, s, true).icon_name, "network-server-symbolic");
+            assert_eq!(connection_icon(&local, s, false).icon_name, "utilities-terminal-symbolic");
+        }
+    }
+
+    #[test]
     fn workspace_connection_summary_local_returns_empty_without_pane_info() {
         assert!(workspace_connection_summary(&RuntimeEndpoint::Local, None).is_empty());
     }
