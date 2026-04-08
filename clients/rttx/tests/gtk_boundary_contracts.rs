@@ -887,6 +887,21 @@ fn pane_description_full_path_and_command_regression() {
 }
 
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.
+/// Contract: prompt-set VTE titles never appear in subtitle when CWD is available.
+#[test]
+fn pane_description_never_shows_prompt_title_with_cwd() {
+    use rttx::runtime::pane_description;
+
+    // user@host:path prompt title — always redundant with CWD.
+    assert_eq!(
+        pane_description(Some("user@host:~/work"), Some("/home/user/work")),
+        Some("/home/user/work".into())
+    );
+    // Even a "useful" title is ignored when CWD is present.
+    assert_eq!(pane_description(Some("vim"), Some("/tmp/project")), Some("/tmp/project".into()));
+}
+
+/// Contract: ConnectionPresentation contains only header_label and input_enabled.
 ///
 /// The banner fields were removed in #305. The pane header status label and
 /// input gating are the only remaining presentation concerns.
