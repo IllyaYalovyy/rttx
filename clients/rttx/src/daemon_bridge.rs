@@ -16,7 +16,7 @@ use rttx_proto::proto;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -317,7 +317,7 @@ struct EndpointActor {
     tracked_workspaces: HashMap<String, String>,
     reconnect_attempt: u32,
     heartbeat: HeartbeatMonitor,
-    heartbeat_timer: tokio::time::Interval,
+    heartbeat_deadline: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,13 +364,8 @@ impl HeartbeatMonitor {
     }
 }
 
-fn new_heartbeat_interval() -> tokio::time::Interval {
-    let mut interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + HEARTBEAT_INTERVAL,
-        HEARTBEAT_INTERVAL,
-    );
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval
+fn new_heartbeat_deadline() -> Instant {
+    Instant::now() + HEARTBEAT_INTERVAL
 }
 
 impl EndpointActor {
@@ -392,7 +387,7 @@ impl EndpointActor {
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
             heartbeat: HeartbeatMonitor::default(),
-            heartbeat_timer: new_heartbeat_interval(),
+            heartbeat_deadline: new_heartbeat_deadline(),
         }
     }
 
@@ -406,11 +401,15 @@ impl EndpointActor {
         loop {
             if let Some(reader) = self.reader.as_mut() {
                 let track_heartbeat = !self.tracked_workspaces.is_empty();
+                let heartbeat_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    self.heartbeat_deadline,
+                ));
+                tokio::pin!(heartbeat_sleep);
                 let event = tokio::select! {
                     biased;
                     command = self.cmd_rx.recv() => LoopEvent::Command(command),
                     message = reader.recv() => LoopEvent::Message(message),
-                    _ = self.heartbeat_timer.tick(), if track_heartbeat => LoopEvent::HeartbeatTick,
+                    () = &mut heartbeat_sleep, if track_heartbeat => LoopEvent::HeartbeatTick,
                 };
 
                 match event {
@@ -439,7 +438,7 @@ impl EndpointActor {
 
     fn restart_heartbeat_timer(&mut self) {
         self.heartbeat.reset();
-        self.heartbeat_timer = new_heartbeat_interval();
+        self.heartbeat_deadline = new_heartbeat_deadline();
     }
 
     async fn send_message(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
@@ -1207,6 +1206,7 @@ impl EndpointActor {
     }
 
     async fn handle_heartbeat_tick(&mut self) {
+        self.heartbeat_deadline = new_heartbeat_deadline();
         match self.heartbeat.on_tick() {
             HeartbeatAction::SendPing { nonce } => {
                 let Some(writer) = self.writer.as_mut() else {
@@ -1373,7 +1373,7 @@ mod tests {
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
             heartbeat: HeartbeatMonitor::default(),
-            heartbeat_timer: new_heartbeat_interval(),
+            heartbeat_deadline: new_heartbeat_deadline(),
         }
     }
 
@@ -1469,9 +1469,18 @@ mod tests {
             tracked_workspaces: HashMap::new(),
             reconnect_attempt: 0,
             heartbeat: HeartbeatMonitor::default(),
-            heartbeat_timer: new_heartbeat_interval(),
+            heartbeat_deadline: new_heartbeat_deadline(),
         };
         (actor, event_rx)
+    }
+
+    #[test]
+    fn endpoint_actor_construction_does_not_require_tokio_runtime() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx);
+        assert!(actor.reader.is_none());
+        assert!(actor.writer.is_none());
     }
 
     #[test]
