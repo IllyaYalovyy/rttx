@@ -85,6 +85,24 @@ impl PaneScreen {
     }
 }
 
+/// Return restart-safe scrollback bytes for a reconstructed pane.
+///
+/// A daemon restart destroys the old PTY, so the last unterminated line from
+/// the previous shell cannot be resumed safely. Keeping it would cause the new
+/// shell prompt to be appended onto stale prompt/editing state, producing
+/// duplicated prompts and corrupted command lines after reconstruction.
+#[must_use]
+pub fn restart_safe_scrollback(data: &[u8]) -> &[u8] {
+    if data.last().is_some_and(|byte| matches!(byte, b'\n' | b'\r')) {
+        return data;
+    }
+
+    match data.iter().rposition(|&byte| matches!(byte, b'\n' | b'\r')) {
+        Some(index) => &data[..=index],
+        None => &[],
+    }
+}
+
 impl vte::Perform for ScreenPerformer {
     fn print(&mut self, c: char) {
         self.cursor_col += 1;
@@ -258,5 +276,25 @@ mod tests {
         screen.feed(b"\r\n\r\n\r\n"); // row 3
         screen.feed(b"\x1b[2A"); // up 2 → row 1
         assert_eq!(screen.cursor_position().0, 1);
+    }
+
+    #[test]
+    fn restart_safe_scrollback_keeps_complete_lines() {
+        assert_eq!(restart_safe_scrollback(b"line 1\r\nline 2\r\n"), b"line 1\r\nline 2\r\n");
+    }
+
+    #[test]
+    fn restart_safe_scrollback_drops_unterminated_active_line() {
+        assert_eq!(restart_safe_scrollback(b"line 1\r\nPROMPT> "), b"line 1\r\n");
+    }
+
+    #[test]
+    fn restart_safe_scrollback_drops_prompt_only_state() {
+        assert_eq!(restart_safe_scrollback(b"PROMPT> "), b"");
+    }
+
+    #[test]
+    fn restart_safe_scrollback_uses_last_carriage_return_as_boundary() {
+        assert_eq!(restart_safe_scrollback(b"status\rpartial"), b"status\r");
     }
 }
