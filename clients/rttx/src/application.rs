@@ -41,6 +41,9 @@ pub(crate) const APP_CSS: &str = "\
     .session-activity-idle {
         opacity: 0.45;
     }
+    .session-row .subtitle {
+        opacity: 0.55;
+    }
     @media (prefers-color-scheme: dark) {
         .accent-blue   { color: @blue_3; }
         .accent-green  { color: @green_3; }

@@ -88,6 +88,9 @@ mod imp {
             obj.add_suffix(&self.connection_icon);
             obj.add_suffix(&self.activity_dot);
             obj.add_suffix(&self.close_button);
+
+            obj.set_subtitle_lines(1);
+            obj.add_css_class("session-row");
         }
     }
 
