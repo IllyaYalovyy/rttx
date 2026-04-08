@@ -784,8 +784,7 @@ fn workspace_connection_summary_contains_no_status_text() {
 
     for (ep, count) in [(&local, 1), (&local, 3), (&remote, 1), (&remote, 2)] {
         let summary = workspace_connection_summary(ep, count);
-        for keyword in ["Recovered", "Disconnected", "Action Required", "Reconnecting", "Blocked"]
-        {
+        for keyword in ["Recovered", "Disconnected", "Action Required", "Reconnecting", "Blocked"] {
             assert!(
                 !summary.contains(keyword),
                 "subtitle should not contain status text '{keyword}': {summary}"
