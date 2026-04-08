@@ -76,6 +76,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
         zoomed_terminal_uuid: None,
+        user_renamed: false,
     }
 }
 
@@ -127,6 +128,7 @@ pub fn managed_session_with_runtime(
         },
         color: SessionColor::default(),
         zoomed_terminal_uuid: None,
+        user_renamed: false,
     };
     session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
     session.sync_legacy_mode_from_runtime();

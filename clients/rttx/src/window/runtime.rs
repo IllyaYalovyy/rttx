@@ -114,12 +114,11 @@ impl Window {
     fn add_remote_managed_session(&self, host: &str) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
-        let mut session_state = SessionState::new_managed_remote(
-            format!("Remote {count}"),
-            host,
-            WorkspacePolicy::Persistent,
-            None,
-        );
+        let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
+        let name = crate::session::state::auto_name_for_workspace(&endpoint, None)
+            .unwrap_or_else(|| format!("Remote {count}"));
+        let mut session_state =
+            SessionState::new_managed_remote(name, host, WorkspacePolicy::Persistent, None);
         session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state, false);
@@ -136,8 +135,12 @@ impl Window {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();
-        let mut session_state =
-            SessionState::new_managed_local(format!("Workspace {count}"), policy, initial_cwd);
+        let name = crate::session::state::auto_name_for_workspace(
+            &RuntimeEndpoint::Local,
+            initial_cwd.as_deref(),
+        )
+        .unwrap_or_else(|| format!("Workspace {count}"));
+        let mut session_state = SessionState::new_managed_local(name, policy, initial_cwd);
         session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state, false);
@@ -637,6 +640,7 @@ impl Window {
             }
             Msg::CwdChanged(cwd_changed) => {
                 pane.set_current_directory(Some(&cwd_changed.cwd));
+                self.maybe_auto_rename_workspace(&workspace_id, Some(&cwd_changed.cwd));
             }
             Msg::PaneExited(exited) => {
                 let visible_session = self.imp().session_stack.visible_child_name();
@@ -757,5 +761,40 @@ impl Window {
 
         self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
         self.connect_managed_workspace(&session_state);
+    }
+
+    pub(super) fn maybe_auto_rename_workspace(&self, workspace_id: &str, cwd: Option<&str>) {
+        let mut state = self.imp().state.borrow_mut();
+        let Some(session) = state.sessions.iter_mut().find(|s| s.uuid == workspace_id) else {
+            return;
+        };
+        if session.user_renamed {
+            return;
+        }
+        let Some(new_name) =
+            crate::session::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
+        else {
+            return;
+        };
+        if session.name == new_name {
+            return;
+        }
+        session.name.clone_from(&new_name);
+        drop(state);
+        self.update_sidebar_row_name(workspace_id, &new_name);
+    }
+
+    fn update_sidebar_row_name(&self, session_uuid: &str, name: &str) {
+        let mut idx = 0;
+        while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
+            if let Some(session_row) =
+                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                && session_row.uuid() == session_uuid
+            {
+                session_row.set_session_name(name);
+                return;
+            }
+            idx += 1;
+        }
     }
 }

@@ -113,6 +113,8 @@ pub struct SessionState {
     pub color: SessionColor,
     #[serde(default)]
     pub zoomed_terminal_uuid: Option<String>,
+    #[serde(default)]
+    pub user_renamed: bool,
 }
 
 impl SessionState {
@@ -145,6 +147,7 @@ impl SessionState {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         }
     }
 
@@ -191,6 +194,7 @@ impl SessionState {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         }
     }
 }
@@ -291,6 +295,23 @@ impl SessionState {
     }
 }
 
+/// Derive a workspace name from the endpoint and working directory.
+///
+/// Returns `None` when no meaningful name can be derived.
+#[must_use]
+pub fn auto_name_for_workspace(endpoint: &RuntimeEndpoint, cwd: Option<&str>) -> Option<String> {
+    if let RuntimeEndpoint::Remote { host } = endpoint {
+        let short = host.split('@').next_back().unwrap_or(host);
+        let short = short.split('.').next().unwrap_or(short);
+        if !short.is_empty() {
+            return Some(short.to_string());
+        }
+    }
+    let path = cwd?;
+    let name = std::path::Path::new(path).file_name()?.to_str()?;
+    if name.is_empty() { None } else { Some(name.to_string()) }
+}
+
 const fn default_left_sidebar_width() -> i32 {
     220
 }
@@ -381,6 +402,7 @@ mod tests {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -640,6 +662,7 @@ mod tests {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         };
         session.layout = session.layout.remove_terminal("t2").unwrap();
         session.prune_recovery();
@@ -661,6 +684,7 @@ mod tests {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         };
         session.normalize_active_terminal();
         assert_eq!(session.active_terminal_uuid.as_deref(), Some("t1"));
@@ -694,6 +718,7 @@ mod tests {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         };
         let json = serde_json::to_string(&session).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -812,5 +837,64 @@ mod module_boundary_tests {
         let classes: std::collections::HashSet<_> =
             SessionColor::ALL.iter().map(|c| c.css_class()).collect();
         assert_eq!(classes.len(), 8);
+    }
+
+    #[test]
+    fn auto_name_from_cwd_uses_basename() {
+        let ep = RuntimeEndpoint::Local;
+        assert_eq!(
+            auto_name_for_workspace(&ep, Some("/home/user/projects/rttx")),
+            Some("rttx".into())
+        );
+    }
+
+    #[test]
+    fn auto_name_from_remote_uses_short_hostname() {
+        let ep = RuntimeEndpoint::Remote { host: "etf@nucbox.local".into() };
+        assert_eq!(auto_name_for_workspace(&ep, None), Some("nucbox".into()));
+    }
+
+    #[test]
+    fn auto_name_remote_without_user_prefix() {
+        let ep = RuntimeEndpoint::Remote { host: "builder.example.com".into() };
+        assert_eq!(auto_name_for_workspace(&ep, None), Some("builder".into()));
+    }
+
+    #[test]
+    fn auto_name_remote_ignores_cwd() {
+        let ep = RuntimeEndpoint::Remote { host: "etf@nucbox".into() };
+        assert_eq!(auto_name_for_workspace(&ep, Some("/home/etf/work")), Some("nucbox".into()));
+    }
+
+    #[test]
+    fn auto_name_returns_none_for_local_without_cwd() {
+        assert_eq!(auto_name_for_workspace(&RuntimeEndpoint::Local, None), None);
+    }
+
+    #[test]
+    fn auto_name_returns_none_for_root_path() {
+        assert_eq!(auto_name_for_workspace(&RuntimeEndpoint::Local, Some("/")), None);
+    }
+
+    #[test]
+    fn auto_name_home_directory() {
+        let ep = RuntimeEndpoint::Local;
+        assert_eq!(auto_name_for_workspace(&ep, Some("/home/user")), Some("user".into()));
+    }
+
+    #[test]
+    fn user_renamed_defaults_to_false_on_deserialize() {
+        let json = r#"{"uuid":"u","name":"Test","layout":{"Terminal":{"uuid":"t"}}}"#;
+        let session: SessionState = serde_json::from_str(json).unwrap();
+        assert!(!session.user_renamed);
+    }
+
+    #[test]
+    fn user_renamed_roundtrips_through_serde() {
+        let mut session = SessionState::new("Test".into());
+        session.user_renamed = true;
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        assert!(restored.user_renamed);
     }
 }

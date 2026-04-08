@@ -165,6 +165,7 @@ fn contract_any_constructible_state_roundtrips() {
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             }],
             width: 1,
             height: 1,
@@ -183,6 +184,7 @@ fn contract_any_constructible_state_roundtrips() {
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             }],
             ..WindowState::default()
         },
@@ -204,6 +206,7 @@ fn contract_any_constructible_state_roundtrips() {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 }],
                 ..WindowState::default()
             }
@@ -222,6 +225,7 @@ fn contract_any_constructible_state_roundtrips() {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 })
                 .collect();
             WindowState {
@@ -683,6 +687,7 @@ fn zoom_state_survives_serialization_roundtrip() {
             runtime: Default::default(),
             color: Default::default(),
             zoomed_terminal_uuid: Some("t1".into()),
+            user_renamed: false,
         }],
         ..Default::default()
     };
