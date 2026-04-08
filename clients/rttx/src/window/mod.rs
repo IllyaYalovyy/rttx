@@ -597,16 +597,13 @@ impl Window {
                 custom_title: session_state.layout.terminal_custom_title(zoomed_uuid),
             };
             let win = self.clone();
-            return session::build_layout_widget(
-                &zoomed_layout,
-                &move |uuid, cwd, _, custom_title| {
-                    win.materialize_terminal(session_state, uuid, cwd, custom_title)
-                },
-            );
+            return session::build_layout_widget(&zoomed_layout, &move |spec| {
+                win.materialize_terminal(session_state, spec.uuid, spec.cwd, spec.custom_title)
+            });
         }
         let win = self.clone();
-        session::build_layout_widget(&session_state.layout, &move |uuid, cwd, _, custom_title| {
-            win.materialize_terminal(session_state, uuid, cwd, custom_title)
+        session::build_layout_widget(&session_state.layout, &move |spec| {
+            win.materialize_terminal(session_state, spec.uuid, spec.cwd, spec.custom_title)
         })
     }
 
