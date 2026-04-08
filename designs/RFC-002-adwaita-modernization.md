@@ -116,17 +116,18 @@ adw::ApplicationWindow
 ### SessionRow widget tree
 
 ```text
-adw::ActionRow
-├── prefix: gtk4::Stack "indicator"
-│     ├── page "idle":   gtk4::Image  (color dot, CSS class)
-│     └── page "active": gtk4::Spinner
+adw::ActionRow  (.session-row)
+├── prefix: gtk4::Image  (connection icon — always visible)
+├── prefix: gtk4::Label  (position number 1–9)
 ├── [title]    — session name  (ActionRow built-in)
-├── [subtitle] — activity text (ActionRow built-in)
+├── [subtitle] — pane info or host · pane info (ActionRow built-in)
 └── suffix:
-      ├── gtk4::Label  (terminal count badge)
-      ├── gtk4::Button ("document-edit-symbolic", rename trigger)
-      └── gtk4::Button ("window-close-symbolic", flat circular)
+      └── gtk4::Button ("window-close-symbolic" or "view-more-symbolic" for managed)
 ```
+
+Activity is indicated by CSS classes on the row itself (no extra widgets):
+- `.session-activity-active` — 3px accent left bar with pulse animation
+- `.session-activity-idle` — 3px accent left bar, static, 45% opacity
 
 ### Session color data model
 
@@ -135,14 +136,13 @@ adw::ActionRow
 pub enum SessionColor { #[default] Blue, Green, Yellow, Red, Purple, Pink, Teal, Orange }
 ```
 
-Each variant maps to an Adwaita accent CSS variable (`@blue_3`, `@green_3`, …) applied as a
-CSS class on the indicator dot image.
+Each variant maps to an Adwaita accent CSS variable (`@blue_3`, `@green_3`, …).
 
 ### Activity detection
 
 VTE fires `window_title_changed` when the shell updates its title (shells do this when starting
-a command). A 5-second debounce timer resets the activity state. The sidebar spinner starts on
-title change and stops after debounce. The timer closure captures a weak window reference to
+a command). A debounce timer resets the activity state. The accent bar appears on
+title change and fades to idle after the debounce. The timer closure captures a weak reference to
 avoid crashes when sessions are closed before the timer fires.
 
 ---
@@ -153,7 +153,7 @@ avoid crashes when sessions are closed before the timer fires.
 | --- | --- |
 | G1 — HIG window chrome | `adw::ToolbarView` replaces `gtk4::Box` wrapper |
 | G2 — Two-tier notifications | `adw::Toast` for focused-window/background-session; `gio::Notification` when unfocused |
-| G3 — SessionRow as ActionRow | Full rewrite with indicator stack, spinner, color dot, rename popover |
+| G3 — SessionRow as ActionRow | Full rewrite with connection icon prefix, accent bar activity, managed actions |
 
 ---
 
@@ -163,11 +163,12 @@ avoid crashes when sessions are closed before the timer fires.
 - [x] **Two-tier notifications** — Implement `terminal_is_in_visible_session`; update `notify_process_completed`
 - [x] **SessionRow base** — Rewrite as `adw::ActionRow` subclass
 - [x] **Session renaming** — Inline popover with `adw::EntryRow`
-- [x] **Activity indicator** — Wire `window_title_changed` signal; debounce timer; spinner vs dot
+- [x] **Activity indicator** — Accent bar via CSS `box-shadow` with pulse animation; replaces earlier spinner/dot design
 - [x] **Session color coding** — Assign colors on creation; CSS classes; color picker UI deferred (NG2)
+- [x] **Connection icon** — Always-visible prefix icon: `computer-symbolic` (local), `network-server-symbolic` (remote), state-specific icons for disconnected/blocked/connecting
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** — Should the color dot use `circle-filled-symbolic` (stock icon) or a 10×10 CSS-drawn circle via a custom icon? The stock icon scales with the font; the CSS approach gives precise sizing control.
+All resolved.
