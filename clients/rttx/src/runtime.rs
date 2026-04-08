@@ -615,10 +615,7 @@ mod tests {
             "Local · vim main.rs"
         );
         assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local");
-        assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, Some("")),
-            "Local"
-        );
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("")), "Local");
         assert_eq!(
             workspace_connection_summary(
                 &RuntimeEndpoint::Remote { host: "builder.example".into() },

@@ -479,7 +479,6 @@ impl Window {
         } else {
             "Close workspace"
         }));
-        row.set_color(session_state.color);
 
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
