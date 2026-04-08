@@ -81,7 +81,7 @@ mod imp {
             obj.add_prefix(&self.position_label);
             obj.add_suffix(&self.close_button);
 
-            obj.set_subtitle_lines(2);
+            obj.set_subtitle_lines(1);
             obj.add_css_class("session-row");
         }
     }

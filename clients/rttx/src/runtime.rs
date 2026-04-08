@@ -423,20 +423,19 @@ pub fn workspace_connection_summary(
 
 /// Build a pane description for the sidebar subtitle.
 ///
-/// Shows the full CWD path (tilde-collapsed). When the VTE title carries
-/// useful info (a running command, not a generic shell name), it is
-/// appended after a newline so both path and command are visible.
+/// Shows the full CWD path (tilde-collapsed). When no CWD is available,
+/// falls back to the VTE title if it carries useful info (not a generic
+/// shell name or prompt-set `user@host:path`).
 #[must_use]
 pub fn pane_description(title: Option<&str>, cwd: Option<&str>) -> Option<String> {
     let path = cwd.map(|c| collapse_home(c.trim()));
-    let useful_title = title.map(str::trim).filter(|t| !t.is_empty() && !is_generic_title(t));
-
-    match (path, useful_title) {
-        (Some(p), Some(t)) if !p.is_empty() => Some(format!("{p}\n{t}")),
-        (Some(p), _) if !p.is_empty() => Some(p),
-        (_, Some(t)) => Some(t.to_string()),
-        _ => None,
+    if let Some(ref p) = path
+        && !p.is_empty()
+    {
+        return Some(p.clone());
     }
+    // No CWD — fall back to title if useful.
+    title.map(str::trim).filter(|t| !t.is_empty() && !is_generic_title(t)).map(String::from)
 }
 
 /// Collapse `/home/<user>/…` to `~/…`.
@@ -674,15 +673,22 @@ mod tests {
 
     #[test]
     fn pane_description_shows_full_path_and_command() {
-        // Full path + useful title → both on separate lines.
+        // CWD always wins — title is ignored when CWD is available.
         let desc = pane_description(Some("vim main.rs"), Some("/tmp/project"));
-        assert_eq!(desc, Some("/tmp/project\nvim main.rs".into()));
+        assert_eq!(desc, Some("/tmp/project".into()));
     }
 
     #[test]
     fn pane_description_path_only_when_title_is_generic() {
         let desc = pane_description(Some("bash"), Some("/tmp/project"));
         assert_eq!(desc, Some("/tmp/project".into()));
+    }
+
+    #[test]
+    fn pane_description_prompt_title_ignored_when_cwd_present() {
+        // Shell prompt sets VTE title to user@host:path — always redundant.
+        let desc = pane_description(Some("yalovyyi@host:~/work"), Some("/home/yalovyyi/work"));
+        assert!(!desc.as_deref().unwrap_or("").contains('@'));
     }
 
     #[test]
