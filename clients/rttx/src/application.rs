@@ -5,6 +5,63 @@ use libadwaita as adw;
 use crate::config;
 use crate::window::Window;
 
+pub(crate) const APP_CSS: &str = "\
+    .terminal-pane {
+        border-radius: 10px;
+        border: 1px solid alpha(@window_fg_color, 0.10);
+        background: alpha(@view_bg_color, 0.78);
+    }
+    .terminal-pane-active {
+        border-color: alpha(@accent_bg_color, 0.85);
+        background: alpha(@view_bg_color, 0.92);
+    }
+    .terminal-header {
+        padding: 6px 8px;
+        border-top-left-radius: 10px;
+        border-top-right-radius: 10px;
+        border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+        background: alpha(@headerbar_bg_color, 0.72);
+    }
+    .terminal-pane-active .terminal-header {
+        background: alpha(@accent_bg_color, 0.14);
+    }
+    .terminal-scroller {
+        background: transparent;
+    }
+    vte-terminal {
+        margin: 2px 6px;
+    }
+    @keyframes bell-flash {
+        from { background-color: alpha(@warning_color, 0.4); }
+        to   { background-color: transparent; }
+    }
+    .bell-flash {
+        animation: bell-flash 0.15s ease-out;
+    }
+    .session-activity-idle {
+        opacity: 0.45;
+    }
+    @media (prefers-color-scheme: dark) {
+        .accent-blue   { color: @blue_3; }
+        .accent-green  { color: @green_3; }
+        .accent-yellow { color: @yellow_3; }
+        .accent-red    { color: @red_3; }
+        .accent-purple { color: @purple_3; }
+        .accent-pink   { color: @pink_3; }
+        .accent-teal   { color: @teal_3; }
+        .accent-orange { color: @orange_3; }
+    }
+    @media (prefers-color-scheme: light) {
+        .accent-blue   { color: @blue_5; }
+        .accent-green  { color: @green_5; }
+        .accent-yellow { color: @yellow_5; }
+        .accent-red    { color: @red_5; }
+        .accent-purple { color: @purple_5; }
+        .accent-pink   { color: @pink_5; }
+        .accent-teal   { color: @teal_5; }
+        .accent-orange { color: @orange_5; }
+    }";
+
 /// Build and run the application.
 #[must_use]
 pub fn run() -> glib::ExitCode {
@@ -25,51 +82,7 @@ pub fn run() -> glib::ExitCode {
         };
 
         let css = gtk4::CssProvider::new();
-        css.load_from_string(
-            ".terminal-pane {
-                border-radius: 10px;
-                border: 1px solid alpha(@window_fg_color, 0.10);
-                background: alpha(@view_bg_color, 0.78);
-            }
-            .terminal-pane-active {
-                border-color: alpha(@accent_bg_color, 0.85);
-                background: alpha(@view_bg_color, 0.92);
-            }
-            .terminal-header {
-                padding: 6px 8px;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                border-bottom: 1px solid alpha(@window_fg_color, 0.08);
-                background: alpha(@headerbar_bg_color, 0.72);
-            }
-            .terminal-pane-active .terminal-header {
-                background: alpha(@accent_bg_color, 0.14);
-            }
-            .terminal-scroller {
-                background: transparent;
-            }
-            vte-terminal {
-                margin: 2px 6px;
-            }
-            @keyframes bell-flash {
-                from { background-color: alpha(@warning_color, 0.4); }
-                to   { background-color: transparent; }
-            }
-            .bell-flash {
-                animation: bell-flash 0.15s ease-out;
-            }
-            .session-activity-idle {
-                opacity: 0.45;
-            }
-            .accent-blue   { color: @blue_3; }
-            .accent-green  { color: @green_3; }
-            .accent-yellow { color: @yellow_3; }
-            .accent-red    { color: @red_3; }
-            .accent-purple { color: @purple_3; }
-            .accent-pink   { color: @pink_3; }
-            .accent-teal   { color: @teal_3; }
-            .accent-orange { color: @orange_3; }",
-        );
+        css.load_from_string(APP_CSS);
         gtk4::style_context_add_provider_for_display(
             &display,
             &css,
