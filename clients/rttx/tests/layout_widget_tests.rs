@@ -86,9 +86,9 @@ fn test_build_layout_widget_multiple_splits() {
     };
 
     let created_uuids = std::cell::RefCell::new(Vec::new());
-    let _widget = build_layout_widget(&layout, &|uuid, _, _, _| {
-        created_uuids.borrow_mut().push(uuid.to_string());
-        gtk4::Label::new(Some(uuid)).upcast()
+    let _widget = build_layout_widget(&layout, &|spec| {
+        created_uuids.borrow_mut().push(spec.uuid.to_string());
+        gtk4::Label::new(Some(spec.uuid)).upcast()
     });
 
     let created_uuids = created_uuids.borrow();
@@ -114,13 +114,13 @@ fn test_rebuild_session_content_reuses_terminals() {
         std::cell::RefCell::new(std::collections::HashMap::<String, gtk4::Widget>::new());
 
     let build_widget = |layout: &LayoutNode| {
-        build_layout_widget(layout, &|uuid, _, _, _| {
+        build_layout_widget(layout, &|spec| {
             let mut terms = terminals.borrow_mut();
-            if let Some(existing) = terms.get(uuid) {
+            if let Some(existing) = terms.get(spec.uuid) {
                 return existing.clone();
             }
-            let new_term: gtk4::Widget = gtk4::Label::new(Some(uuid)).upcast();
-            terms.insert(uuid.to_string(), new_term.clone());
+            let new_term: gtk4::Widget = gtk4::Label::new(Some(spec.uuid)).upcast();
+            terms.insert(spec.uuid.to_string(), new_term.clone());
             new_term
         })
     };
@@ -168,7 +168,7 @@ fn test_build_layout_widget_with_parented_terminals() {
         custom_title: None,
     };
 
-    let widget = build_layout_widget(&layout, &|_, _, _, _| {
+    let widget = build_layout_widget(&layout, &|_spec| {
         if t1.parent().is_some() {
             t1.unparent();
         }
@@ -205,8 +205,7 @@ fn test_capture_paned_ratios_reads_position() {
         }),
     };
 
-    let widget =
-        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
 
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
     paned.set_size_request(800, 600);
@@ -257,8 +256,7 @@ fn test_capture_paned_ratios_nested() {
         }),
     };
 
-    let widget =
-        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
 
     let outer = widget.downcast_ref::<gtk4::Paned>().unwrap();
     outer.set_size_request(800, 600);
@@ -311,8 +309,7 @@ fn test_apply_paned_ratios_sets_position() {
         }),
     };
 
-    let widget =
-        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
 
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
     paned.set_size_request(800, 600);
@@ -350,8 +347,7 @@ fn test_scheduled_initial_paned_ratios_apply_once_widget_has_size() {
         }),
     };
 
-    let widget =
-        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
     session::schedule_initial_paned_ratios(&widget, &layout);
 
     let window = gtk4::Window::new();
@@ -397,8 +393,7 @@ fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
         }),
     };
 
-    let widget =
-        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
     session::schedule_initial_paned_ratios(&widget, &layout);
 
     let window = gtk4::Window::new();
@@ -455,8 +450,7 @@ fn build_layout_widget_does_not_set_magic_paned_position() {
         }),
     };
 
-    let widget =
-        build_layout_widget(&layout, &|uuid, _, _, _| gtk4::Label::new(Some(uuid)).upcast());
+    let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
 
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
     // Before realize, position must be 0 (GTK default) — not a magic sentinel.
