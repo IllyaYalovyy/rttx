@@ -76,6 +76,7 @@ fn workflow_multi_session_state() {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         },
         SessionState {
             uuid: "s2".into(),
@@ -88,6 +89,7 @@ fn workflow_multi_session_state() {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         },
         SessionState {
             uuid: "s3".into(),
@@ -100,6 +102,7 @@ fn workflow_multi_session_state() {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         },
     ];
 
@@ -158,6 +161,7 @@ fn workflow_persist_and_restore_with_cwds() {
             runtime: WorkspaceRuntime::default(),
             color: SessionColor::default(),
             zoomed_terminal_uuid: None,
+            user_renamed: false,
         }],
         active_session_index: 0,
         width: 1200,
@@ -245,6 +249,7 @@ fn empty_session_name_is_valid() {
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
         zoomed_terminal_uuid: None,
+        user_renamed: false,
     };
     let json = serde_json::to_string(&session).unwrap();
     let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -266,6 +271,7 @@ fn session_order_persists_through_serialization() {
                 runtime: WorkspaceRuntime::default(),
                 color: SessionColor::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             },
             SessionState {
                 uuid: "s1".into(),
@@ -278,6 +284,7 @@ fn session_order_persists_through_serialization() {
                 runtime: WorkspaceRuntime::default(),
                 color: SessionColor::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             },
             SessionState {
                 uuid: "s2".into(),
@@ -290,6 +297,7 @@ fn session_order_persists_through_serialization() {
                 runtime: WorkspaceRuntime::default(),
                 color: SessionColor::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             },
         ],
         active_session_index: 1,
@@ -975,6 +983,7 @@ fn zoom_toggle_sets_and_clears_zoomed_terminal() {
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
         zoomed_terminal_uuid: None,
+        user_renamed: false,
     };
 
     // Zoom in
@@ -1003,6 +1012,7 @@ fn zoom_state_not_persisted_when_cleared_before_save() {
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
         zoomed_terminal_uuid: Some("t1".into()),
+        user_renamed: false,
     };
 
     // Simulate save_state clearing zoom
@@ -1026,6 +1036,7 @@ fn zoom_on_single_pane_session_is_noop() {
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
         zoomed_terminal_uuid: None,
+        user_renamed: false,
     };
 
     // Single pane — zoom should not be set (enforced by toggle_pane_zoom)
@@ -1047,6 +1058,7 @@ fn zoom_preserves_layout_tree_integrity() {
         runtime: WorkspaceRuntime::default(),
         color: SessionColor::default(),
         zoomed_terminal_uuid: None,
+        user_renamed: false,
     };
 
     // Zoom t2

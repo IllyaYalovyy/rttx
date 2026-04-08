@@ -984,6 +984,7 @@ impl Window {
                 return;
             };
             session.name = new_name.to_string();
+            session.user_renamed = true;
         }
 
         let mut idx = 0;
@@ -2808,6 +2809,7 @@ mod tests {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2820,6 +2822,7 @@ mod tests {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 },
             ],
             ..WindowState::default()
@@ -2866,6 +2869,7 @@ mod tests {
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             }],
             ..WindowState::default()
         };
@@ -2905,6 +2909,7 @@ mod tests {
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             }],
             ..WindowState::default()
         };
@@ -2932,6 +2937,7 @@ mod tests {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 },
                 SessionState {
                     uuid: "s2".into(),
@@ -2949,6 +2955,7 @@ mod tests {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 },
             ],
             ..WindowState::default()
@@ -3530,6 +3537,7 @@ mod tests {
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
+                user_renamed: false,
             }],
             ..WindowState::default()
         };
@@ -4422,6 +4430,7 @@ mod tests {
         window.save_state();
         let saved_state = session::load_window_state();
         assert_eq!(saved_state.sessions[0].name, "Renamed Session");
+        assert!(saved_state.sessions[0].user_renamed);
 
         window.close();
     }
@@ -5731,6 +5740,7 @@ mod tests {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 },
                 SessionState {
                     uuid: second_uuid.clone(),
@@ -5743,6 +5753,7 @@ mod tests {
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
+                    user_renamed: false,
                 },
             ],
             ..WindowState::default()
@@ -6139,5 +6150,72 @@ mod tests {
 
         window.close();
         crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn auto_rename_updates_sidebar_when_not_user_renamed() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app =
+            adw::Application::builder().application_id("com.illya.rttx.auto-rename-tests").build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].uuid.clone()
+        };
+
+        window.maybe_auto_rename_workspace(&session_uuid, Some("/home/user/projects/rttx"));
+
+        {
+            let state = window.imp().state.borrow();
+            assert_eq!(state.sessions[0].name, "rttx");
+            assert!(!state.sessions[0].user_renamed);
+        }
+
+        let row = window.imp().sidebar_list.row_at_index(0).expect("row exists");
+        let session_row =
+            row.child().and_then(|child| child.downcast::<SessionRow>().ok()).expect("SessionRow");
+        assert_eq!(session_row.session_name(), "rttx");
+
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn auto_rename_skipped_after_manual_rename() {
+        require_display!();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+        crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+        let app = adw::Application::builder()
+            .application_id("com.illya.rttx.auto-rename-sticky-tests")
+            .build();
+        app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+        let window = Window::new(&app);
+        let session_uuid = {
+            let state = window.imp().state.borrow();
+            state.sessions[0].uuid.clone()
+        };
+
+        window.rename_session(&session_uuid, "My Custom Name");
+        window.maybe_auto_rename_workspace(&session_uuid, Some("/home/user/projects/rttx"));
+
+        {
+            let state = window.imp().state.borrow();
+            assert_eq!(state.sessions[0].name, "My Custom Name");
+            assert!(state.sessions[0].user_renamed);
+        }
+
+        window.close();
     }
 }
