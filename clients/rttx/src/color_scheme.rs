@@ -114,7 +114,7 @@ pub fn builtin_color_schemes() -> Vec<ColorScheme> {
     ];
     const DAYBREAK: [&str; 16] = [
         "#2B2F36", "#B2472F", "#2F6B3C", "#8A6318", "#2F5FAE", "#7B4CB0", "#1E6F79", "#687281",
-        "#768090", "#CC5A3C", "#3F7D4D", "#A97A1F", "#4B7BD0", "#9562C7", "#2B8791", "#37414F",
+        "#666F7E", "#B94D31", "#3F7D4D", "#8F681A", "#376CCB", "#8C54C2", "#277982", "#37414F",
     ];
 
     vec![
@@ -364,9 +364,11 @@ mod tests {
         );
 
         for (index, color) in scheme.palette_rgba().iter().enumerate() {
+            let ratio = contrast_ratio(color, &background);
             assert!(
-                contrast_ratio(color, &background) >= 3.5,
-                "palette slot {index} lost too much contrast against the light background"
+                ratio >= 4.5,
+                "palette slot {index} has contrast {ratio:.2} against the light background, \
+                 WCAG AA requires at least 4.5:1"
             );
         }
     }
