@@ -838,6 +838,33 @@ fn pane_description_extracts_compact_label() {
     assert_eq!(pane_description(None, None), None);
 }
 
+/// Contract: pane_description filters generic VTE titles and prefers CWD.
+///
+/// Prevents 'Terminal (persistent)' and shell names from appearing in the
+/// sidebar subtitle. CWD leaf folder is always preferred when available.
+#[test]
+fn pane_description_subtitle_structure_regression() {
+    use rttx::runtime::{pane_description, workspace_connection_summary, RuntimeEndpoint};
+
+    // CWD leaf preferred over any title.
+    assert_eq!(
+        pane_description(Some("Terminal (persistent)"), Some("/home/user/rttx")),
+        Some("rttx".into())
+    );
+    // Generic titles filtered when no CWD.
+    assert_eq!(pane_description(Some("Terminal (persistent)"), None), None);
+    assert_eq!(pane_description(Some("fish"), None), None);
+    // Useful title kept when no CWD.
+    assert_eq!(pane_description(Some("htop"), None), Some("htop".into()));
+
+    // Local subtitle is just the pane info.
+    assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("rttx")), "rttx");
+    // Remote subtitle includes host.
+    let remote = RuntimeEndpoint::Remote { host: "dev-box".into() };
+    assert_eq!(workspace_connection_summary(&remote, Some("rttx")), "dev-box · rttx");
+    assert_eq!(workspace_connection_summary(&remote, None), "dev-box");
+}
+
 /// Contract: ConnectionPresentation contains only header_label and input_enabled.
 ///
 /// The banner fields were removed in #305. The pane header status label and
