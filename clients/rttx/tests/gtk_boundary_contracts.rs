@@ -828,8 +828,13 @@ fn workspace_connection_summary_contains_no_status_text() {
 fn pane_description_extracts_compact_label() {
     use rttx::runtime::pane_description;
 
-    assert_eq!(pane_description(Some("vim"), Some("/home/user")), Some("vim".into()));
+    // CWD leaf is preferred over title.
+    assert_eq!(pane_description(Some("vim"), Some("/home/user")), Some("user".into()));
     assert_eq!(pane_description(None, Some("/home/user/project")), Some("project".into()));
+    // Title used only when no CWD and title is not generic.
+    assert_eq!(pane_description(Some("vim"), None), Some("vim".into()));
+    // Generic titles are filtered.
+    assert_eq!(pane_description(Some("bash"), None), None);
     assert_eq!(pane_description(None, None), None);
 }
 
