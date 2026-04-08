@@ -525,15 +525,13 @@ impl Window {
         workspace_id: &str,
         status: &ConnectionStatus,
     ) {
+        self.refresh_sidebar_subtitle(workspace_id);
+
         let state = self.imp().state.borrow();
         let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
         else {
             return;
         };
-        let summary = workspace_connection_summary(
-            &session.runtime.endpoint,
-            session.layout.terminal_count(),
-        );
         let icon = connection_icon(&session.runtime.endpoint, status);
         drop(state);
 
@@ -544,7 +542,6 @@ impl Window {
                 row.child().and_then(|child| child.downcast::<SessionRow>().ok())
                 && session_row.uuid() == workspace_id
             {
-                session_row.set_subtitle(&summary);
                 session_row.set_connection_icon(icon.as_ref());
                 break;
             }
@@ -636,10 +633,12 @@ impl Window {
                 if pane.custom_title().is_none() {
                     pane.set_title(&title_changed.title);
                 }
+                self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
             Msg::CwdChanged(cwd_changed) => {
                 pane.set_current_directory(Some(&cwd_changed.cwd));
                 self.maybe_auto_rename_workspace(&workspace_id, Some(&cwd_changed.cwd));
+                self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
             Msg::PaneExited(exited) => {
                 let visible_session = self.imp().session_stack.visible_child_name();

@@ -396,17 +396,34 @@ pub const fn connection_icon(
 }
 
 #[must_use]
-pub fn workspace_connection_summary(endpoint: &RuntimeEndpoint, pane_count: usize) -> String {
+pub fn workspace_connection_summary(
+    endpoint: &RuntimeEndpoint,
+    active_pane_info: Option<&str>,
+) -> String {
     let base = match endpoint {
         RuntimeEndpoint::Local => "Local runtime",
         RuntimeEndpoint::Remote { host } => host.as_str(),
     };
 
-    if pane_count == 1 {
-        format!("{base} · 1 pane")
-    } else {
-        format!("{base} · {pane_count} panes")
+    match active_pane_info {
+        Some(info) if !info.is_empty() => format!("{base} · {info}"),
+        _ => base.to_string(),
     }
+}
+
+/// Extract a compact pane description from its title and working directory.
+///
+/// Prefers the title when it carries useful information (i.e. not just the shell
+/// name). Falls back to the CWD basename.
+#[must_use]
+pub fn pane_description(title: Option<&str>, cwd: Option<&str>) -> Option<String> {
+    if let Some(title) = title {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    cwd.map(|c| c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c).to_string())
 }
 
 /// Deterministic, non-destructive binding reconciliation result.
@@ -592,42 +609,52 @@ mod tests {
     }
 
     #[test]
-    fn workspace_connection_summary_includes_pane_count() {
+    fn workspace_connection_summary_with_pane_info() {
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, 3),
-            "Local runtime · 3 panes"
+            workspace_connection_summary(&RuntimeEndpoint::Local, Some("vim main.rs")),
+            "Local runtime · vim main.rs"
         );
+        assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, None), "Local runtime");
         assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, 1),
-            "Local runtime · 1 pane"
-        );
-        assert_eq!(
-            workspace_connection_summary(&RuntimeEndpoint::Local, 2),
-            "Local runtime · 2 panes"
+            workspace_connection_summary(&RuntimeEndpoint::Local, Some("")),
+            "Local runtime"
         );
         assert_eq!(
             workspace_connection_summary(
                 &RuntimeEndpoint::Remote { host: "builder.example".into() },
-                1,
+                Some("~/src"),
             ),
-            "builder.example · 1 pane"
+            "builder.example · ~/src"
         );
     }
 
     #[test]
-    fn workspace_connection_summary_for_connected_remote_stays_compact() {
+    fn workspace_connection_summary_for_remote_endpoint() {
         let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
 
-        assert_eq!(workspace_connection_summary(&endpoint, 1), "builder.example · 1 pane");
-        assert_eq!(workspace_connection_summary(&endpoint, 2), "builder.example · 2 panes");
+        assert_eq!(workspace_connection_summary(&endpoint, Some("bash")), "builder.example · bash");
+        assert_eq!(workspace_connection_summary(&endpoint, None), "builder.example");
     }
 
     #[test]
-    fn workspace_connection_summary_pane_count_singular_plural() {
-        let ep = RuntimeEndpoint::Local;
-        assert!(workspace_connection_summary(&ep, 1).ends_with("1 pane"));
-        assert!(workspace_connection_summary(&ep, 2).ends_with("2 panes"));
-        assert!(workspace_connection_summary(&ep, 10).ends_with("10 panes"));
+    fn pane_description_prefers_title_over_cwd() {
+        assert_eq!(
+            pane_description(Some("vim main.rs"), Some("/home/user/project")),
+            Some("vim main.rs".into())
+        );
+    }
+
+    #[test]
+    fn pane_description_falls_back_to_cwd_basename() {
+        assert_eq!(pane_description(None, Some("/home/user/project")), Some("project".into()));
+        assert_eq!(pane_description(None, Some("/home/user/project/")), Some("project".into()));
+        assert_eq!(pane_description(None, Some("/")), Some("/".into()));
+    }
+
+    #[test]
+    fn pane_description_none_when_no_info() {
+        assert_eq!(pane_description(None, None), None);
+        assert_eq!(pane_description(Some(""), None), None);
     }
 
     #[test]

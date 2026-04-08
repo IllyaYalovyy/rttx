@@ -14,8 +14,8 @@ use crate::config;
 use crate::preferences::{self, Preferences};
 use crate::runtime::{
     ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
-    WorkspacePolicy, connection_icon, present_connection_status, present_workspace_actions,
-    workspace_connection_summary,
+    WorkspacePolicy, connection_icon, pane_description, present_connection_status,
+    present_workspace_actions, workspace_connection_summary,
 };
 use crate::session::{
     self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, PaneTarget,
@@ -740,7 +740,7 @@ impl Window {
 
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
         session::schedule_initial_paned_ratios(&content, &session_state.layout);
-        self.update_sidebar_count(&session_state.uuid, session_state.layout.terminal_count());
+        self.refresh_sidebar_subtitle(&session_state.uuid);
         self.renumber_session_rows();
 
         if auto_connect_managed && session_state.uses_managed_runtime() {
@@ -1022,11 +1022,21 @@ impl Window {
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
             win.set_focused_terminal(Some(&uuid));
-            let mut state = win.imp().state.borrow_mut();
-            if let Some(session) =
-                state.sessions.iter_mut().find(|session| session.layout.contains_terminal(&uuid))
-            {
-                session.active_terminal_uuid = Some(uuid.clone());
+            let session_uuid = {
+                let mut state = win.imp().state.borrow_mut();
+                let session = state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.layout.contains_terminal(&uuid));
+                if let Some(session) = session {
+                    session.active_terminal_uuid = Some(uuid.clone());
+                    Some(session.uuid.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(session_uuid) = session_uuid {
+                win.refresh_sidebar_subtitle(&session_uuid);
             }
         });
         term.vte().add_controller(focus_controller);
@@ -1046,6 +1056,12 @@ impl Window {
         let uuid = term.uuid();
         term.vte().connect_contents_changed(move |_| {
             win.mark_session_activity(&uuid);
+        });
+
+        let win = self.clone();
+        let uuid = term.uuid();
+        term.vte().connect_window_title_changed(move |_| {
+            win.refresh_sidebar_subtitle_if_active(&uuid);
         });
 
         let drag_source = gtk4::DragSource::new();
@@ -1932,7 +1948,7 @@ impl Window {
                     &new_terminal_uuid,
                     orientation,
                 ) {
-                    self.update_sidebar_count(&session_uuid, session_state.layout.terminal_count());
+                    self.refresh_sidebar_subtitle(&session_uuid);
                 } else {
                     self.rebuild_session_content(&session_uuid, &session_state);
                 }
@@ -2064,7 +2080,7 @@ impl Window {
             session::schedule_initial_paned_ratios(&content, &session_state.layout);
         }
 
-        self.update_sidebar_count(session_uuid, session_state.layout.terminal_count());
+        self.refresh_sidebar_subtitle(session_uuid);
         self.sync_sidebar_to_visible_session();
     }
 
@@ -2222,19 +2238,23 @@ impl Window {
         imp.terminals.borrow_mut().remove(uuid);
     }
 
-    fn update_sidebar_count(&self, session_uuid: &str, count: usize) {
+    fn refresh_sidebar_subtitle(&self, session_uuid: &str) {
         let imp = self.imp();
         let subtitle = {
             let state = imp.state.borrow();
             let Some(session) = state.sessions.iter().find(|s| s.uuid == session_uuid) else {
                 return;
             };
+            let endpoint = &session.runtime.endpoint;
+            let active_uuid = session.active_terminal_uuid.as_deref();
+            let pane_info = active_uuid.and_then(|uuid| {
+                let handle = self.terminal_handle(uuid)?;
+                pane_description(Some(&handle.title()), handle.current_directory().as_deref())
+            });
             if session.uses_managed_runtime() {
-                workspace_connection_summary(&session.runtime.endpoint, count)
-            } else if count == 1 {
-                "1 pane".to_string()
+                workspace_connection_summary(endpoint, pane_info.as_deref())
             } else {
-                format!("{count} panes")
+                pane_info.unwrap_or_default()
             }
         };
         let mut idx = 0;
@@ -2246,6 +2266,20 @@ impl Window {
                 return;
             }
             idx += 1;
+        }
+    }
+
+    fn refresh_sidebar_subtitle_if_active(&self, terminal_uuid: &str) {
+        let session_uuid = {
+            let state = self.imp().state.borrow();
+            state
+                .sessions
+                .iter()
+                .find(|s| s.active_terminal_uuid.as_deref() == Some(terminal_uuid))
+                .map(|s| s.uuid.clone())
+        };
+        if let Some(session_uuid) = session_uuid {
+            self.refresh_sidebar_subtitle(&session_uuid);
         }
     }
 
@@ -5809,7 +5843,7 @@ mod tests {
 
         let row = session_row_for_uuid(&window, &session_state.uuid);
         let subtitle = row.subtitle().map(|value| value.to_string());
-        assert_eq!(subtitle.as_deref(), Some("Local runtime · 1 pane"));
+        assert_eq!(subtitle.as_deref(), Some("Local runtime · Terminal (persistent)"));
         assert!(row.imp().connection_icon.is_visible());
         assert!(
             !subtitle.as_deref().is_some_and(|value| value.contains("Recovered")),

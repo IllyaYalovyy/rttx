@@ -303,15 +303,15 @@ mod tests {
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
-    fn session_row_subtitle_shows_pane_count() {
+    fn session_row_subtitle_shows_pane_info() {
         require_display!();
 
         let row = SessionRow::new("session-1", "Session 1");
-        row.set_subtitle("Local runtime · 3 panes");
-        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime · 3 panes");
+        row.set_subtitle("Local runtime · vim main.rs");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime · vim main.rs");
 
-        row.set_subtitle("1 pane");
-        assert_eq!(row.subtitle().unwrap().as_str(), "1 pane");
+        row.set_subtitle("Local runtime");
+        assert_eq!(row.subtitle().unwrap().as_str(), "Local runtime");
     }
 
     #[test]
