@@ -38,8 +38,17 @@ pub(crate) const APP_CSS: &str = "\
     .bell-flash {
         animation: bell-flash 0.15s ease-out;
     }
+    @keyframes activity-pulse {
+        0%   { box-shadow: inset 3px 0 0 0 alpha(@accent_bg_color, 0.9); }
+        50%  { box-shadow: inset 3px 0 0 0 alpha(@accent_bg_color, 0.4); }
+        100% { box-shadow: inset 3px 0 0 0 alpha(@accent_bg_color, 0.9); }
+    }
+    .session-activity-active {
+        box-shadow: inset 3px 0 0 0 @accent_bg_color;
+        animation: activity-pulse 1.8s ease-in-out infinite;
+    }
     .session-activity-idle {
-        opacity: 0.45;
+        box-shadow: inset 3px 0 0 0 alpha(@accent_bg_color, 0.45);
     }
     .session-row .subtitle {
         opacity: 0.55;
