@@ -466,6 +466,14 @@ impl DaemonWriter {
         .await
     }
 
+    /// Send a heartbeat ping to the daemon.
+    pub async fn send_ping(&mut self, nonce: u64) -> Result<(), DaemonError> {
+        self.send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce })),
+        })
+        .await
+    }
+
     /// Detach from a session without killing it.
     pub async fn detach_session(&mut self, session_id: Uuid) -> Result<(), DaemonError> {
         self.send(&proto::ClientMessage {
@@ -543,6 +551,7 @@ pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
         Msg::Bell(m) => &m.pane_id,
         Msg::PaneResized(m) => &m.pane_id,
         Msg::HelloAck(_)
+        | Msg::Pong(_)
         | Msg::SessionList(_)
         | Msg::SessionCreated(_)
         | Msg::Snapshot(_)
@@ -789,6 +798,40 @@ mod tests {
                         assert_eq!(resize.rows, 40);
                     }
                     other => panic!("expected Resize, got {other:?}"),
+                }
+                break;
+            }
+        }
+
+        client_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_ping_encodes_correctly() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move {
+                let conn = DaemonConnection::connect(&sock).await.unwrap();
+                let (_reader, mut writer) = conn.into_split();
+                writer.send_ping(99).await.unwrap();
+            }
+        });
+
+        let mut server_stream = serve_handshake(&listener).await;
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = server_stream.read_buf(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
+                match msg.msg {
+                    Some(proto::client_message::Msg::Ping(ping)) => assert_eq!(ping.nonce, 99),
+                    other => panic!("expected Ping, got {other:?}"),
                 }
                 break;
             }

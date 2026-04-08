@@ -8,7 +8,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use prost::Message;
 
 /// Protocol version. Bumped on incompatible wire format changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Maximum message size (16 MB). Prevents unbounded allocations.
 pub const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
@@ -136,7 +136,7 @@ mod tests {
         let messages: Vec<proto::ClientMessage> = vec![
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                    protocol_version: 1,
+                    protocol_version: PROTOCOL_VERSION,
                     client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
                 })),
             },
@@ -203,6 +203,9 @@ mod tests {
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
             },
+            proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 7 })),
+            },
         ];
 
         for msg in &messages {
@@ -221,7 +224,7 @@ mod tests {
         let messages: Vec<proto::ServerMessage> = vec![
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::HelloAck(proto::HelloAck {
-                    protocol_version: 1,
+                    protocol_version: PROTOCOL_VERSION,
                     server_id: uuid_to_bytes(uuid::Uuid::new_v4()),
                 })),
             },
@@ -348,6 +351,9 @@ mod tests {
                     code: 1,
                     message: "not found".into(),
                 })),
+            },
+            proto::ServerMessage {
+                msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 42 })),
             },
         ];
 

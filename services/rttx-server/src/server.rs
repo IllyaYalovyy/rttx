@@ -298,6 +298,8 @@ impl Server {
                 Some(protocol::hello_ack(s.server_id))
             }
 
+            proto::client_message::Msg::Ping(ping) => Some(protocol::pong(ping.nonce)),
+
             proto::client_message::Msg::ListSessions(_) => {
                 let s = server.lock().await;
                 let infos = protocol::session_inventory_for(client_id, s.sessions.values());

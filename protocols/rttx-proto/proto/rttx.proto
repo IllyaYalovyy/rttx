@@ -74,6 +74,10 @@ message SetPaneTitle {
 
 message Shutdown {}
 
+message Ping {
+    uint64 nonce = 1;
+}
+
 // --- Server → Client ---
 
 message HelloAck {
@@ -220,6 +224,10 @@ message Error {
     string message = 2;
 }
 
+message Pong {
+    uint64 nonce = 1;
+}
+
 // --- Envelope ---
 
 message ClientMessage {
@@ -236,6 +244,7 @@ message ClientMessage {
         SetPaneTitle set_pane_title = 10;
         Shutdown shutdown = 11;
         TerminateSession terminate_session = 12;
+        Ping ping = 13;
     }
 }
 
@@ -257,5 +266,6 @@ message ServerMessage {
         PaneResized pane_resized = 14;
         SessionTerminated session_terminated = 15;
         AttachBlocked attach_blocked = 16;
+        Pong pong = 17;
     }
 }
