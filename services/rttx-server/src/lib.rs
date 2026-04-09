@@ -10,3 +10,4 @@ pub mod screen;
 pub mod serialization;
 pub mod server;
 pub mod session;
+pub mod single_instance;
