@@ -144,24 +144,30 @@ Rationale:
 
 ### Connection icon (prefix)
 
-Always visible on every row. Determined by endpoint type and connection status.
+Always visible on every row. One icon per row.
 
-| Endpoint | Status | Icon | CSS class | Tooltip |
-|----------|--------|------|-----------|---------|
-| Local | Connected | `computer-symbolic` | `dim-label` | Local workspace |
-| Local | Connecting/Starting | `content-loading-symbolic` | `dim-label` | Connecting… |
-| Local | Recovered | `emblem-ok-symbolic` | `accent` | Connection recovered |
-| Local | Disconnected | `network-offline-symbolic` | `warning` | Disconnected |
-| Local | Blocked | `network-offline-symbolic` | `error` | Connection blocked |
-| Remote | Connected | `network-server-symbolic` | `accent` | Connected to remote host |
-| Remote | Connecting | `network-server-symbolic` | `dim-label` | Connecting… |
-| Remote | Recovered | `emblem-ok-symbolic` | `accent` | Connection recovered |
-| Remote | Disconnected | `network-offline-symbolic` | `warning` | Disconnected |
-| Remote | Blocked | `network-offline-symbolic` | `error` | Connection blocked |
-| Direct (no daemon) | — | `computer-symbolic` | `dim-label` | Local workspace |
+Shape encodes workspace type (constant for the lifetime of the row):
 
-The icon is set in `append_session_row` at creation time and updated by
-`refresh_workspace_row_status` on connection state changes.
+| Workspace type | Icon shape |
+|----------------|------------|
+| Local managed (daemon-backed) | `computer-symbolic` |
+| Remote managed (daemon-backed) | `network-server-symbolic` |
+| Direct (no daemon) | `utilities-terminal-symbolic` |
+
+Color encodes connection state (changes dynamically):
+
+| Status | CSS class | Meaning |
+|--------|-----------|---------|
+| Connected (local) | `dim-label` | Normal, healthy |
+| Connected (remote) | `accent` | Active remote connection |
+| Connecting / Starting | `dim-label` | In progress |
+| Recovered | `accent` | Just reconnected |
+| Disconnected | `warning` | Lost connection |
+| Blocked | `error` | Cannot connect |
+
+The icon shape never changes — you always know what kind of workspace it is at a glance.
+Only the color changes to reflect connection health. Tooltip provides the detail
+(e.g. "Disconnected from runtime", "Connecting to remote host").
 
 ### Title
 

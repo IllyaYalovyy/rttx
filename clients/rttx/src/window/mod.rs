@@ -480,7 +480,11 @@ impl Window {
         } else {
             ConnectionStatus::Connected
         };
-        let icon = connection_icon(&session_state.runtime.endpoint, &initial_status);
+        let icon = connection_icon(
+            &session_state.runtime.endpoint,
+            &initial_status,
+            session_state.uses_managed_runtime(),
+        );
         row.set_connection_icon(&icon);
 
         if session_state.uses_managed_runtime() {

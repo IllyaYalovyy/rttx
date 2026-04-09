@@ -740,20 +740,34 @@ fn workspace_connection_summary_shows_endpoint_and_pane_info() {
 fn connection_icon_always_returns_icon() {
     use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
 
-    let local_connected = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected);
+    let local_connected =
+        connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
     assert_eq!(local_connected.icon_name, "computer-symbolic");
 
     let local_disconnected =
-        connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected);
+        connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Disconnected, true);
     assert_eq!(local_disconnected.css_class, "warning");
+    // Shape stays constant regardless of state.
+    assert_eq!(local_disconnected.icon_name, "computer-symbolic");
 
     let remote = RuntimeEndpoint::Remote { host: "h".into() };
-    let connected = connection_icon(&remote, &ConnectionStatus::Connected);
+    let connected = connection_icon(&remote, &ConnectionStatus::Connected, true);
     assert_eq!(connected.css_class, "accent");
+    assert_eq!(connected.icon_name, "network-server-symbolic");
 
-    let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected);
+    let disconnected = connection_icon(&remote, &ConnectionStatus::Disconnected, true);
     assert_eq!(disconnected.css_class, "warning");
-    assert_ne!(connected.icon_name, disconnected.icon_name);
+    // Shape stays constant — same icon, different color.
+    assert_eq!(disconnected.icon_name, "network-server-symbolic");
+}
+
+/// Contract: direct (no daemon) workspaces use terminal icon.
+#[test]
+fn connection_icon_direct_uses_terminal_symbolic() {
+    use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
+
+    let icon = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
+    assert_eq!(icon.icon_name, "utilities-terminal-symbolic");
 }
 
 /// Contract: every connection icon carries a non-empty tooltip.
@@ -776,7 +790,7 @@ fn connection_icon_always_has_tooltip() {
         (&remote, ConnectionStatus::Recovered),
         (&remote, ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied)),
     ] {
-        let icon = connection_icon(endpoint, &status);
+        let icon = connection_icon(endpoint, &status, true);
         assert!(
             !icon.tooltip.is_empty(),
             "connection_icon for {status:?} should have a non-empty tooltip"
