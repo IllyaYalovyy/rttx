@@ -32,6 +32,7 @@ fn preferences_roundtrip_all_fields() {
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
         pane_navigation_keys: PaneNavigationKeys::AltArrow,
         auto_start_daemon: true,
+        reconnect_delay_secs: 10,
     };
 
     preferences::save_to(&prefs, &path).unwrap();

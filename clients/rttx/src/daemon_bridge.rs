@@ -149,12 +149,14 @@ pub struct EndpointConnectionManager {
     endpoints: RefCell<HashMap<String, EndpointHandle>>,
     event_tx: mpsc::UnboundedSender<EndpointEvent>,
     auto_start_daemon: bool,
+    reconnect_delay_secs: u32,
 }
 
 impl EndpointConnectionManager {
     /// Create a new endpoint-scoped manager and its event receiver.
     pub fn new(
         auto_start_daemon: bool,
+        reconnect_delay_secs: u32,
     ) -> Result<(Self, mpsc::UnboundedReceiver<EndpointEvent>), DaemonError> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -163,7 +165,13 @@ impl EndpointConnectionManager {
             .map_err(DaemonError::Io)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Ok((
-            Self { rt, endpoints: RefCell::new(HashMap::new()), event_tx, auto_start_daemon },
+            Self {
+                rt,
+                endpoints: RefCell::new(HashMap::new()),
+                event_tx,
+                auto_start_daemon,
+                reconnect_delay_secs,
+            },
             event_rx,
         ))
     }
@@ -184,6 +192,7 @@ impl EndpointConnectionManager {
             cmd_tx.clone(),
             cmd_rx,
             self.auto_start_daemon,
+            self.reconnect_delay_secs,
         );
         self.rt.spawn(actor.run());
         self.endpoints.borrow_mut().insert(key, EndpointHandle { cmd_tx: cmd_tx.clone() });
@@ -332,6 +341,7 @@ struct EndpointActor {
     /// Prevents spawning multiple daemon processes during reconnect loops.
     daemon_start_attempted: bool,
     auto_start_daemon: bool,
+    reconnect_delay_secs: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,6 +399,7 @@ impl EndpointActor {
         self_tx: mpsc::UnboundedSender<EndpointCommand>,
         cmd_rx: mpsc::UnboundedReceiver<EndpointCommand>,
         auto_start_daemon: bool,
+        reconnect_delay_secs: u32,
     ) -> Self {
         Self {
             endpoint,
@@ -405,6 +416,7 @@ impl EndpointActor {
             heartbeat_deadline: new_heartbeat_deadline(),
             daemon_start_attempted: false,
             auto_start_daemon,
+            reconnect_delay_secs,
         }
     }
 
@@ -1277,7 +1289,7 @@ impl EndpointActor {
     }
 
     fn next_reconnect_delay_secs(&self) -> u32 {
-        self.next_reconnect_attempt().min(5)
+        self.next_reconnect_attempt().min(self.reconnect_delay_secs)
     }
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
@@ -1403,6 +1415,7 @@ mod tests {
             heartbeat_deadline: new_heartbeat_deadline(),
             daemon_start_attempted: false,
             auto_start_daemon: true,
+            reconnect_delay_secs: 10,
         }
     }
 
@@ -1501,6 +1514,7 @@ mod tests {
             heartbeat_deadline: new_heartbeat_deadline(),
             daemon_start_attempted: false,
             auto_start_daemon: true,
+            reconnect_delay_secs: 10,
         };
         (actor, event_rx)
     }
@@ -1509,7 +1523,7 @@ mod tests {
     fn endpoint_actor_construction_does_not_require_tokio_runtime() {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let (self_tx, cmd_rx) = mpsc::unbounded_channel();
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true);
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
         assert!(actor.reader.is_none());
         assert!(actor.writer.is_none());
     }
@@ -1705,7 +1719,7 @@ mod tests {
     fn daemon_start_attempted_flag_defaults_to_false() {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let (self_tx, cmd_rx) = mpsc::unbounded_channel();
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true);
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
         assert!(
             !actor.daemon_start_attempted,
             "new actor must not have daemon_start_attempted set"
@@ -1716,7 +1730,40 @@ mod tests {
     fn auto_start_daemon_flag_is_stored() {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let (self_tx, cmd_rx) = mpsc::unbounded_channel();
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false);
+        let actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
         assert!(!actor.auto_start_daemon);
+    }
+
+    #[test]
+    fn reconnect_delay_caps_at_configured_value() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+
+        // Ramp-up: delay = min(attempt, 10)
+        assert_eq!(actor.next_reconnect_delay_secs(), 1);
+        actor.reconnect_attempt = 5;
+        assert_eq!(actor.next_reconnect_delay_secs(), 6);
+        actor.reconnect_attempt = 9;
+        assert_eq!(actor.next_reconnect_delay_secs(), 10);
+        // Capped at configured max.
+        actor.reconnect_attempt = 100;
+        assert_eq!(actor.next_reconnect_delay_secs(), 10);
+    }
+
+    #[test]
+    fn reconnect_delay_respects_custom_cap() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 3);
+
+        assert_eq!(actor.next_reconnect_delay_secs(), 1);
+        actor.reconnect_attempt = 2;
+        assert_eq!(actor.next_reconnect_delay_secs(), 3);
+        actor.reconnect_attempt = 50;
+        assert_eq!(actor.next_reconnect_delay_secs(), 3);
     }
 }

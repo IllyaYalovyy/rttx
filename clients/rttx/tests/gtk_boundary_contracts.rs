@@ -968,3 +968,25 @@ fn auto_start_daemon_backward_compat_and_roundtrip() {
     save_to(&prefs, &explicit).unwrap();
     assert!(!load_from(&explicit).auto_start_daemon);
 }
+
+/// Contract: reconnect_delay_secs defaults to 10 and survives roundtrip.
+///
+/// Existing preferences files without this field must load with 10s default
+/// (backward compat). Custom values must persist.
+#[test]
+fn reconnect_delay_secs_backward_compat_and_roundtrip() {
+    use rttx::preferences::{Preferences, load_from, save_to};
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Backward compat: missing field defaults to 10.
+    let legacy = dir.path().join("legacy.json");
+    std::fs::write(&legacy, r#"{"font": "Hack 10"}"#).unwrap();
+    assert_eq!(load_from(&legacy).reconnect_delay_secs, 10);
+
+    // Roundtrip with custom value.
+    let custom = dir.path().join("custom.json");
+    let prefs = Preferences { reconnect_delay_secs: 30, ..Default::default() };
+    save_to(&prefs, &custom).unwrap();
+    assert_eq!(load_from(&custom).reconnect_delay_secs, 30);
+}

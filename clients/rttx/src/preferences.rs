@@ -79,6 +79,8 @@ pub struct Preferences {
     pub pane_navigation_keys: PaneNavigationKeys,
     #[serde(default = "default_true")]
     pub auto_start_daemon: bool,
+    #[serde(default = "default_reconnect_delay_secs")]
+    pub reconnect_delay_secs: u32,
 }
 
 fn default_font() -> String {
@@ -102,6 +104,9 @@ const fn default_scrollback() -> i64 {
 const fn default_true() -> bool {
     true
 }
+const fn default_reconnect_delay_secs() -> u32 {
+    10
+}
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -120,6 +125,7 @@ impl Default for Preferences {
             default_session_folder: default_session_folder(),
             pane_navigation_keys: PaneNavigationKeys::default(),
             auto_start_daemon: true,
+            reconnect_delay_secs: default_reconnect_delay_secs(),
         }
     }
 }
@@ -173,6 +179,8 @@ struct PreferencesDisk {
     pane_navigation_keys: PaneNavigationKeys,
     #[serde(default = "default_true")]
     auto_start_daemon: bool,
+    #[serde(default = "default_reconnect_delay_secs")]
+    reconnect_delay_secs: u32,
 }
 
 impl From<PreferencesDisk> for Preferences {
@@ -205,6 +213,7 @@ impl From<PreferencesDisk> for Preferences {
             default_session_folder: raw.default_session_folder,
             pane_navigation_keys: raw.pane_navigation_keys,
             auto_start_daemon: raw.auto_start_daemon,
+            reconnect_delay_secs: raw.reconnect_delay_secs,
         }
     }
 }
@@ -274,6 +283,7 @@ mod tests {
         assert!(!prefs.scroll_on_output);
         assert!(!prefs.smart_clipboard);
         assert!(prefs.auto_start_daemon);
+        assert_eq!(prefs.reconnect_delay_secs, 10);
     }
 
     #[test]
@@ -465,5 +475,27 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let loaded = load_from(&path);
         assert!(loaded.auto_start_daemon);
+    }
+
+    #[test]
+    fn reconnect_delay_secs_defaults_to_10() {
+        assert_eq!(Preferences::default().reconnect_delay_secs, 10);
+    }
+
+    #[test]
+    fn reconnect_delay_secs_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        let prefs = Preferences { reconnect_delay_secs: 30, ..Default::default() };
+        save_to(&prefs, &path).unwrap();
+        assert_eq!(load_from(&path).reconnect_delay_secs, 30);
+    }
+
+    #[test]
+    fn missing_reconnect_delay_secs_defaults_to_10() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{}").unwrap();
+        assert_eq!(load_from(&path).reconnect_delay_secs, 10);
     }
 }
