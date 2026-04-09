@@ -157,7 +157,9 @@ impl Window {
             return true;
         }
 
-        match crate::daemon_bridge::EndpointConnectionManager::new() {
+        match crate::daemon_bridge::EndpointConnectionManager::new(
+            crate::preferences::load().auto_start_daemon,
+        ) {
             Ok((manager, rx)) => {
                 self.start_endpoint_event_poller(rx);
                 self.imp().connection_manager.replace(Some(manager));

@@ -31,6 +31,7 @@ fn preferences_roundtrip_all_fields() {
         smart_clipboard: true,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
         pane_navigation_keys: PaneNavigationKeys::AltArrow,
+        auto_start_daemon: true,
     };
 
     preferences::save_to(&prefs, &path).unwrap();
