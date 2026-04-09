@@ -14,6 +14,9 @@ use uuid::Uuid;
 /// Default scrollback byte limit per pane (10 MB).
 const DEFAULT_MAX_SCROLLBACK: usize = 10 * 1024 * 1024;
 
+/// Default on-disk scrollback log byte limit per pane (10 MB).
+const DEFAULT_MAX_SCROLLBACK_LOG: u64 = 10 * 1024 * 1024;
+
 /// Runtime state of a single pane.
 pub struct Pane {
     /// Unique pane identifier.
@@ -73,8 +76,9 @@ impl Pane {
 
     /// Flush pending scrollback bytes to the log file on disk.
     ///
-    /// Appends only the bytes received since the last flush. Sets the
-    /// `scrollback_log_path` on the pane for persistence metadata.
+    /// Appends only the bytes received since the last flush. If the file
+    /// exceeds `DEFAULT_MAX_SCROLLBACK_LOG` bytes after appending, the file
+    /// is truncated to keep only the tail.
     pub fn flush_scrollback(
         &mut self,
         cache_dir: &Path,
@@ -92,7 +96,14 @@ impl Pane {
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
         file.write_all(&self.pending_flush)?;
         self.pending_flush.clear();
-        self.scrollback_log_path = Some(path);
+        self.scrollback_log_path = Some(path.clone());
+
+        // Cap the file size.
+        let meta = std::fs::metadata(&path)?;
+        if meta.len() > DEFAULT_MAX_SCROLLBACK_LOG {
+            truncate_log_tail(&path, DEFAULT_MAX_SCROLLBACK_LOG)?;
+        }
+
         Ok(())
     }
 
@@ -143,6 +154,17 @@ impl Pane {
             rows: self.rows,
         }
     }
+}
+
+/// Truncate a log file to keep only the last `max_bytes` bytes.
+///
+/// Reads the tail, rewrites the file. This is `O(max_bytes)` but runs at most
+/// once per flush cycle and only when the file exceeds the cap.
+fn truncate_log_tail(path: &Path, max_bytes: u64) -> Result<(), std::io::Error> {
+    let data = std::fs::read(path)?;
+    let keep_from = data.len().saturating_sub(max_bytes as usize);
+    std::fs::write(path, &data[keep_from..])?;
+    Ok(())
 }
 
 /// Serializable pane state for disk persistence.
@@ -277,5 +299,36 @@ mod tests {
     fn effective_cwd_returns_none_without_pid_or_osc7() {
         let pane = Pane::new(Uuid::new_v4(), 80, 24);
         assert!(pane.effective_cwd().is_none());
+    }
+
+    #[test]
+    fn flush_scrollback_caps_file_size() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        // Write more than DEFAULT_MAX_SCROLLBACK_LOG in multiple flushes.
+        let chunk = vec![b'A'; 4 * 1024 * 1024]; // 4 MB
+        for _ in 0..4 {
+            pane.feed_output(&chunk);
+            pane.flush_scrollback(tmp.path(), session_id).unwrap();
+        }
+        // 4 * 4 MB = 16 MB written, cap is 10 MB.
+        let log_path = pane.scrollback_log_path.as_ref().unwrap();
+        let size = std::fs::metadata(log_path).unwrap().len();
+        assert!(
+            size <= DEFAULT_MAX_SCROLLBACK_LOG,
+            "scrollback log {size} bytes exceeds cap {DEFAULT_MAX_SCROLLBACK_LOG}"
+        );
+        assert!(size > 0, "scrollback log should not be empty");
+    }
+
+    #[test]
+    fn truncate_log_tail_keeps_end() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("test.log");
+        std::fs::write(&path, b"AAABBBCCC").unwrap();
+        truncate_log_tail(&path, 3).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"CCC");
     }
 }
