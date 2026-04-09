@@ -37,6 +37,7 @@ mod imp {
         pub close_button: gtk4::Button,
         pub split_h_button: gtk4::Button,
         pub split_v_button: gtk4::Button,
+        pub zoom_button: gtk4::Button,
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
         pub child_exited_handler: RefCell<Option<glib::SignalHandlerId>>,
@@ -83,9 +84,15 @@ mod imp {
             self.close_button.add_css_class("flat");
             self.close_button.set_tooltip_text(Some("Close terminal"));
 
+            self.zoom_button.set_icon_name("view-fullscreen-symbolic");
+            self.zoom_button.add_css_class("flat");
+            self.zoom_button.set_tooltip_text(Some("Zoom pane"));
+            self.zoom_button.set_visible(false);
+
             self.header.append(&self.title_label);
             self.header.append(&self.split_h_button);
             self.header.append(&self.split_v_button);
+            self.header.append(&self.zoom_button);
             self.header.append(&self.close_button);
 
             self.recovery_bar.set_orientation(gtk4::Orientation::Horizontal);
@@ -292,6 +299,23 @@ impl TerminalWidget {
     #[must_use]
     pub fn split_v_button(&self) -> &gtk4::Button {
         &self.imp().split_v_button
+    }
+
+    #[must_use]
+    pub fn zoom_button(&self) -> &gtk4::Button {
+        &self.imp().zoom_button
+    }
+
+    pub fn set_zoom_state(&self, zoomed: bool, multi_pane: bool) {
+        let btn = &self.imp().zoom_button;
+        btn.set_visible(zoomed || multi_pane);
+        if zoomed {
+            btn.set_icon_name("view-restore-symbolic");
+            btn.set_tooltip_text(Some("Restore pane"));
+        } else {
+            btn.set_icon_name("view-fullscreen-symbolic");
+            btn.set_tooltip_text(Some("Zoom pane"));
+        }
     }
 
     #[must_use]
