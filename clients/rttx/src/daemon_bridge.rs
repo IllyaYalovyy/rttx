@@ -1684,4 +1684,15 @@ mod tests {
         actor_task.abort();
         let _ = actor_task.await;
     }
+
+    #[test]
+    fn daemon_start_attempted_flag_defaults_to_false() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx);
+        assert!(
+            !actor.daemon_start_attempted,
+            "new actor must not have daemon_start_attempted set"
+        );
+    }
 }
