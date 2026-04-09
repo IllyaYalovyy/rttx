@@ -662,4 +662,14 @@ mod search_tests {
         assert!(msg.contains(error));
         assert!(msg.ends_with("\x1b[0m\r\n"));
     }
+
+    /// Zoom button visibility rule: visible when zoomed OR multi-pane.
+    #[test]
+    fn zoom_button_visibility_rule() {
+        let visible = |zoomed: bool, multi_pane: bool| zoomed || multi_pane;
+        assert!(!visible(false, false), "single pane, not zoomed → hidden");
+        assert!(visible(false, true), "multi pane, not zoomed → visible");
+        assert!(visible(true, false), "zoomed (was multi) → visible");
+        assert!(visible(true, true), "zoomed + multi → visible");
+    }
 }

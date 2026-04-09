@@ -1340,6 +1340,7 @@ fn persistent_pane_view_has_expected_children() {
     assert!(pane.close_button().icon_name().is_some());
     assert!(pane.split_h_button().icon_name().is_some());
     assert!(pane.split_v_button().icon_name().is_some());
+    assert!(pane.zoom_button().icon_name().is_some());
     // VTE should exist.
     assert!(pane.vte().column_count() >= 0);
 }
@@ -1589,4 +1590,61 @@ fn link_gesture_denies_when_no_uri() {
     // This is a compile-time + documentation test — the actual GTK gesture
     // behavior requires a display.
     assert_ne!(gtk4::EventSequenceState::Denied, gtk4::EventSequenceState::Claimed);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_zoom_button_hidden_by_default() {
+    require_display!();
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    assert!(!term.zoom_button().is_visible());
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_zoom_button_visible_for_multi_pane() {
+    require_display!();
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    term.set_zoom_state(false, true);
+    assert!(term.zoom_button().is_visible());
+    assert_eq!(term.zoom_button().icon_name().unwrap(), "view-fullscreen-symbolic");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_zoom_button_shows_restore_when_zoomed() {
+    require_display!();
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    term.set_zoom_state(true, true);
+    assert!(term.zoom_button().is_visible());
+    assert_eq!(term.zoom_button().icon_name().unwrap(), "view-restore-symbolic");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_zoom_button_hidden_for_single_pane_unzoomed() {
+    require_display!();
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    term.set_zoom_state(false, false);
+    assert!(!term.zoom_button().is_visible());
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_zoom_button_visible_for_multi_pane() {
+    require_display!();
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p1", "s1");
+    pane.set_zoom_state(false, true);
+    assert!(pane.zoom_button().is_visible());
+    assert_eq!(pane.zoom_button().icon_name().unwrap(), "view-fullscreen-symbolic");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_zoom_button_shows_restore_when_zoomed() {
+    require_display!();
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p1", "s1");
+    pane.set_zoom_state(true, false);
+    assert!(pane.zoom_button().is_visible());
+    assert_eq!(pane.zoom_button().icon_name().unwrap(), "view-restore-symbolic");
 }

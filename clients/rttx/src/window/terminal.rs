@@ -12,6 +12,9 @@ impl Window {
             return self.materialize_persistent_terminal(session_state, uuid, custom_title);
         }
 
+        let zoomed = session_state.is_zoomed();
+        let multi_pane = session_state.layout.terminal_count() > 1;
+
         let existing = {
             let terminals = self.imp().terminals.borrow();
             terminals.get(uuid).cloned()
@@ -20,6 +23,7 @@ impl Window {
             if existing.parent().is_some() {
                 existing.unparent();
             }
+            existing.set_zoom_state(zoomed, multi_pane);
             return existing.upcast();
         }
 
@@ -27,6 +31,7 @@ impl Window {
         if let Some(title) = custom_title {
             term.set_custom_title(Some(title));
         }
+        term.set_zoom_state(zoomed, multi_pane);
         self.connect_terminal_signals(&term);
         self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
         self.initialize_terminal_recovery(&term, session_state, uuid);
@@ -40,6 +45,9 @@ impl Window {
         uuid: &str,
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
+        let zoomed = session_state.is_zoomed();
+        let multi_pane = session_state.layout.terminal_count() > 1;
+
         let existing = {
             let panes = self.imp().persistent_terminals.borrow();
             panes.get(uuid).cloned()
@@ -48,6 +56,7 @@ impl Window {
             if existing.parent().is_some() {
                 existing.unparent();
             }
+            existing.set_zoom_state(zoomed, multi_pane);
             return existing.upcast();
         }
 
@@ -56,6 +65,7 @@ impl Window {
         if let Some(title) = custom_title {
             pane_view.set_custom_title(Some(title));
         }
+        pane_view.set_zoom_state(zoomed, multi_pane);
         self.apply_preferences_to_persistent_pane(&pane_view);
         self.connect_managed_pane(session_state, &pane_view);
         self.imp().persistent_terminals.borrow_mut().insert(uuid.to_string(), pane_view.clone());
@@ -181,6 +191,11 @@ impl Window {
         let uuid = term.uuid();
         term.close_button().connect_clicked(move |_| {
             win.close_terminal(&uuid);
+        });
+
+        let win = self.clone();
+        term.zoom_button().connect_clicked(move |_| {
+            win.toggle_pane_zoom();
         });
 
         let win = self.clone();

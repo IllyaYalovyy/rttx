@@ -247,6 +247,11 @@ impl Window {
             win.close_terminal(&close_uuid);
         });
 
+        let win = self.clone();
+        pane_view.zoom_button().connect_clicked(move |_| {
+            win.toggle_pane_zoom();
+        });
+
         let bell_pane = pane_view.clone();
         pane_view.vte().connect_bell(move |_| {
             bell_pane.flash_bell();
