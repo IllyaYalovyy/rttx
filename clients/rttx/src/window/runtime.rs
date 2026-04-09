@@ -157,8 +157,10 @@ impl Window {
             return true;
         }
 
+        let prefs = crate::preferences::load();
         match crate::daemon_bridge::EndpointConnectionManager::new(
-            crate::preferences::load().auto_start_daemon,
+            prefs.auto_start_daemon,
+            prefs.reconnect_delay_secs,
         ) {
             Ok((manager, rx)) => {
                 self.start_endpoint_event_poller(rx);

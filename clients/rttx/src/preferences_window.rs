@@ -199,6 +199,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
                 _ => PaneNavigationKeys::AltArrow,
             },
             auto_start_daemon: prefs.auto_start_daemon,
+            reconnect_delay_secs: prefs.reconnect_delay_secs,
         };
         if let Err(e) = preferences::save(&new_prefs) {
             log::error!("Failed to save preferences: {e}");
