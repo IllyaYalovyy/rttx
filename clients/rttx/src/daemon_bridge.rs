@@ -996,6 +996,11 @@ impl EndpointActor {
                 if workspaces.is_empty() {
                     return;
                 }
+                log::debug!(
+                    "Reconnect attempt to {} for {} workspace(s)",
+                    self.endpoint.key(),
+                    workspaces.len()
+                );
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
                     if problem.is_transient() {
@@ -1005,6 +1010,11 @@ impl EndpointActor {
                     return;
                 }
 
+                log::info!(
+                    "Reconnected to {}, reattaching {} workspace(s)",
+                    self.endpoint.key(),
+                    self.tracked_workspaces.len()
+                );
                 for (workspace_id, runtime_id) in self.tracked_workspaces.clone() {
                     if let Ok(snapshot) = self.attach_runtime(&workspace_id, &runtime_id).await {
                         let _ = self.event_tx.send(EndpointEvent::WorkspaceOpened {
@@ -1043,6 +1053,11 @@ impl EndpointActor {
             }
             Err(error) => {
                 let problem = classify_connection_problem(&error);
+                log::debug!(
+                    "Connection to {} failed: {error} ({})",
+                    self.endpoint.key(),
+                    if problem.is_transient() { "transient" } else { "permanent" }
+                );
                 if problem.is_transient() {
                     let attempt = self.next_reconnect_attempt();
                     let delay_secs = self.next_reconnect_delay_secs();
@@ -1070,11 +1085,11 @@ impl EndpointActor {
             RuntimeEndpoint::Local => {
                 let socket_path = default_socket_path();
                 if !socket_path.exists() && !self.daemon_start_attempted && self.auto_start_daemon {
+                    log::info!("Auto-starting local daemon");
                     self.daemon_start_attempted = true;
                     Self::start_local_daemon(&socket_path).await?;
                 }
                 self.connection = Some(DaemonConnection::connect(&socket_path).await?);
-                // Connection succeeded — allow future start attempts if daemon dies again.
                 self.daemon_start_attempted = false;
             }
             RuntimeEndpoint::Remote { host } => {
@@ -1264,6 +1279,11 @@ impl EndpointActor {
     }
 
     fn handle_disconnect(&mut self) {
+        log::warn!(
+            "Connection lost to {} ({} tracked workspace(s))",
+            self.endpoint.key(),
+            self.tracked_workspaces.len()
+        );
         self.connection = None;
         self.reader = None;
         self.writer = None;
@@ -1294,6 +1314,12 @@ impl EndpointActor {
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+        log::info!(
+            "Scheduling reconnect to {} (attempt {}, delay {}s)",
+            self.endpoint.key(),
+            self.reconnect_attempt,
+            delay_secs
+        );
         let self_tx = self.self_tx.clone();
         let delay = Duration::from_secs(u64::from(delay_secs));
         tokio::spawn(async move {
@@ -1765,5 +1791,49 @@ mod tests {
         assert_eq!(actor.next_reconnect_delay_secs(), 3);
         actor.reconnect_attempt = 50;
         assert_eq!(actor.next_reconnect_delay_secs(), 3);
+    }
+
+    #[tokio::test]
+    async fn handle_disconnect_schedules_reconnect_for_tracked_workspaces() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+        actor.tracked_workspaces.insert("ws-1".into(), "rt-1".into());
+
+        actor.handle_disconnect();
+
+        assert_eq!(actor.reconnect_attempt, 1);
+        assert!(actor.connection.is_none());
+        // Should have emitted Disconnected + Reconnecting for the tracked workspace.
+        let ev1 = event_rx.try_recv().unwrap();
+        assert!(matches!(
+            ev1,
+            EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Disconnected,
+                ..
+            }
+        ));
+        let ev2 = event_rx.try_recv().unwrap();
+        assert!(matches!(
+            ev2,
+            EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn handle_disconnect_without_tracked_workspaces_does_not_schedule() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+
+        actor.handle_disconnect();
+
+        assert_eq!(actor.reconnect_attempt, 0);
+        assert!(event_rx.try_recv().is_err());
     }
 }

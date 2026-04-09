@@ -990,3 +990,21 @@ fn reconnect_delay_secs_backward_compat_and_roundtrip() {
     save_to(&prefs, &custom).unwrap();
     assert_eq!(load_from(&custom).reconnect_delay_secs, 30);
 }
+
+/// Contract: reconnect status carries attempt and delay for diagnostic logging.
+///
+/// The reconnect cycle logs attempt number and delay from the ConnectionStatus.
+/// This test verifies the status machine produces the expected values.
+#[test]
+fn reconnect_status_carries_attempt_and_delay() {
+    use rttx::runtime::{ConnectionEvent, ConnectionStatus, advance_connection_status};
+
+    let status = advance_connection_status(
+        &ConnectionStatus::Connecting,
+        ConnectionEvent::RetryScheduled { attempt: 3, retry_in_secs: 10 },
+    );
+    assert!(
+        matches!(status, ConnectionStatus::Reconnecting { attempt: 3, retry_in_secs: 10 }),
+        "expected Reconnecting with attempt=3, delay=10, got {status:?}"
+    );
+}
