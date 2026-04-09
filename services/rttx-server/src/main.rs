@@ -60,17 +60,23 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     let os = UnixOs;
     let runtime_dir = os.runtime_dir();
+    let lock_path = runtime_dir.join("rttx-server.lock");
     let pid_path = runtime_dir.join("rttx-server.pid");
 
-    // Check if already running via PID file.
-    if is_running_via_pid(&pid_path) {
-        let mode = if dev_mode { "rttx-server (dev)" } else { "rttx-server" };
-        eprintln!("{mode} is already running");
-        std::process::exit(1);
-    }
+    // Acquire the single-instance lock before any other initialization.
+    // The lock is inherited across fork (daemonize) and held until process exit.
+    let _instance_guard =
+        match rttx_server::single_instance::SingleInstanceGuard::try_acquire(&lock_path) {
+            Ok(guard) => guard,
+            Err(rttx_server::single_instance::SingleInstanceError::AlreadyRunning) => {
+                let mode = if dev_mode { "rttx-server (dev)" } else { "rttx-server" };
+                eprintln!("{mode} is already running");
+                std::process::exit(1);
+            }
+            Err(e) => return Err(e.into()),
+        };
 
     if !foreground {
-        std::fs::create_dir_all(&runtime_dir)?;
         let daemon = daemonize::Daemonize::new().pid_file(&pid_path).working_directory(".");
 
         match daemon.start() {
@@ -89,7 +95,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         tracing::debug!(runtime_dir = %runtime_dir.display(), cache_dir = %os.cache_dir().display());
     }
 
-    // Write PID file in foreground mode too (daemonize writes it in daemon mode).
+    // Write PID file in foreground mode (daemonize writes it in daemon mode).
     if foreground {
         std::fs::create_dir_all(&runtime_dir)?;
         std::fs::write(&pid_path, std::process::id().to_string())?;
@@ -117,7 +123,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         rttx_server::server::run(server).await
     });
 
-    // Cleanup PID file on normal exit.
+    // Cleanup PID file on normal exit. Lock file is cleaned up by guard drop.
     let _ = std::fs::remove_file(&pid_path);
     result
 }
@@ -283,18 +289,6 @@ fn status() -> anyhow::Result<()> {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max - 1]) }
-}
-
-/// Check if a daemon is running by reading the PID file and probing the process.
-fn is_running_via_pid(pid_path: &std::path::Path) -> bool {
-    let Ok(contents) = std::fs::read_to_string(pid_path) else {
-        return false;
-    };
-    let Ok(pid) = contents.trim().parse::<i32>() else {
-        return false;
-    };
-    // Check if the process exists by sending signal 0.
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }
 
 async fn handle_signals(server: Arc<Mutex<Server>>) {
