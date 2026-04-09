@@ -53,7 +53,7 @@ BEHAVIOR_TEST_PATTERNS = (
     "services/rttx-server/tests/**/*.rs",
 )
 
-RUST_TEST_DECLARATION = re.compile(r"^\s*(#\[(test|should_panic)\]|proptest!\s*)")
+RUST_TEST_DECLARATION = re.compile(r"^\s*(#\[(test|should_panic|tokio::test)\]|proptest!\s*)")
 PYTHON_TEST_DECLARATION = re.compile(r"^\s*def test_[A-Za-z0-9_]*\s*\(")
 
 
