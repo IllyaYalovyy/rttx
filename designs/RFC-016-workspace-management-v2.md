@@ -11,10 +11,10 @@
 
 ## Summary
 
-Rework tab creation, bookmarks, and the right sidebar to reduce friction and eliminate
-confusion. Replace the single "+" button with explicit creation buttons, replace bookmarks
-with Hosts and Places, scope commands and places to the active host, and remove tmux and
-template support.
+Rework workspace creation, split-pane creation, bookmarks, and the right sidebar to reduce
+friction and eliminate confusion. Replace the single "+" button with explicit creation
+controls, replace bookmarks with Hosts and Places, scope commands and places to the active
+host, and remove tmux and template support.
 
 The one-tab-one-endpoint architecture is preserved.
 
@@ -22,7 +22,7 @@ The one-tab-one-endpoint architecture is preserved.
 
 ## Goals
 
-- **G1** — Creating any workspace type (direct, persistent, remote) takes at most 2 clicks
+- **G1** — Common new-tab and split-pane actions are explicit and low-friction
 - **G2** — The right sidebar shows only content relevant to the active workspace's host
 - **G3** — Saved paths display compactly in dropdowns without losing distinguishability
 - **G4** — Connecting to a remote host with existing runtimes offers a clear attach-or-create
@@ -39,15 +39,18 @@ The one-tab-one-endpoint architecture is preserved.
 
 ## Background & Motivation
 
-The current workspace creation flow has three problems:
+The current workspace and pane creation flow has four problems:
 
 1. **The "+" button always creates local-persistent.** Ephemeral and remote are buried in the
    hamburger menu. Most users never discover them.
 
-2. **Bookmarks conflate four concepts** (folder, SSH host, tmux session, combined) into one
+2. **Split panes always clone the parent.** There is no explicit choice between "clone what I
+   have" and "start a fresh pane in this workspace."
+
+3. **Bookmarks conflate four concepts** (folder, SSH host, tmux session, combined) into one
    entity. Users must understand the interaction matrix to create a useful bookmark.
 
-3. **Commands and bookmarks are global.** The same list appears whether you're on localhost or
+4. **Commands and bookmarks are global.** The same list appears whether you're on localhost or
    a remote dev box. Commands that make sense locally (`cargo build`) are useless on a remote
    host running a different project.
 
@@ -103,7 +106,7 @@ arrow shows saved places (for Direct/Persistent) or saved hosts (for Remote).
 - **Click**: Opens the host list dropdown immediately (no default — you must pick a host)
 - **Dropdown**: List of saved hosts. Selecting one initiates connection.
 
-When a host is selected, the remote attach flow begins (see §3).
+When a host is selected, the remote attach flow begins (see §4).
 
 #### Keyboard shortcuts
 
@@ -126,8 +129,14 @@ struct Host {
     uuid: String,
     name: String,           // display name, e.g. "dev-box"
     ssh_target: String,     // user@host or host, passed to ssh
+    endpoint_key: String,   // canonical identity derived from ssh_target
 }
 ```
+
+`endpoint_key` is the canonical remote identity used throughout the UI and persistence. It is
+derived from a normalized SSH target and is what remote workspaces, places, and commands match
+against. A Host record is saved metadata layered on top of endpoint identity, not the identity
+itself.
 
 Hosts appear in the Remote dropdown and in the right sidebar when managing connections.
 
@@ -139,7 +148,8 @@ A saved directory shortcut, scoped to a host.
 struct Place {
     uuid: String,
     path: String,           // absolute path, e.g. "/home/user/projects/rttx"
-    host_uuid: Option<String>,  // None = local, Some(uuid) = specific host
+    host_key: Option<String>,   // None = local, Some(endpoint_key) = specific remote host
+    global: bool,               // true = show for every host
 }
 ```
 
@@ -148,16 +158,16 @@ Places appear in the Direct/Persistent dropdowns (local places) and in the right
 
 #### Global places
 
-A place with `host_uuid: None` and a special `global: true` flag appears in the sidebar
-for every host. Use case: paths like `/tmp` or `/var/log` that exist on every machine.
+A place with `host_key: None` and `global: true` appears in the sidebar for every host. Use
+case: paths like `/tmp` or `/var/log` that exist on every machine.
 
 #### Migration
 
 Existing bookmarks are migrated automatically:
 - Bookmark with only `directory` → local Place
 - Bookmark with only `ssh_target` → Host
-- Bookmark with `ssh_target` + `directory` → Host + Place scoped to that host
-- Bookmark with `tmux_session` → dropped (with a one-time notification)
+- Bookmark with `ssh_target` + `directory` → Host + Place scoped to that host's `endpoint_key`
+- Bookmark with `tmux_session` → dropped
 
 ### 3. Path contraction for dropdowns
 
@@ -303,7 +313,9 @@ clunky.
 
 ### 5. Host-scoped right sidebar
 
-The right sidebar auto-switches content based on the active workspace's endpoint.
+The right sidebar auto-switches content based on the active workspace's endpoint. This RFC
+keeps the existing one-workspace-one-endpoint architecture, so the sidebar is scoped by the
+active workspace, not by individual panes or per-project context inside a workspace.
 
 #### Structure
 
@@ -327,18 +339,24 @@ The right sidebar auto-switches content based on the active workspace's endpoint
 
 When the user switches tabs:
 1. Determine the active workspace's endpoint: `Local` or `Remote { host }`
-2. Filter places to show only those matching the endpoint's host (plus global places)
-3. Filter commands to show only those matching the endpoint's host (plus global commands)
+2. Convert the endpoint into a scope key: `None` for local, `Some(endpoint_key)` for remote
+3. Filter places to show only those matching the scope key (plus global places)
+4. Filter commands to show only those matching the scope key (plus global commands)
 
-For local workspaces, show places/commands where `host_uuid` is `None`.
-For remote workspaces, show places/commands where `host_uuid` matches the host.
+For local workspaces, show places/commands where `host_key` is `None`.
+For remote workspaces, show places/commands where `host_key` matches the workspace's
+`endpoint_key`.
 
 Global entries (marked `global: true`) appear in a separate section at the bottom,
 regardless of the active host.
 
+If a remote workspace is connected to an endpoint that does not yet have a saved Host record,
+the sidebar still scopes by `endpoint_key`. The Host object is optional metadata; matching and
+filtering do not depend on it existing.
+
 #### Commands
 
-Commands gain a `host_uuid` field, same as places:
+Commands gain a `host_key` field, same as places:
 
 ```rust
 struct SavedCommand {
@@ -346,21 +364,41 @@ struct SavedCommand {
     title: String,
     body: String,
     default_run_mode: CommandRunMode,
-    host_uuid: Option<String>,  // None = local, Some(uuid) = specific host
+    host_key: Option<String>,   // None = local, Some(endpoint_key) = specific remote host
     global: bool,               // true = show for all hosts
 }
 ```
 
-Existing commands are migrated as local (`host_uuid: None`).
+Existing commands are migrated as local (`host_key: None`).
 
 ### 6. Split pane behavior
 
-When splitting a pane (Ctrl+Shift+E / Ctrl+Shift+O), the new pane clones the parent:
-same endpoint, same working directory. This is the "clone parent" behavior — no chooser,
-no extra clicks.
+When splitting a pane (Ctrl+Shift+E / Ctrl+Shift+O), the GUI opens a split chooser anchored to
+the split action. The chooser uses the same explicit-creation pattern as new-tab creation, but
+it is constrained to the active workspace's runtime. A workspace remains bound to one endpoint
+and one runtime policy, so the chooser never offers cross-endpoint or cross-runtime actions.
 
-This is unchanged from current behavior. The "new pane chooser" idea from the earlier
-discussion is deferred — it adds friction to the most common operation.
+```
+┌──────────────────────────────┐
+│ Clone parent                │
+│ New shell                   │
+│ Open place: ~/pro/rttx      │
+│ Open place: ~/pro/redis     │
+└──────────────────────────────┘
+```
+
+#### Split chooser rules
+
+- **Clone parent**: Same endpoint, same working directory, same launch context
+- **New shell**: New pane in the current workspace using that workspace's default launch mode
+- **Open place**: New pane in the current workspace, starting at a place scoped to the current
+  host
+
+For a local workspace, the place list is local places plus global places.
+For a remote workspace, the place list is places matching that remote workspace's
+`endpoint_key` plus global places.
+
+This keeps split explicit without violating the one-workspace-one-endpoint architecture.
 
 ### 7. Terminology changes
 
@@ -379,8 +417,8 @@ discussion is deferred — it adds friction to the most common operation.
 
 | Goal | How addressed |
 |------|---------------|
-| G1 — 2-click creation | Split buttons: 1 click for default, 2 for place/host selection |
-| G2 — Host-scoped sidebar | Auto-switch on tab change, filter by endpoint host |
+| G1 — Explicit, low-friction creation | Split buttons for new tabs, chooser for splits, no hidden workspace types |
+| G2 — Host-scoped sidebar | Auto-switch on tab change, filter by endpoint key |
 | G3 — Compact paths | Disambiguating fish-style contraction with max-width constraint |
 | G4 — Remote attach UX | Popover showing existing runtimes + "New workspace" option |
 | G5 — Remove dead weight | tmux bookmarks and templates removed |
@@ -394,7 +432,8 @@ discussion is deferred — it adds friction to the most common operation.
 - [ ] **Tab creation bar** — replace "+" with Direct/Persistent/Remote split buttons
 - [ ] **Remote attach popover** — inventory query + attach/create choice
 - [ ] **Host-scoped sidebar** — auto-switch places and commands on tab change
-- [ ] **Command host scoping** — add `host_uuid` to `SavedCommand`, migrate existing
+- [ ] **Command host scoping** — add `host_key` to `SavedCommand`, migrate existing
+- [ ] **Split chooser** — replace implicit clone-only split with explicit in-workspace chooser
 - [ ] **Remove tmux support** — drop `tmux_session` from data model and UI
 - [ ] **Remove templates** — drop template UI and related code
 - [ ] **Keyboard shortcuts** — Ctrl+Shift+P (persistent), Ctrl+Shift+R (remote)
