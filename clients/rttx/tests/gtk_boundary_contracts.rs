@@ -946,3 +946,25 @@ fn daemon_binary_is_non_empty() {
         "daemon_binary should be a bare name resolved via PATH, not an absolute path"
     );
 }
+
+/// Contract: auto_start_daemon defaults to true and survives roundtrip.
+///
+/// Existing preferences files without this field must load with auto-start
+/// enabled (backward compat). Files with it set to false must preserve that.
+#[test]
+fn auto_start_daemon_backward_compat_and_roundtrip() {
+    use rttx::preferences::{Preferences, load_from, save_to};
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Backward compat: missing field defaults to true.
+    let legacy = dir.path().join("legacy.json");
+    std::fs::write(&legacy, r#"{"font": "Hack 10"}"#).unwrap();
+    assert!(load_from(&legacy).auto_start_daemon);
+
+    // Roundtrip with false.
+    let explicit = dir.path().join("explicit.json");
+    let prefs = Preferences { auto_start_daemon: false, ..Default::default() };
+    save_to(&prefs, &explicit).unwrap();
+    assert!(!load_from(&explicit).auto_start_daemon);
+}

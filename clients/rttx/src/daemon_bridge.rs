@@ -148,18 +148,24 @@ pub struct EndpointConnectionManager {
     rt: tokio::runtime::Runtime,
     endpoints: RefCell<HashMap<String, EndpointHandle>>,
     event_tx: mpsc::UnboundedSender<EndpointEvent>,
+    auto_start_daemon: bool,
 }
 
 impl EndpointConnectionManager {
     /// Create a new endpoint-scoped manager and its event receiver.
-    pub fn new() -> Result<(Self, mpsc::UnboundedReceiver<EndpointEvent>), DaemonError> {
+    pub fn new(
+        auto_start_daemon: bool,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<EndpointEvent>), DaemonError> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
             .build()
             .map_err(DaemonError::Io)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        Ok((Self { rt, endpoints: RefCell::new(HashMap::new()), event_tx }, event_rx))
+        Ok((
+            Self { rt, endpoints: RefCell::new(HashMap::new()), event_tx, auto_start_daemon },
+            event_rx,
+        ))
     }
 
     fn endpoint_handle(
@@ -172,8 +178,13 @@ impl EndpointConnectionManager {
         }
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let actor =
-            EndpointActor::new(endpoint.clone(), self.event_tx.clone(), cmd_tx.clone(), cmd_rx);
+        let actor = EndpointActor::new(
+            endpoint.clone(),
+            self.event_tx.clone(),
+            cmd_tx.clone(),
+            cmd_rx,
+            self.auto_start_daemon,
+        );
         self.rt.spawn(actor.run());
         self.endpoints.borrow_mut().insert(key, EndpointHandle { cmd_tx: cmd_tx.clone() });
         cmd_tx
@@ -320,6 +331,7 @@ struct EndpointActor {
     heartbeat_deadline: Instant,
     /// Prevents spawning multiple daemon processes during reconnect loops.
     daemon_start_attempted: bool,
+    auto_start_daemon: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +388,7 @@ impl EndpointActor {
         event_tx: mpsc::UnboundedSender<EndpointEvent>,
         self_tx: mpsc::UnboundedSender<EndpointCommand>,
         cmd_rx: mpsc::UnboundedReceiver<EndpointCommand>,
+        auto_start_daemon: bool,
     ) -> Self {
         Self {
             endpoint,
@@ -391,6 +404,7 @@ impl EndpointActor {
             heartbeat: HeartbeatMonitor::default(),
             heartbeat_deadline: new_heartbeat_deadline(),
             daemon_start_attempted: false,
+            auto_start_daemon,
         }
     }
 
@@ -1043,7 +1057,7 @@ impl EndpointActor {
         match &self.endpoint {
             RuntimeEndpoint::Local => {
                 let socket_path = default_socket_path();
-                if !socket_path.exists() && !self.daemon_start_attempted {
+                if !socket_path.exists() && !self.daemon_start_attempted && self.auto_start_daemon {
                     self.daemon_start_attempted = true;
                     Self::start_local_daemon(&socket_path).await?;
                 }
@@ -1388,6 +1402,7 @@ mod tests {
             heartbeat: HeartbeatMonitor::default(),
             heartbeat_deadline: new_heartbeat_deadline(),
             daemon_start_attempted: false,
+            auto_start_daemon: true,
         }
     }
 
@@ -1485,6 +1500,7 @@ mod tests {
             heartbeat: HeartbeatMonitor::default(),
             heartbeat_deadline: new_heartbeat_deadline(),
             daemon_start_attempted: false,
+            auto_start_daemon: true,
         };
         (actor, event_rx)
     }
@@ -1493,7 +1509,7 @@ mod tests {
     fn endpoint_actor_construction_does_not_require_tokio_runtime() {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let (self_tx, cmd_rx) = mpsc::unbounded_channel();
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx);
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true);
         assert!(actor.reader.is_none());
         assert!(actor.writer.is_none());
     }
@@ -1689,10 +1705,18 @@ mod tests {
     fn daemon_start_attempted_flag_defaults_to_false() {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let (self_tx, cmd_rx) = mpsc::unbounded_channel();
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx);
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true);
         assert!(
             !actor.daemon_start_attempted,
             "new actor must not have daemon_start_attempted set"
         );
+    }
+
+    #[test]
+    fn auto_start_daemon_flag_is_stored() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false);
+        assert!(!actor.auto_start_daemon);
     }
 }

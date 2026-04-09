@@ -198,6 +198,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
                 1 => PaneNavigationKeys::CtrlShiftArrow,
                 _ => PaneNavigationKeys::AltArrow,
             },
+            auto_start_daemon: prefs.auto_start_daemon,
         };
         if let Err(e) = preferences::save(&new_prefs) {
             log::error!("Failed to save preferences: {e}");

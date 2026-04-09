@@ -77,6 +77,8 @@ pub struct Preferences {
     pub default_session_folder: DefaultSessionFolder,
     #[serde(default)]
     pub pane_navigation_keys: PaneNavigationKeys,
+    #[serde(default = "default_true")]
+    pub auto_start_daemon: bool,
 }
 
 fn default_font() -> String {
@@ -117,6 +119,7 @@ impl Default for Preferences {
             smart_clipboard: false,
             default_session_folder: default_session_folder(),
             pane_navigation_keys: PaneNavigationKeys::default(),
+            auto_start_daemon: true,
         }
     }
 }
@@ -168,6 +171,8 @@ struct PreferencesDisk {
     default_session_folder: DefaultSessionFolder,
     #[serde(default)]
     pane_navigation_keys: PaneNavigationKeys,
+    #[serde(default = "default_true")]
+    auto_start_daemon: bool,
 }
 
 impl From<PreferencesDisk> for Preferences {
@@ -199,6 +204,7 @@ impl From<PreferencesDisk> for Preferences {
             smart_clipboard: raw.smart_clipboard,
             default_session_folder: raw.default_session_folder,
             pane_navigation_keys: raw.pane_navigation_keys,
+            auto_start_daemon: raw.auto_start_daemon,
         }
     }
 }
@@ -267,6 +273,7 @@ mod tests {
         assert!(prefs.scroll_on_keystroke);
         assert!(!prefs.scroll_on_output);
         assert!(!prefs.smart_clipboard);
+        assert!(prefs.auto_start_daemon);
     }
 
     #[test]
@@ -434,5 +441,29 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
+    }
+
+    #[test]
+    fn auto_start_daemon_defaults_to_true() {
+        assert!(Preferences::default().auto_start_daemon);
+    }
+
+    #[test]
+    fn auto_start_daemon_roundtrips_false() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        let prefs = Preferences { auto_start_daemon: false, ..Default::default() };
+        save_to(&prefs, &path).unwrap();
+        let loaded = load_from(&path);
+        assert!(!loaded.auto_start_daemon);
+    }
+
+    #[test]
+    fn missing_auto_start_daemon_defaults_to_true() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{}").unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.auto_start_daemon);
     }
 }
