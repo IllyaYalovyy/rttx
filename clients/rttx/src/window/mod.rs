@@ -490,15 +490,22 @@ impl Window {
         if session_state.uses_managed_runtime() {
             row.set_managed_actions_style();
             row.close_button().set_tooltip_text(Some("Workspace actions"));
+
+            let win = self.clone();
+            let session_uuid = session_state.uuid.clone();
+            let row_for_menu = row.clone();
+            row.close_button().connect_clicked(move |_| {
+                win.show_workspace_popover_menu(&row_for_menu, &session_uuid);
+            });
         } else {
             row.close_button().set_tooltip_text(Some("Close workspace"));
-        }
 
-        let win = self.clone();
-        let session_uuid = session_state.uuid.clone();
-        row.close_button().connect_clicked(move |_| {
-            win.confirm_close_session(&session_uuid);
-        });
+            let win = self.clone();
+            let session_uuid = session_state.uuid.clone();
+            row.close_button().connect_clicked(move |_| {
+                win.confirm_close_session(&session_uuid);
+            });
+        }
 
         let win = self.clone();
         let session_uuid = session_state.uuid.clone();
@@ -535,16 +542,6 @@ impl Window {
             false
         });
         row.add_controller(drop_target);
-
-        let win = self.clone();
-        let session_uuid_for_ctx = session_state.uuid.clone();
-        let ctx_gesture = gtk4::GestureClick::new();
-        ctx_gesture.set_button(3);
-        ctx_gesture.connect_released(move |gesture, _, _, _| {
-            gesture.set_state(gtk4::EventSequenceState::Claimed);
-            win.show_sidebar_context_menu(&session_uuid_for_ctx);
-        });
-        row.add_controller(ctx_gesture);
 
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
@@ -804,6 +801,72 @@ impl Window {
         self.renumber_session_rows();
     }
 
+    pub(super) fn detach_session(&self, session_uuid: &str) {
+        let imp = self.imp();
+
+        let (terminal_uuids, new_index, detach_info) = {
+            let mut state = imp.state.borrow_mut();
+            if state.sessions.len() <= 1 {
+                return;
+            }
+            let Some(pos) = state.sessions.iter().position(|s| s.uuid == session_uuid) else {
+                return;
+            };
+            let session = &state.sessions[pos];
+            let info = session
+                .runtime
+                .runtime_id
+                .as_ref()
+                .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id.clone()));
+            let uuids = session.layout.terminal_uuids();
+            let session = state.sessions.remove(pos);
+            drop(session);
+            let new_index = pos.min(state.sessions.len() - 1);
+            state.active_session_index = new_index;
+            (uuids, new_index, info)
+        };
+
+        {
+            let terminals = imp.terminals.borrow();
+            for uuid in &terminal_uuids {
+                if let Some(term) = terminals.get(uuid) {
+                    term.disconnect_child_exited();
+                }
+            }
+        }
+        {
+            let mut terminals = imp.terminals.borrow_mut();
+            for uuid in &terminal_uuids {
+                terminals.remove(uuid);
+            }
+        }
+        {
+            let mut panes = imp.persistent_terminals.borrow_mut();
+            for uuid in &terminal_uuids {
+                panes.remove(uuid);
+            }
+        }
+
+        if let Some((endpoint, runtime_id)) = detach_info
+            && let Some(manager) = imp.connection_manager.borrow().as_ref()
+        {
+            manager.detach_runtime(session_uuid, &endpoint, &runtime_id);
+            manager.forget_workspace(&endpoint, session_uuid);
+        }
+        imp.workspace_connection_status.borrow_mut().remove(session_uuid);
+        self.clear_workspace_reconnect_countdown(session_uuid);
+
+        if let Some(child) = imp.session_stack.child_by_name(session_uuid) {
+            imp.session_stack.remove(&child);
+        }
+        self.remove_sidebar_row(session_uuid);
+
+        if let Some(row) = imp.sidebar_list.row_at_index(new_index as i32) {
+            imp.sidebar_list.select_row(Some(&row));
+        }
+        self.renumber_session_rows();
+    }
+
     fn close_session(&self, session_uuid: &str) {
         let imp = self.imp();
 
@@ -869,29 +932,26 @@ impl Window {
         if let Some(child) = imp.session_stack.child_by_name(session_uuid) {
             imp.session_stack.remove(&child);
         }
-        if let Some(row) = imp.sidebar_list.row_at_index({
-            let mut idx = 0;
-            loop {
-                match imp.sidebar_list.row_at_index(idx) {
-                    Some(r) => {
-                        if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok())
-                            && sr.uuid() == session_uuid
-                        {
-                            break idx;
-                        }
-                        idx += 1;
-                    }
-                    None => break -1,
-                }
-            }
-        }) {
-            imp.sidebar_list.remove(&row);
-        }
+        self.remove_sidebar_row(session_uuid);
 
         if let Some(row) = imp.sidebar_list.row_at_index(new_index as i32) {
             imp.sidebar_list.select_row(Some(&row));
         }
         self.renumber_session_rows();
+    }
+
+    fn remove_sidebar_row(&self, session_uuid: &str) {
+        let imp = self.imp();
+        let mut idx = 0;
+        while let Some(r) = imp.sidebar_list.row_at_index(idx) {
+            if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok())
+                && sr.uuid() == session_uuid
+            {
+                imp.sidebar_list.remove(&r);
+                return;
+            }
+            idx += 1;
+        }
     }
 }
 
