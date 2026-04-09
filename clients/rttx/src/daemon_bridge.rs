@@ -318,6 +318,8 @@ struct EndpointActor {
     reconnect_attempt: u32,
     heartbeat: HeartbeatMonitor,
     heartbeat_deadline: Instant,
+    /// Prevents spawning multiple daemon processes during reconnect loops.
+    daemon_start_attempted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +390,7 @@ impl EndpointActor {
             reconnect_attempt: 0,
             heartbeat: HeartbeatMonitor::default(),
             heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
         }
     }
 
@@ -1040,10 +1043,13 @@ impl EndpointActor {
         match &self.endpoint {
             RuntimeEndpoint::Local => {
                 let socket_path = default_socket_path();
-                if !socket_path.exists() {
+                if !socket_path.exists() && !self.daemon_start_attempted {
+                    self.daemon_start_attempted = true;
                     Self::start_local_daemon(&socket_path).await?;
                 }
                 self.connection = Some(DaemonConnection::connect(&socket_path).await?);
+                // Connection succeeded — allow future start attempts if daemon dies again.
+                self.daemon_start_attempted = false;
             }
             RuntimeEndpoint::Remote { host } => {
                 let (connection, ssh_handle) = DaemonConnection::connect_ssh(host).await?;
@@ -1063,9 +1069,16 @@ impl EndpointActor {
         if crate::config::is_development() {
             command.env("RTTX_DEV_MODE", "1");
         }
-        let _ = command.status().await?;
 
-        for _ in 0..30 {
+        // Spawn and wait for the parent process to exit (it daemonizes by forking).
+        let status = command.status().await?;
+        if !status.success() {
+            return Err(DaemonError::Io(std::io::Error::other(format!(
+                "daemon exited with {status}"
+            ))));
+        }
+
+        for _ in 0..50 {
             if socket_path.exists() {
                 return Ok(());
             }
@@ -1374,6 +1387,7 @@ mod tests {
             reconnect_attempt: 0,
             heartbeat: HeartbeatMonitor::default(),
             heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
         }
     }
 
@@ -1470,6 +1484,7 @@ mod tests {
             reconnect_attempt: 0,
             heartbeat: HeartbeatMonitor::default(),
             heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
         };
         (actor, event_rx)
     }
@@ -1668,5 +1683,16 @@ mod tests {
         server.await.expect("server task should stay alive until released");
         actor_task.abort();
         let _ = actor_task.await;
+    }
+
+    #[test]
+    fn daemon_start_attempted_flag_defaults_to_false() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx);
+        assert!(
+            !actor.daemon_start_attempted,
+            "new actor must not have daemon_start_attempted set"
+        );
     }
 }

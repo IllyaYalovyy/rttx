@@ -931,3 +931,18 @@ fn connection_presentation_has_no_banner_fields() {
     assert_eq!(p.header_label, "Connected");
     assert!(p.input_enabled);
 }
+
+/// Contract: daemon_binary returns a non-empty string suitable for Command::new.
+///
+/// The GUI uses this to auto-start the daemon. If it returned an empty string,
+/// Command::new would fail silently and the reconnect loop could spawn garbage.
+#[test]
+fn daemon_binary_is_non_empty() {
+    use rttx::daemon::daemon_binary;
+    let binary = daemon_binary();
+    assert!(!binary.is_empty(), "daemon_binary must return a non-empty name");
+    assert!(
+        !binary.contains('/'),
+        "daemon_binary should be a bare name resolved via PATH, not an absolute path"
+    );
+}
