@@ -357,18 +357,4 @@ impl Window {
             self.refresh_sidebar_subtitle(&session_uuid);
         }
     }
-
-    pub(super) fn sidebar_row_for_uuid(&self, session_uuid: &str) -> Option<SessionRow> {
-        let imp = self.imp();
-        let mut idx = 0;
-        while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(sr) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
-                && sr.uuid() == session_uuid
-            {
-                return Some(sr);
-            }
-            idx += 1;
-        }
-        None
-    }
 }

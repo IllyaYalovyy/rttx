@@ -1008,3 +1008,36 @@ fn reconnect_status_carries_attempt_and_delay() {
         "expected Reconnecting with attempt=3, delay=10, got {status:?}"
     );
 }
+
+/// Contract: workspace_menu_items returns correct items for each workspace type.
+///
+/// The sidebar 3-dot popover menu uses this function to decide which actions
+/// to show. Rename and Close are always present (not gated by this function).
+#[test]
+fn workspace_menu_items_contract() {
+    use rttx::runtime::{WorkspaceMenuContext, workspace_menu_items};
+
+    // Remote + persistent + attached + disconnected → all optional items visible.
+    let all = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: true,
+        is_disconnected: true,
+    });
+    assert!(all.show_edit_connection);
+    assert!(all.show_reconnect);
+    assert!(all.show_detach);
+
+    // Local + ephemeral + connected → no optional items.
+    let minimal = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: false,
+        is_managed: true,
+        is_persistent: false,
+        is_attached: true,
+        is_disconnected: false,
+    });
+    assert!(!minimal.show_edit_connection);
+    assert!(!minimal.show_reconnect);
+    assert!(!minimal.show_detach);
+}

@@ -352,6 +352,34 @@ pub fn present_workspace_actions(
     }
 }
 
+/// Which actions to show in the workspace context menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMenuItems {
+    pub show_edit_connection: bool,
+    pub show_reconnect: bool,
+    pub show_detach: bool,
+}
+
+/// Input state for determining workspace menu items.
+#[derive(Debug, Clone)]
+pub struct WorkspaceMenuContext {
+    pub is_remote: bool,
+    pub is_managed: bool,
+    pub is_persistent: bool,
+    pub is_attached: bool,
+    pub is_disconnected: bool,
+}
+
+/// Determine which context menu items are relevant for a workspace.
+#[must_use]
+pub const fn workspace_menu_items(ctx: &WorkspaceMenuContext) -> WorkspaceMenuItems {
+    WorkspaceMenuItems {
+        show_edit_connection: ctx.is_remote,
+        show_reconnect: ctx.is_managed && ctx.is_disconnected,
+        show_detach: ctx.is_persistent && ctx.is_attached,
+    }
+}
+
 /// Render a connection state into pane header label and input availability.
 #[must_use]
 pub fn present_connection_status(status: &ConnectionStatus) -> ConnectionPresentation {
@@ -1064,5 +1092,74 @@ mod tests {
         let p = present_connection_status(&ConnectionStatus::Starting);
         assert_eq!(p.header_label, "Starting");
         assert!(!p.input_enabled);
+    }
+
+    #[test]
+    fn menu_items_local_persistent_connected() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: true,
+            is_disconnected: false,
+        });
+        assert!(!items.show_edit_connection);
+        assert!(!items.show_reconnect);
+        assert!(items.show_detach);
+    }
+
+    #[test]
+    fn menu_items_remote_persistent_disconnected() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: true,
+            is_disconnected: true,
+        });
+        assert!(items.show_edit_connection);
+        assert!(items.show_reconnect);
+        assert!(items.show_detach);
+    }
+
+    #[test]
+    fn menu_items_local_ephemeral_connected() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: true,
+            is_persistent: false,
+            is_attached: true,
+            is_disconnected: false,
+        });
+        assert!(!items.show_edit_connection);
+        assert!(!items.show_reconnect);
+        assert!(!items.show_detach);
+    }
+
+    #[test]
+    fn menu_items_managed_disconnected_not_attached() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: true,
+        });
+        assert!(items.show_reconnect);
+        assert!(!items.show_detach);
+    }
+
+    #[test]
+    fn menu_items_unmanaged_workspace() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: false,
+            is_persistent: false,
+            is_attached: false,
+            is_disconnected: false,
+        });
+        assert!(!items.show_edit_connection);
+        assert!(!items.show_reconnect);
+        assert!(!items.show_detach);
     }
 }
