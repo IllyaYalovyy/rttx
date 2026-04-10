@@ -256,6 +256,24 @@ pub fn title_changed(
     }
 }
 
+/// Build a `CwdChanged` message.
+#[must_use]
+pub fn cwd_changed(
+    session_id: Uuid,
+    pane_id: Uuid,
+    cwd: String,
+    revision: u64,
+) -> proto::ServerMessage {
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::CwdChanged(proto::CwdChanged {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: uuid_to_bytes(pane_id),
+            cwd,
+            revision,
+        })),
+    }
+}
+
 /// Build an `AttachBlocked` response.
 #[must_use]
 pub fn attach_blocked(
@@ -408,5 +426,19 @@ mod tests {
                     .to_vec(),
             ]
         );
+    }
+
+    #[test]
+    fn cwd_changed_message_contains_correct_fields() {
+        let sid = Uuid::new_v4();
+        let pid = Uuid::new_v4();
+        let msg = cwd_changed(sid, pid, "/home/user".into(), 42);
+        let proto::server_message::Msg::CwdChanged(inner) = msg.msg.unwrap() else {
+            panic!("expected CwdChanged");
+        };
+        assert_eq!(inner.cwd, "/home/user");
+        assert_eq!(inner.revision, 42);
+        assert_eq!(inner.session_id, sid.as_bytes().to_vec());
+        assert_eq!(inner.pane_id, pid.as_bytes().to_vec());
     }
 }
