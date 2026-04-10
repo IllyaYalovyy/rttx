@@ -1046,4 +1046,24 @@ mod tests {
         let input = b"prompt$ cmd\r\nprompt$ ";
         assert!(!input.contains(&0x07));
     }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn bell_settings_applied_to_persistent_pane() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+
+        // VTE defaults audible_bell to true.
+        assert!(pane.vte().is_audible_bell());
+
+        pane.vte().set_audible_bell(false);
+        assert!(!pane.vte().is_audible_bell());
+
+        pane.set_visual_bell(false);
+        assert!(!pane.imp().visual_bell.get());
+
+        pane.set_visual_bell(true);
+        assert!(pane.imp().visual_bell.get());
+    }
 }
