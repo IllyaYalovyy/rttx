@@ -673,6 +673,7 @@ impl Window {
             | Msg::AttachBlocked(_)
             | Msg::SessionDetached(_)
             | Msg::SessionTerminated(_)
+            | Msg::SessionRenamed(_)
             | Msg::Pong(_)
             | Msg::Error(_) => {}
         }

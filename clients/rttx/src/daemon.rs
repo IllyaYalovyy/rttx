@@ -558,6 +558,7 @@ pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
         | Msg::AttachBlocked(_)
         | Msg::SessionDetached(_)
         | Msg::SessionTerminated(_)
+        | Msg::SessionRenamed(_)
         | Msg::Error(_) => return None,
     };
     bytes_to_uuid(bytes).ok()

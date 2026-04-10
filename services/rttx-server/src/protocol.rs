@@ -284,6 +284,18 @@ pub const fn error(code: u32, message: String) -> proto::ServerMessage {
     }
 }
 
+/// Build a `SessionRenamed` response.
+#[must_use]
+pub fn session_renamed(session_id: Uuid, name: String, revision: u64) -> proto::ServerMessage {
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::SessionRenamed(proto::SessionRenamed {
+            session_id: uuid_to_bytes(session_id),
+            name,
+            revision,
+        })),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

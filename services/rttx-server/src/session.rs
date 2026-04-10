@@ -354,6 +354,15 @@ impl Session {
         DetachOutcome::Detached { revision: self.revision() }
     }
 
+    /// Rename this session and return the resulting revision.
+    pub fn rename(&mut self, name: String) -> u64 {
+        if self.name != name {
+            self.name = name;
+            self.bump_revision();
+        }
+        self.revision()
+    }
+
     /// Update a pane's size and return the resulting session revision.
     pub fn resize_pane(&mut self, pane_id: Uuid, cols: u16, rows: u16) -> Option<u64> {
         let changed = {
@@ -587,6 +596,20 @@ mod tests {
         assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
         assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
         assert_eq!(session.set_pane_exit_status(pane_id, None), Some(6));
+        assert_eq!(session.rename("test".into()), 6);
+        assert_eq!(session.rename("renamed".into()), 7);
+    }
+
+    #[test]
+    fn rename_updates_name_and_persists() {
+        let mut session = Session::new("original".into());
+        assert_eq!(session.name, "original");
+
+        session.rename("updated".into());
+        assert_eq!(session.name, "updated");
+
+        let persisted = session.to_persisted();
+        assert_eq!(persisted.name, "updated");
     }
 
     #[test]
