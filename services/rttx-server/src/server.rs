@@ -812,13 +812,23 @@ fn spawn_pty_read_loop(
                         Ok(n) => {
                             let data = buf[..n].to_vec();
                             let mut s = server.lock().await;
-                            if let Some(session) = s.sessions.get_mut(&session_id)
+                            let new_cwd = if let Some(session) = s.sessions.get_mut(&session_id)
                                 && let Some(pane) = session.panes.get_mut(&pane_id)
                             {
-                                pane.feed_output(&data);
-                            }
+                                let result = pane.feed_output(&data);
+                                result.new_cwd.and_then(|cwd| {
+                                    let rev = session.set_pane_cwd(pane_id, &cwd)?;
+                                    Some((cwd, rev))
+                                })
+                            } else {
+                                None
+                            };
                             let msg = protocol::delta(session_id, pane_id, data);
                             s.broadcast_to_session(session_id, &msg);
+                            if let Some((cwd, revision)) = new_cwd {
+                                let msg = protocol::cwd_changed(session_id, pane_id, cwd, revision);
+                                s.broadcast_to_session(session_id, &msg);
+                            }
                         }
                         Err(e) => {
                             tracing::error!("PTY read error for pane {pane_id}: {e}");

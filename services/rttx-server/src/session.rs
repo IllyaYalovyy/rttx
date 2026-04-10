@@ -392,6 +392,13 @@ impl Session {
         Some(self.revision())
     }
 
+    /// Record a CWD change detected by `feed_output` and bump revision.
+    pub fn set_pane_cwd(&mut self, pane_id: Uuid, _cwd: &str) -> Option<u64> {
+        self.panes.get(&pane_id)?;
+        self.bump_revision();
+        Some(self.revision())
+    }
+
     /// Update a pane's exit status and return the resulting session revision.
     pub fn set_pane_exit_status(&mut self, pane_id: Uuid, status: Option<i32>) -> Option<u64> {
         let changed = {
@@ -596,8 +603,9 @@ mod tests {
         assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
         assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
         assert_eq!(session.set_pane_exit_status(pane_id, None), Some(6));
-        assert_eq!(session.rename("test".into()), 6);
-        assert_eq!(session.rename("renamed".into()), 7);
+        assert_eq!(session.set_pane_cwd(pane_id, "/tmp"), Some(7));
+        assert_eq!(session.rename("test".into()), 7);
+        assert_eq!(session.rename("renamed".into()), 8);
     }
 
     #[test]

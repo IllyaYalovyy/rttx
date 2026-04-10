@@ -17,6 +17,12 @@ const DEFAULT_MAX_SCROLLBACK: usize = 10 * 1024 * 1024;
 /// Default on-disk scrollback log byte limit per pane (10 MB).
 const DEFAULT_MAX_SCROLLBACK_LOG: u64 = 10 * 1024 * 1024;
 
+/// What changed after feeding PTY output to a pane.
+pub struct FeedResult {
+    /// New CWD if it changed from the previous value.
+    pub new_cwd: Option<String>,
+}
+
 /// Runtime state of a single pane.
 pub struct Pane {
     /// Unique pane identifier.
@@ -63,15 +69,22 @@ impl Pane {
     }
 
     /// Feed PTY output into the screen state.
-    pub fn feed_output(&mut self, data: &[u8]) {
+    pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
         self.screen.feed(data);
         self.pending_flush.extend_from_slice(data);
         if let Some(title) = self.screen.title() {
             self.title = Some(title.to_string());
         }
-        if let Some(cwd) = self.screen.cwd() {
-            self.cwd = Some(cwd.to_string());
-        }
+        let new_cwd = self.screen.cwd().and_then(|cwd| {
+            let cwd = cwd.to_string();
+            if self.cwd.as_deref() == Some(&cwd) {
+                None
+            } else {
+                self.cwd = Some(cwd.clone());
+                Some(cwd)
+            }
+        });
+        FeedResult { new_cwd }
     }
 
     /// Flush pending scrollback bytes to the log file on disk.
@@ -330,5 +343,37 @@ mod tests {
         std::fs::write(&path, b"AAABBBCCC").unwrap();
         truncate_log_tail(&path, 3).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"CCC");
+    }
+
+    #[test]
+    fn feed_output_returns_new_cwd_on_osc7() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert!(pane.cwd.is_none());
+
+        // OSC 7 with file URI.
+        let osc7 = b"\x1b]7;file://localhost/tmp/test\x07";
+        let result = pane.feed_output(osc7);
+        assert_eq!(result.new_cwd.as_deref(), Some("/tmp/test"));
+        assert_eq!(pane.cwd.as_deref(), Some("/tmp/test"));
+    }
+
+    #[test]
+    fn feed_output_returns_none_when_cwd_unchanged() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        let osc7 = b"\x1b]7;file://localhost/tmp/test\x07";
+        let result = pane.feed_output(osc7);
+        assert!(result.new_cwd.is_some());
+
+        // Same CWD again — should not report a change.
+        let result = pane.feed_output(osc7);
+        assert!(result.new_cwd.is_none());
+    }
+
+    #[test]
+    fn feed_output_returns_none_for_plain_output() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let result = pane.feed_output(b"hello world\r\n");
+        assert!(result.new_cwd.is_none());
     }
 }
