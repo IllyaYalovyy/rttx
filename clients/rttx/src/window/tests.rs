@@ -3522,3 +3522,47 @@ fn retry_workspace_connection_sets_connecting_and_rebuilds_on_open() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn bell_preferences_applied_to_managed_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    // Save preferences with bells disabled.
+    let mut prefs = preferences::load();
+    prefs.audible_bell = false;
+    prefs.visual_bell = false;
+    let _ = preferences::save(&prefs);
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.bell-pref-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions[0].runtime.managed = true;
+        state.sessions[0].runtime.runtime_id = Some("runtime-1".into());
+        state.sessions[0].clone()
+    };
+    window.rebuild_session_content(&session_state.uuid, &session_state);
+    pump_events(50);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .values()
+        .next()
+        .cloned()
+        .expect("managed pane should exist");
+
+    assert!(!pane.vte().is_audible_bell(), "audible bell should be disabled by preference");
+    assert!(!pane.imp().visual_bell.get(), "visual bell should be disabled by preference");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

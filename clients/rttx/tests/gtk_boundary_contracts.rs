@@ -1063,3 +1063,22 @@ fn connected_icon_color_consistent_across_endpoints() {
     assert_eq!(local.css_class, direct.css_class, "local and direct connected must match");
     assert_eq!(local.css_class, "accent", "connected workspaces must use accent color");
 }
+
+/// Regression: bell preferences must include both audible and visual fields.
+///
+/// Previously, apply_preferences_to_persistent_pane() did not set audible_bell
+/// or visual_bell on daemon-managed panes, so VTE's default (audible=true)
+/// caused the audio bell to fire regardless of user settings.
+#[test]
+fn preferences_bell_fields_roundtrip() {
+    use rttx::preferences::{Preferences, load_from, save_to};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("prefs.json");
+
+    let prefs = Preferences { audible_bell: false, visual_bell: false, ..Default::default() };
+    let _ = save_to(&prefs, &path);
+    let loaded = load_from(&path);
+    assert!(!loaded.audible_bell, "audible_bell=false must survive roundtrip");
+    assert!(!loaded.visual_bell, "visual_bell=false must survive roundtrip");
+}

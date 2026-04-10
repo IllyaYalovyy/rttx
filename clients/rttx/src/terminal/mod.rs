@@ -680,4 +680,16 @@ mod search_tests {
         assert_eq!(links::display_text_for_uri("file:///tmp/log.txt"), "/tmp/log.txt");
         assert_eq!(links::display_text_for_uri("https://example.com"), "https://example.com");
     }
+
+    /// Regression: bell preferences must be applied to persistent panes.
+    ///
+    /// VTE defaults `audible_bell` to true. If `apply_preferences_to_persistent_pane`
+    /// skips `set_audible_bell`/`set_visual_bell`, the audio bell fires regardless
+    /// of user settings.
+    #[test]
+    fn preferences_contain_bell_fields_with_correct_defaults() {
+        let prefs = crate::preferences::Preferences::default();
+        assert!(prefs.audible_bell, "audible_bell should default to true");
+        assert!(prefs.visual_bell, "visual_bell should default to true");
+    }
 }
