@@ -43,6 +43,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Check version consistency
+        run: bash .github/scripts/check-version-consistency.sh
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

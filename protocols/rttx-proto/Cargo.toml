@@ -1,8 +1,8 @@
 [package]
 name = "rttx-proto"
-version = "0.2.1"
+version.workspace = true
 edition = "2024"
-license = "GPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 prost = { version = "0.13", features = ["std", "prost-derive"] }
