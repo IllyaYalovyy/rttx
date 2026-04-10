@@ -163,3 +163,92 @@ async fn create_and_close_pane() {
     let resp = client.recv().await;
     assert!(matches!(resp.msg, Some(proto::server_message::Msg::PaneClosed(_))));
 }
+
+#[tokio::test]
+async fn rename_session_updates_name_and_inventory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let session_id =
+        common::create_session(&mut client, "original", proto::RuntimePolicy::Persistent).await;
+    common::attach_rw(&mut client, &session_id).await;
+
+    // Rename the session.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
+                session_id: session_id.clone(),
+                name: "renamed".into(),
+            })),
+        })
+        .await;
+
+    // Expect SessionRenamed response.
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionRenamed(renamed)) => {
+                assert_eq!(renamed.session_id, session_id);
+                assert_eq!(renamed.name, "renamed");
+                break;
+            }
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionRenamed, got {other:?}"),
+        }
+    }
+
+    // Verify inventory reflects the new name.
+    let sessions = common::list_sessions(&mut client).await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].name, "renamed");
+}
+
+#[tokio::test]
+async fn rename_session_persists_across_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let session_id =
+        common::create_session(&mut client, "before", proto::RuntimePolicy::Persistent).await;
+    common::attach_rw(&mut client, &session_id).await;
+
+    // Rename.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
+                session_id: session_id.clone(),
+                name: "after".into(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionRenamed(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionRenamed, got {other:?}"),
+        }
+    }
+
+    // Wait for state to be persisted with the new name.
+    common::wait_for_state_containing(&tmp.path().join("cache"), "after", Duration::from_secs(5))
+        .await;
+
+    // Shutdown and restart.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
+        })
+        .await;
+    let _ = handle.await;
+
+    let (socket_path2, _handle2) = start_test_server(tmp.path()).await;
+    let mut client2 = TestClient::connect(&socket_path2).await;
+    client2.handshake().await;
+
+    let sessions = common::list_sessions(&mut client2).await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].name, "after");
+}

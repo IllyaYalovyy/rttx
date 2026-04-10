@@ -7,7 +7,6 @@
 use pretty_assertions::assert_eq;
 use rttx::runtime::WorkspaceRuntime;
 use rttx::session::*;
-
 // ── Helpers (can't use test_helpers from lib, so inline) ─────────
 
 fn term(id: &str) -> LayoutNode {
@@ -1126,4 +1125,24 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
     // The workspace should be rebuilt.
     assert_eq!(transition.rebuilt_workspaces.len(), 1);
     assert_eq!(transition.rebuilt_workspaces[0].workspace_id, state.sessions[0].uuid);
+}
+
+#[test]
+fn rename_sets_user_renamed_and_persists_name() {
+    let mut session = SessionState::new_managed_local(
+        "Original".into(),
+        rttx::runtime::WorkspacePolicy::Ephemeral,
+        None,
+    );
+    session.runtime.runtime_id = Some(uuid::Uuid::new_v4().to_string());
+    assert!(!session.user_renamed);
+
+    session.name = "Renamed".into();
+    session.user_renamed = true;
+
+    let json = serde_json::to_string(&session).unwrap();
+    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.name, "Renamed");
+    assert!(restored.user_renamed);
+    assert!(restored.runtime.runtime_id.is_some());
 }

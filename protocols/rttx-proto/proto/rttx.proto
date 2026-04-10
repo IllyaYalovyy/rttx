@@ -72,6 +72,11 @@ message SetPaneTitle {
     string title = 3;
 }
 
+message RenameSession {
+    bytes session_id = 1;
+    string name = 2;
+}
+
 message Shutdown {}
 
 message Ping {
@@ -219,6 +224,12 @@ message AttachBlocked {
     uint32 read_only_client_count = 4;
 }
 
+message SessionRenamed {
+    bytes session_id = 1;
+    string name = 2;
+    uint64 revision = 3;
+}
+
 message Error {
     uint32 code = 1;
     string message = 2;
@@ -245,6 +256,7 @@ message ClientMessage {
         Shutdown shutdown = 11;
         TerminateSession terminate_session = 12;
         Ping ping = 13;
+        RenameSession rename_session = 14;
     }
 }
 
@@ -267,5 +279,6 @@ message ServerMessage {
         SessionTerminated session_terminated = 15;
         AttachBlocked attach_blocked = 16;
         Pong pong = 17;
+        SessionRenamed session_renamed = 18;
     }
 }

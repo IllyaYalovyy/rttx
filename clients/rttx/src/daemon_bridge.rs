@@ -36,6 +36,7 @@ pub enum ManagerOperation {
     RefreshInventory,
     SendInput,
     ResizePane,
+    RenameRuntime,
 }
 
 /// Event emitted back onto the GTK main loop from an endpoint actor.
@@ -134,6 +135,11 @@ enum EndpointCommand {
     Reconnect,
     ForgetWorkspace {
         workspace_id: String,
+    },
+    RenameRuntime {
+        workspace_id: String,
+        runtime_id: String,
+        name: String,
     },
 }
 
@@ -322,6 +328,21 @@ impl EndpointConnectionManager {
             .endpoint_handle(endpoint)
             .send(EndpointCommand::ForgetWorkspace { workspace_id: workspace_id.to_string() });
     }
+
+    /// Rename a runtime on the daemon.
+    pub fn rename_runtime(
+        &self,
+        workspace_id: &str,
+        endpoint: &RuntimeEndpoint,
+        runtime_id: &str,
+        name: &str,
+    ) {
+        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::RenameRuntime {
+            workspace_id: workspace_id.to_string(),
+            runtime_id: runtime_id.to_string(),
+            name: name.to_string(),
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -491,7 +512,8 @@ impl EndpointActor {
                     | proto::server_message::Msg::TitleChanged(_)
                     | proto::server_message::Msg::CwdChanged(_)
                     | proto::server_message::Msg::Bell(_)
-                    | proto::server_message::Msg::PaneResized(_),
+                    | proto::server_message::Msg::PaneResized(_)
+                    | proto::server_message::Msg::SessionRenamed(_),
                 ) => true,
                 Some(proto::server_message::Msg::SessionTerminated(_)) => !expect_terminated,
                 _ => false,
@@ -1020,6 +1042,26 @@ impl EndpointActor {
                 }
 
                 self.split_connection();
+            }
+            EndpointCommand::RenameRuntime { workspace_id, runtime_id, name } => {
+                let Some(runtime_uuid) = parse_uuid(
+                    &workspace_id,
+                    ManagerOperation::RenameRuntime,
+                    &runtime_id,
+                    &self.event_tx,
+                ) else {
+                    return;
+                };
+                if self.ensure_connected(&workspace_id).await.is_err() {
+                    return;
+                }
+                let msg = proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                        name,
+                    })),
+                };
+                let _ = self.send_message(&msg).await;
             }
             EndpointCommand::ForgetWorkspace { workspace_id } => {
                 self.tracked_workspaces.remove(&workspace_id);

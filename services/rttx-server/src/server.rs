@@ -761,6 +761,33 @@ impl Server {
                 Some(protocol::title_changed(session_id, pane_id, req.title, revision))
             }
 
+            proto::client_message::Msg::RenameSession(req) => {
+                let session_id = match bytes_to_uuid(&req.session_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Some(protocol::error(
+                            protocol::ERR_INVALID_PARAMETER,
+                            e.to_string(),
+                        ));
+                    }
+                };
+                let mut s = server.lock().await;
+                let Some(session) = s.sessions.get_mut(&session_id) else {
+                    return Some(protocol::error(
+                        protocol::ERR_SESSION_NOT_FOUND,
+                        "session not found".into(),
+                    ));
+                };
+                if !session.client_has_write_access(client_id) {
+                    return Some(protocol::error(
+                        protocol::ERR_OWNERSHIP_CONFLICT,
+                        "runtime is currently owned by another client".into(),
+                    ));
+                }
+                let revision = session.rename(req.name.clone());
+                Some(protocol::session_renamed(session_id, req.name, revision))
+            }
+
             proto::client_message::Msg::Shutdown(_) => None,
         }
     }

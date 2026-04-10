@@ -259,7 +259,7 @@ impl Window {
     }
 
     pub(super) fn rename_session(&self, session_uuid: &str, new_name: &str) {
-        {
+        let runtime_info = {
             let mut state = self.imp().state.borrow_mut();
             let Some(session) =
                 state.sessions.iter_mut().find(|session| session.uuid == session_uuid)
@@ -268,6 +268,16 @@ impl Window {
             };
             session.name = new_name.to_string();
             session.user_renamed = true;
+            session
+                .runtime
+                .managed
+                .then(|| (session.runtime.endpoint.clone(), session.runtime.runtime_id.clone()))
+        };
+
+        if let Some((endpoint, Some(runtime_id))) = runtime_info
+            && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
+        {
+            manager.rename_runtime(session_uuid, &endpoint, &runtime_id, new_name);
         }
 
         let mut idx = 0;
