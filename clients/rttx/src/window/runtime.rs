@@ -646,6 +646,16 @@ impl Window {
             }
             Msg::CwdChanged(cwd_changed) => {
                 pane.set_current_directory(Some(&cwd_changed.cwd));
+                {
+                    let mut state = self.imp().state.borrow_mut();
+                    if let Some(session) =
+                        state.sessions.iter_mut().find(|s| s.uuid == workspace_id)
+                    {
+                        session
+                            .layout
+                            .set_terminal_cwd(&layout_terminal_uuid, Some(cwd_changed.cwd.clone()));
+                    }
+                }
                 self.maybe_auto_rename_workspace(&workspace_id, Some(&cwd_changed.cwd));
                 self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
