@@ -812,21 +812,30 @@ fn spawn_pty_read_loop(
                         Ok(n) => {
                             let data = buf[..n].to_vec();
                             let mut s = server.lock().await;
-                            let new_cwd = if let Some(session) = s.sessions.get_mut(&session_id)
+                            let (new_cwd, new_title) = if let Some(session) = s.sessions.get_mut(&session_id)
                                 && let Some(pane) = session.panes.get_mut(&pane_id)
                             {
                                 let result = pane.feed_output(&data);
-                                result.new_cwd.and_then(|cwd| {
+                                let cwd = result.new_cwd.and_then(|cwd| {
                                     let rev = session.set_pane_cwd(pane_id, &cwd)?;
                                     Some((cwd, rev))
-                                })
+                                });
+                                let title = result.new_title.and_then(|title| {
+                                    let rev = session.set_pane_title(pane_id, title.clone())?;
+                                    Some((title, rev))
+                                });
+                                (cwd, title)
                             } else {
-                                None
+                                (None, None)
                             };
                             let msg = protocol::delta(session_id, pane_id, data);
                             s.broadcast_to_session(session_id, &msg);
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = protocol::cwd_changed(session_id, pane_id, cwd, revision);
+                                s.broadcast_to_session(session_id, &msg);
+                            }
+                            if let Some((title, revision)) = new_title {
+                                let msg = protocol::title_changed(session_id, pane_id, title, revision);
                                 s.broadcast_to_session(session_id, &msg);
                             }
                         }

@@ -21,6 +21,8 @@ const DEFAULT_MAX_SCROLLBACK_LOG: u64 = 10 * 1024 * 1024;
 pub struct FeedResult {
     /// New CWD if it changed from the previous value.
     pub new_cwd: Option<String>,
+    /// New title if it changed from the previous value.
+    pub new_title: Option<String>,
 }
 
 /// Runtime state of a single pane.
@@ -72,9 +74,15 @@ impl Pane {
     pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
         self.screen.feed(data);
         self.pending_flush.extend_from_slice(data);
-        if let Some(title) = self.screen.title() {
-            self.title = Some(title.to_string());
-        }
+        let new_title = self.screen.title().and_then(|title| {
+            let title = title.to_string();
+            if self.title.as_deref() == Some(&title) {
+                None
+            } else {
+                self.title = Some(title.clone());
+                Some(title)
+            }
+        });
         let new_cwd = self.screen.cwd().and_then(|cwd| {
             let cwd = cwd.to_string();
             if self.cwd.as_deref() == Some(&cwd) {
@@ -84,7 +92,7 @@ impl Pane {
                 Some(cwd)
             }
         });
-        FeedResult { new_cwd }
+        FeedResult { new_cwd, new_title }
     }
 
     /// Flush pending scrollback bytes to the log file on disk.
@@ -375,5 +383,26 @@ mod tests {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         let result = pane.feed_output(b"hello world\r\n");
         assert!(result.new_cwd.is_none());
+        assert!(result.new_title.is_none());
+    }
+
+    #[test]
+    fn feed_output_returns_new_title_on_osc0() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let osc0 = b"\x1b]0;my-project\x07";
+        let result = pane.feed_output(osc0);
+        assert_eq!(result.new_title.as_deref(), Some("my-project"));
+        assert_eq!(pane.title.as_deref(), Some("my-project"));
+    }
+
+    #[test]
+    fn feed_output_returns_none_when_title_unchanged() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let osc0 = b"\x1b]0;my-project\x07";
+        let result = pane.feed_output(osc0);
+        assert!(result.new_title.is_some());
+
+        let result = pane.feed_output(osc0);
+        assert!(result.new_title.is_none());
     }
 }
