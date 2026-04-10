@@ -1041,3 +1041,25 @@ fn workspace_menu_items_contract() {
     assert!(!minimal.show_reconnect);
     assert!(!minimal.show_detach);
 }
+
+/// Regression: connected icon color must be consistent across all endpoint types.
+///
+/// Previously, local connected workspaces used "dim-label" (gray) while remote
+/// connected workspaces used "accent" (colored), making local workspaces look
+/// disconnected.
+#[test]
+fn connected_icon_color_consistent_across_endpoints() {
+    use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
+
+    let local = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
+    let remote = connection_icon(
+        &RuntimeEndpoint::Remote { host: "h".into() },
+        &ConnectionStatus::Connected,
+        true,
+    );
+    let direct = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
+
+    assert_eq!(local.css_class, remote.css_class, "local and remote connected must match");
+    assert_eq!(local.css_class, direct.css_class, "local and direct connected must match");
+    assert_eq!(local.css_class, "accent", "connected workspaces must use accent color");
+}
