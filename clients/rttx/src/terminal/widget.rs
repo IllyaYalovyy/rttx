@@ -183,18 +183,30 @@ mod imp {
 
             let copy_link_action = gtk4::gio::SimpleAction::new("copy-link", None);
             copy_link_action.set_enabled(false);
+            let open_link_action = gtk4::gio::SimpleAction::new("open-link", None);
+            open_link_action.set_enabled(false);
             let action_group = gtk4::gio::SimpleActionGroup::new();
             action_group.add_action(&copy_link_action);
+            action_group.add_action(&open_link_action);
             obj.insert_action_group("term", Some(&action_group));
 
             let obj_weak = obj.downgrade();
             copy_link_action.connect_activate(move |_, _| {
                 let Some(obj) = obj_weak.upgrade() else { return };
                 let matched = obj.imp().last_match_at_click.borrow().clone();
-                if let Some(text) = matched
+                if let Some(uri) = matched
                     && let Some(display) = gtk4::gdk::Display::default()
                 {
-                    display.clipboard().set_text(&text);
+                    display.clipboard().set_text(&links::display_text_for_uri(&uri));
+                }
+            });
+
+            let obj_weak = obj.downgrade();
+            open_link_action.connect_activate(move |_, _| {
+                let Some(obj) = obj_weak.upgrade() else { return };
+                let matched = obj.imp().last_match_at_click.borrow().clone();
+                if let Some(uri) = matched {
+                    links::launch_uri(&uri);
                 }
             });
 
@@ -202,7 +214,9 @@ mod imp {
             let clipboard_section = gtk4::gio::Menu::new();
             clipboard_section.append(Some("Copy"), Some("win.copy"));
             clipboard_section.append(Some("Paste"), Some("win.paste"));
-            clipboard_section.append(Some("Copy Link"), Some("term.copy-link"));
+            let link_section = gtk4::gio::Menu::new();
+            link_section.append(Some("Open Link"), Some("term.open-link"));
+            link_section.append(Some("Copy Link"), Some("term.copy-link"));
             let pane_section = gtk4::gio::Menu::new();
             pane_section.append(Some("Search"), Some("win.search"));
             pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
@@ -215,6 +229,7 @@ mod imp {
             let close_section = gtk4::gio::Menu::new();
             close_section.append(Some("Close Pane"), Some("win.close-terminal"));
             menu.append_section(None, &clipboard_section);
+            menu.append_section(None, &link_section);
             menu.append_section(None, &pane_section);
             menu.append_section(None, &session_section);
             menu.append_section(None, &close_section);
@@ -227,6 +242,7 @@ mod imp {
             right_click.set_button(3);
             right_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
             let copy_link_ref = copy_link_action;
+            let open_link_ref = open_link_action;
             let obj_weak = obj.downgrade();
             right_click.connect_pressed(move |gesture, _, x, y| {
                 if let Some(obj) = obj_weak.upgrade() {
@@ -236,7 +252,9 @@ mod imp {
                         y,
                         obj.current_directory().as_deref(),
                     );
-                    copy_link_ref.set_enabled(matched.is_some());
+                    let has_link = matched.is_some();
+                    copy_link_ref.set_enabled(has_link);
+                    open_link_ref.set_enabled(has_link);
                     obj.imp().last_match_at_click.replace(matched);
                 }
                 context_menu

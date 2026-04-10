@@ -633,6 +633,7 @@ mod pane_passive_tests {
 
 #[cfg(test)]
 mod search_tests {
+    use super::links;
     /// The PCRE2 literal escape pattern wraps user input safely so special
     /// regex characters are not interpreted.
     #[test]
@@ -671,5 +672,12 @@ mod search_tests {
         assert!(visible(false, true), "multi pane, not zoomed → visible");
         assert!(visible(true, false), "zoomed (was multi) → visible");
         assert!(visible(true, true), "zoomed + multi → visible");
+    }
+
+    /// Copy Link should show the filesystem path for file URIs, not the URI.
+    #[test]
+    fn display_text_for_file_uri_shows_path() {
+        assert_eq!(links::display_text_for_uri("file:///tmp/log.txt"), "/tmp/log.txt");
+        assert_eq!(links::display_text_for_uri("https://example.com"), "https://example.com");
     }
 }

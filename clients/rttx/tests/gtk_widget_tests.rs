@@ -1648,3 +1648,22 @@ fn persistent_pane_zoom_button_shows_restore_when_zoomed() {
     assert!(pane.zoom_button().is_visible());
     assert_eq!(pane.zoom_button().icon_name().unwrap(), "view-restore-symbolic");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_has_open_and_copy_link_actions() {
+    require_display!();
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    // Actions exist but are disabled by default — activate returns Err.
+    assert!(term.activate_action("term.open-link", None).is_err());
+    assert!(term.activate_action("term.copy-link", None).is_err());
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_has_open_and_copy_link_actions() {
+    require_display!();
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p1", "s1");
+    assert!(pane.activate_action("term.open-link", None).is_err());
+    assert!(pane.activate_action("term.copy-link", None).is_err());
+}
