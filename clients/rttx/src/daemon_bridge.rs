@@ -536,17 +536,10 @@ impl EndpointActor {
                     return;
                 }
 
-                let runtime_id = if let Some(runtime_id) = runtime_id {
-                    runtime_id
-                } else {
-                    let Ok(runtime_id) = self.create_runtime(&workspace_id, &name, policy).await
-                    else {
-                        return;
-                    };
-                    runtime_id
-                };
-
-                let Ok(snapshot) = self.attach_runtime(&workspace_id, &runtime_id).await else {
+                let Ok((runtime_id, snapshot)) = self
+                    .resolve_and_attach_runtime(&workspace_id, &name, policy, runtime_id.as_deref())
+                    .await
+                else {
                     return;
                 };
 
@@ -1166,6 +1159,52 @@ impl EndpointActor {
                 Err(())
             }
         }
+    }
+
+    /// Resolve a runtime id (reattach or create) and attach to it.
+    ///
+    /// When `existing_runtime_id` is provided, tries to reattach first.
+    /// If the runtime no longer exists (daemon restarted, ephemeral gone),
+    /// falls back to creating a fresh runtime so "Retry Connection" works.
+    /// Ownership conflicts and transport errors are reported immediately.
+    async fn resolve_and_attach_runtime(
+        &mut self,
+        workspace_id: &str,
+        name: &str,
+        policy: WorkspacePolicy,
+        existing_runtime_id: Option<&str>,
+    ) -> Result<(String, proto::Snapshot), ()> {
+        if let Some(runtime_id) = existing_runtime_id
+            && let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>()
+        {
+            match self.attach_runtime_via_active_channel(runtime_uuid).await {
+                Ok(snapshot) => return Ok((runtime_id.to_string(), snapshot)),
+                // Ownership conflict or transport failure — report, don't retry.
+                Err(
+                    ref error @ (DaemonError::AttachBlocked(_)
+                    | DaemonError::Io(_)
+                    | DaemonError::Disconnected),
+                ) => {
+                    self.handle_command_error(workspace_id, ManagerOperation::OpenWorkspace, error);
+                    return Err(());
+                }
+                // Runtime gone — fall through to create a new one.
+                Err(error) => {
+                    log::info!(
+                        "Reattach to {runtime_id} failed for {workspace_id}: \
+                         {error}, creating new runtime"
+                    );
+                }
+            }
+        }
+
+        let Ok(runtime_id) = self.create_runtime(workspace_id, name, policy).await else {
+            return Err(());
+        };
+        let Ok(snapshot) = self.attach_runtime(workspace_id, &runtime_id).await else {
+            return Err(());
+        };
+        Ok((runtime_id, snapshot))
     }
 
     async fn create_runtime_via_active_channel(
@@ -1835,5 +1874,191 @@ mod tests {
 
         assert_eq!(actor.reconnect_attempt, 0);
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_and_attach_falls_back_to_new_runtime_on_stale_id() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::new(),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+        };
+
+        let stale_runtime = Uuid::new_v4();
+        let new_runtime = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+
+            // 1. Receive AttachSession for the stale runtime — reply "not found".
+            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
+            assert!(
+                matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))),
+                "expected AttachSession, got {msg:?}"
+            );
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Error(proto::Error {
+                        code: 4,
+                        message: "session not found".into(),
+                    })),
+                },
+            )
+            .await;
+
+            // 2. Receive CreateSession — reply with new runtime id.
+            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
+            assert!(
+                matches!(msg.msg, Some(proto::client_message::Msg::CreateSession(_))),
+                "expected CreateSession, got {msg:?}"
+            );
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
+                        session_id: rttx_proto::uuid_to_bytes(new_runtime),
+                        revision: 1,
+                    })),
+                },
+            )
+            .await;
+
+            // 3. Receive AttachSession for the new runtime — reply with snapshot.
+            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
+            assert!(
+                matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))),
+                "expected AttachSession, got {msg:?}"
+            );
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
+                        session_id: rttx_proto::uuid_to_bytes(new_runtime),
+                        panes: vec![proto::PaneSnapshot {
+                            pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                            title: "shell".into(),
+                            cwd: "/home".into(),
+                            cols: 80,
+                            rows: 24,
+                            scrollback: Vec::new(),
+                            exit_status: None,
+                        }],
+                        revision: 2,
+                        current_client_role: proto::RuntimeClientRole::Writer as i32,
+                    })),
+                },
+            )
+            .await;
+        });
+
+        let result = actor
+            .resolve_and_attach_runtime(
+                "ws-1",
+                "Test Workspace",
+                WorkspacePolicy::Ephemeral,
+                Some(&stale_runtime.to_string()),
+            )
+            .await;
+
+        let (runtime_id, snapshot) = result.expect("should fall back to new runtime");
+        assert_eq!(runtime_id, new_runtime.to_string());
+        assert_eq!(snapshot.panes.len(), 1);
+
+        // Verify no error events were emitted (the stale attach failure is
+        // handled internally, not surfaced as a workspace error).
+        let mut saw_error = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if matches!(event, EndpointEvent::WorkspaceError { .. }) {
+                saw_error = true;
+            }
+        }
+        assert!(!saw_error, "stale-runtime fallback should not emit WorkspaceError");
+
+        server.await.expect("fake server task should complete");
+    }
+
+    #[tokio::test]
+    async fn resolve_and_attach_reports_ownership_conflict() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::new(),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+        };
+
+        let runtime_id = Uuid::new_v4();
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+
+            // Receive AttachSession — reply with AttachBlocked.
+            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
+            assert!(matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))));
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        current_client_role: 0,
+                        attached_client_count: 1,
+                        read_only_client_count: 0,
+                    })),
+                },
+            )
+            .await;
+        });
+
+        let result = actor
+            .resolve_and_attach_runtime(
+                "ws-1",
+                "Test Workspace",
+                WorkspacePolicy::Persistent,
+                Some(&runtime_id.to_string()),
+            )
+            .await;
+
+        assert!(result.is_err(), "ownership conflict should not fall back");
+
+        // Should have emitted a WorkspaceError.
+        let mut saw_error = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if matches!(event, EndpointEvent::WorkspaceError { .. }) {
+                saw_error = true;
+            }
+        }
+        assert!(saw_error, "ownership conflict should emit WorkspaceError");
+
+        server.await.expect("fake server task should complete");
     }
 }
