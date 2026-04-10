@@ -316,14 +316,13 @@ mod tests {
 
         let local = crate::runtime::ConnectionIcon {
             icon_name: "computer-symbolic",
-            css_class: "dim-label",
-            tooltip: "Local workspace",
+            css_class: "accent",
+            tooltip: "Connected to local runtime",
         };
         row.set_connection_icon(&local);
         assert!(row.imp().connection_icon.is_visible());
         assert_eq!(row.imp().connection_icon.icon_name().unwrap(), "computer-symbolic");
-        assert!(!row.imp().connection_icon.has_css_class("accent"));
-        assert!(row.imp().connection_icon.has_css_class("dim-label"));
+        assert!(row.imp().connection_icon.has_css_class("accent"));
     }
 
     #[test]

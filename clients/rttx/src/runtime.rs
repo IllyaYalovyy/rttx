@@ -405,8 +405,8 @@ pub struct ConnectionIcon {
 /// - Direct (no daemon): `utilities-terminal-symbolic`
 ///
 /// Color encodes connection state (changes dynamically):
-/// - `dim-label`: normal / connecting
-/// - `accent`: connected (remote) or recovered
+/// - `dim-label`: connecting
+/// - `accent`: connected or recovered
 /// - `warning`: disconnected
 /// - `error`: blocked
 #[must_use]
@@ -424,17 +424,16 @@ pub const fn connection_icon(
         "utilities-terminal-symbolic"
     };
     let (css_class, tooltip) = match status {
-        ConnectionStatus::Connected => match endpoint {
-            RuntimeEndpoint::Local => ("dim-label", "Local workspace"),
-            RuntimeEndpoint::Remote { .. } => ("accent", "Connected to remote host"),
-        },
-        ConnectionStatus::Recovered => ("accent", "Connection recovered"),
+        ConnectionStatus::Connected | ConnectionStatus::Recovered => {
+            let tooltip = match endpoint {
+                RuntimeEndpoint::Local => "Connected to local runtime",
+                RuntimeEndpoint::Remote { .. } => "Connected to remote host",
+            };
+            ("accent", tooltip)
+        }
         ConnectionStatus::Disconnected => ("warning", "Disconnected from runtime"),
         ConnectionStatus::Blocked(_) => ("error", "Connection blocked"),
-        _ => match endpoint {
-            RuntimeEndpoint::Local => ("dim-label", "Connecting to local runtime"),
-            RuntimeEndpoint::Remote { .. } => ("dim-label", "Connecting to remote host"),
-        },
+        _ => ("dim-label", "Connecting…"),
     };
     ConnectionIcon { icon_name, css_class, tooltip }
 }
@@ -759,7 +758,7 @@ mod tests {
     fn connection_icon_computer_for_local_connected() {
         let icon = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
         assert_eq!(icon.icon_name, "computer-symbolic");
-        assert_eq!(icon.css_class, "dim-label");
+        assert_eq!(icon.css_class, "accent");
     }
 
     #[test]
@@ -780,7 +779,7 @@ mod tests {
     #[test]
     fn connection_icon_color_for_local_managed() {
         let ep = RuntimeEndpoint::Local;
-        assert_eq!(connection_icon(&ep, &ConnectionStatus::Connected, true).css_class, "dim-label");
+        assert_eq!(connection_icon(&ep, &ConnectionStatus::Connected, true).css_class, "accent");
         assert_eq!(connection_icon(&ep, &ConnectionStatus::Recovered, true).css_class, "accent");
         assert_eq!(
             connection_icon(&ep, &ConnectionStatus::Disconnected, true).css_class,
@@ -850,7 +849,22 @@ mod tests {
         let ep = RuntimeEndpoint::Local;
         let icon = connection_icon(&ep, &ConnectionStatus::Connected, false);
         assert_eq!(icon.icon_name, "utilities-terminal-symbolic");
-        assert_eq!(icon.css_class, "dim-label");
+        assert_eq!(icon.css_class, "accent");
+    }
+
+    #[test]
+    fn connected_color_consistent_across_all_workspace_types() {
+        let local_managed =
+            connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
+        let remote_managed = connection_icon(
+            &RuntimeEndpoint::Remote { host: "h".into() },
+            &ConnectionStatus::Connected,
+            true,
+        );
+        let direct = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
+        assert_eq!(local_managed.css_class, "accent");
+        assert_eq!(remote_managed.css_class, "accent");
+        assert_eq!(direct.css_class, "accent");
     }
 
     #[test]
@@ -865,13 +879,13 @@ mod tests {
         assert_eq!(disconnected.tooltip, "Disconnected from runtime");
 
         let connecting_local = connection_icon(&local, &ConnectionStatus::Connecting, true);
-        assert_eq!(connecting_local.tooltip, "Connecting to local runtime");
+        assert_eq!(connecting_local.tooltip, "Connecting…");
 
         let connecting_remote = connection_icon(&remote, &ConnectionStatus::Connecting, true);
-        assert_eq!(connecting_remote.tooltip, "Connecting to remote host");
+        assert_eq!(connecting_remote.tooltip, "Connecting…");
 
         let local_connected = connection_icon(&local, &ConnectionStatus::Connected, true);
-        assert_eq!(local_connected.tooltip, "Local workspace");
+        assert_eq!(local_connected.tooltip, "Connected to local runtime");
     }
 
     #[test]
