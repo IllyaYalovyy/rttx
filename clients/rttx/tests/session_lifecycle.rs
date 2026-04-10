@@ -1076,3 +1076,54 @@ fn zoom_preserves_layout_tree_integrity() {
     session.zoomed_terminal_uuid = None;
     assert_eq!(session.layout, layout);
 }
+
+// ── Retry connection with stale runtime ─────────────────────────
+
+#[test]
+fn workspace_opened_with_new_runtime_id_updates_session_state() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::WorkspacePolicy;
+    use rttx::session::SessionState;
+
+    let stale_runtime = uuid::Uuid::new_v4().to_string();
+    let new_runtime = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+
+    let mut session =
+        SessionState::new_managed_local("Retry Test".into(), WorkspacePolicy::Ephemeral, None);
+    session.runtime.runtime_id = Some(stale_runtime);
+
+    let mut state = WindowState { sessions: vec![session], ..Default::default() };
+
+    // Simulate the daemon responding with a different runtime id
+    // (the stale one was gone, so a new runtime was created).
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+        workspace_id: state.sessions[0].uuid.clone(),
+        runtime_id: new_runtime.to_string(),
+        snapshot: rttx_proto::proto::Snapshot {
+            session_id: rttx_proto::uuid_to_bytes(new_runtime),
+            panes: vec![rttx_proto::proto::PaneSnapshot {
+                pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                title: "shell".into(),
+                cwd: "/home".into(),
+                cols: 80,
+                rows: 24,
+                scrollback: Vec::new(),
+                exit_status: None,
+            }],
+            revision: 1,
+            current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+        },
+    });
+
+    // The session should have the new runtime id.
+    assert_eq!(
+        state.sessions[0].runtime.runtime_id.as_deref(),
+        Some(new_runtime.to_string().as_str()),
+        "runtime_id should be updated to the new runtime"
+    );
+
+    // The workspace should be rebuilt.
+    assert_eq!(transition.rebuilt_workspaces.len(), 1);
+    assert_eq!(transition.rebuilt_workspaces[0].workspace_id, state.sessions[0].uuid);
+}

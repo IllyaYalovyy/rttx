@@ -3451,3 +3451,74 @@ fn auto_rename_skipped_after_manual_rename() {
 
     window.close();
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn retry_workspace_connection_sets_connecting_and_rebuilds_on_open() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.retry-connection-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+    let session_state = crate::test_helpers::managed_session_with_runtime(
+        "workspace-retry",
+        "Retry Workspace",
+        LayoutNode::new_terminal_with_uuid("retry-pane"),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some(&runtime_id.to_string()),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Simulate disconnected state.
+    window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Disconnected);
+
+    // Call retry — should set status to Connecting.
+    window.retry_workspace_connection(&session_state.uuid);
+
+    assert_eq!(
+        window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
+        Some(&ConnectionStatus::Connecting),
+        "retry should set status to Connecting"
+    );
+
+    // Simulate the daemon responding with WorkspaceOpened.
+    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
+        workspace_id: session_state.uuid.clone(),
+        runtime_id: runtime_id.to_string(),
+        snapshot: rttx_proto::proto::Snapshot {
+            session_id: rttx_proto::uuid_to_bytes(runtime_id),
+            panes: vec![rttx_proto::proto::PaneSnapshot {
+                pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                title: "shell".into(),
+                cwd: "/home/user".into(),
+                cols: 80,
+                rows: 24,
+                scrollback: b"reconnected".to_vec(),
+                exit_status: None,
+            }],
+            revision: 5,
+            current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+        },
+    });
+    pump_events(50);
+
+    // The session content should have been rebuilt.
+    let stack = &window.imp().session_stack;
+    assert!(
+        stack.child_by_name(&session_state.uuid).is_some(),
+        "session content should exist after WorkspaceOpened"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
