@@ -44,6 +44,7 @@ mod imp {
         pub status_label: gtk4::Label,
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
+        pub last_match_at_click: RefCell<Option<String>>,
     }
 
     impl Default for PersistentPaneView {
@@ -69,6 +70,7 @@ mod imp {
                 status_label: gtk4::Label::default(),
                 search_bar: gtk4::SearchBar::default(),
                 search_entry: gtk4::SearchEntry::default(),
+                last_match_at_click: RefCell::default(),
             }
         }
     }
@@ -144,6 +146,88 @@ mod imp {
             links::install_openable_link_controllers(&self.vte, move || {
                 link_target.upgrade().and_then(|pane| pane.current_directory())
             });
+
+            let copy_link_action = gtk4::gio::SimpleAction::new("copy-link", None);
+            copy_link_action.set_enabled(false);
+            let open_link_action = gtk4::gio::SimpleAction::new("open-link", None);
+            open_link_action.set_enabled(false);
+            let action_group = gtk4::gio::SimpleActionGroup::new();
+            action_group.add_action(&copy_link_action);
+            action_group.add_action(&open_link_action);
+            obj.insert_action_group("term", Some(&action_group));
+
+            let obj_weak = obj.downgrade();
+            copy_link_action.connect_activate(move |_, _| {
+                let Some(obj) = obj_weak.upgrade() else { return };
+                let matched = obj.imp().last_match_at_click.borrow().clone();
+                if let Some(uri) = matched
+                    && let Some(display) = gtk4::gdk::Display::default()
+                {
+                    display.clipboard().set_text(&links::display_text_for_uri(&uri));
+                }
+            });
+
+            let obj_weak = obj.downgrade();
+            open_link_action.connect_activate(move |_, _| {
+                let Some(obj) = obj_weak.upgrade() else { return };
+                let matched = obj.imp().last_match_at_click.borrow().clone();
+                if let Some(uri) = matched {
+                    links::launch_uri(&uri);
+                }
+            });
+
+            let menu = gtk4::gio::Menu::new();
+            let clipboard_section = gtk4::gio::Menu::new();
+            clipboard_section.append(Some("Copy"), Some("win.copy"));
+            clipboard_section.append(Some("Paste"), Some("win.paste"));
+            let link_section = gtk4::gio::Menu::new();
+            link_section.append(Some("Open Link"), Some("term.open-link"));
+            link_section.append(Some("Copy Link"), Some("term.copy-link"));
+            let pane_section = gtk4::gio::Menu::new();
+            pane_section.append(Some("Search"), Some("win.search"));
+            pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
+            pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
+            let session_section = gtk4::gio::Menu::new();
+            session_section.append(Some("New Session"), Some("win.new-session"));
+            session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
+            session_section.append(Some("Preferences"), Some("win.preferences"));
+            let close_section = gtk4::gio::Menu::new();
+            close_section.append(Some("Close Pane"), Some("win.close-terminal"));
+            menu.append_section(None, &clipboard_section);
+            menu.append_section(None, &link_section);
+            menu.append_section(None, &pane_section);
+            menu.append_section(None, &session_section);
+            menu.append_section(None, &close_section);
+
+            let context_menu = gtk4::PopoverMenu::from_model(Some(&menu));
+            context_menu.set_has_arrow(false);
+            context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
+
+            let right_click = gtk4::GestureClick::new();
+            right_click.set_button(3);
+            right_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            let copy_link_ref = copy_link_action;
+            let open_link_ref = open_link_action;
+            let obj_weak = obj.downgrade();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                if let Some(obj) = obj_weak.upgrade() {
+                    let matched = links::openable_uri_at(
+                        &obj.imp().vte,
+                        x,
+                        y,
+                        obj.current_directory().as_deref(),
+                    );
+                    let has_link = matched.is_some();
+                    copy_link_ref.set_enabled(has_link);
+                    open_link_ref.set_enabled(has_link);
+                    obj.imp().last_match_at_click.replace(matched);
+                }
+                context_menu
+                    .set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                context_menu.popup();
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+            });
+            self.vte.add_controller(right_click);
 
             self.search_entry.set_hexpand(true);
             self.search_bar.set_child(Some(&self.search_entry));

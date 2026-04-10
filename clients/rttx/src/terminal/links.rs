@@ -101,6 +101,14 @@ pub(crate) fn parse_file_uri(uri: &str) -> Option<String> {
     glib::filename_from_uri(uri).ok().map(|(path, _hostname)| path.display().to_string())
 }
 
+/// Return the human-readable text for a URI suitable for clipboard copy.
+///
+/// File URIs are converted back to filesystem paths; everything else is
+/// returned as-is.
+pub(crate) fn display_text_for_uri(uri: &str) -> String {
+    parse_file_uri(uri).unwrap_or_else(|| uri.to_string())
+}
+
 pub(crate) fn openable_uri_from_match_text(
     match_text: &str,
     current_directory: Option<&str>,
@@ -328,5 +336,26 @@ mod tests {
     fn gesture_denied_state_is_available() {
         // Compile-time check: EventSequenceState::Denied exists and is usable.
         assert_ne!(gtk4::EventSequenceState::Denied, gtk4::EventSequenceState::Claimed);
+    }
+
+    #[test]
+    fn display_text_for_file_uri_returns_path() {
+        assert_eq!(super::display_text_for_uri("file:///home/user/project"), "/home/user/project");
+    }
+
+    #[test]
+    fn display_text_for_http_uri_returns_uri() {
+        assert_eq!(
+            super::display_text_for_uri("https://example.com/docs"),
+            "https://example.com/docs"
+        );
+    }
+
+    #[test]
+    fn display_text_for_file_uri_decodes_percent() {
+        assert_eq!(
+            super::display_text_for_uri("file:///home/user/my%20project"),
+            "/home/user/my project"
+        );
     }
 }
