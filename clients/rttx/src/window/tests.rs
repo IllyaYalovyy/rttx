@@ -3566,3 +3566,82 @@ fn bell_preferences_applied_to_managed_pane() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn cwd_changed_updates_layout_node() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.cwd-changed-layout-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "managed-pane-cwd";
+    let runtime_pane_id = uuid::Uuid::new_v4();
+    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+        "ws-cwd",
+        "CWD Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some("runtime-cwd"),
+    );
+    session_state
+        .runtime
+        .pane_bindings
+        .insert(layout_uuid.to_string(), runtime_pane_id.to_string());
+
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Verify initial layout CWD is None.
+    {
+        let state = window.imp().state.borrow();
+        let session = state.sessions.iter().find(|s| s.uuid == "ws-cwd").unwrap();
+        assert_eq!(session.layout.terminal_cwd(layout_uuid), None);
+    }
+
+    // Dispatch a CwdChanged message.
+    let msg = rttx_proto::proto::ServerMessage {
+        msg: Some(rttx_proto::proto::server_message::Msg::CwdChanged(
+            rttx_proto::proto::CwdChanged {
+                session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(runtime_pane_id),
+                cwd: "/tmp/updated".into(),
+                revision: 1,
+            },
+        )),
+    };
+    window.dispatch_managed_runtime_message(&RuntimeEndpoint::Local, &msg);
+
+    // Verify layout CWD is updated.
+    {
+        let state = window.imp().state.borrow();
+        let session = state.sessions.iter().find(|s| s.uuid == "ws-cwd").unwrap();
+        assert_eq!(
+            session.layout.terminal_cwd(layout_uuid).as_deref(),
+            Some("/tmp/updated"),
+            "CwdChanged should update the layout node CWD"
+        );
+    }
+
+    // Verify widget CWD is also updated.
+    {
+        let pane = window.imp().persistent_terminals.borrow().get(layout_uuid).cloned().unwrap();
+        assert_eq!(
+            pane.current_directory().as_deref(),
+            Some("/tmp/updated"),
+            "CwdChanged should update the widget CWD"
+        );
+    }
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
