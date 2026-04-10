@@ -1,8 +1,8 @@
 [package]
 name = "rttx-server"
-version = "0.2.1"
+version.workspace = true
 edition = "2024"
-license = "GPL-3.0-or-later"
+license.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"
