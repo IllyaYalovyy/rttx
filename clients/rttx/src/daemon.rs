@@ -132,6 +132,8 @@ impl DaemonConnection {
     /// kept alive for the connection to persist.
     pub async fn connect_ssh(host: &str) -> Result<(Self, SshHandle), DaemonError> {
         let mut child = tokio::process::Command::new("ssh")
+            .args(["-o", "BatchMode=yes"])
+            .args(["-o", "ConnectTimeout=10"])
             .arg(host)
             .arg("rttx-server")
             .arg("attach-stdio")
@@ -863,5 +865,14 @@ mod tests {
             })),
         };
         assert_eq!(extract_pane_id(&msg), None);
+    }
+
+    #[tokio::test]
+    async fn connect_ssh_to_bogus_host_fails_fast() {
+        let start = std::time::Instant::now();
+        let result = DaemonConnection::connect_ssh("rttx-nonexistent-host-test").await;
+        assert!(result.is_err(), "SSH to bogus host should fail");
+        // BatchMode=yes makes SSH fail immediately instead of hanging for auth.
+        assert!(start.elapsed().as_secs() < 15, "SSH should fail fast, not hang");
     }
 }

@@ -25,6 +25,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(20);
 #[cfg(not(test))]
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 
+const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Operation type for manager error reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagerOperation {
@@ -1128,7 +1130,15 @@ impl EndpointActor {
                 self.daemon_start_attempted = false;
             }
             RuntimeEndpoint::Remote { host } => {
-                let (connection, ssh_handle) = DaemonConnection::connect_ssh(host).await?;
+                let (connection, ssh_handle) =
+                    tokio::time::timeout(SSH_CONNECT_TIMEOUT, DaemonConnection::connect_ssh(host))
+                        .await
+                        .map_err(|_| {
+                            DaemonError::Io(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                format!("SSH connection to {host} timed out"),
+                            ))
+                        })??;
                 self.connection = Some(connection);
                 self.ssh_handle = Some(ssh_handle);
             }
@@ -2102,5 +2112,17 @@ mod tests {
         assert!(saw_error, "ownership conflict should emit WorkspaceError");
 
         server.await.expect("fake server task should complete");
+    }
+
+    #[test]
+    fn ssh_connect_timeout_is_reasonable() {
+        assert!(
+            SSH_CONNECT_TIMEOUT >= Duration::from_secs(10),
+            "SSH timeout should be at least 10s to allow for slow networks"
+        );
+        assert!(
+            SSH_CONNECT_TIMEOUT <= Duration::from_secs(60),
+            "SSH timeout should not exceed 60s to avoid blocking the actor too long"
+        );
     }
 }
