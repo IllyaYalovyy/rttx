@@ -96,7 +96,9 @@ impl Window {
 
     pub(super) fn show_workspace_popover_menu(&self, row: &SessionRow, session_uuid: &str) {
         // Unparent any previous popover so it doesn't leak.
-        if let Some(old) = self.imp().workspace_popover.borrow_mut().take() {
+        if let Some(old) = self.imp().workspace_popover.borrow_mut().take()
+            && old.parent().is_some()
+        {
             old.unparent();
         }
 
