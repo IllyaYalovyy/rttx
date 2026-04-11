@@ -267,6 +267,9 @@ impl Window {
             return;
         };
         self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.reset_endpoint(&session_state.runtime.endpoint);
+        }
         self.connect_managed_workspace(&session_state);
     }
 
