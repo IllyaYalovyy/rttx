@@ -3645,3 +3645,57 @@ fn cwd_changed_updates_layout_node() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_pane_exit_marks_visible_pane_exited() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.managed-pane-exit-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "managed-pane-exit";
+    let runtime_pane_id = uuid::Uuid::new_v4();
+    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+        "ws-exit",
+        "Exit Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some("runtime-exit"),
+    );
+    session_state
+        .runtime
+        .pane_bindings
+        .insert(layout_uuid.to_string(), runtime_pane_id.to_string());
+
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let msg = rttx_proto::proto::ServerMessage {
+        msg: Some(rttx_proto::proto::server_message::Msg::PaneExited(
+            rttx_proto::proto::PaneExited {
+                session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(runtime_pane_id),
+                status: 0,
+                revision: 2,
+            },
+        )),
+    };
+    window.dispatch_managed_runtime_message(&RuntimeEndpoint::Local, &msg);
+
+    let pane = window.imp().persistent_terminals.borrow().get(layout_uuid).cloned().unwrap();
+    assert!(pane.exited_for_test());
+    assert!(!pane.input_enabled_for_test());
+    assert_eq!(pane.status_label_text_for_test(), "Exited");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

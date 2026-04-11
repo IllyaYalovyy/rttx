@@ -663,6 +663,7 @@ impl Window {
                 self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
             Msg::PaneExited(exited) => {
+                pane.mark_exited(exited.status);
                 let visible_session = self.imp().session_stack.visible_child_name();
                 let state = self.imp().state.borrow();
                 let in_background = terminal_is_in_background_session(

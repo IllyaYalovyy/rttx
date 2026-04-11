@@ -287,3 +287,33 @@ async fn pane_exit_produces_pane_exited_message() {
     assert_eq!(exitpane_id, expectedpane_id);
     assert_eq!(exited.status, 7);
 }
+
+#[tokio::test]
+async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    client.drain(Duration::from_millis(500)).await;
+
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: session_id.clone(),
+                pane_id: pane_id.clone(),
+                data: vec![0x04],
+            })),
+        })
+        .await;
+
+    let msgs = client.drain(Duration::from_secs(3)).await;
+    let exited = msgs.iter().find_map(|m| match &m.msg {
+        Some(proto::server_message::Msg::PaneExited(pe)) => Some(pe.clone()),
+        _ => None,
+    });
+
+    let exited = exited.expect("Ctrl+D at shell prompt must produce PaneExited");
+    assert_eq!(exited.pane_id, pane_id);
+    assert_eq!(exited.status, 0);
+}

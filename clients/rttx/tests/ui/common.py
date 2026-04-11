@@ -201,11 +201,12 @@ def terminal_caret_offset(node: Atspi.Accessible) -> int:
 class TestEnvironment:
     """Isolated weston/XDG environment shared by one UI test."""
 
-    def __init__(self) -> None:
+    def __init__(self, extra_env: dict[str, str] | None = None) -> None:
         self.root_dir = tempfile.mkdtemp(prefix="rttx-ui-test-")
         self.runtime_dir = os.path.join(self.root_dir, "run")
         self.config_home = os.path.join(self.root_dir, "config")
         self.cache_home = os.path.join(self.root_dir, "cache")
+        self.extra_env = extra_env or {}
         os.makedirs(self.runtime_dir, mode=0o700, exist_ok=True)
         os.makedirs(self.config_home, exist_ok=True)
         os.makedirs(self.cache_home, exist_ok=True)
@@ -242,6 +243,7 @@ class TestEnvironment:
         env["PATH"] = os.path.join(TARGET_DIR, "debug") + os.pathsep + env["PATH"]
         env.pop("GTK_A11Y", None)
         env.pop("DISPLAY", None)
+        env.update(self.extra_env)
         if disable_shell_spawn:
             env["RTTX_DISABLE_SHELL_SPAWN"] = "1"
         else:
@@ -378,8 +380,12 @@ class AppFixture:
     rttx instance.
     """
 
-    def __init__(self, disable_shell_spawn: bool = True) -> None:
-        self.environment = TestEnvironment()
+    def __init__(
+        self,
+        disable_shell_spawn: bool = True,
+        extra_env: dict[str, str] | None = None,
+    ) -> None:
+        self.environment = TestEnvironment(extra_env=extra_env)
         self.disable_shell_spawn = disable_shell_spawn
         self._app: subprocess.Popen | None = None
         self.atspi_app: Atspi.Accessible | None = None
