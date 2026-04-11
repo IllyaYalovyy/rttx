@@ -370,6 +370,24 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_d_encodes_eof_byte() {
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK),
+            Some(vec![0x04])
+        );
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::d,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+            ),
+            TerminalKeyAction::ForwardToPty(vec![0x04])
+        );
+    }
+
+    #[test]
     fn managed_ctrl_v_prefers_clipboard_paste_over_shell_syn() {
         let modifiers = gtk4::gdk::ModifierType::CONTROL_MASK
             | gtk4::gdk::ModifierType::LOCK_MASK
