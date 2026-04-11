@@ -1020,10 +1020,7 @@ impl EndpointActor {
                 );
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
-                    if problem.is_transient() {
-                        let delay_secs = self.next_reconnect_delay_secs();
-                        self.schedule_reconnect(delay_secs);
-                    }
+                    self.schedule_reconnect_for_problem(&problem);
                     return;
                 }
 
@@ -1417,6 +1414,18 @@ impl EndpointActor {
             tokio::time::sleep(delay).await;
             let _ = self_tx.send(EndpointCommand::Reconnect);
         });
+    }
+
+    /// Schedule a reconnect based on the error type. Non-transient errors
+    /// use the maximum delay but still retry — the underlying problem may
+    /// resolve (e.g., daemon restarts with correct version).
+    fn schedule_reconnect_for_problem(&mut self, problem: &ConnectionProblem) {
+        let delay_secs = if problem.is_transient() {
+            self.next_reconnect_delay_secs()
+        } else {
+            self.reconnect_delay_secs
+        };
+        self.schedule_reconnect(delay_secs);
     }
 
     fn emit_status(&self, workspace_id: &str, status: ConnectionStatus) {
@@ -2124,5 +2133,50 @@ mod tests {
             SSH_CONNECT_TIMEOUT <= Duration::from_secs(60),
             "SSH timeout should not exceed 60s to avoid blocking the actor too long"
         );
+    }
+
+    /// Verify that a non-transient connection error during reconnect still
+    /// schedules another attempt instead of silently killing the loop.
+    #[tokio::test]
+    async fn schedule_reconnect_for_non_transient_uses_max_delay() {
+        let (event_tx, _) = mpsc::unbounded_channel();
+        let (self_tx, mut self_rx) = mpsc::unbounded_channel();
+        let (_, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+
+        let non_transient = ConnectionProblem::VersionMismatch;
+        assert!(!non_transient.is_transient());
+
+        actor.schedule_reconnect_for_problem(&non_transient);
+
+        // Non-transient should use max delay (reconnect_delay_secs = 10).
+        assert_eq!(actor.reconnect_attempt, 1);
+
+        let cmd = tokio::time::timeout(Duration::from_secs(15), self_rx.recv())
+            .await
+            .expect("should receive reconnect command")
+            .expect("channel should not close");
+        assert!(matches!(cmd, EndpointCommand::Reconnect));
+    }
+
+    #[tokio::test]
+    async fn schedule_reconnect_for_transient_uses_progressive_delay() {
+        let (event_tx, _) = mpsc::unbounded_channel();
+        let (self_tx, mut self_rx) = mpsc::unbounded_channel();
+        let (_, cmd_rx) = mpsc::unbounded_channel();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+
+        actor.schedule_reconnect_for_problem(&ConnectionProblem::DaemonUnavailable);
+
+        // Transient at attempt 1 should use delay = min(1, 10) = 1s.
+        assert_eq!(actor.reconnect_attempt, 1);
+
+        let cmd = tokio::time::timeout(Duration::from_secs(5), self_rx.recv())
+            .await
+            .expect("should receive reconnect command")
+            .expect("channel should not close");
+        assert!(matches!(cmd, EndpointCommand::Reconnect));
     }
 }
