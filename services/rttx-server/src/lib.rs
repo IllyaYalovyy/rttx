@@ -2,6 +2,7 @@
 
 pub mod engine;
 pub mod ipc;
+pub mod logging;
 pub mod os;
 pub mod pane;
 pub mod protocol;

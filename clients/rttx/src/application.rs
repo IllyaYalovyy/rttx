@@ -74,14 +74,53 @@ pub(crate) const APP_CSS: &str = "\
         .accent-orange { color: @orange_5; }
     }";
 
+fn init_logging() {
+    use tracing_subscriber::EnvFilter;
+
+    let is_dev = config::is_development();
+    let default_level = if is_dev { "debug" } else { "rttx=info,warn" };
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+
+    let log_dir = log_dir_path();
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "rttx.log");
+    cleanup_old_logs(&log_dir, "rttx.log", 3);
+
+    tracing_subscriber::fmt()
+        .with_writer(file_appender)
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .init();
+}
+
+fn cleanup_old_logs(dir: &std::path::Path, prefix: &str, keep_days: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut log_files: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name().to_string_lossy().starts_with(prefix)
+                && e.file_type().is_ok_and(|t| t.is_file())
+        })
+        .collect();
+    log_files.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+    for old in log_files.into_iter().skip(keep_days + 1) {
+        let _ = std::fs::remove_file(old.path());
+    }
+}
+
+/// Return the log directory for the GUI.
+#[must_use]
+pub fn log_dir_path() -> std::path::PathBuf {
+    let cache_dir = glib::user_cache_dir();
+    let dir_name = if config::is_development() { "rttx-devel" } else { "rttx" };
+    cache_dir.join(dir_name)
+}
+
 /// Build and run the application.
 #[must_use]
 pub fn run() -> glib::ExitCode {
-    if config::is_development() && std::env::var_os("RUST_LOG").is_none() {
-        pretty_env_logger::formatted_builder().filter_level(log::LevelFilter::Debug).init();
-    } else {
-        pretty_env_logger::init();
-    }
+    init_logging();
 
     let app = adw::Application::builder()
         .application_id(config::app_id())

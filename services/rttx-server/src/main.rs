@@ -8,7 +8,6 @@ use rttx_server::os::unix::UnixOs;
 use rttx_server::server::Server;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
@@ -35,6 +34,8 @@ enum Command {
     Status,
     /// Serve one client over stdin/stdout (for SSH)
     AttachStdio,
+    /// Show the path to the daemon log file
+    Logs,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -45,14 +46,15 @@ fn main() -> anyhow::Result<()> {
         Command::Stop => stop(),
         Command::Status => status(),
         Command::AttachStdio => attach_stdio(),
+        Command::Logs => {
+            logs();
+            Ok(())
+        }
     }
 }
 
-fn init_tracing(dev_mode: bool) {
-    let default_level = if dev_mode { "debug" } else { "info" };
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
-    tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(filter).init();
+fn init_tracing(dev_mode: bool, log_dir: &std::path::Path) {
+    rttx_server::logging::init_file_logging(log_dir, "rttx-server", dev_mode);
 }
 
 fn start(foreground: bool) -> anyhow::Result<()> {
@@ -88,7 +90,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         }
     }
 
-    init_tracing(dev_mode);
+    init_tracing(dev_mode, &os.cache_dir());
 
     if dev_mode {
         tracing::info!("Starting rttx-server in DEVELOPMENT mode");
@@ -133,12 +135,18 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 /// Intended to be invoked via SSH: `ssh host rttx-server attach-stdio`.
 /// Connects to the already-running local daemon and bridges the client's
 /// stdin/stdout to the daemon socket. The daemon keeps running after the
+fn logs() {
+    let os = UnixOs;
+    let log_dir = os.cache_dir();
+    println!("{}", log_dir.display());
+}
+
 /// SSH connection drops, so PTYs and runtimes survive GUI restarts.
 fn attach_stdio() -> anyhow::Result<()> {
     let dev_mode = rttx_server::os::unix::dev_mode_enabled();
-    init_tracing(dev_mode);
-
     let os = UnixOs;
+    init_tracing(dev_mode, &os.cache_dir());
+
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 
     if !socket_path.exists() {
