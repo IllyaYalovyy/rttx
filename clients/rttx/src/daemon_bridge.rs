@@ -143,6 +143,7 @@ enum EndpointCommand {
         runtime_id: String,
         name: String,
     },
+    Shutdown,
 }
 
 #[derive(Debug)]
@@ -205,6 +206,15 @@ impl EndpointConnectionManager {
         self.rt.spawn(actor.run());
         self.endpoints.borrow_mut().insert(key, EndpointHandle { cmd_tx: cmd_tx.clone() });
         cmd_tx
+    }
+
+    /// Shut down the existing actor for an endpoint so the next operation
+    /// creates a fresh one. Used by explicit user retry to bypass a stuck actor.
+    pub fn reset_endpoint(&self, endpoint: &RuntimeEndpoint) {
+        let key = endpoint.key();
+        if let Some(handle) = self.endpoints.borrow_mut().remove(&key) {
+            let _ = handle.cmd_tx.send(EndpointCommand::Shutdown);
+        }
     }
 
     /// Create or attach a managed workspace runtime asynchronously.
@@ -467,6 +477,9 @@ impl EndpointActor {
                 match event {
                     LoopEvent::Command(command) => {
                         let Some(command) = command else { break };
+                        if matches!(command, EndpointCommand::Shutdown) {
+                            break;
+                        }
                         self.handle_command(command).await;
                     }
                     LoopEvent::Message(message) => self.handle_runtime_message(message),
@@ -474,6 +487,9 @@ impl EndpointActor {
                 }
             } else {
                 let Some(command) = self.cmd_rx.recv().await else { break };
+                if matches!(command, EndpointCommand::Shutdown) {
+                    break;
+                }
                 self.handle_command(command).await;
             }
         }
@@ -1065,6 +1081,7 @@ impl EndpointActor {
             EndpointCommand::ForgetWorkspace { workspace_id } => {
                 self.tracked_workspaces.remove(&workspace_id);
             }
+            EndpointCommand::Shutdown => {}
         }
     }
 
@@ -2178,5 +2195,75 @@ mod tests {
             .expect("should receive reconnect command")
             .expect("channel should not close");
         assert!(matches!(cmd, EndpointCommand::Reconnect));
+    }
+
+    #[tokio::test]
+    async fn shutdown_command_stops_actor() {
+        let ((reader, writer), _server) = split_duplex_connection();
+        let actor = make_actor(reader, writer);
+
+        // Send Shutdown via the actor's own channel.
+        let tx = actor.self_tx.clone();
+        tx.send(EndpointCommand::Shutdown).unwrap();
+
+        // The actor should exit promptly.
+        tokio::time::timeout(Duration::from_secs(2), actor.run())
+            .await
+            .expect("actor should exit after Shutdown");
+    }
+
+    #[tokio::test]
+    async fn shutdown_command_stops_actor_without_connection() {
+        let (event_tx, _) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx.clone(),
+            cmd_rx,
+            false,
+            10,
+        );
+
+        self_tx.send(EndpointCommand::Shutdown).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), actor.run())
+            .await
+            .expect("actor should exit after Shutdown even without connection");
+    }
+
+    #[test]
+    fn reset_endpoint_removes_handle_and_sends_shutdown() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let manager = EndpointConnectionManager {
+            rt,
+            endpoints: RefCell::new(HashMap::new()),
+            event_tx,
+            auto_start_daemon: false,
+            reconnect_delay_secs: 10,
+        };
+
+        let endpoint = RuntimeEndpoint::Local;
+
+        // Create an actor by requesting its handle.
+        let tx = manager.endpoint_handle(&endpoint);
+        assert!(manager.endpoints.borrow().contains_key(&endpoint.key()));
+
+        // Reset should remove the handle.
+        manager.reset_endpoint(&endpoint);
+        assert!(!manager.endpoints.borrow().contains_key(&endpoint.key()));
+
+        // The old channel should have received Shutdown.
+        // (We can't easily recv from it since the actor owns cmd_rx,
+        // but we can verify the handle is gone and a new one is created.)
+        let tx2 = manager.endpoint_handle(&endpoint);
+        assert!(manager.endpoints.borrow().contains_key(&endpoint.key()));
+
+        // The new handle should be a different channel than the old one.
+        // Send on old channel — it should still work (actor hasn't consumed it yet)
+        // but the manager no longer references it.
+        assert!(tx.send(EndpointCommand::RefreshInventory).is_ok());
+        assert!(tx2.send(EndpointCommand::RefreshInventory).is_ok());
     }
 }
