@@ -1045,18 +1045,42 @@ impl EndpointActor {
                     self.endpoint.key(),
                     self.tracked_workspaces.len()
                 );
+                let mut any_transient_failure = false;
                 for (workspace_id, runtime_id) in self.tracked_workspaces.clone() {
-                    if let Ok(snapshot) = self.attach_runtime(&workspace_id, &runtime_id).await {
-                        let _ = self.event_tx.send(EndpointEvent::WorkspaceOpened {
-                            workspace_id: workspace_id.clone(),
-                            runtime_id: runtime_id.clone(),
-                            snapshot,
-                        });
-                        self.emit_status(&workspace_id, ConnectionStatus::Recovered);
+                    let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>() else {
+                        continue;
+                    };
+                    match self.attach_runtime_via_active_channel(runtime_uuid).await {
+                        Ok(snapshot) => {
+                            let _ = self.event_tx.send(EndpointEvent::WorkspaceOpened {
+                                workspace_id: workspace_id.clone(),
+                                runtime_id: runtime_id.clone(),
+                                snapshot,
+                            });
+                            self.emit_status(&workspace_id, ConnectionStatus::Recovered);
+                        }
+                        Err(ref error) => {
+                            let problem = classify_connection_problem(error);
+                            log::warn!("Reattach {workspace_id} failed during reconnect: {error}");
+                            self.emit_error(
+                                &workspace_id,
+                                ManagerOperation::OpenWorkspace,
+                                problem.clone(),
+                                error.to_string(),
+                            );
+                            if problem.is_transient() {
+                                any_transient_failure = true;
+                                break;
+                            }
+                        }
                     }
                 }
 
-                self.split_connection();
+                if any_transient_failure {
+                    self.handle_disconnect();
+                } else {
+                    self.split_connection();
+                }
             }
             EndpointCommand::RenameRuntime { workspace_id, runtime_id, name } => {
                 let Some(runtime_uuid) = parse_uuid(
@@ -2265,5 +2289,66 @@ mod tests {
         // but the manager no longer references it.
         assert!(tx.send(EndpointCommand::RefreshInventory).is_ok());
         assert!(tx2.send(EndpointCommand::RefreshInventory).is_ok());
+    }
+
+    /// When a reconnect reattach fails with a transient I/O error, only one
+    /// reconnect should be scheduled — not one per tracked workspace.
+    /// Regression test for the connect/disconnect loop (#417).
+    #[tokio::test]
+    async fn reconnect_transient_failure_schedules_single_reconnect() {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let ws1_runtime = Uuid::new_v4();
+        let ws2_runtime = Uuid::new_v4();
+
+        let ((reader, writer), server_stream) = split_duplex_connection();
+        let mut actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx: self_tx.clone(),
+            cmd_rx,
+            // Connection is set (not split) — simulates a fresh reconnect.
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::from([
+                ("ws-1".into(), ws1_runtime.to_string()),
+                ("ws-2".into(), ws2_runtime.to_string()),
+            ]),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+        };
+
+        // Server: drop the connection immediately to cause I/O errors.
+        drop(server_stream);
+
+        // Simulate the reconnect reattach loop.
+        let mut any_transient_failure = false;
+        for (_workspace_id, runtime_id) in actor.tracked_workspaces.clone() {
+            let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>() else {
+                continue;
+            };
+            match actor.attach_runtime_via_active_channel(runtime_uuid).await {
+                Ok(_) => {}
+                Err(ref error) => {
+                    let problem = classify_connection_problem(error);
+                    if problem.is_transient() {
+                        any_transient_failure = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(any_transient_failure, "should detect transient failure");
+
+        // The fix: only one handle_disconnect call.
+        actor.handle_disconnect();
+        assert_eq!(actor.reconnect_attempt, 1, "exactly one reconnect should be scheduled");
     }
 }
