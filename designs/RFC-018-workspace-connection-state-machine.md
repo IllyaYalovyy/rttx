@@ -118,9 +118,10 @@ machine. Direct terminal process lifecycle should remain a separate terminal con
 
 `Starting`
 
-The client is starting or locating the endpoint daemon. This is normally local-only, because the
-client can auto-start the local daemon. Remote endpoints usually move directly to `Connecting`
-unless a future remote daemon launcher is added.
+The client is starting or locating the endpoint daemon. This state is only meaningful when the
+client must auto-start a local daemon before connecting. Remote endpoints skip this state and begin
+at `Connecting`. Implementations may omit `Starting` if daemon startup is fast enough to be
+invisible — the key invariant is that no input is accepted until `Connected`.
 
 `Connecting`
 
@@ -140,8 +141,10 @@ scheduled. Input is disabled while the workspace waits for the next attempt.
 `Disconnected`
 
 The workspace is not connected and no automatic reconnect is currently active. This covers explicit
-disconnect, user-stopped daemons, retry exhaustion if we add a retry limit, or any future paused
-reconnect state.
+user disconnect, user-stopped daemons, retry exhaustion if we add a retry limit, or any future
+paused reconnect state. The cause is not encoded in the durable state — if the UI needs to
+distinguish "user chose to disconnect" from "retries exhausted," it should check the most recent
+transient event (`ReconnectAbandoned` vs user-initiated detach).
 
 `Blocked(ConnectionProblem)`
 
@@ -196,12 +199,13 @@ Automatic reconnect stopped or was explicitly paused. The durable state becomes 
 - `Starting` or `Connecting` moves to `Blocked` after a non-transient failure.
 - `Connected` moves to `Reconnecting` when the connection is lost and automatic reconnect is active.
 - `Connected` moves to `Disconnected` when the user explicitly disconnects or automatic reconnect is not active.
+- `Connected` moves to `Blocked` when a non-transient error arrives on a live connection (e.g., ownership conflict from another client attaching).
 - `Reconnecting` moves to `Connecting` when the retry timer fires.
 - `Reconnecting` moves to `Connected` when reconnect and reattach succeed.
 - `Reconnecting` moves to `Blocked` when a retry hits a non-transient failure.
 - `Reconnecting` moves to `Disconnected` when retry is abandoned or paused.
 - `Disconnected` moves to `Starting` or `Connecting` when the user requests reconnect.
-- `Blocked` moves to `Starting` or `Connecting` only after user action or an explicit reconnect request.
+- `Blocked` moves to `Starting` or `Connecting` only after user action or an explicit reconnect request. Blocked states never auto-resolve — the user must act.
 
 No transition should produce a durable `Recovered` status. Recovery is represented by the
 `ReconnectSucceeded` event and a resulting durable `Connected` status.
@@ -241,9 +245,9 @@ permission denied, runtime ownership conflict, and user-action-required server e
 
 ### Compatibility
 
-The connection status is currently runtime UI state, not persisted workspace data. If future
-implementation discovers a serialized or logged `Recovered` status, loading it must map to
-`Connected` rather than failing. Any persisted-state compatibility change must use
+The connection status is currently runtime UI state held in a `HashMap` on the window object — it
+is not persisted to disk. No migration is needed. If a future change persists connection status and
+encounters a serialized `Recovered` variant, loading must map it to `Connected` using
 `#[serde(default)]` or an equivalent backward-compatible loader pattern.
 
 ---
@@ -267,14 +271,24 @@ implementation discovers a serialized or logged `Recovered` status, loading it m
 - [ ] **Step 3** — Update pane header and sidebar presentation tests to assert no durable recovered state leaks into UI
 - [ ] **Step 4** — Update daemon reconnect flow so successful reattach emits `Connected` plus the transient event
 - [ ] **Step 5** — Add integration coverage for heartbeat loss, reconnect scheduling, successful reattach, and blocked failures
-- [ ] **Step 6** — Audit direct terminal presentation so it remains separate from managed workspace connection state
+- [ ] **Step 6** — Verify direct terminal presentation does not reference `ConnectionStatus` or the managed state machine; add a compile-time or test assertion if any coupling exists
+
+Steps 1–3 can land as a single PR. Steps 4–5 are the core behavioral work. Step 6 is a quick audit.
 
 ---
 
 ## Open Questions
 
 - [ ] **Q1** — Should `ReconnectSucceeded` show a toast, a one-shot sidebar pulse, both, or only log output?
-- [ ] **Q2** — Should rttx eventually add retry exhaustion, or should transient reconnect remain unbounded until the user closes or disconnects the workspace?
+- [x] **Q2** — Should rttx eventually add retry exhaustion, or should transient reconnect remain unbounded until the user closes or disconnects the workspace? **Decision**: Reconnect remains unbounded for now. The `Disconnected` state is reachable only via explicit user action (detach/close) or future explicit "stop retrying" UI. If retry exhaustion is added later, it will be a separate RFC with UX design for the exhaustion notification.
+
+---
+
+## Implementation Notes
+
+- **Naming convention**: In code, durable states should use the `ConnectionState` type and events
+  should use a separate `ConnectionEvent` enum. This avoids confusion between identically-named
+  states and events (e.g., `ConnectionState::Connected` vs `ConnectionEvent::Connected`).
 
 ---
 
