@@ -28,3 +28,26 @@ fn transient_errors_are_classified_correctly() {
         "DaemonUnavailable should be transient for progressive backoff"
     );
 }
+
+/// Verify that `classify_connection_problem` maps I/O errors to the
+/// transient `DaemonUnavailable` variant — the classification that
+/// drives the reconnect-vs-give-up decision in the Reconnect handler.
+#[test]
+fn io_error_is_transient_daemon_unavailable() {
+    use rttx::daemon::DaemonError;
+    use rttx::runtime::classify_connection_problem;
+
+    let io_err = DaemonError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken"));
+    let problem = classify_connection_problem(&io_err);
+    assert!(
+        problem.is_transient(),
+        "I/O errors must be transient so the Reconnect handler breaks on first failure"
+    );
+
+    let disconnected = DaemonError::Disconnected;
+    let problem = classify_connection_problem(&disconnected);
+    assert!(
+        problem.is_transient(),
+        "Disconnected must be transient so the Reconnect handler breaks on first failure"
+    );
+}
