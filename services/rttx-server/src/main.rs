@@ -425,3 +425,15 @@ async fn handle_signals(server: Arc<Mutex<Server>>) {
         s.request_shutdown();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_clean_command() {
+        let cli = Cli::try_parse_from(["rttx-server", "clean"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Clean)));
+    }
+}
