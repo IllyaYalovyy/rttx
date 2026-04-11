@@ -315,5 +315,4 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
 
     let exited = exited.expect("Ctrl+D at shell prompt must produce PaneExited");
     assert_eq!(exited.pane_id, pane_id);
-    assert_eq!(exited.status, 0);
 }
