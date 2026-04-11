@@ -32,6 +32,8 @@ enum Command {
     Stop,
     /// Show daemon status and active runtimes
     Status,
+    /// Remove all sessions with no connected clients
+    Clean,
     /// Serve one client over stdin/stdout (for SSH)
     AttachStdio,
     /// Show the path to the daemon log file
@@ -45,6 +47,7 @@ fn main() -> anyhow::Result<()> {
         Command::Start { foreground } => start(foreground),
         Command::Stop => stop(),
         Command::Status => status(),
+        Command::Clean => clean(),
         Command::AttachStdio => attach_stdio(),
         Command::Logs => {
             logs();
@@ -291,6 +294,113 @@ fn status() -> anyhow::Result<()> {
             }
         }
 
+        Ok(())
+    })
+}
+
+fn clean() -> anyhow::Result<()> {
+    use bytes::BytesMut;
+    use rttx_proto::{decode_frame, encode_frame};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let os = UnixOs;
+    let socket_path = os.runtime_dir().join("rttx-server.sock");
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        if !ipc::is_server_running(&socket_path).await {
+            println!("Daemon is not running");
+            return Ok(());
+        }
+
+        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
+        let mut buf = BytesMut::new();
+        let mut read_buf = BytesMut::with_capacity(8192);
+
+        // Hello.
+        let hello = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+                protocol_version: rttx_proto::PROTOCOL_VERSION,
+                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+            })),
+        };
+        encode_frame(&hello, &mut buf)?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        loop {
+            stream.read_buf(&mut read_buf).await?;
+            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
+                break;
+            }
+        }
+
+        // ListSessions.
+        buf.clear();
+        encode_frame(
+            &proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            },
+            &mut buf,
+        )?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        let resp: proto::ServerMessage = loop {
+            stream.read_buf(&mut read_buf).await?;
+            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
+                Ok(msg) => break msg,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => anyhow::bail!("decode error: {e}"),
+            }
+        };
+
+        let sessions = match resp.msg {
+            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
+            _ => anyhow::bail!("unexpected response"),
+        };
+
+        let unused: Vec<_> = sessions.iter().filter(|s| s.attached_client_count == 0).collect();
+
+        if unused.is_empty() {
+            println!("No unused sessions");
+            return Ok(());
+        }
+
+        let mut cleaned = 0u32;
+        for session in &unused {
+            buf.clear();
+            encode_frame(
+                &proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::TerminateSession(
+                        proto::TerminateSession { session_id: session.id.clone() },
+                    )),
+                },
+                &mut buf,
+            )?;
+            stream.write_all(&buf).await?;
+            stream.flush().await?;
+
+            // Wait for SessionTerminated.
+            loop {
+                stream.read_buf(&mut read_buf).await?;
+                match decode_frame::<proto::ServerMessage>(&mut read_buf) {
+                    Ok(msg) => {
+                        if matches!(msg.msg, Some(proto::server_message::Msg::SessionTerminated(_)))
+                        {
+                            let name = truncate(&session.name, 40);
+                            println!("Removed: {name}");
+                            cleaned += 1;
+                            break;
+                        }
+                    }
+                    Err(rttx_proto::FrameError::Incomplete) => {}
+                    Err(e) => anyhow::bail!("decode error: {e}"),
+                }
+            }
+        }
+
+        println!("Cleaned {cleaned} session{}", if cleaned == 1 { "" } else { "s" });
         Ok(())
     })
 }
