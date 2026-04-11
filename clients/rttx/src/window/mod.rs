@@ -64,6 +64,7 @@ mod imp {
         pub workspace_connection_status: RefCell<HashMap<String, ConnectionStatus>>,
         pub workspace_reconnect_sources: RefCell<HashMap<String, glib::SourceId>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
+        pub workspace_popover: RefCell<Option<gtk4::PopoverMenu>>,
     }
 
     #[glib::object_subclass]
