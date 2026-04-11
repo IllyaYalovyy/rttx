@@ -610,22 +610,22 @@ impl Server {
                 let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
                     return None;
                 };
-                let writer = {
+                let (writer, session_label) = {
                     let s = server.lock().await;
                     let session = s.sessions.get(&session_id)?;
-                    if !session.panes.contains_key(&pane_id)
-                        || !session.client_has_write_access(client_id)
-                    {
+                    if !session.panes.contains_key(&pane_id) {
                         return None;
                     }
-                    s.pty_writers.get(&pane_id).cloned()
+                    if !session.client_has_write_access(client_id) {
+                        return Some(protocol::error(
+                            protocol::ERR_OWNERSHIP_CONFLICT,
+                            "runtime is currently owned by another client".into(),
+                        ));
+                    }
+                    (s.pty_writers.get(&pane_id).cloned(), s.session_label(session_id))
                 };
                 if let Some(writer) = writer {
                     let pane_short = short_id(pane_id);
-                    let session_label = {
-                        let s = server.lock().await;
-                        s.session_label(session_id)
-                    };
                     let mut w = writer.lock().await;
                     if let Err(e) = w.write_all(&req.data).await {
                         tracing::error!(
@@ -658,10 +658,14 @@ impl Server {
                 let writer = {
                     let s = server.lock().await;
                     let session = s.sessions.get(&session_id)?;
-                    if !session.panes.contains_key(&pane_id)
-                        || !session.client_has_write_access(client_id)
-                    {
+                    if !session.panes.contains_key(&pane_id) {
                         return None;
+                    }
+                    if !session.client_has_write_access(client_id) {
+                        return Some(protocol::error(
+                            protocol::ERR_OWNERSHIP_CONFLICT,
+                            "runtime is currently owned by another client".into(),
+                        ));
                     }
                     s.pty_writers.get(&pane_id).cloned()
                 };
