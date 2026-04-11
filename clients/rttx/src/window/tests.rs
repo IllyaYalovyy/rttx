@@ -3769,3 +3769,45 @@ fn close_session_closes_window_when_last_workspace() {
 
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// Regression test for #435: opening the workspace popover menu after
+/// closing a different workspace must not crash. The old popover was
+/// parented to a ListBoxRow that got destroyed when the workspace was
+/// closed, so the next `unparent()` call hit a SEGV.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn popover_menu_after_close_does_not_crash() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.popover-after-close").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let second = SessionState::new("Second".into());
+    let second_uuid = second.uuid.clone();
+    window.imp().state.borrow_mut().sessions.push(second.clone());
+    window.build_session(&second, false);
+
+    let first_uuid = window.imp().state.borrow().sessions[0].uuid.clone();
+
+    // Show the popover on the second workspace (stores it in workspace_popover).
+    let second_row = session_row_for_uuid(&window, &second_uuid);
+    window.show_workspace_popover_menu(&second_row, &second_uuid);
+    assert!(window.imp().workspace_popover.borrow().is_some());
+
+    // Close the second workspace — its sidebar row is destroyed.
+    window.close_session(&second_uuid);
+
+    // Show the popover on the first workspace — must not crash.
+    let first_row = session_row_for_uuid(&window, &first_uuid);
+    window.show_workspace_popover_menu(&first_row, &first_uuid);
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

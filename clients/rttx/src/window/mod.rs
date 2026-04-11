@@ -958,6 +958,13 @@ impl Window {
 
     fn remove_sidebar_row(&self, session_uuid: &str) {
         let imp = self.imp();
+        // Clear the stored popover — its parent (the ListBoxRow) is about
+        // to be destroyed, so a later unparent() would hit freed memory.
+        if let Some(old) = imp.workspace_popover.borrow_mut().take()
+            && old.parent().is_some()
+        {
+            old.unparent();
+        }
         let mut idx = 0;
         while let Some(r) = imp.sidebar_list.row_at_index(idx) {
             if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok())
