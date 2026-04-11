@@ -1088,4 +1088,33 @@ mod tests {
         assert!(label.ends_with(')'), "got: {label}");
         assert_eq!(label.len(), "(12345678)".len());
     }
+
+    #[tokio::test]
+    async fn input_to_missing_session_returns_none() {
+        let server = Arc::new(Mutex::new(Server::new(Box::new(StubOs))));
+        let client_id = Uuid::new_v4();
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                data: b"hello".to_vec(),
+            })),
+        };
+        assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn resize_missing_session_returns_none() {
+        let server = Arc::new(Mutex::new(Server::new(Box::new(StubOs))));
+        let client_id = Uuid::new_v4();
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+                session_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                cols: 80,
+                rows: 24,
+            })),
+        };
+        assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    }
 }

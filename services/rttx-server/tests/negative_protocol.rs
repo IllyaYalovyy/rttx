@@ -340,6 +340,52 @@ async fn input_to_nonexistent_pane_is_silently_dropped() {
     assert!(matches!(resp.msg, Some(proto::server_message::Msg::SessionList(_))));
 }
 
+// ── Fire-and-forget commands to nonexistent sessions ────────────
+
+/// Input and Resize targeting a session that does not exist must produce
+/// no response at all — they are fire-and-forget and the server must not
+/// pollute the push stream with error messages.
+#[tokio::test]
+async fn fire_and_forget_to_nonexistent_session_produces_no_response() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let fake_session = bogus_uuid();
+    let fake_pane = bogus_uuid();
+
+    // Send Input to a nonexistent session.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: fake_session.clone(),
+                pane_id: fake_pane.clone(),
+                data: b"hello".to_vec(),
+            })),
+        })
+        .await;
+
+    // Send Resize to a nonexistent session.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+                session_id: fake_session,
+                pane_id: fake_pane,
+                cols: 80,
+                rows: 24,
+            })),
+        })
+        .await;
+
+    // Neither command should produce any response.
+    let msgs = client.drain(Duration::from_millis(300)).await;
+    assert!(
+        msgs.iter().all(|m| !matches!(m.msg, Some(proto::server_message::Msg::Error(_)))),
+        "fire-and-forget commands to nonexistent session must not produce error responses"
+    );
+}
+
 // ── Helpers ─────────────────────────────────────────────────────
 
 fn expect_error(resp: &proto::ServerMessage) -> &proto::Error {
