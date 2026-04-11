@@ -350,6 +350,33 @@ cargo test -p rttx-server --lib
 cargo test -p rttx-server --tests
 ```
 
+### Logging
+
+Both the GUI and daemon write logs to files with daily rotation:
+
+| Component | Log directory | Default level |
+|---|---|---|
+| GUI (`rttx`) | `$XDG_CACHE_HOME/rttx/` | `rttx=info,warn` |
+| Daemon (`rttx-server`) | `$XDG_CACHE_HOME/rttx-server/` | `info` |
+
+Old log files are cleaned up automatically (3 days retained).
+
+View the daemon log directory:
+
+```bash
+rttx-server logs
+```
+
+Override the log level with `RUST_LOG`:
+
+```bash
+RUST_LOG=rttx=debug rttx                          # GUI with debug logging
+RUST_LOG=debug rttx-server start --foreground      # daemon with debug logging
+```
+
+Dev mode uses separate directories (`rttx-devel/`, `rttx-server-devel/`) so development logs do
+not mix with production logs. See `designs/RFC-017-logging.md` for design details.
+
 ### Meson install details
 
 Meson installs the client binary, desktop file, icons, and AppStream metadata. It does not install
