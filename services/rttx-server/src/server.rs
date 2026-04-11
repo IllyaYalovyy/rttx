@@ -24,6 +24,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use uuid::Uuid;
 
+/// Return the first 8 characters of a UUID for compact log output.
+#[must_use]
+pub fn short_id(id: Uuid) -> String {
+    id.to_string()[..8].to_string()
+}
+
 /// Shared mutable server state.
 pub struct Server {
     /// All active sessions.
@@ -72,6 +78,17 @@ impl Server {
         let _ = self.shutdown_tx.send(true);
     }
 
+    /// Human-readable label for a session: `"name" (short_id)`.
+    ///
+    /// Falls back to just the short ID when the session is not found.
+    #[must_use]
+    pub fn session_label(&self, session_id: Uuid) -> String {
+        self.sessions.get(&session_id).map_or_else(
+            || format!("({})", short_id(session_id)),
+            |session| format!("\"{}\" ({})", session.name, short_id(session_id)),
+        )
+    }
+
     /// Load persisted state and resurrect sessions.
     pub fn load_persisted_state(&mut self) {
         let state_path = default_state_path(&self.os.cache_dir());
@@ -99,37 +116,36 @@ impl Server {
     /// `Arc<Mutex<>>` so we can spawn PTY read loops.
     #[allow(clippy::significant_drop_tightening)]
     pub async fn reconstruct_sessions(server: &Arc<Mutex<Self>>) {
-        let panes_to_reconstruct: Vec<(Uuid, Uuid, Option<String>, u16, u16)> = {
+        let panes_to_reconstruct: Vec<(Uuid, Uuid, String, Option<String>, u16, u16)> = {
             let mut s = server.lock().await;
 
             for session in s.sessions.values_mut() {
+                let label = format!("\"{}\" ({})", session.name, short_id(session.id));
                 for pane in session.panes.values_mut() {
                     // Replay scrollback log into the pane screen.
                     if let Some(ref log_path) = pane.scrollback_log_path
                         && log_path.exists()
                     {
+                        let pane_short = short_id(pane.id);
                         match std::fs::read(log_path) {
                             Ok(data) => {
                                 let restart_safe = restart_safe_scrollback(&data);
                                 tracing::info!(
-                                    "Replaying {} bytes of scrollback for pane {}",
+                                    "Replaying {} bytes of scrollback for pane {pane_short} in session {label}",
                                     restart_safe.len(),
-                                    pane.id
                                 );
                                 pane.screen.feed(restart_safe);
                                 if restart_safe.len() != data.len()
                                     && let Err(e) = std::fs::write(log_path, restart_safe)
                                 {
                                     tracing::error!(
-                                        "Failed to rewrite restart-safe scrollback for pane {}: {e}",
-                                        pane.id
+                                        "Failed to rewrite restart-safe scrollback for pane {pane_short} in session {label}: {e}",
                                     );
                                 }
                             }
                             Err(e) => {
                                 tracing::error!(
-                                    "Failed to read scrollback log for pane {}: {e}",
-                                    pane.id
+                                    "Failed to read scrollback log for pane {pane_short} in session {label}: {e}",
                                 );
                             }
                         }
@@ -141,8 +157,9 @@ impl Server {
             s.sessions
                 .values()
                 .flat_map(|session| {
+                    let name = session.name.clone();
                     session.panes.values().map(move |pane| {
-                        (session.id, pane.id, pane.cwd.clone(), pane.cols, pane.rows)
+                        (session.id, pane.id, name.clone(), pane.cwd.clone(), pane.cols, pane.rows)
                     })
                 })
                 .collect()
@@ -154,7 +171,9 @@ impl Server {
 
         tracing::info!("Reconstructing {} panes", panes_to_reconstruct.len());
 
-        for (session_id, pane_id, cwd, cols, rows) in panes_to_reconstruct {
+        for (session_id, pane_id, session_name, cwd, cols, rows) in panes_to_reconstruct {
+            let session_label = format!("\"{}\" ({})", session_name, short_id(session_id));
+            let pane_short = short_id(pane_id);
             let pty_result = {
                 let s = server.lock().await;
                 let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
@@ -190,14 +209,17 @@ impl Server {
                         Arc::clone(server),
                         session_id,
                         pane_id,
+                        &session_name,
                         reader,
                         child,
                         kill_rx,
                     );
-                    tracing::info!("Reconstructed pane {pane_id} in session {session_id}");
+                    tracing::info!("Reconstructed pane {pane_short} in session {session_label}");
                 }
                 Err(e) => {
-                    tracing::error!("Failed to reconstruct pane {pane_id}: {e}");
+                    tracing::error!(
+                        "Failed to reconstruct pane {pane_short} in session {session_label}: {e}"
+                    );
                     let mut s = server.lock().await;
                     if let Some(session) = s.sessions.get_mut(&session_id) {
                         let _ = session.set_pane_exit_status(pane_id, Some(-1));
@@ -457,7 +479,7 @@ impl Server {
                 };
 
                 let pane_id = Uuid::new_v4();
-                let pty_result = {
+                let (pty_result, session_label) = {
                     let s = server.lock().await;
                     let Some(session) = s.sessions.get(&session_id) else {
                         return Some(protocol::error(
@@ -471,6 +493,7 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
+                    let label = s.session_label(session_id);
                     let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
                     if let Some(parent) = hist.parent() {
                         let _ = std::fs::create_dir_all(parent);
@@ -483,7 +506,7 @@ impl Server {
                     ];
                     let cwd = req.cwd;
                     let config = PaneSpawnConfig { command: vec![], cwd, env, cols: 80, rows: 24 };
-                    s.engine.spawn_pane(pane_id, &config)
+                    (s.engine.spawn_pane(pane_id, &config), label)
                 };
 
                 match pty_result {
@@ -491,7 +514,7 @@ impl Server {
                         let child_pid = pty.pid();
                         let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
-                        let revision = {
+                        let (revision, session_name) = {
                             let mut s = server.lock().await;
                             let Some(session) = s.sessions.get_mut(&session_id) else {
                                 let _ = child.start_kill();
@@ -504,15 +527,17 @@ impl Server {
                             pane.child_pid = child_pid;
                             session.add_pane(pane);
                             let revision = session.revision();
+                            let name = session.name.clone();
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
-                            revision
+                            (revision, name)
                         };
                         spawn_pty_read_loop(
                             Arc::clone(server),
                             session_id,
                             pane_id,
+                            &session_name,
                             reader,
                             child,
                             kill_rx,
@@ -520,7 +545,10 @@ impl Server {
                         Some(protocol::pane_created(session_id, pane_id, revision))
                     }
                     Err(e) => {
-                        tracing::error!("Failed to spawn PTY for pane {pane_id}: {e}");
+                        tracing::error!(
+                            "Failed to spawn PTY for pane {} in session {session_label}: {e}",
+                            short_id(pane_id)
+                        );
                         Some(protocol::error(
                             protocol::ERR_SPAWN_FAILED,
                             format!("failed to spawn pane: {e}"),
@@ -594,7 +622,7 @@ impl Server {
                         ));
                     }
                 };
-                let writer = {
+                let (writer, session_label) = {
                     let s = server.lock().await;
                     let Some(session) = s.sessions.get(&session_id) else {
                         return Some(protocol::error(
@@ -614,15 +642,20 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    s.pty_writers.get(&pane_id).cloned()
+                    (s.pty_writers.get(&pane_id).cloned(), s.session_label(session_id))
                 };
                 if let Some(writer) = writer {
+                    let pane_short = short_id(pane_id);
                     let mut w = writer.lock().await;
                     if let Err(e) = w.write_all(&req.data).await {
-                        tracing::error!("Failed to write to PTY {pane_id}: {e}");
+                        tracing::error!(
+                            "Failed to write to PTY {pane_short} in session {session_label}: {e}"
+                        );
                     }
                     if let Err(e) = w.flush().await {
-                        tracing::error!("Failed to flush PTY {pane_id}: {e}");
+                        tracing::error!(
+                            "Failed to flush PTY {pane_short} in session {session_label}: {e}"
+                        );
                     }
                 }
                 None
@@ -660,7 +693,7 @@ impl Server {
                     ));
                 };
 
-                let writer = {
+                let (writer, session_label) = {
                     let s = server.lock().await;
                     let Some(session) = s.sessions.get(&session_id) else {
                         return Some(protocol::error(
@@ -686,13 +719,16 @@ impl Server {
                             "pane is not running".into(),
                         ));
                     };
-                    Arc::clone(writer)
+                    (Arc::clone(writer), s.session_label(session_id))
                 };
 
                 {
                     let w = writer.lock().await;
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
-                        tracing::error!("Failed to resize PTY {pane_id}: {e}");
+                        tracing::error!(
+                            "Failed to resize PTY {} in session {session_label}: {e}",
+                            short_id(pane_id)
+                        );
                         return Some(protocol::error(
                             protocol::ERR_PANE_NOT_RUNNING,
                             format!("failed to resize pane: {e}"),
@@ -798,10 +834,13 @@ fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
     session_id: Uuid,
     pane_id: Uuid,
+    session_name: &str,
     mut reader: pty_process::OwnedReadPty,
     mut child: tokio::process::Child,
     mut kill_rx: oneshot::Receiver<()>,
 ) {
+    let session_label = format!("\"{}\" ({})", session_name, short_id(session_id));
+    let pane_short = short_id(pane_id);
     tokio::spawn(async move {
         let mut buf = [0u8; 4096];
         loop {
@@ -840,14 +879,14 @@ fn spawn_pty_read_loop(
                             }
                         }
                         Err(e) => {
-                            tracing::error!("PTY read error for pane {pane_id}: {e}");
+                            tracing::error!("PTY read error for pane {pane_short} in session {session_label}: {e}");
                             break;
                         }
                     }
                 }
                 _ = &mut kill_rx => {
                     let _ = child.start_kill();
-                    tracing::info!("PTY read loop cancelled for pane {pane_id}");
+                    tracing::info!("PTY read loop cancelled for pane {pane_short} in session {session_label}");
                     return;
                 }
             }
@@ -857,7 +896,9 @@ fn spawn_pty_read_loop(
         let status = match child.wait().await {
             Ok(s) => s.code().unwrap_or(-1),
             Err(e) => {
-                tracing::error!("Failed to wait on child for pane {pane_id}: {e}");
+                tracing::error!(
+                    "Failed to wait on child for pane {pane_short} in session {session_label}: {e}"
+                );
                 -1
             }
         };
@@ -873,7 +914,9 @@ fn spawn_pty_read_loop(
         s.pty_kill_senders.remove(&pane_id);
         drop(s);
 
-        tracing::info!("PTY exited for pane {pane_id}, status {status}");
+        tracing::info!(
+            "PTY exited for pane {pane_short} in session {session_label}, status {status}"
+        );
     });
 }
 
@@ -901,9 +944,13 @@ pub async fn serialization_loop(
         let session_ids: Vec<_> = s.sessions.keys().copied().collect();
         for session_id in session_ids {
             if let Some(session) = s.sessions.get_mut(&session_id) {
+                let label = format!("\"{}\" ({})", session.name, short_id(session_id));
                 for pane in session.panes.values_mut() {
                     if let Err(e) = pane.flush_scrollback(&cache_dir, session_id) {
-                        tracing::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
+                        tracing::error!(
+                            "Failed to flush scrollback for pane {} in session {label}: {e}",
+                            short_id(pane.id)
+                        );
                     }
                 }
             }
@@ -925,9 +972,13 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let cache_dir = s.os.cache_dir();
 
     for session in s.sessions.values_mut() {
+        let label = format!("\"{}\" ({})", session.name, short_id(session.id));
         for pane in session.panes.values_mut() {
             if let Err(e) = pane.flush_scrollback(&cache_dir, session.id) {
-                tracing::error!("Failed to flush scrollback for pane {}: {e}", pane.id);
+                tracing::error!(
+                    "Failed to flush scrollback for pane {} in session {label}: {e}",
+                    short_id(pane.id)
+                );
             }
         }
     }
@@ -970,9 +1021,7 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
                 let conn = result?;
                 let server = Arc::clone(&server);
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(server, conn).await {
-                        tracing::error!("Client error: {e}");
-                    }
+                    let _ = handle_client(server, conn).await;
                 });
             }
             _ = shutdown_rx.changed() => {
@@ -1006,7 +1055,8 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let client_id = Uuid::new_v4();
-    tracing::info!("Client {client_id} connected");
+    let client_short = short_id(client_id);
+    tracing::info!("Client {client_short} connected");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -1019,12 +1069,12 @@ where
             tokio::select! {
                 msg_result = conn.read_message() => {
                     let Some(msg) = msg_result? else {
-                        tracing::info!("Client {client_id} disconnected");
+                        tracing::info!("Client {client_short} disconnected");
                         break;
                     };
 
                     if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
-                        tracing::info!("Shutdown requested by client {client_id}");
+                        tracing::info!("Shutdown requested by client {client_short}");
                         let s = server.lock().await;
                         s.request_shutdown();
                         break;
@@ -1052,5 +1102,56 @@ where
         }
     }
 
+    if let Err(ref e) = result {
+        tracing::error!("Client {client_short} error: {e}");
+    }
+
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::os::OsInterface;
+    use std::path::PathBuf;
+
+    #[derive(Debug)]
+    struct StubOs;
+    impl OsInterface for StubOs {
+        fn runtime_dir(&self) -> PathBuf {
+            PathBuf::from("/tmp/test-runtime")
+        }
+        fn cache_dir(&self) -> PathBuf {
+            PathBuf::from("/tmp/test-cache")
+        }
+    }
+
+    #[test]
+    fn short_id_returns_first_eight_characters() {
+        let id = Uuid::parse_str("17f448df-95be-4d4e-b010-b5021b4e6eb5").unwrap();
+        assert_eq!(short_id(id), "17f448df");
+    }
+
+    #[test]
+    fn session_label_includes_name_and_short_id() {
+        let mut server = Server::new(Box::new(StubOs));
+        let session = Session::new("my-workspace".into());
+        let session_id = session.id;
+        server.sessions.insert(session_id, session);
+
+        let label = server.session_label(session_id);
+        assert!(label.starts_with("\"my-workspace\" ("), "got: {label}");
+        assert!(label.ends_with(')'), "got: {label}");
+        assert_eq!(label.len(), "\"my-workspace\" (12345678)".len());
+    }
+
+    #[test]
+    fn session_label_falls_back_for_unknown_session() {
+        let server = Server::new(Box::new(StubOs));
+        let unknown_id = Uuid::new_v4();
+        let label = server.session_label(unknown_id);
+        assert!(label.starts_with('('), "got: {label}");
+        assert!(label.ends_with(')'), "got: {label}");
+        assert_eq!(label.len(), "(12345678)".len());
+    }
 }
