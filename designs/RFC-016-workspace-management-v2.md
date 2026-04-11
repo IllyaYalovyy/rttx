@@ -238,6 +238,7 @@ Both are tag-based rather than single-host-bound.
 ```rust
 struct Place {
     uuid: String,
+    name: String,             // display name, auto-derived from last path component if empty
     path: String,
     host_tags: Vec<String>,   // empty = global
 }
@@ -302,61 +303,44 @@ The right sidebar becomes host-aware, but not host-blind.
 
 #### Default behavior
 
-- When the user switches workspaces, the sidebar host selector automatically follows the
-  active workspace host
+- The sidebar always auto-follows the active workspace host — no manual override
+- When the user switches workspaces, the host selector updates to match the new workspace
 - Places and commands shown in the host-specific section are those tagged with the selected
   host key
 - Items with no tags appear in the global section
 
-#### Manual override
+#### All Hosts view
 
-The user may manually change the host selector in the sidebar to inspect content for a
-different host without switching tabs.
-
-#### Selector population
-
-The sidebar host selector must not be derived only from the current saved host list.
-
-It is populated from:
-- host keys currently assigned to places or commands
-- plus the active workspace host, when needed for context
-
-This guarantees that orphaned content remains visible and manageable.
+An **All Hosts** entry in the host selector shows every place and command across all hosts,
+grouped by host key. This replaces the manual-override pattern and gives users a single view
+for cross-host inspection and management without creating split-brain confusion.
 
 #### Orphaned tags
 
 If a host record is deleted but items still reference that host key:
 
 - the tag remains intact
-- the selector still shows it
-- the UI renders it as missing/orphaned
+- orphaned items appear in the **All Hosts** view under a clearly marked orphaned section
+- the UI renders orphaned host keys as missing (e.g. strikethrough or dimmed label)
 - cleanup is explicit, not automatic
 
 Automatic cleanup on host deletion is worse UX because it silently removes information users
 may still need to inspect or retag later.
 
+#### Host deletion cleanup
+
+When a user deletes a host record that has tagged items, the UI presents an immediate cleanup
+dialog showing all affected places and commands with checkboxes. All items are pre-checked for
+cleanup. The user may uncheck any items they want to keep (they will appear as orphaned in the
+All Hosts view). This makes cleanup explicit and immediate without being deferred and forgotten.
+
 ### 8. Split pane behavior
 
-Split-pane creation should use the same explicit model as top-level creation, but it remains
-constrained to the current workspace.
-
-```
-┌──────────────────────────────┐
-│ Clone parent                │
-│ New shell                   │
-│ Open place: Home            │
-│ Open place: ~/pro/rttx      │
-└──────────────────────────────┘
-```
-
-#### Split chooser rules
-
-- **Clone parent**: same launch context and working directory as the source pane
-- **New shell**: new pane in the current workspace using the workspace's default launch mode
-- **Open place**: new pane in the current workspace at a host-compatible place
+Split always clones the parent pane — same launch context and working directory as the source
+pane. No chooser dialog, no extra clicks.
 
 Because a workspace is still a single tab bound to one endpoint/runtime policy, split never
-offers cross-host or cross-runtime actions.
+creates cross-host or cross-runtime panes.
 
 ### 9. Terminology
 
@@ -394,23 +378,23 @@ offers cross-host or cross-runtime actions.
 - [ ] Update commands to use host tags instead of single-host binding
 - [ ] Add built-in global places: `Home` and `Root`
 - [ ] Rework the right sidebar around search + host selector + tagged content
-- [ ] Preserve and surface orphaned tags instead of cleaning them automatically
-- [ ] Replace clone-only split with an explicit in-workspace split chooser
+- [ ] Add All Hosts view to sidebar for cross-host inspection
+- [ ] Preserve and surface orphaned tags in All Hosts view
+- [ ] Add host deletion cleanup dialog with per-item checkboxes
 - [ ] Remove tmux-related data model and UI paths
 - [ ] Remove template-related UI and data paths
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-- **Q1** — In the **New Workspace** dialog, do we want an explicit "Empty shell" row in addition
-  to `Home` and `Root`, or are those sufficient?
-- **Q2** — Should the host menus in the top bar show recent hosts first, or always keep a fixed
-  local-then-remote ordering?
-- **Q3** — Do we want aliases for places in v2, or is path-only presentation sufficient for the
-  first implementation?
-- **Q4** — Should host deletion offer an explicit cleanup dialog for affected tags immediately,
-  or should cleanup remain a later management action?
+- **Q1** — `Home` and `Root` are sufficient. No separate "Empty shell" row needed.
+- **Q2** — Fixed ordering: `Local` first, then remote hosts alphabetically. Predictable layout
+  over recency.
+- **Q3** — Display names for places are required from v1. Auto-derived from the last path
+  component when not explicitly set by the user.
+- **Q4** — Host deletion presents an immediate cleanup dialog with checkboxes for affected
+  items. All pre-checked for cleanup; user unchecks to keep. Explicit and immediate.
 
 ---
 
