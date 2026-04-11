@@ -32,6 +32,7 @@ mod imp {
         pub visual_bell: Cell<bool>,
         pub connected: Cell<bool>,
         pub accepts_input: Cell<bool>,
+        pub exited: Cell<bool>,
         pub input_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
@@ -58,6 +59,7 @@ mod imp {
                 visual_bell: Cell::default(),
                 connected: Cell::default(),
                 accepts_input: Cell::default(),
+                exited: Cell::default(),
                 input_key_controller: RefCell::default(),
                 vte: vte4::Terminal::new(),
                 terminal_scroller: gtk4::ScrolledWindow::new(),
@@ -479,12 +481,32 @@ impl PersistentPaneView {
         status: &ConnectionStatus,
         presentation: &ConnectionPresentation,
     ) {
+        self.imp().exited.set(false);
         self.imp()
             .connected
             .set(matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered));
         self.imp().status_label.set_label(&presentation.header_label);
         self.imp().status_label.set_tooltip_text(Some(&status.label()));
         self.imp().accepts_input.set(presentation.input_enabled);
+    }
+
+    /// Mark the remote process as exited and make the pane visibly non-interactive.
+    pub fn mark_exited(&self, status: i32) {
+        self.imp().connected.set(false);
+        self.imp().accepts_input.set(false);
+        let label = if status == 0 { "Exited".into() } else { format!("Exited {status}") };
+        self.imp().status_label.set_label(&label);
+        self.imp()
+            .status_label
+            .set_tooltip_text(Some(&format!("Process exited with status {status}")));
+        if !self.imp().exited.replace(true) {
+            let message = if status == 0 {
+                "\r\n[Process exited]\r\n".into()
+            } else {
+                format!("\r\n[Process exited with status {status}]\r\n")
+            };
+            self.imp().vte.feed(message.as_bytes());
+        }
     }
 
     /// Mark this pane as active (focused).
@@ -701,6 +723,11 @@ impl PersistentPaneView {
     }
 
     #[cfg(test)]
+    pub(crate) fn exited_for_test(&self) -> bool {
+        self.imp().exited.get()
+    }
+
+    #[cfg(test)]
     pub(crate) fn emit_input_key_for_test(
         &self,
         key: gtk4::gdk::Key,
@@ -779,6 +806,30 @@ mod tests {
 
         let recovered = present_connection_status(&ConnectionStatus::Recovered);
         pane.set_connection_presentation(&ConnectionStatus::Recovered, &recovered);
+        assert_eq!(pane.status_label_text_for_test(), "Connected");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn mark_exited_disables_input_and_reports_status() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+        assert!(pane.input_enabled_for_test());
+
+        pane.mark_exited(0);
+
+        assert!(pane.exited_for_test());
+        assert!(!pane.input_enabled_for_test());
+        assert_eq!(pane.status_label_text_for_test(), "Exited");
+
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        assert!(!pane.exited_for_test());
+        assert!(pane.input_enabled_for_test());
         assert_eq!(pane.status_label_text_for_test(), "Connected");
     }
 
@@ -923,6 +974,16 @@ mod tests {
                 false,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x16])
+        );
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::d,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+            ),
+            TerminalKeyAction::ForwardToPty(vec![0x04])
         );
         assert_eq!(
             terminal_key_action(

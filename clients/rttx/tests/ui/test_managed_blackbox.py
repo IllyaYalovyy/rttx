@@ -117,5 +117,41 @@ class TestManagedBlackBox(unittest.TestCase):
         )
 
 
+class TestManagedPaneExitBlackBox(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.fixture = AppFixture(
+            disable_shell_spawn=True, extra_env={"SHELL": "/bin/true"}
+        )
+        self.fixture.start_daemon()
+        self.fixture.start()
+
+    def tearDown(self) -> None:
+        self.fixture.stop()
+
+    def test_managed_pane_exit_is_visible_when_shell_exits(self) -> None:
+        """A daemon PaneExited event must leave a clear, non-hanging pane."""
+        button = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "New persistent workspace"
+        )
+        self.assertIsNotNone(button, "persistent workspace button not visible")
+        click(button)
+
+        close_pane = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
+        )
+        self.assertIsNotNone(close_pane, "managed workspace controls never appeared")
+
+        exited = self.fixture.wait_for_showing_name(
+            Atspi.Role.LABEL, "Exited", timeout=20.0
+        )
+        self.assertIsNotNone(exited, "managed pane never reported the exited process")
+        self.assertEqual(
+            len(self.fixture.wait_for_terminal_count(1, timeout=5.0)),
+            1,
+            "managed exited pane should remain visible for the user",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
