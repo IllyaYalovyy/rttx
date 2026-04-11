@@ -3699,3 +3699,73 @@ fn managed_pane_exit_marks_visible_pane_exited() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// Closing a workspace when multiple workspaces exist removes the target
+/// workspace and keeps the window open.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_session_removes_workspace_when_multiple_exist() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.close-multi-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Add a second session so we have two.
+    let second = SessionState::new("Second".into());
+    let second_uuid = second.uuid.clone();
+    window.imp().state.borrow_mut().sessions.push(second.clone());
+    window.build_session(&second, false);
+
+    assert_eq!(window.imp().state.borrow().sessions.len(), 2);
+
+    window.close_session(&second_uuid);
+
+    assert_eq!(
+        window.imp().state.borrow().sessions.len(),
+        1,
+        "closing one of two workspaces should remove it"
+    );
+    assert!(
+        !window.imp().state.borrow().sessions.iter().any(|s| s.uuid == second_uuid),
+        "the closed workspace should no longer be in state"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+/// Closing the last workspace should close the window instead of silently
+/// doing nothing. Regression test for #414.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_session_closes_window_when_last_workspace() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.close-last-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_uuid = window.imp().state.borrow().sessions[0].uuid.clone();
+
+    assert_eq!(window.imp().state.borrow().sessions.len(), 1);
+
+    // Before the fix, this silently returned. Now it should close the window.
+    window.close_session(&session_uuid);
+    pump_events(50);
+
+    // GtkWindow.close() triggers the close-request signal and eventually
+    // hides the window. We verify the window is no longer visible.
+    assert!(!window.is_visible(), "closing the last workspace should close the window");
+
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

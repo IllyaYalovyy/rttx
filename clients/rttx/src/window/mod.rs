@@ -867,12 +867,27 @@ impl Window {
         self.renumber_session_rows();
     }
 
-    fn close_session(&self, session_uuid: &str) {
+    pub(super) fn close_session(&self, session_uuid: &str) {
         let imp = self.imp();
 
         let (terminal_uuids, new_index, managed_runtime) = {
             let mut state = imp.state.borrow_mut();
             if state.sessions.len() <= 1 {
+                let session = state.sessions.iter().find(|s| s.uuid == session_uuid);
+                let managed_runtime = session.and_then(|s| {
+                    s.uses_managed_runtime()
+                        .then(|| (s.runtime.endpoint.clone(), s.runtime.runtime_id.clone()))
+                });
+                drop(state);
+                if let Some((endpoint, runtime_id)) = managed_runtime
+                    && let Some(manager) = imp.connection_manager.borrow().as_ref()
+                {
+                    if let Some(ref runtime_id) = runtime_id {
+                        manager.terminate_runtime(session_uuid, &endpoint, runtime_id);
+                    }
+                    manager.forget_workspace(&endpoint, session_uuid);
+                }
+                self.close();
                 return;
             }
             let Some(pos) = state.sessions.iter().position(|s| s.uuid == session_uuid) else {
