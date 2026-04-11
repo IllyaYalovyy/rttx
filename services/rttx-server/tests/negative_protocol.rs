@@ -181,7 +181,7 @@ async fn close_pane_with_nonexistent_pane_returns_error() {
 }
 
 #[tokio::test]
-async fn resize_nonexistent_pane_returns_error() {
+async fn resize_nonexistent_pane_is_silently_dropped() {
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, _handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&socket_path).await;
@@ -200,9 +200,21 @@ async fn resize_nonexistent_pane_returns_error() {
     };
     client.send(&msg).await;
 
+    // Resize to a nonexistent pane must be silently dropped — no error
+    // response — because the client treats Resize as fire-and-forget.
+    let msgs = client.drain(Duration::from_millis(200)).await;
+    assert!(
+        msgs.iter().all(|m| !matches!(m.msg, Some(proto::server_message::Msg::Error(_)))),
+        "resize to nonexistent pane must not produce an error response"
+    );
+
+    // Server must remain functional.
+    let list = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+    };
+    client.send(&list).await;
     let resp = client.recv_or_timeout().await;
-    let err = expect_error(&resp);
-    assert!(err.code == 6 || err.code == 7); // ERR_PANE_NOT_FOUND or ERR_PANE_NOT_RUNNING
+    assert!(matches!(resp.msg, Some(proto::server_message::Msg::SessionList(_))));
 }
 
 // ── Duplicate and out-of-order mutations ────────────────────────
@@ -293,7 +305,7 @@ async fn wrong_protocol_version_returns_version_mismatch() {
 // ── Input to nonexistent pane is silently dropped ───────────────
 
 #[tokio::test]
-async fn input_to_nonexistent_pane_does_not_crash() {
+async fn input_to_nonexistent_pane_is_silently_dropped() {
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, _handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&socket_path).await;
@@ -311,11 +323,15 @@ async fn input_to_nonexistent_pane_does_not_crash() {
     };
     client.send(&msg).await;
 
-    // Input to a nonexistent pane may return an error or be silently dropped.
-    // Either way, the server must remain functional.
-    // Drain any error response, then verify the server is still alive.
-    client.drain(Duration::from_millis(200)).await;
+    // Input to a nonexistent pane must be silently dropped — no error
+    // response — because the client treats Input as fire-and-forget.
+    let msgs = client.drain(Duration::from_millis(200)).await;
+    assert!(
+        msgs.iter().all(|m| !matches!(m.msg, Some(proto::server_message::Msg::Error(_)))),
+        "input to nonexistent pane must not produce an error response"
+    );
 
+    // Server must remain functional.
     let list = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
     };

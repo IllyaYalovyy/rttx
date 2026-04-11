@@ -596,7 +596,7 @@ impl Window {
         };
 
         if let Msg::Error(error) = inner {
-            log::error!("Daemon error: {} (code {})", error.message, error.code);
+            log::warn!("Daemon error: {} (code {})", error.message, error.code);
             return;
         }
 
