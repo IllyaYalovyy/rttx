@@ -95,6 +95,11 @@ impl Window {
     }
 
     pub(super) fn show_workspace_popover_menu(&self, row: &SessionRow, session_uuid: &str) {
+        // Unparent any previous popover so it doesn't leak.
+        if let Some(old) = self.imp().workspace_popover.borrow_mut().take() {
+            old.unparent();
+        }
+
         let items = {
             let state = self.imp().state.borrow();
             let Some(session) = state.sessions.iter().find(|s| s.uuid == session_uuid) else {
@@ -185,9 +190,7 @@ impl Window {
         });
         self.add_action(&close_action);
 
-        popover.connect_closed(|popover| {
-            popover.unparent();
-        });
+        self.imp().workspace_popover.replace(Some(popover.clone()));
         popover.popup();
     }
 
