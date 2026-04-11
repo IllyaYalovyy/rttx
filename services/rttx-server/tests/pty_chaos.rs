@@ -125,7 +125,7 @@ async fn close_pane_during_output_burst() {
 // ── Resize after pane exit ──────────────────────────────────────
 
 #[tokio::test]
-async fn resize_after_pane_exit_returns_error() {
+async fn resize_after_pane_exit_is_silently_dropped() {
     let tmp = tempfile::tempdir().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -137,11 +137,11 @@ async fn resize_after_pane_exit_returns_error() {
     send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
     wait_for_pane_exited(&mut client, &pane_id).await;
 
-    // Resize the dead pane — should return an error, not panic.
+    // Resize the dead pane — must be silently dropped, not panic or error.
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                session_id,
+                session_id: session_id.clone(),
                 pane_id,
                 cols: 120,
                 rows: 40,
@@ -149,11 +149,15 @@ async fn resize_after_pane_exit_returns_error() {
         })
         .await;
 
-    let resp = client.recv_or_timeout().await;
+    let msgs = client.drain(Duration::from_millis(200)).await;
     assert!(
-        matches!(resp.msg, Some(proto::server_message::Msg::Error(_))),
-        "resize of exited pane must return error, got {resp:?}"
+        msgs.iter().all(|m| !matches!(m.msg, Some(proto::server_message::Msg::Error(_)))),
+        "resize of exited pane must not produce an error response"
     );
+
+    // Server must remain functional.
+    let sessions = list_sessions(&mut client).await;
+    assert_eq!(sessions.len(), 1);
 }
 
 // ── Title change interleaved with output ────────────────────────

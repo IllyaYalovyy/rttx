@@ -604,37 +604,17 @@ impl Server {
             }
 
             proto::client_message::Msg::Input(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Some(protocol::error(
-                            protocol::ERR_INVALID_PARAMETER,
-                            e.to_string(),
-                        ));
-                    }
+                let Ok(session_id) = bytes_to_uuid(&req.session_id) else {
+                    return None;
                 };
-                let pane_id = match bytes_to_uuid(&req.pane_id) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Some(protocol::error(
-                            protocol::ERR_INVALID_PARAMETER,
-                            e.to_string(),
-                        ));
-                    }
+                let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
+                    return None;
                 };
                 let (writer, session_label) = {
                     let s = server.lock().await;
-                    let Some(session) = s.sessions.get(&session_id) else {
-                        return Some(protocol::error(
-                            protocol::ERR_SESSION_NOT_FOUND,
-                            "session not found".into(),
-                        ));
-                    };
+                    let session = s.sessions.get(&session_id)?;
                     if !session.panes.contains_key(&pane_id) {
-                        return Some(protocol::error(
-                            protocol::ERR_PANE_NOT_FOUND,
-                            "pane not found".into(),
-                        ));
+                        return None;
                     }
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
@@ -662,50 +642,24 @@ impl Server {
             }
 
             proto::client_message::Msg::Resize(req) => {
-                let pane_id = match bytes_to_uuid(&req.pane_id) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Some(protocol::error(
-                            protocol::ERR_INVALID_PARAMETER,
-                            e.to_string(),
-                        ));
-                    }
+                let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
+                    return None;
                 };
-                let session_id = match bytes_to_uuid(&req.session_id) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Some(protocol::error(
-                            protocol::ERR_INVALID_PARAMETER,
-                            e.to_string(),
-                        ));
-                    }
+                let Ok(session_id) = bytes_to_uuid(&req.session_id) else {
+                    return None;
                 };
                 let Ok(cols) = u16::try_from(req.cols) else {
-                    return Some(protocol::error(
-                        protocol::ERR_INVALID_PARAMETER,
-                        "cols out of range".into(),
-                    ));
+                    return None;
                 };
                 let Ok(rows) = u16::try_from(req.rows) else {
-                    return Some(protocol::error(
-                        protocol::ERR_INVALID_PARAMETER,
-                        "rows out of range".into(),
-                    ));
+                    return None;
                 };
 
-                let (writer, session_label) = {
+                let writer = {
                     let s = server.lock().await;
-                    let Some(session) = s.sessions.get(&session_id) else {
-                        return Some(protocol::error(
-                            protocol::ERR_SESSION_NOT_FOUND,
-                            "session not found".into(),
-                        ));
-                    };
+                    let session = s.sessions.get(&session_id)?;
                     if !session.panes.contains_key(&pane_id) {
-                        return Some(protocol::error(
-                            protocol::ERR_PANE_NOT_FOUND,
-                            "pane not found".into(),
-                        ));
+                        return None;
                     }
                     if !session.client_has_write_access(client_id) {
                         return Some(protocol::error(
@@ -713,44 +667,28 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    let Some(writer) = s.pty_writers.get(&pane_id) else {
-                        return Some(protocol::error(
-                            protocol::ERR_PANE_NOT_RUNNING,
-                            "pane is not running".into(),
-                        ));
-                    };
-                    (Arc::clone(writer), s.session_label(session_id))
+                    s.pty_writers.get(&pane_id).cloned()
                 };
+
+                let writer = writer?;
 
                 {
                     let w = writer.lock().await;
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
+                        let s = server.lock().await;
                         tracing::error!(
-                            "Failed to resize PTY {} in session {session_label}: {e}",
-                            short_id(pane_id)
+                            "Failed to resize PTY {} in session {}: {e}",
+                            short_id(pane_id),
+                            s.session_label(session_id),
                         );
-                        return Some(protocol::error(
-                            protocol::ERR_PANE_NOT_RUNNING,
-                            format!("failed to resize pane: {e}"),
-                        ));
+                        return None;
                     }
                 }
 
                 let revision = {
                     let mut s = server.lock().await;
-                    let Some(session) = s.sessions.get_mut(&session_id) else {
-                        return Some(protocol::error(
-                            protocol::ERR_SESSION_NOT_FOUND,
-                            "session not found".into(),
-                        ));
-                    };
-                    let Some(revision) = session.resize_pane(pane_id, cols, rows) else {
-                        return Some(protocol::error(
-                            protocol::ERR_PANE_NOT_FOUND,
-                            "pane not found".into(),
-                        ));
-                    };
-                    revision
+                    let session = s.sessions.get_mut(&session_id)?;
+                    session.resize_pane(pane_id, cols, rows)?
                 };
 
                 Some(protocol::pane_resized(session_id, pane_id, cols, rows, revision))
@@ -1153,5 +1091,34 @@ mod tests {
         assert!(label.starts_with('('), "got: {label}");
         assert!(label.ends_with(')'), "got: {label}");
         assert_eq!(label.len(), "(12345678)".len());
+    }
+
+    #[tokio::test]
+    async fn input_to_missing_session_returns_none() {
+        let server = Arc::new(Mutex::new(Server::new(Box::new(StubOs))));
+        let client_id = Uuid::new_v4();
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                session_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                data: b"hello".to_vec(),
+            })),
+        };
+        assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn resize_missing_session_returns_none() {
+        let server = Arc::new(Mutex::new(Server::new(Box::new(StubOs))));
+        let client_id = Uuid::new_v4();
+        let msg = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+                session_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+                cols: 80,
+                rows: 24,
+            })),
+        };
+        assert!(Server::handle_message(&server, client_id, msg).await.is_none());
     }
 }
