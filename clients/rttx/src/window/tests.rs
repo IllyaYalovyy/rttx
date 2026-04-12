@@ -3811,3 +3811,135 @@ fn popover_menu_after_close_does_not_crash() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+fn has_controller<T: IsA<glib::Object>>(widget: &impl IsA<gtk4::Widget>) -> bool {
+    let controllers = widget.observe_controllers();
+    for index in 0..controllers.n_items() {
+        if let Some(controller) = controllers.item(index)
+            && controller.downcast::<T>().is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_pane_has_drag_source_on_header() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.managed-drag-source-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session(
+        "workspace-drag",
+        "Drag Workspace",
+        LayoutNode::new_terminal_with_uuid("drag-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get("drag-pane")
+        .cloned()
+        .expect("managed pane should be present");
+
+    assert!(
+        has_controller::<gtk4::DragSource>(pane.header()),
+        "managed pane header should have a DragSource controller"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_pane_has_drop_target() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.managed-drop-target-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session(
+        "workspace-drop",
+        "Drop Workspace",
+        LayoutNode::new_terminal_with_uuid("drop-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get("drop-pane")
+        .cloned()
+        .expect("managed pane should be present");
+
+    assert!(
+        has_controller::<gtk4::DropTarget>(&pane),
+        "managed pane should have a DropTarget controller"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn swap_terminals_works_for_managed_panes() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.managed-swap-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let layout = LayoutNode::Split {
+        orientation: crate::session::layout::SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::new_terminal_with_uuid("pane-a")),
+        second: Box::new(LayoutNode::new_terminal_with_uuid("pane-b")),
+    };
+    let session_state =
+        crate::test_helpers::managed_session("workspace-swap", "Swap Workspace", layout);
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    window.swap_terminals("pane-a", "pane-b");
+
+    let state = window.imp().state.borrow();
+    let session =
+        state.sessions.iter().find(|s| s.uuid == "workspace-swap").expect("session should exist");
+    assert_eq!(
+        session.layout.terminal_uuids(),
+        vec!["pane-b", "pane-a"],
+        "swap should exchange pane positions in managed workspace"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
