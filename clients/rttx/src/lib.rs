@@ -4,6 +4,7 @@ pub mod color_scheme;
 pub mod commands;
 pub mod commands_window;
 pub mod config;
+pub mod connect_existing_dialog;
 pub mod daemon;
 pub mod daemon_bridge;
 pub mod form_dialog;

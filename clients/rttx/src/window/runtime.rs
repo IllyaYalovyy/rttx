@@ -56,8 +56,7 @@ impl Window {
     }
 
     pub(super) fn show_browse_remote_runtimes_dialog(&self) {
-        let dialog =
-            adw::Dialog::builder().title("Attach to Remote Runtime").content_width(440).build();
+        let dialog = adw::Dialog::builder().title("Connect to Existing").content_width(440).build();
         let header = adw::HeaderBar::new();
         let connect_button = gtk4::Button::with_label("Connect");
         connect_button.add_css_class("suggested-action");
@@ -68,7 +67,6 @@ impl Window {
         let status_label = gtk4::Label::new(None);
         status_label.set_xalign(0.0);
         status_label.add_css_class("dim-label");
-        status_label.set_text("Existing runtimes on the host will appear in the sidebar.");
 
         let group = adw::PreferencesGroup::new();
         group.add(&host_row);
@@ -89,27 +87,81 @@ impl Window {
         let dialog_ref = dialog.clone();
         let win = self.clone();
         connect_button.connect_clicked(move |_| {
-            let host = host_row.text().trim().to_string();
-            if host.is_empty() {
+            let host_text = host_row.text().trim().to_string();
+            if host_text.is_empty() {
                 status_label.set_text("SSH host is required");
                 return;
             }
-            win.browse_remote_runtimes(&host);
             dialog_ref.close();
+            let host = crate::host::Host::remote(&host_text);
+            win.request_connect_existing(&host);
         });
 
         dialog.present(Some(self));
     }
 
-    fn browse_remote_runtimes(&self, host: &str) {
+    /// Initiate the Connect to Existing flow for a local host.
+    pub(super) fn connect_existing_local(&self) {
+        self.request_connect_existing(&crate::host::Host::local());
+    }
+
+    /// Request session inventory for a host and show the Connect to Existing
+    /// dialog when the response arrives.
+    fn request_connect_existing(&self, host: &crate::host::Host) {
         if !self.ensure_connection_manager() {
             return;
         }
-        let endpoint = RuntimeEndpoint::Remote { host: host.into() };
+        let endpoint = if host.is_local() {
+            RuntimeEndpoint::Local
+        } else {
+            RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
+        };
+        self.imp().pending_connect_existing.replace(Some(host.clone()));
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
             manager.refresh_inventory(&endpoint);
         }
-        self.show_toast(&format!("Connecting to {host}…"));
+    }
+
+    /// Return runtime IDs already attached by this client for a given host.
+    pub(crate) fn open_runtime_ids_for_endpoint(&self, host: &crate::host::Host) -> Vec<String> {
+        let endpoint = if host.is_local() {
+            RuntimeEndpoint::Local
+        } else {
+            RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
+        };
+        let state = self.imp().state.borrow();
+        state
+            .sessions
+            .iter()
+            .filter(|s| s.uses_managed_runtime() && s.runtime.endpoint == endpoint)
+            .filter_map(|s| s.runtime.runtime_id.clone())
+            .collect()
+    }
+
+    /// Attach to an existing runtime on a host by creating a new workspace
+    /// bound to that runtime ID.
+    pub(crate) fn attach_to_existing_runtime(&self, host: &crate::host::Host, runtime_id: &str) {
+        let imp = self.imp();
+        let count = imp.state.borrow().sessions.len() + 1;
+        let name = format!("Workspace {count}");
+
+        let mut session_state = if host.is_local() {
+            SessionState::new_managed_local(name, WorkspacePolicy::Persistent, None)
+        } else {
+            let ssh_target = host.ssh_target.as_deref().unwrap_or(&host.key);
+            SessionState::new_managed_remote(name, ssh_target, WorkspacePolicy::Persistent, None)
+        };
+        session_state.runtime.runtime_id = Some(runtime_id.to_string());
+        session_state.color = self.next_session_color();
+        imp.state.borrow_mut().sessions.push(session_state.clone());
+        self.build_session(&session_state, false);
+        self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
+        self.connect_managed_workspace(&session_state);
+
+        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = imp.sidebar_list.row_at_index(index) {
+            imp.sidebar_list.select_row(Some(&row));
+        }
     }
 
     /// Create a new remote managed workspace at a specific path.
@@ -373,6 +425,31 @@ impl Window {
                 log::warn!("Workspace {workspace_id} runtime error: {detail}");
                 if !workspace_id.starts_with("inventory:") {
                     self.show_toast(&detail);
+                }
+            }
+            EndpointEvent::InventoryLoaded { endpoint, sessions }
+                if self.imp().pending_connect_existing.borrow().is_some() =>
+            {
+                let host = self.imp().pending_connect_existing.take().unwrap();
+                let expected_endpoint = if host.is_local() {
+                    RuntimeEndpoint::Local
+                } else {
+                    RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
+                };
+                if endpoint == expected_endpoint {
+                    crate::connect_existing_dialog::show(self, &host, &sessions);
+                } else {
+                    // Wrong endpoint — put the pending request back and
+                    // let the event go through normal reconciliation.
+                    self.imp().pending_connect_existing.replace(Some(host));
+                    let transition = {
+                        let mut state = self.imp().state.borrow_mut();
+                        state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+                            endpoint,
+                            sessions,
+                        })
+                    };
+                    self.apply_endpoint_event_transition(&transition);
                 }
             }
             other => {
