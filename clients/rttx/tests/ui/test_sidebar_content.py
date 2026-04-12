@@ -32,7 +32,20 @@ FORBIDDEN_SUBTITLE_PATTERNS = [
 
 
 def get_sidebar_rows(app: Atspi.Accessible) -> list[Atspi.Accessible]:
-    """Return all LIST_ITEM nodes (sidebar workspace rows)."""
+    """Return LIST_ITEM nodes from the workspace sidebar only.
+
+    Scopes to the list labeled 'Workspaces' to avoid picking up items
+    from the Places or Commands lists in the utility sidebar.
+    """
+    lists = find_all_by_role(app, Atspi.Role.LIST)
+    for lst in lists:
+        try:
+            name = lst.get_name() or ""
+            if name == "Workspaces":
+                return find_all_by_role(lst, Atspi.Role.LIST_ITEM)
+        except Exception:  # noqa: BLE001
+            continue
+    # Fallback: return all LIST_ITEM nodes if the labeled list is not found
     return find_all_by_role(app, Atspi.Role.LIST_ITEM)
 
 
