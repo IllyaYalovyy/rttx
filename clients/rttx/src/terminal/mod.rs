@@ -639,6 +639,29 @@ mod tests {
             Some(b"\x1bOP" as &[u8])
         );
     }
+
+    /// Managed backend must intercept all printable and control keys so VTE's
+    /// `commit` signal only fires for mouse events. Regression for #442.
+    #[test]
+    fn managed_backend_intercepts_all_typeable_keys() {
+        let keys_and_mods: &[(gtk4::gdk::Key, gtk4::gdk::ModifierType)] = &[
+            (gtk4::gdk::Key::a, gtk4::gdk::ModifierType::empty()),
+            (gtk4::gdk::Key::Return, gtk4::gdk::ModifierType::empty()),
+            (gtk4::gdk::Key::space, gtk4::gdk::ModifierType::empty()),
+            (gtk4::gdk::Key::Up, gtk4::gdk::ModifierType::empty()),
+            (gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK),
+            (gtk4::gdk::Key::x, gtk4::gdk::ModifierType::ALT_MASK),
+            (gtk4::gdk::Key::F5, gtk4::gdk::ModifierType::empty()),
+        ];
+        for (key, mods) in keys_and_mods {
+            let action =
+                terminal_key_action(TerminalInputBackend::Managed, *key, *mods, false, false);
+            assert!(
+                matches!(action, TerminalKeyAction::ForwardToPty(_)),
+                "managed backend must intercept {key:?}+{mods:?}, got {action:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
