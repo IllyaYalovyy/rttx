@@ -109,6 +109,40 @@ def find_showing_by_role_and_name(
     return None
 
 
+def find_showing_by_name(
+    root: Atspi.Accessible,
+    name: str,
+    roles: list[Atspi.Role] | None = None,
+) -> Atspi.Accessible | None:
+    """Return the first visible node matching *name* across *roles*.
+
+    If *roles* is ``None``, searches PUSH_BUTTON, MENU_ITEM, and LABEL.
+    """
+    if roles is None:
+        roles = [Atspi.Role.PUSH_BUTTON, Atspi.Role.MENU_ITEM, Atspi.Role.LABEL]
+    for role in roles:
+        found = find_showing_by_role_and_name(root, role, name)
+        if found is not None:
+            return found
+    return None
+
+
+def wait_for_showing_by_name(
+    root: Atspi.Accessible,
+    name: str,
+    roles: list[Atspi.Role] | None = None,
+    timeout: float = 10.0,
+) -> Atspi.Accessible | None:
+    """Poll until a visible node with *name* appears across *roles*."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = find_showing_by_name(root, name, roles)
+        if found is not None:
+            return found
+        time.sleep(0.2)
+    return find_showing_by_name(root, name, roles)
+
+
 def find_app_by_pid(pid: int, timeout: float = 10.0) -> Atspi.Accessible | None:
     """Poll the AT-SPI desktop until the application with *pid* appears."""
     deadline = time.monotonic() + timeout
@@ -476,6 +510,12 @@ class AppFixture:
     def showing_terminals(self) -> list:
         """Return all visible TERMINAL-role nodes currently in the tree."""
         return [node for node in self.terminals() if is_showing(node)]
+
+    def wait_for_showing_by_name(
+        self, name: str, roles: list | None = None, timeout: float = 10.0
+    ) -> Atspi.Accessible | None:
+        """Wait until a visible node with *name* appears across *roles*."""
+        return wait_for_showing_by_name(self.atspi_app, name, roles, timeout=timeout)
 
     def window(self) -> Atspi.Accessible | None:
         """Return the first top-level window node."""

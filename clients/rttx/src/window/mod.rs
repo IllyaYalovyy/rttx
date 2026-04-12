@@ -65,7 +65,9 @@ mod imp {
         pub command_scroll: gtk4::ScrolledWindow,
         pub command_empty: adw::StatusPage,
         pub toast_overlay: adw::ToastOverlay,
-        pub add_session_button: gtk4::Button,
+        pub new_button: gtk4::MenuButton,
+        pub connect_button: gtk4::MenuButton,
+        pub new_direct_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
@@ -101,9 +103,27 @@ mod imp {
             toggle_sidebar.set_active(true);
             header.pack_start(&toggle_sidebar);
 
-            self.add_session_button.set_icon_name("list-add-symbolic");
-            self.add_session_button.set_tooltip_text(Some("New persistent workspace"));
-            header.pack_start(&self.add_session_button);
+            self.new_button.set_label("New");
+            self.new_button.set_tooltip_text(Some("New workspace"));
+            self.new_button.set_icon_name("list-add-symbolic");
+            self.new_button.add_css_class("flat");
+            self.new_button.update_property(&[gtk4::accessible::Property::Label("New workspace")]);
+            header.pack_start(&self.new_button);
+
+            self.connect_button.set_label("Connect");
+            self.connect_button.set_tooltip_text(Some("Connect to existing workspace"));
+            self.connect_button.set_icon_name("network-server-symbolic");
+            self.connect_button.add_css_class("flat");
+            self.connect_button
+                .update_property(&[gtk4::accessible::Property::Label("Connect to existing")]);
+            header.pack_start(&self.connect_button);
+
+            self.new_direct_button.set_label("Direct");
+            self.new_direct_button.set_tooltip_text(Some("New direct workspace"));
+            self.new_direct_button.add_css_class("flat");
+            self.new_direct_button
+                .update_property(&[gtk4::accessible::Property::Label("New direct workspace")]);
+            header.pack_start(&self.new_direct_button);
 
             if let Some(label) = config::badge_label() {
                 self.devel_badge.set_label(label);
@@ -125,11 +145,6 @@ mod imp {
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
-            menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
-            menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
-            menu.append(Some("New Remote Workspace"), Some("win.new-remote-workspace"));
-            menu.append(Some("Connect to Existing (Local)"), Some("win.connect-existing-local"));
-            menu.append(Some("Connect to Existing (Remote)"), Some("win.browse-remote-runtimes"));
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -491,9 +506,11 @@ impl Window {
 
     fn setup_signals(&self) {
         let win = self.clone();
-        self.imp().add_session_button.connect_clicked(move |_| {
-            win.add_session();
+        self.imp().new_direct_button.connect_clicked(move |_| {
+            win.add_direct_session();
         });
+
+        self.setup_host_menu_buttons();
 
         let win = self.clone();
         self.imp().sidebar_list.connect_row_selected(move |_, row| {
@@ -550,6 +567,79 @@ impl Window {
         self.refresh_place_sidebar();
         self.refresh_bookmark_sidebar();
         self.refresh_command_sidebar();
+    }
+
+    fn setup_host_menu_buttons(&self) {
+        self.refresh_host_menus();
+
+        let win = self.clone();
+        self.imp().new_button.connect_notify_local(Some("active"), move |_, _| {
+            win.refresh_host_menus();
+        });
+
+        let win = self.clone();
+        self.imp().connect_button.connect_notify_local(Some("active"), move |_, _| {
+            win.refresh_host_menus();
+        });
+    }
+
+    fn refresh_host_menus(&self) {
+        let mut hosts: Vec<host::Host> = vec![host::Host::local()];
+        let saved = host::load();
+        let mut remotes: Vec<host::Host> =
+            saved.into_iter().filter(host::Host::is_remote).collect();
+        remotes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        hosts.extend(remotes);
+
+        let new_menu = gtk4::gio::Menu::new();
+        let connect_menu = gtk4::gio::Menu::new();
+
+        for host in &hosts {
+            let new_item = gtk4::gio::MenuItem::new(Some(&host.name), None);
+            new_item.set_action_and_target_value(
+                Some("win.new-for-host"),
+                Some(&host.key.to_variant()),
+            );
+            new_menu.append_item(&new_item);
+
+            let connect_item = gtk4::gio::MenuItem::new(Some(&host.name), None);
+            connect_item.set_action_and_target_value(
+                Some("win.connect-for-host"),
+                Some(&host.key.to_variant()),
+            );
+            connect_menu.append_item(&connect_item);
+        }
+
+        self.imp().new_button.set_menu_model(Some(&new_menu));
+        self.imp().connect_button.set_menu_model(Some(&connect_menu));
+
+        let new_action =
+            gtk4::gio::SimpleAction::new("new-for-host", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        new_action.connect_activate(move |_, param| {
+            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            win.new_workspace_for_host(&key);
+        });
+        self.add_action(&new_action);
+
+        let connect_action =
+            gtk4::gio::SimpleAction::new("connect-for-host", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        connect_action.connect_activate(move |_, param| {
+            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            win.connect_for_host(&key);
+        });
+        self.add_action(&connect_action);
+    }
+
+    fn new_workspace_for_host(&self, host_key: &str) {
+        let host = host::resolve(host_key, &host::load());
+        crate::new_workspace_dialog::show(self, &host);
+    }
+
+    fn connect_for_host(&self, host_key: &str) {
+        let host = host::resolve(host_key, &host::load());
+        self.request_connect_existing(&host);
     }
 
     fn append_session_row(&self, session_state: &SessionState) {
