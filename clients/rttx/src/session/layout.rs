@@ -45,6 +45,16 @@ pub enum SplitOrientation {
     Vertical,
 }
 
+impl SplitOrientation {
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::Horizontal => Self::Vertical,
+            Self::Vertical => Self::Horizontal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Left,
@@ -374,6 +384,24 @@ impl LayoutNode {
                 first.set_terminal_custom_title(target_uuid, custom_title.clone())
                     || second.set_terminal_custom_title(target_uuid, custom_title)
             }
+        }
+    }
+
+    /// Return a new tree with every split orientation toggled.
+    ///
+    /// Horizontal splits become vertical and vice versa. Terminal nodes and
+    /// split ratios are preserved. Useful when switching between landscape
+    /// and portrait monitor orientations.
+    #[must_use]
+    pub fn rotated(&self) -> Self {
+        match self {
+            Self::Terminal { .. } => self.clone(),
+            Self::Split { orientation, ratio, first, second } => Self::Split {
+                orientation: orientation.toggled(),
+                ratio: *ratio,
+                first: Box::new(first.rotated()),
+                second: Box::new(second.rotated()),
+            },
         }
     }
 
@@ -739,6 +767,70 @@ mod tests {
             panic!("Expected Split");
         }
     }
+
+    // ── Rotation tests ───────────────────────────────────────────
+
+    #[test]
+    fn rotate_terminal_is_identity() {
+        let layout = term("t1");
+        assert_eq!(layout.rotated(), layout);
+    }
+
+    #[test]
+    fn rotate_single_horizontal_split_becomes_vertical() {
+        let layout = hsplit(term("t1"), term("t2"));
+        let rotated = layout.rotated();
+        assert_eq!(rotated, vsplit(term("t1"), term("t2")));
+    }
+
+    #[test]
+    fn rotate_single_vertical_split_becomes_horizontal() {
+        let layout = vsplit(term("t1"), term("t2"));
+        let rotated = layout.rotated();
+        assert_eq!(rotated, hsplit(term("t1"), term("t2")));
+    }
+
+    #[test]
+    fn rotate_preserves_ratios() {
+        let layout = split_ratio(SplitOrientation::Horizontal, 0.7, term("t1"), term("t2"));
+        let rotated = layout.rotated();
+        if let LayoutNode::Split { orientation, ratio, .. } = &rotated {
+            assert_eq!(*orientation, SplitOrientation::Vertical);
+            assert!((*ratio - 0.7).abs() < f64::EPSILON);
+        } else {
+            panic!("Expected Split");
+        }
+    }
+
+    #[test]
+    fn rotate_nested_toggles_all_orientations() {
+        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        let rotated = layout.rotated();
+        assert_eq!(rotated, vsplit(term("t1"), hsplit(term("t2"), term("t3"))));
+    }
+
+    #[test]
+    fn rotate_preserves_terminal_uuids() {
+        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        assert_eq!(layout.terminal_uuids(), layout.rotated().terminal_uuids());
+    }
+
+    #[test]
+    fn rotate_twice_is_identity() {
+        let layout = hsplit(
+            split_ratio(SplitOrientation::Vertical, 0.3, term("t1"), term("t2")),
+            term("t3"),
+        );
+        assert_eq!(layout.rotated().rotated(), layout);
+    }
+
+    #[test]
+    fn orientation_toggled() {
+        assert_eq!(SplitOrientation::Horizontal.toggled(), SplitOrientation::Vertical);
+        assert_eq!(SplitOrientation::Vertical.toggled(), SplitOrientation::Horizontal);
+    }
+
+    // ── End rotation tests ───────────────────────────────────────
 
     #[test]
     fn split_preserves_parent_ratio() {
@@ -1130,6 +1222,21 @@ pub mod proptests {
                     prop_assert_ne!(&adj, target, "Adjacent must differ from target");
                 }
             }
+        }
+
+        #[test]
+        fn rotate_twice_is_identity(layout in arb_layout()) {
+            prop_assert_eq!(layout.rotated().rotated(), layout);
+        }
+
+        #[test]
+        fn rotate_preserves_uuids(layout in arb_layout()) {
+            prop_assert_eq!(layout.terminal_uuids(), layout.rotated().terminal_uuids());
+        }
+
+        #[test]
+        fn rotate_preserves_count(layout in arb_layout()) {
+            prop_assert_eq!(layout.terminal_count(), layout.rotated().terminal_count());
         }
     }
 }

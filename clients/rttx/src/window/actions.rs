@@ -31,6 +31,7 @@ impl Window {
             ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
             ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
             ("toggle-pane-zoom", &["<Ctrl><Shift>Z"], Self::toggle_pane_zoom),
+            ("rotate-layout", &["<Ctrl><Shift>R"], Self::rotate_layout),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
             ("new-ephemeral-workspace", &["<Ctrl><Shift><Alt>T"], Self::add_ephemeral_session),
             ("new-remote-workspace", &[], Self::show_new_remote_workspace_dialog),
@@ -253,6 +254,24 @@ impl Window {
                 }
                 session.zoomed_terminal_uuid = Some(focused);
             }
+            session.clone()
+        };
+        self.rebuild_session_content(&session_uuid, &session_state);
+        self.focus_session_terminal(&session_uuid);
+    }
+
+    fn rotate_layout(&self) {
+        let Some(session_uuid) =
+            self.imp().session_stack.visible_child_name().map(|n| n.to_string())
+        else {
+            return;
+        };
+        let session_state = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) = state.sessions.iter_mut().find(|s| s.uuid == session_uuid) else {
+                return;
+            };
+            session.layout = session.layout.rotated();
             session.clone()
         };
         self.rebuild_session_content(&session_uuid, &session_state);
