@@ -8,6 +8,8 @@ pub mod daemon;
 pub mod daemon_bridge;
 pub mod form_dialog;
 pub mod host;
+pub mod new_workspace_dialog;
+pub mod places;
 pub mod preferences;
 pub mod runtime;
 pub mod session;

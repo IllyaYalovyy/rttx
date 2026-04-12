@@ -2,7 +2,7 @@ use super::*;
 
 impl Window {
     pub fn add_session(&self) {
-        self.add_managed_session(WorkspacePolicy::Persistent);
+        crate::new_workspace_dialog::show(self, &crate::host::Host::local());
     }
 
     pub(super) fn add_ephemeral_session(&self) {
@@ -13,7 +13,7 @@ impl Window {
         let dialog =
             adw::Dialog::builder().title("New Remote Workspace").content_width(440).build();
         let header = adw::HeaderBar::new();
-        let create_button = gtk4::Button::with_label("Create");
+        let create_button = gtk4::Button::with_label("Next");
         create_button.add_css_class("suggested-action");
         header.pack_end(&create_button);
 
@@ -42,13 +42,14 @@ impl Window {
         let dialog_ref = dialog.clone();
         let win = self.clone();
         create_button.connect_clicked(move |_| {
-            let host = host_row.text().trim().to_string();
-            if host.is_empty() {
+            let host_text = host_row.text().trim().to_string();
+            if host_text.is_empty() {
                 status_label.set_text("SSH host is required");
                 return;
             }
-            win.add_remote_managed_session(&host);
             dialog_ref.close();
+            let host = crate::host::Host::remote(&host_text);
+            crate::new_workspace_dialog::show(&win, &host);
         });
 
         dialog.present(Some(self));
@@ -111,13 +112,15 @@ impl Window {
         self.show_toast(&format!("Connecting to {host}…"));
     }
 
-    fn add_remote_managed_session(&self, host: &str) {
+    /// Create a new remote managed workspace at a specific path.
+    pub(crate) fn add_remote_managed_session_at(&self, host: &str, initial_cwd: Option<String>) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
-        let name = crate::session::state::workspace_display_name(&endpoint, None, count);
+        let name =
+            crate::session::state::workspace_display_name(&endpoint, initial_cwd.as_deref(), count);
         let mut session_state =
-            SessionState::new_managed_remote(name, host, WorkspacePolicy::Persistent, None);
+            SessionState::new_managed_remote(name, host, WorkspacePolicy::Persistent, initial_cwd);
         session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state, false);
@@ -131,9 +134,21 @@ impl Window {
     }
 
     pub(super) fn add_managed_session(&self, policy: WorkspacePolicy) {
+        self.add_managed_session_at_with_policy(policy, self.resolve_default_session_folder());
+    }
+
+    /// Create a new local managed workspace at a specific path.
+    pub(crate) fn add_managed_session_at(&self, initial_cwd: Option<String>) {
+        self.add_managed_session_at_with_policy(WorkspacePolicy::Persistent, initial_cwd);
+    }
+
+    fn add_managed_session_at_with_policy(
+        &self,
+        policy: WorkspacePolicy,
+        initial_cwd: Option<String>,
+    ) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
-        let initial_cwd = self.resolve_default_session_folder();
         let name = crate::session::state::workspace_display_name(
             &RuntimeEndpoint::Local,
             initial_cwd.as_deref(),

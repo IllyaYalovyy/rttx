@@ -129,6 +129,14 @@ class TestSidebarContentManaged(unittest.TestCase):
         )
         self.assertIsNotNone(button, "persistent workspace button not visible")
         click(button)
+
+        # The New Workspace dialog opens — select "Home" to create the workspace.
+        home_button = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Home", timeout=10.0
+        )
+        self.assertIsNotNone(home_button, "Home place button not visible in dialog")
+        click(home_button)
+
         self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
         )
