@@ -444,6 +444,7 @@ impl PersistentPaneView {
 
     /// Feed a snapshot's scrollback bytes into VTE to restore state on attach.
     /// Bell characters are stripped to prevent historical bells from ringing.
+    /// Scrolls to the bottom so the viewport shows the most recent output.
     pub fn feed_snapshot(&self, scrollback: &[u8]) {
         if scrollback.is_empty() {
             return;
@@ -453,6 +454,10 @@ impl PersistentPaneView {
             self.imp().vte.feed(&filtered);
         } else {
             self.imp().vte.feed(scrollback);
+        }
+        let adj = self.imp().vte.vadjustment();
+        if let Some(adj) = adj {
+            adj.set_value(adj.upper() - adj.page_size());
         }
     }
 

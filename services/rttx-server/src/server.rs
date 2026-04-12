@@ -389,7 +389,10 @@ impl Server {
                         cwd: pane.effective_cwd().unwrap_or_default(),
                         cols: u32::from(pane.cols),
                         rows: u32::from(pane.rows),
-                        scrollback: pane.screen.raw_bytes().to_vec(),
+                        scrollback: pane
+                            .screen
+                            .snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES)
+                            .to_vec(),
                         exit_status: pane.exit_status,
                     })
                     .collect();

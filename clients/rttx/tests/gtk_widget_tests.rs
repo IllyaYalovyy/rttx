@@ -1221,6 +1221,31 @@ fn persistent_pane_view_feed_snapshot_restores_cursor_after_multiline_formatted_
     window.close();
 }
 
+/// After feeding a large snapshot, the viewport must be scrolled to the
+/// bottom so the user sees the most recent output. Regression test for #440.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_view_feed_snapshot_scrolls_to_bottom() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
+    let window = present_widget(&pane);
+    pump_events(50);
+
+    // Feed enough lines to exceed the visible area.
+    let mut data = Vec::new();
+    for i in 0..200 {
+        data.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    pane.feed_snapshot(&data);
+    pump_events(50);
+
+    let adj = pane.vte().vadjustment().expect("VTE should have a vadjustment");
+    let at_bottom = (adj.value() + adj.page_size() - adj.upper()).abs() < 1.0;
+    assert!(at_bottom, "viewport should be scrolled to the bottom after snapshot feed");
+    window.close();
+}
+
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn persistent_pane_resize_callback_tracks_allocated_terminal_size() {
