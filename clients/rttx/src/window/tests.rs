@@ -4101,3 +4101,120 @@ fn command_sidebar_filters_by_selected_host() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_delete_button_hidden_for_local_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.host-delete-local-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Default selection is "Local" — delete button should be hidden
+    assert!(
+        !window.imp().host_delete_button.is_visible(),
+        "delete button should be hidden when Local host is selected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_delete_button_visible_for_remote_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    // Save a remote host so it appears in the selector
+    let config_dir = tmp.path().join("rttx-devel");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let hosts = vec![crate::host::Host::remote("deploy@example.com")];
+    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.host-delete-remote-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Select the remote host (index 1: Local=0, example=1, All Hosts=2)
+    window.imp().host_selector.set_selected(1);
+    pump_events(50);
+
+    assert!(
+        window.imp().host_delete_button.is_visible(),
+        "delete button should be visible when a remote host is selected"
+    );
+
+    // Switch back to Local
+    window.imp().host_selector.set_selected(0);
+    pump_events(50);
+
+    assert!(
+        !window.imp().host_delete_button.is_visible(),
+        "delete button should be hidden again when Local is selected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_delete_button_hidden_for_all_hosts() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    // Save a remote host so "All Hosts" is not the only extra entry
+    let config_dir = tmp.path().join("rttx-devel");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let hosts = vec![crate::host::Host::remote("deploy@example.com")];
+    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.host-delete-allhosts-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Select "All Hosts" (last entry)
+    let model = window
+        .imp()
+        .host_selector
+        .model()
+        .and_then(|m| m.downcast::<gtk4::StringList>().ok())
+        .unwrap();
+    let last_idx = model.n_items() - 1;
+    window.imp().host_selector.set_selected(last_idx);
+    pump_events(50);
+
+    assert!(
+        !window.imp().host_delete_button.is_visible(),
+        "delete button should be hidden when All Hosts is selected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

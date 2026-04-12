@@ -80,6 +80,160 @@ impl Window {
         );
     }
 
+    pub(super) fn confirm_delete_host(&self, host_key: String) {
+        let saved_hosts = host::load();
+        let saved_places = places::load();
+        let saved_commands = commands::load();
+        let affected = host::deletion_affected(&host_key, &saved_places, &saved_commands);
+
+        if affected.is_empty() {
+            let win = self.clone();
+            self.confirm_delete(
+                "Delete Host?",
+                "The host will be permanently removed.",
+                move || {
+                    let mut hosts = host::load();
+                    hosts.retain(|h| h.key != host_key);
+                    if let Err(e) = host::save(&hosts) {
+                        log::error!("Failed to delete host: {e}");
+                    }
+                    win.rebuild_host_selector_model(None);
+                    win.refresh_place_sidebar();
+                    win.refresh_command_sidebar();
+                },
+            );
+            return;
+        }
+
+        let resolved = host::resolve(&host_key, &saved_hosts);
+        let dialog = adw::Dialog::builder()
+            .title(format!("Delete Host: {}?", resolved.name))
+            .content_width(480)
+            .build();
+        let header = adw::HeaderBar::new();
+        let delete_button = gtk4::Button::with_label("Delete");
+        delete_button.add_css_class("destructive-action");
+        header.pack_end(&delete_button);
+
+        let cancel_button = gtk4::Button::with_label("Cancel");
+        header.pack_start(&cancel_button);
+
+        let description = gtk4::Label::new(Some(
+            "The following places and commands are tagged with this host. \
+             Checked items will be deleted. Uncheck items you want to keep \
+             (they will appear as orphaned).",
+        ));
+        description.set_wrap(true);
+        description.set_xalign(0.0);
+        description.add_css_class("dim-label");
+
+        let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content_box.set_margin_start(18);
+        content_box.set_margin_end(18);
+        content_box.set_margin_top(12);
+        content_box.set_margin_bottom(18);
+        content_box.append(&description);
+
+        let mut place_checks: Vec<(String, gtk4::CheckButton)> = Vec::new();
+        let mut command_checks: Vec<(String, gtk4::CheckButton)> = Vec::new();
+
+        if !affected.places.is_empty() {
+            let group = adw::PreferencesGroup::new();
+            group.set_title("Places");
+            for place in &affected.places {
+                let check = gtk4::CheckButton::new();
+                check.set_active(true);
+                let row = adw::ActionRow::builder()
+                    .title(&place.name)
+                    .subtitle(&place.path)
+                    .activatable_widget(&check)
+                    .build();
+                row.add_prefix(&check);
+                group.add(&row);
+                place_checks.push((place.uuid.clone(), check));
+            }
+            content_box.append(&group);
+        }
+
+        if !affected.commands.is_empty() {
+            let group = adw::PreferencesGroup::new();
+            group.set_title("Commands");
+            for cmd in &affected.commands {
+                let check = gtk4::CheckButton::new();
+                check.set_active(true);
+                let row = adw::ActionRow::builder()
+                    .title(&cmd.title)
+                    .subtitle(cmd.preview())
+                    .activatable_widget(&check)
+                    .build();
+                row.add_prefix(&check);
+                group.add(&row);
+                command_checks.push((cmd.uuid.clone(), check));
+            }
+            content_box.append(&group);
+        }
+
+        let scroll = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vexpand(true)
+            .max_content_height(400)
+            .propagate_natural_height(true)
+            .child(&content_box)
+            .build();
+
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
+        toolbar_view.set_content(Some(&scroll));
+        dialog.set_child(Some(&toolbar_view));
+
+        let dialog_ref = dialog.clone();
+        cancel_button.connect_clicked(move |_| {
+            dialog_ref.close();
+        });
+
+        let dialog_ref = dialog.clone();
+        let win = self.clone();
+        delete_button.connect_clicked(move |_| {
+            let place_uuids: Vec<String> = place_checks
+                .iter()
+                .filter(|(_, check)| check.is_active())
+                .map(|(uuid, _)| uuid.clone())
+                .collect();
+            let command_uuids: Vec<String> = command_checks
+                .iter()
+                .filter(|(_, check)| check.is_active())
+                .map(|(uuid, _)| uuid.clone())
+                .collect();
+
+            let hosts = host::load();
+            let places_data = places::load();
+            let commands_data = commands::load();
+            let (new_hosts, new_places, new_commands) = host::apply_deletion_cleanup(
+                &host_key,
+                &hosts,
+                &places_data,
+                &commands_data,
+                &place_uuids,
+                &command_uuids,
+            );
+            if let Err(e) = host::save(&new_hosts) {
+                log::error!("Failed to save hosts: {e}");
+            }
+            if let Err(e) = places::save(&new_places) {
+                log::error!("Failed to save places: {e}");
+            }
+            if let Err(e) = commands::save(&new_commands) {
+                log::error!("Failed to save commands: {e}");
+            }
+            win.rebuild_host_selector_model(None);
+            win.refresh_place_sidebar();
+            win.refresh_command_sidebar();
+            dialog_ref.close();
+        });
+
+        dialog.present(Some(self));
+    }
+
     pub(super) fn show_about_window(&self) {
         let about = adw::AboutWindow::new();
         about.set_transient_for(Some(self));
