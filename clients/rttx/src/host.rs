@@ -48,12 +48,7 @@ impl Host {
     pub fn remote(ssh_target: &str) -> Self {
         let key = normalize_ssh_key(ssh_target);
         let name = display_name_from_ssh(ssh_target);
-        Self {
-            key,
-            name,
-            kind: HostKind::Remote,
-            ssh_target: Some(ssh_target.into()),
-        }
+        Self { key, name, kind: HostKind::Remote, ssh_target: Some(ssh_target.into()) }
     }
 
     #[must_use]
