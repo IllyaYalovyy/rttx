@@ -221,6 +221,29 @@ impl Window {
             win.send_managed_terminal_resize(&resize_terminal_uuid, cols, rows);
         });
 
+        let drag_source = gtk4::DragSource::new();
+        drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+        let drag_uuid = terminal_uuid.clone();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gtk4::gdk::ContentProvider::for_value(&drag_uuid.to_value()))
+        });
+        pane_view.header().add_controller(drag_source);
+
+        let drop_target =
+            gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+        let win = self.clone();
+        let target_uuid = terminal_uuid.clone();
+        drop_target.connect_drop(move |_, value, _, _| {
+            if let Ok(source_uuid) = value.get::<String>()
+                && source_uuid != target_uuid
+            {
+                win.swap_terminals(&source_uuid, &target_uuid);
+                return true;
+            }
+            false
+        });
+        pane_view.add_controller(drop_target);
+
         let win = self.clone();
         let focus_uuid = terminal_uuid.clone();
         let focus_controller = gtk4::EventControllerFocus::new();
