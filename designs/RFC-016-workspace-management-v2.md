@@ -2,7 +2,7 @@
 
 | Field         | Value         |
 |---------------|---------------|
-| Status        | Draft         |
+| Status        | Implemented   |
 | Author(s)     | Illya Yalovyy |
 | Supersedes    | —             |
 | Superseded by | —             |
@@ -370,19 +370,19 @@ creates cross-host or cross-runtime panes.
 
 ## Development Plan
 
-- [ ] Replace the top bar entrypoints with `New`, `Connect to Existing`, and `New Direct`
-- [ ] Introduce canonical host keys for local and remote endpoints
-- [ ] Add the **New Workspace** dialog with search and host-scoped place selection
-- [ ] Add the **Connect to Existing** dialog with clear available/busy state
-- [ ] Replace bookmark storage with Places + host-tagging
-- [ ] Update commands to use host tags instead of single-host binding
-- [ ] Add built-in global places: `Home` and `Root`
-- [ ] Rework the right sidebar around search + host selector + tagged content
-- [ ] Add All Hosts view to sidebar for cross-host inspection
-- [ ] Preserve and surface orphaned tags in All Hosts view
-- [ ] Add host deletion cleanup dialog with per-item checkboxes
-- [ ] Remove tmux-related data model and UI paths
-- [ ] Remove template-related UI and data paths
+- [x] Replace the top bar entrypoints with `New`, `Connect to Existing`, and `New Direct`
+- [x] Introduce canonical host keys for local and remote endpoints
+- [x] Add the **New Workspace** dialog with search and host-scoped place selection
+- [x] Add the **Connect to Existing** dialog with clear available/busy state
+- [x] Replace bookmark storage with Places + host-tagging
+- [x] Update commands to use host tags instead of single-host binding
+- [x] Add built-in global places: `Home` and `Root`
+- [x] Rework the right sidebar around search + host selector + tagged content
+- [x] Add All Hosts view to sidebar for cross-host inspection
+- [x] Preserve and surface orphaned tags in All Hosts view
+- [x] Add host deletion cleanup dialog with per-item checkboxes
+- [x] Remove tmux-related data model and UI paths
+- [x] Remove template-related UI and data paths
 
 ---
 
