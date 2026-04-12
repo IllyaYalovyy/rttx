@@ -127,6 +127,62 @@ pub fn save_to(hosts: &[Host], path: &Path) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// Items affected by deleting a host record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletionAffected {
+    pub places: Vec<crate::places::Place>,
+    pub commands: Vec<crate::commands::SavedCommand>,
+}
+
+impl DeletionAffected {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.places.is_empty() && self.commands.is_empty()
+    }
+}
+
+/// Compute places and commands that reference `host_key` in their tags.
+#[must_use]
+pub fn deletion_affected(
+    host_key: &str,
+    places: &[crate::places::Place],
+    commands: &[crate::commands::SavedCommand],
+) -> DeletionAffected {
+    DeletionAffected {
+        places: places
+            .iter()
+            .filter(|p| p.host_tags.iter().any(|t| t == host_key))
+            .cloned()
+            .collect(),
+        commands: commands
+            .iter()
+            .filter(|c| c.host_tags.iter().any(|t| t == host_key))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Apply cleanup: remove the given place UUIDs and command UUIDs, then
+/// remove the host from the saved hosts list.
+///
+/// Returns the updated `(hosts, places, commands)`.
+#[must_use]
+pub fn apply_deletion_cleanup(
+    host_key: &str,
+    hosts: &[Host],
+    places: &[crate::places::Place],
+    commands: &[crate::commands::SavedCommand],
+    place_uuids_to_delete: &[String],
+    command_uuids_to_delete: &[String],
+) -> (Vec<Host>, Vec<crate::places::Place>, Vec<crate::commands::SavedCommand>) {
+    let new_hosts: Vec<Host> = hosts.iter().filter(|h| h.key != host_key).cloned().collect();
+    let new_places: Vec<crate::places::Place> =
+        places.iter().filter(|p| !place_uuids_to_delete.contains(&p.uuid)).cloned().collect();
+    let new_commands: Vec<crate::commands::SavedCommand> =
+        commands.iter().filter(|c| !command_uuids_to_delete.contains(&c.uuid)).cloned().collect();
+    (new_hosts, new_places, new_commands)
+}
+
 /// Resolve a host key to a `Host`, checking saved hosts first, then
 /// returning the built-in local host or an ad-hoc remote host.
 #[must_use]
@@ -298,5 +354,109 @@ mod tests {
         let json = serde_json::to_string(&host).unwrap();
         let deserialized: Host = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, host);
+    }
+
+    // ── Deletion affected ───────────────────────────────────────
+
+    #[test]
+    fn deletion_affected_finds_tagged_places_and_commands() {
+        let mut place = crate::places::Place::new("rttx", "~/pro/rttx");
+        place.host_tags = vec!["example.com".into()];
+        let global_place = crate::places::Place::new("tmp", "/tmp");
+
+        let mut cmd = crate::commands::SavedCommand::new("Deploy", "cargo build");
+        cmd.host_tags = vec!["example.com".into()];
+        let global_cmd = crate::commands::SavedCommand::new("Global", "echo hi");
+
+        let affected = deletion_affected(
+            "example.com",
+            &[place.clone(), global_place],
+            &[cmd.clone(), global_cmd],
+        );
+        assert_eq!(affected.places, vec![place]);
+        assert_eq!(affected.commands, vec![cmd]);
+    }
+
+    #[test]
+    fn deletion_affected_empty_when_no_tags_match() {
+        let place = crate::places::Place::new("rttx", "~/pro/rttx");
+        let cmd = crate::commands::SavedCommand::new("Build", "cargo build");
+        let affected = deletion_affected("example.com", &[place], &[cmd]);
+        assert!(affected.is_empty());
+    }
+
+    #[test]
+    fn deletion_affected_multi_tagged_item_included() {
+        let mut place = crate::places::Place::new("shared", "/shared");
+        place.host_tags = vec!["local".into(), "example.com".into()];
+        let affected = deletion_affected("example.com", &[place], &[]);
+        assert_eq!(affected.places.len(), 1);
+    }
+
+    // ── Apply deletion cleanup ──────────────────────────────────
+
+    #[test]
+    fn apply_cleanup_removes_selected_items_and_host() {
+        let host = Host::remote("deploy@example.com");
+        let mut place = crate::places::Place::new("rttx", "~/pro/rttx");
+        place.host_tags = vec!["example.com".into()];
+        let mut cmd = crate::commands::SavedCommand::new("Deploy", "cargo build");
+        cmd.host_tags = vec!["example.com".into()];
+        let place_uuid = place.uuid.clone();
+        let cmd_uuid = cmd.uuid.clone();
+
+        let (new_hosts, new_places, new_commands) = apply_deletion_cleanup(
+            "example.com",
+            &[host],
+            &[place],
+            &[cmd],
+            &[place_uuid],
+            &[cmd_uuid],
+        );
+        assert!(new_hosts.is_empty());
+        assert!(new_places.is_empty());
+        assert!(new_commands.is_empty());
+    }
+
+    #[test]
+    fn apply_cleanup_keeps_unchecked_items() {
+        let host = Host::remote("deploy@example.com");
+        let mut place = crate::places::Place::new("keep", "/keep");
+        place.host_tags = vec!["example.com".into()];
+        let mut cmd = crate::commands::SavedCommand::new("Keep", "echo keep");
+        cmd.host_tags = vec!["example.com".into()];
+
+        let (new_hosts, new_places, new_commands) = apply_deletion_cleanup(
+            "example.com",
+            &[host],
+            &[place.clone()],
+            &[cmd.clone()],
+            &[],
+            &[],
+        );
+        assert!(new_hosts.is_empty());
+        assert_eq!(new_places, vec![place]);
+        assert_eq!(new_commands, vec![cmd]);
+    }
+
+    #[test]
+    fn apply_cleanup_preserves_unrelated_items() {
+        let host = Host::remote("deploy@example.com");
+        let other_host = Host::remote("other@other.com");
+        let global_place = crate::places::Place::new("tmp", "/tmp");
+        let mut tagged_place = crate::places::Place::new("rttx", "~/pro/rttx");
+        tagged_place.host_tags = vec!["example.com".into()];
+        let tagged_uuid = tagged_place.uuid.clone();
+
+        let (new_hosts, new_places, _) = apply_deletion_cleanup(
+            "example.com",
+            &[host, other_host.clone()],
+            &[global_place.clone(), tagged_place],
+            &[],
+            &[tagged_uuid],
+            &[],
+        );
+        assert_eq!(new_hosts, vec![other_host]);
+        assert_eq!(new_places, vec![global_place]);
     }
 }
