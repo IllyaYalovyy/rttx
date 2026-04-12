@@ -61,8 +61,7 @@ pub fn show(window: &Window, host: &Host) {
     let host_clone = host.clone();
     let dialog_ref = dialog.clone();
     list_box.connect_row_activated(move |_, row| {
-        let Some(action_row) = row.child().and_then(|c| c.downcast::<adw::ActionRow>().ok())
-        else {
+        let Some(action_row) = row.child().and_then(|c| c.downcast::<adw::ActionRow>().ok()) else {
             return;
         };
         let path = action_row.subtitle().map(|s| s.to_string()).unwrap_or_default();

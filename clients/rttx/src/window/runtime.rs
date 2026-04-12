@@ -113,25 +113,14 @@ impl Window {
     }
 
     /// Create a new remote managed workspace at a specific path.
-    pub(crate) fn add_remote_managed_session_at(
-        &self,
-        host: &str,
-        initial_cwd: Option<String>,
-    ) {
+    pub(crate) fn add_remote_managed_session_at(&self, host: &str, initial_cwd: Option<String>) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
-        let name = crate::session::state::workspace_display_name(
-            &endpoint,
-            initial_cwd.as_deref(),
-            count,
-        );
-        let mut session_state = SessionState::new_managed_remote(
-            name,
-            host,
-            WorkspacePolicy::Persistent,
-            initial_cwd,
-        );
+        let name =
+            crate::session::state::workspace_display_name(&endpoint, initial_cwd.as_deref(), count);
+        let mut session_state =
+            SessionState::new_managed_remote(name, host, WorkspacePolicy::Persistent, initial_cwd);
         session_state.color = self.next_session_color();
         imp.state.borrow_mut().sessions.push(session_state.clone());
         self.build_session(&session_state, false);
