@@ -28,11 +28,11 @@ class TestManagedBlackBox(unittest.TestCase):
         click(button)
         import time
         time.sleep(0.5)
-        local_row = self.fixture.wait_for_showing_name(
-            Atspi.Role.LIST_ITEM, "Local", timeout=5.0
+        local_item = self.fixture.wait_for_showing_name(
+            Atspi.Role.MENU_ITEM, "Local", timeout=5.0
         )
-        self.assertIsNotNone(local_row, "Local host row not visible in New menu")
-        click(local_row)
+        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
+        click(local_item)
 
         close_pane = self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
@@ -145,11 +145,11 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
         click(button)
         import time
         time.sleep(0.5)
-        local_row = self.fixture.wait_for_showing_name(
-            Atspi.Role.LIST_ITEM, "Local", timeout=5.0
+        local_item = self.fixture.wait_for_showing_name(
+            Atspi.Role.MENU_ITEM, "Local", timeout=5.0
         )
-        self.assertIsNotNone(local_row, "Local host row not visible in New menu")
-        click(local_row)
+        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
+        click(local_item)
 
         close_pane = self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0

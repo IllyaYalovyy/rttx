@@ -35,12 +35,6 @@ mod runtime;
 mod sidebar;
 mod terminal;
 
-#[derive(Debug, Clone, Copy)]
-enum HostMenuAction {
-    New,
-    Connect,
-}
-
 mod imp {
     use super::*;
     use std::cell::RefCell;
@@ -485,33 +479,22 @@ impl Window {
     fn setup_host_menu_buttons(&self) {
         let imp = self.imp();
 
-        // "New" button: populate host menu on click, each item creates a
-        // new daemon-backed workspace for that host.
-        let new_popover = gtk4::Popover::new();
-        imp.new_button.set_popover(Some(&new_popover));
+        // Populate menus initially and refresh on popover show.
+        self.refresh_host_menus();
+
         let win = self.clone();
-        let popover_ref = new_popover.clone();
-        new_popover.connect_show(move |_| {
-            win.populate_host_popover(&popover_ref, HostMenuAction::New);
+        imp.new_button.connect_notify_local(Some("active"), move |_, _| {
+            win.refresh_host_menus();
         });
 
-        // "Connect to Existing" button: populate host menu on click, each
-        // item opens the browse-remote-runtimes flow for that host.
-        let connect_popover = gtk4::Popover::new();
-        imp.connect_button.set_popover(Some(&connect_popover));
         let win = self.clone();
-        let popover_ref = connect_popover.clone();
-        connect_popover.connect_show(move |_| {
-            win.populate_host_popover(&popover_ref, HostMenuAction::Connect);
+        imp.connect_button.connect_notify_local(Some("active"), move |_, _| {
+            win.refresh_host_menus();
         });
     }
 
-    fn populate_host_popover(&self, popover: &gtk4::Popover, action: HostMenuAction) {
+    fn refresh_host_menus(&self) {
         use crate::host::{self, Host};
-
-        let list_box = gtk4::ListBox::new();
-        list_box.set_selection_mode(gtk4::SelectionMode::None);
-        list_box.add_css_class("boxed-list");
 
         let mut hosts: Vec<Host> = vec![Host::local()];
         let saved = host::load();
@@ -519,56 +502,68 @@ impl Window {
         remotes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         hosts.extend(remotes);
 
-        for host in hosts {
-            let row = adw::ActionRow::new();
-            row.set_title(&host.name);
-            if host.is_remote()
-                && let Some(ref target) = host.ssh_target
-            {
-                row.set_subtitle(target);
-            }
-            row.set_activatable(true);
+        let new_menu = gtk4::gio::Menu::new();
+        let connect_menu = gtk4::gio::Menu::new();
 
-            let win = self.clone();
-            let popover = popover.clone();
-            let host_key = host.key.clone();
-            let ssh_target = host.ssh_target.clone();
-            let is_local = host.is_local();
-            row.connect_activated(move |_| {
-                popover.popdown();
-                match action {
-                    HostMenuAction::New => {
-                        if is_local {
-                            win.add_managed_session(WorkspacePolicy::Persistent);
-                        } else if let Some(ref target) = ssh_target {
-                            win.add_remote_managed_session(target);
-                        } else {
-                            win.add_remote_managed_session(&host_key);
-                        }
-                    }
-                    HostMenuAction::Connect => {
-                        if is_local {
-                            win.browse_local_runtimes();
-                        } else if let Some(ref target) = ssh_target {
-                            win.browse_remote_runtimes(target);
-                        } else {
-                            win.browse_remote_runtimes(&host_key);
-                        }
-                    }
-                }
-            });
+        for host in &hosts {
+            let new_item = gtk4::gio::MenuItem::new(Some(&host.name), None);
+            new_item.set_action_and_target_value(
+                Some("win.new-for-host"),
+                Some(&host.key.to_variant()),
+            );
+            new_menu.append_item(&new_item);
 
-            list_box.append(&row);
+            let connect_item = gtk4::gio::MenuItem::new(Some(&host.name), None);
+            connect_item.set_action_and_target_value(
+                Some("win.connect-for-host"),
+                Some(&host.key.to_variant()),
+            );
+            connect_menu.append_item(&connect_item);
         }
 
-        let scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Never)
-            .max_content_height(400)
-            .propagate_natural_height(true)
-            .child(&list_box)
-            .build();
+        self.imp().new_button.set_menu_model(Some(&new_menu));
+        self.imp().connect_button.set_menu_model(Some(&connect_menu));
 
-        popover.set_child(Some(&scroll));
+        // Register host-specific actions.
+        let new_action =
+            gtk4::gio::SimpleAction::new("new-for-host", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        new_action.connect_activate(move |_, param| {
+            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            win.new_workspace_for_host(&key);
+        });
+        self.add_action(&new_action);
+
+        let connect_action =
+            gtk4::gio::SimpleAction::new("connect-for-host", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        connect_action.connect_activate(move |_, param| {
+            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            win.connect_for_host(&key);
+        });
+        self.add_action(&connect_action);
+    }
+
+    fn new_workspace_for_host(&self, host_key: &str) {
+        if host_key == crate::host::LOCAL_KEY {
+            self.add_managed_session(WorkspacePolicy::Persistent);
+        } else {
+            let saved = crate::host::load();
+            let host = crate::host::resolve(host_key, &saved);
+            let target = host.ssh_target.as_deref().unwrap_or(host_key);
+            self.add_remote_managed_session(target);
+        }
+    }
+
+    fn connect_for_host(&self, host_key: &str) {
+        if host_key == crate::host::LOCAL_KEY {
+            self.browse_local_runtimes();
+        } else {
+            let saved = crate::host::load();
+            let host = crate::host::resolve(host_key, &saved);
+            let target = host.ssh_target.as_deref().unwrap_or(host_key);
+            self.browse_remote_runtimes(target);
+        }
     }
 
     fn append_session_row(&self, session_state: &SessionState) {
