@@ -1155,20 +1155,14 @@ fn rotate_layout_persists_through_serialization() {
     session.uuid = "s1".into();
     session.layout = layout;
 
-    let mut state = WindowState {
-        active_session_index: 0,
-        sessions: vec![session],
-        ..WindowState::default()
-    };
+    let mut state =
+        WindowState { active_session_index: 0, sessions: vec![session], ..WindowState::default() };
 
     state.sessions[0].layout = state.sessions[0].layout.rotated();
 
     let json = serde_json::to_string(&state).unwrap();
     let restored: WindowState = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(
-        restored.sessions[0].layout,
-        vsplit(term("t1"), hsplit(term("t2"), term("t3")))
-    );
+    assert_eq!(restored.sessions[0].layout, vsplit(term("t1"), hsplit(term("t2"), term("t3"))));
     assert_eq!(restored.sessions[0].layout.terminal_uuids(), original_uuids);
 }
