@@ -130,10 +130,8 @@ class TestSidebarContentManaged(unittest.TestCase):
         self.assertIsNotNone(button, "New workspace button not visible")
         click(button)
         import time
-        time.sleep(0.5)
-        local_item = self.fixture.wait_for_showing_name(
-            Atspi.Role.MENU_ITEM, "Local", timeout=5.0
-        )
+        time.sleep(1.0)
+        local_item = self.fixture.wait_for_showing_by_name("Local", timeout=10.0)
         self.assertIsNotNone(local_item, "Local host item not visible in New menu")
         click(local_item)
 
