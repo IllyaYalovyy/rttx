@@ -5,6 +5,7 @@ pub mod commands;
 pub mod commands_window;
 pub mod config;
 pub mod daemon;
+pub mod host;
 pub mod daemon_bridge;
 pub mod preferences;
 pub mod runtime;
