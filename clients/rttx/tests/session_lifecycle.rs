@@ -1146,3 +1146,29 @@ fn rename_sets_user_renamed_and_persists_name() {
     assert!(restored.user_renamed);
     assert!(restored.runtime.runtime_id.is_some());
 }
+
+#[test]
+fn rotate_layout_persists_through_serialization() {
+    let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+    let original_uuids = layout.terminal_uuids();
+    let mut session = SessionState::new("test".into());
+    session.uuid = "s1".into();
+    session.layout = layout;
+
+    let mut state = WindowState {
+        active_session_index: 0,
+        sessions: vec![session],
+        ..WindowState::default()
+    };
+
+    state.sessions[0].layout = state.sessions[0].layout.rotated();
+
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        restored.sessions[0].layout,
+        vsplit(term("t1"), hsplit(term("t2"), term("t3")))
+    );
+    assert_eq!(restored.sessions[0].layout.terminal_uuids(), original_uuids);
+}

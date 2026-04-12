@@ -1082,3 +1082,24 @@ fn preferences_bell_fields_roundtrip() {
     assert!(!loaded.audible_bell, "audible_bell=false must survive roundtrip");
     assert!(!loaded.visual_bell, "visual_bell=false must survive roundtrip");
 }
+
+/// Rotation must preserve all terminal UUIDs and produce a valid serializable tree.
+#[test]
+fn contract_rotate_preserves_structure_and_serializes() {
+    let layout = hsplit(
+        vsplit(term_full("a", "/a", "A"), term_full("b", "/b", "B")),
+        term_full("c", "/c", "C"),
+    );
+
+    let rotated = layout.rotated();
+
+    let uuids = rotated.terminal_uuids();
+    assert!(uuids.contains(&"a".to_string()));
+    assert!(uuids.contains(&"b".to_string()));
+    assert!(uuids.contains(&"c".to_string()));
+    assert_eq!(uuids.len(), 3);
+
+    let json = serde_json::to_string(&rotated).unwrap();
+    let restored: LayoutNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, rotated);
+}

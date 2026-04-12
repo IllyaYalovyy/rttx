@@ -168,6 +168,7 @@ workspaces will fail to connect.
 | Jump to workspace 1-9 | Alt+1 through Alt+9 |
 | Zoom in / out / reset | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Zoom pane (toggle) | Ctrl+Shift+Z |
+| Rotate layout | Ctrl+Shift+R |
 | Navigate panes | Alt+Arrow (configurable) |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |
