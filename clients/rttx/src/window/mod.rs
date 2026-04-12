@@ -35,6 +35,12 @@ mod runtime;
 mod sidebar;
 mod terminal;
 
+#[derive(Debug, Clone, Copy)]
+enum HostMenuAction {
+    New,
+    Connect,
+}
+
 mod imp {
     use super::*;
     use std::cell::RefCell;
@@ -56,7 +62,9 @@ mod imp {
         pub command_scroll: gtk4::ScrolledWindow,
         pub command_empty: adw::StatusPage,
         pub toast_overlay: adw::ToastOverlay,
-        pub add_session_button: gtk4::Button,
+        pub new_button: gtk4::MenuButton,
+        pub connect_button: gtk4::MenuButton,
+        pub new_direct_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
@@ -90,9 +98,22 @@ mod imp {
             toggle_sidebar.set_active(true);
             header.pack_start(&toggle_sidebar);
 
-            self.add_session_button.set_icon_name("list-add-symbolic");
-            self.add_session_button.set_tooltip_text(Some("New persistent workspace"));
-            header.pack_start(&self.add_session_button);
+            self.new_button.set_label("New");
+            self.new_button.set_tooltip_text(Some("New workspace"));
+            self.new_button.set_icon_name("list-add-symbolic");
+            self.new_button.add_css_class("flat");
+            header.pack_start(&self.new_button);
+
+            self.connect_button.set_label("Connect");
+            self.connect_button.set_tooltip_text(Some("Connect to existing workspace"));
+            self.connect_button.set_icon_name("network-server-symbolic");
+            self.connect_button.add_css_class("flat");
+            header.pack_start(&self.connect_button);
+
+            self.new_direct_button.set_label("Direct");
+            self.new_direct_button.set_tooltip_text(Some("New direct workspace"));
+            self.new_direct_button.add_css_class("flat");
+            header.pack_start(&self.new_direct_button);
 
             if let Some(label) = config::badge_label() {
                 self.devel_badge.set_label(label);
@@ -114,10 +135,6 @@ mod imp {
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
-            menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
-            menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
-            menu.append(Some("New Remote Workspace"), Some("win.new-remote-workspace"));
-            menu.append(Some("Attach to Remote Runtime"), Some("win.browse-remote-runtimes"));
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
@@ -426,9 +443,11 @@ impl Window {
 
     fn setup_signals(&self) {
         let win = self.clone();
-        self.imp().add_session_button.connect_clicked(move |_| {
-            win.add_session();
+        self.imp().new_direct_button.connect_clicked(move |_| {
+            win.add_direct_session();
         });
+
+        self.setup_host_menu_buttons();
 
         let win = self.clone();
         self.imp().sidebar_list.connect_row_selected(move |_, row| {
@@ -461,6 +480,95 @@ impl Window {
 
         self.refresh_bookmark_sidebar();
         self.refresh_command_sidebar();
+    }
+
+    fn setup_host_menu_buttons(&self) {
+        let imp = self.imp();
+
+        // "New" button: populate host menu on click, each item creates a
+        // new daemon-backed workspace for that host.
+        let new_popover = gtk4::Popover::new();
+        imp.new_button.set_popover(Some(&new_popover));
+        let win = self.clone();
+        let popover_ref = new_popover.clone();
+        new_popover.connect_show(move |_| {
+            win.populate_host_popover(&popover_ref, HostMenuAction::New);
+        });
+
+        // "Connect to Existing" button: populate host menu on click, each
+        // item opens the browse-remote-runtimes flow for that host.
+        let connect_popover = gtk4::Popover::new();
+        imp.connect_button.set_popover(Some(&connect_popover));
+        let win = self.clone();
+        let popover_ref = connect_popover.clone();
+        connect_popover.connect_show(move |_| {
+            win.populate_host_popover(&popover_ref, HostMenuAction::Connect);
+        });
+    }
+
+    fn populate_host_popover(&self, popover: &gtk4::Popover, action: HostMenuAction) {
+        use crate::host::{self, Host};
+
+        let list_box = gtk4::ListBox::new();
+        list_box.set_selection_mode(gtk4::SelectionMode::None);
+        list_box.add_css_class("boxed-list");
+
+        let mut hosts: Vec<Host> = vec![Host::local()];
+        let saved = host::load();
+        let mut remotes: Vec<Host> = saved.into_iter().filter(Host::is_remote).collect();
+        remotes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        hosts.extend(remotes);
+
+        for host in hosts {
+            let row = adw::ActionRow::new();
+            row.set_title(&host.name);
+            if host.is_remote()
+                && let Some(ref target) = host.ssh_target
+            {
+                row.set_subtitle(target);
+            }
+            row.set_activatable(true);
+
+            let win = self.clone();
+            let popover = popover.clone();
+            let host_key = host.key.clone();
+            let ssh_target = host.ssh_target.clone();
+            let is_local = host.is_local();
+            row.connect_activated(move |_| {
+                popover.popdown();
+                match action {
+                    HostMenuAction::New => {
+                        if is_local {
+                            win.add_managed_session(WorkspacePolicy::Persistent);
+                        } else if let Some(ref target) = ssh_target {
+                            win.add_remote_managed_session(target);
+                        } else {
+                            win.add_remote_managed_session(&host_key);
+                        }
+                    }
+                    HostMenuAction::Connect => {
+                        if is_local {
+                            win.browse_local_runtimes();
+                        } else if let Some(ref target) = ssh_target {
+                            win.browse_remote_runtimes(target);
+                        } else {
+                            win.browse_remote_runtimes(&host_key);
+                        }
+                    }
+                }
+            });
+
+            list_box.append(&row);
+        }
+
+        let scroll = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .max_content_height(400)
+            .propagate_natural_height(true)
+            .child(&list_box)
+            .build();
+
+        popover.set_child(Some(&scroll));
     }
 
     fn append_session_row(&self, session_state: &SessionState) {

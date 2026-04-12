@@ -125,10 +125,17 @@ class TestSidebarContentManaged(unittest.TestCase):
 
     def _create_managed_workspace(self) -> None:
         button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "New persistent workspace"
+            Atspi.Role.TOGGLE_BUTTON, "New workspace"
         )
-        self.assertIsNotNone(button, "persistent workspace button not visible")
+        self.assertIsNotNone(button, "New workspace button not visible")
         click(button)
+        import time
+        time.sleep(0.5)
+        local_row = self.fixture.wait_for_showing_name(
+            Atspi.Role.LIST_ITEM, "Local", timeout=5.0
+        )
+        self.assertIsNotNone(local_row, "Local host row not visible in New menu")
+        click(local_row)
         self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
         )
