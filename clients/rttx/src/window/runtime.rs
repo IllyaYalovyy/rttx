@@ -427,7 +427,7 @@ impl Window {
         pane.set_connected(true);
 
         let (cols, rows) = pane.terminal_size();
-        if cols > 0 && rows > 0 {
+        if cols > 0 && rows > 0 && (cols != restore.cols || rows != restore.rows) {
             self.send_managed_terminal_resize(&restore.layout_terminal_uuid, cols, rows);
         }
     }

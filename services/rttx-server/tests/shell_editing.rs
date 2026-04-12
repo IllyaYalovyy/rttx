@@ -454,3 +454,29 @@ fn graceful_restart_does_not_fossilize_stale_prompt_lines() {
         shutdown_server(&mut client, &mut server_child).await;
     });
 }
+
+#[tokio::test]
+async fn reattach_without_resize_does_not_duplicate_prompt() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (socket_path, mut server_child) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&socket_path).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    // Detach and reattach without sending a resize.
+    let scrollback = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    let text = normalize_scrollback(&scrollback);
+
+    // The snapshot should end with exactly one prompt, not a duplicate.
+    assert!(
+        !text.contains("PROMPT> PROMPT> "),
+        "reattach snapshot should not contain duplicated prompts.\nscrollback:\n{text:?}"
+    );
+    assert!(
+        text.ends_with(PROMPT),
+        "reattach snapshot should end with a single prompt.\nscrollback:\n{text:?}"
+    );
+
+    shutdown_server(&mut client, &mut server_child).await;
+}
