@@ -229,8 +229,7 @@ impl Window {
         });
         pane_view.header().add_controller(drag_source);
 
-        let drop_target =
-            gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+        let drop_target = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
         let win = self.clone();
         let target_uuid = terminal_uuid.clone();
         drop_target.connect_drop(move |_, value, _, _| {

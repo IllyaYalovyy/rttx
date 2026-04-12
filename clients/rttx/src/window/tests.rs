@@ -3913,9 +3913,8 @@ fn swap_terminals_works_for_managed_panes() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.managed-swap-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.managed-swap-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -3933,11 +3932,8 @@ fn swap_terminals_works_for_managed_panes() {
     window.swap_terminals("pane-a", "pane-b");
 
     let state = window.imp().state.borrow();
-    let session = state
-        .sessions
-        .iter()
-        .find(|s| s.uuid == "workspace-swap")
-        .expect("session should exist");
+    let session =
+        state.sessions.iter().find(|s| s.uuid == "workspace-swap").expect("session should exist");
     assert_eq!(
         session.layout.terminal_uuids(),
         vec!["pane-b", "pane-a"],
