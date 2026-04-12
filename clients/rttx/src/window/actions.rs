@@ -129,6 +129,17 @@ impl Window {
         });
         self.add_action(&delete_command_action);
 
+        let open_place_action =
+            gtk4::gio::SimpleAction::new("open-place", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        open_place_action.connect_activate(move |_, param| {
+            let path: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            if !path.is_empty() {
+                win.open_place_in_current_pane(&path);
+            }
+        });
+        self.add_action(&open_place_action);
+
         let about_action = gtk4::gio::SimpleAction::new("about", None);
         let win = self.clone();
         about_action.connect_activate(move |_, _| {

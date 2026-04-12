@@ -4,6 +4,22 @@ pub mod links;
 pub mod persistent_widget;
 pub mod widget;
 
+use gtk4::prelude::*;
+
+/// Populate a `gio::Menu` with places visible on the given host key.
+///
+/// Each item triggers `win.open-place` with the place path as parameter.
+pub(crate) fn populate_places_submenu(menu: &gtk4::gio::Menu, host_key: &str) {
+    menu.remove_all();
+    let saved = crate::places::load();
+    let visible = crate::places::visible_for_host(&saved, host_key);
+    for place in &visible {
+        let item = gtk4::gio::MenuItem::new(Some(&place.display_label()), None);
+        item.set_action_and_target_value(Some("win.open-place"), Some(&place.path.to_variant()));
+        menu.append_item(&item);
+    }
+}
+
 /// Test-only re-export of `encode_terminal_key_input`.
 #[doc(hidden)]
 #[must_use]
@@ -666,6 +682,8 @@ mod tests {
 
 #[cfg(test)]
 mod pane_passive_tests {
+    use gtk4::prelude::*;
+
     #[test]
     fn persistent_pane_view_is_constructible_without_action_buttons() {
         let _size = std::mem::size_of::<super::persistent_widget::PersistentPaneView>();
@@ -676,6 +694,34 @@ mod pane_passive_tests {
         let place = crate::places::Place::from_cwd("/home/user/projects/rttx", vec![]);
         assert_eq!(place.name, "rttx");
         assert_eq!(place.path, "/home/user/projects/rttx");
+    }
+
+    #[test]
+    fn populate_places_submenu_adds_builtins_and_matching_saved() {
+        let menu = gtk4::gio::Menu::new();
+        // With no saved places, builtins (Home, Root) should appear.
+        super::populate_places_submenu(&menu, crate::host::LOCAL_KEY);
+        assert!(menu.n_items() >= 2, "builtins must appear; got {}", menu.n_items());
+
+        // Calling again clears previous items before repopulating.
+        super::populate_places_submenu(&menu, crate::host::LOCAL_KEY);
+        assert!(menu.n_items() >= 2);
+    }
+
+    #[test]
+    fn populate_places_submenu_items_target_open_place_action() {
+        let menu = gtk4::gio::Menu::new();
+        super::populate_places_submenu(&menu, crate::host::LOCAL_KEY);
+        for idx in 0..menu.n_items() {
+            let action = menu
+                .item_attribute_value(idx, "action", Some(gtk4::glib::VariantTy::STRING))
+                .expect("each item must have an action");
+            assert_eq!(action.get::<String>().unwrap(), "win.open-place");
+            let target = menu
+                .item_attribute_value(idx, "target", Some(gtk4::glib::VariantTy::STRING))
+                .expect("each item must have a target path");
+            assert!(!target.get::<String>().unwrap().is_empty());
+        }
     }
 }
 

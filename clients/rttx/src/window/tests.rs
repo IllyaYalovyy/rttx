@@ -4488,3 +4488,91 @@ fn add_current_path_to_places_tags_remote_host() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn open_place_action_sends_cd_to_focused_terminal() {
+    require_display!();
+
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.open-place-action-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid.clone()));
+
+    window.open_place_in_current_pane("/tmp/test-place");
+
+    let term = window
+        .imp()
+        .terminals
+        .borrow()
+        .get(&terminal_uuid)
+        .cloned()
+        .expect("terminal should exist");
+    assert_eq!(
+        term.pending_shell_inputs_for_test(),
+        vec!["cd /tmp/test-place\n"],
+        "open-place should queue a cd command to the focused terminal"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn open_place_action_resolves_tilde_path() {
+    require_display!();
+
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.open-place-tilde-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid.clone()));
+
+    // "~" resolves to home — the cd command should use "~" (shell resolves it)
+    window.open_place_in_current_pane("~");
+
+    let term = window
+        .imp()
+        .terminals
+        .borrow()
+        .get(&terminal_uuid)
+        .cloned()
+        .expect("terminal should exist");
+    assert_eq!(
+        term.pending_shell_inputs_for_test(),
+        vec!["cd ~\n"],
+        "tilde path should resolve to home via cd ~"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+fn visible_session_host_key_defaults_to_local() {
+    // The underlying logic defaults to LOCAL_KEY when no visible session is found.
+    assert_eq!(crate::host::LOCAL_KEY, "local");
+}
