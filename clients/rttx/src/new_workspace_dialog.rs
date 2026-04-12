@@ -22,9 +22,7 @@ pub fn show(window: &Window, host: &Host) {
     search_entry.set_margin_end(18);
     search_entry.set_margin_top(12);
 
-    let list_box = gtk4::ListBox::new();
-    list_box.set_selection_mode(gtk4::SelectionMode::None);
-    list_box.add_css_class("boxed-list");
+    let list_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     list_box.set_margin_start(18);
     list_box.set_margin_end(18);
     list_box.set_margin_top(12);
@@ -48,35 +46,38 @@ pub fn show(window: &Window, host: &Host) {
     dialog.set_child(Some(&toolbar_view));
 
     let host_key = host.key.clone();
-    populate_places(&list_box, &host_key, "");
+    populate_places(&list_box, &host_key, "", window, host, &dialog);
 
-    let list_for_search = list_box.clone();
     let host_key_for_search = host_key;
+    let win_for_search = window.clone();
+    let host_for_search = host.clone();
+    let dialog_for_search = dialog.clone();
     search_entry.connect_changed(move |entry| {
         let query = entry.text().to_string();
-        populate_places(&list_for_search, &host_key_for_search, &query);
-    });
-
-    let win = window.clone();
-    let host_clone = host.clone();
-    let dialog_ref = dialog.clone();
-    list_box.connect_row_activated(move |_, row| {
-        let Some(action_row) = row.child().and_then(|c| c.downcast::<adw::ActionRow>().ok()) else {
-            return;
-        };
-        let path = action_row.subtitle().map(|s| s.to_string()).unwrap_or_default();
-        let name = action_row.title().to_string();
-        dialog_ref.close();
-        create_workspace_at_place(&win, &host_clone, &name, &path);
+        populate_places(
+            &list_box,
+            &host_key_for_search,
+            &query,
+            &win_for_search,
+            &host_for_search,
+            &dialog_for_search,
+        );
     });
 
     dialog.present(Some(window));
     search_entry.grab_focus();
 }
 
-fn populate_places(list_box: &gtk4::ListBox, host_key: &str, query: &str) {
-    while let Some(row) = list_box.row_at_index(0) {
-        list_box.remove(&row);
+fn populate_places(
+    container: &gtk4::Box,
+    host_key: &str,
+    query: &str,
+    window: &Window,
+    host: &Host,
+    dialog: &adw::Dialog,
+) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
     }
 
     let saved = places::load();
@@ -98,9 +99,9 @@ fn populate_places(list_box: &gtk4::ListBox, host_key: &str, query: &str) {
             label.add_css_class("dim-label");
             label.add_css_class("caption");
             label.set_margin_start(6);
-            label.set_margin_top(12);
-            label.set_margin_bottom(4);
-            list_box.append(&label);
+            label.set_margin_top(8);
+            label.set_margin_bottom(2);
+            container.append(&label);
         } else if !is_builtin && !has_saved {
             has_saved = true;
             let label = gtk4::Label::new(Some("Saved Places"));
@@ -108,18 +109,56 @@ fn populate_places(list_box: &gtk4::ListBox, host_key: &str, query: &str) {
             label.add_css_class("dim-label");
             label.add_css_class("caption");
             label.set_margin_start(6);
-            label.set_margin_top(12);
-            label.set_margin_bottom(4);
-            list_box.append(&label);
+            label.set_margin_top(8);
+            label.set_margin_bottom(2);
+            container.append(&label);
         }
 
-        let row = adw::ActionRow::builder()
-            .title(&place.name)
-            .subtitle(&place.path)
-            .activatable(true)
-            .build();
-        row.add_prefix(&gtk4::Image::from_icon_name(place_icon(place)));
-        list_box.append(&row);
+        let icon = gtk4::Image::from_icon_name(place_icon(place));
+        icon.set_margin_end(8);
+
+        let title_label = gtk4::Label::new(Some(&place.name));
+        title_label.set_xalign(0.0);
+        title_label.set_hexpand(true);
+        title_label.add_css_class("body");
+
+        let subtitle_label = gtk4::Label::new(Some(&place.path));
+        subtitle_label.set_xalign(0.0);
+        subtitle_label.add_css_class("dim-label");
+        subtitle_label.add_css_class("caption");
+
+        let text_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        text_box.append(&title_label);
+        text_box.append(&subtitle_label);
+
+        let row_content = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        row_content.set_margin_start(12);
+        row_content.set_margin_end(12);
+        row_content.set_margin_top(8);
+        row_content.set_margin_bottom(8);
+        row_content.append(&icon);
+        row_content.append(&text_box);
+
+        let button = gtk4::Button::new();
+        button.set_child(Some(&row_content));
+        button.add_css_class("flat");
+        button.update_property(&[gtk4::accessible::Property::Label(&place.name)]);
+
+        let win = window.clone();
+        let host_clone = host.clone();
+        let dialog_ref = dialog.clone();
+        let path = place.path.clone();
+        button.connect_clicked(move |_| {
+            dialog_ref.close();
+            let initial_cwd = resolve_place_path(&path);
+            if host_clone.is_local() {
+                win.add_managed_session_at(initial_cwd);
+            } else if let Some(ssh_target) = &host_clone.ssh_target {
+                win.add_remote_managed_session_at(ssh_target, initial_cwd);
+            }
+        });
+
+        container.append(&button);
     }
 }
 
@@ -130,15 +169,6 @@ fn place_icon(place: &Place) -> &'static str {
         "drive-harddisk-symbolic"
     } else {
         "folder-symbolic"
-    }
-}
-
-fn create_workspace_at_place(window: &Window, host: &Host, _name: &str, path: &str) {
-    let initial_cwd = resolve_place_path(path);
-    if host.is_local() {
-        window.add_managed_session_at(initial_cwd);
-    } else if let Some(ssh_target) = &host.ssh_target {
-        window.add_remote_managed_session_at(ssh_target, initial_cwd);
     }
 }
 
