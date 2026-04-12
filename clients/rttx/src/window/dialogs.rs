@@ -482,4 +482,42 @@ impl Window {
         bookmark.directory = cwd;
         Some(bookmark)
     }
+
+    /// Extract the SSH target from the active session's remote endpoint.
+    ///
+    /// Returns `None` for local or unmanaged sessions.
+    pub(crate) fn ssh_target_for_active_session(&self) -> Option<String> {
+        let state = self.imp().state.borrow();
+        let visible = self.imp().session_stack.visible_child_name()?;
+        let session = state.sessions.iter().find(|s| s.uuid == visible.as_str())?;
+        match &session.runtime.endpoint {
+            RuntimeEndpoint::Remote { host } if session.runtime.is_managed() => Some(host.clone()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn do_add_current_host(&self) {
+        let Some(ssh_target) = self.ssh_target_for_active_session() else {
+            self.show_toast("No SSH host in the active workspace");
+            return;
+        };
+
+        let new_host = host::Host::remote(&ssh_target);
+        let mut hosts = host::load();
+
+        if hosts.iter().any(|h| h.key == new_host.key) {
+            self.show_toast(&format!("Host \"{}\" is already saved", new_host.name));
+            return;
+        }
+
+        hosts.push(new_host.clone());
+        if let Err(e) = host::save(&hosts) {
+            log::error!("Failed to save hosts: {e}");
+            self.show_toast("Failed to save host");
+            return;
+        }
+
+        self.rebuild_host_selector_model(None);
+        self.show_toast(&format!("Host \"{}\" added", new_host.name));
+    }
 }

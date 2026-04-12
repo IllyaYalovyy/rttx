@@ -4218,3 +4218,140 @@ fn host_delete_button_hidden_for_all_hosts() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn add_current_host_saves_remote_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.add-current-host-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Add a remote managed workspace and switch to it
+    let remote_session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "deploy@builder.example.com",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let remote_uuid = remote_session.uuid.clone();
+    window.imp().state.borrow_mut().sessions.push(remote_session.clone());
+    window.build_session(&remote_session, false);
+    pump_events(50);
+
+    let state = window.imp().state.borrow();
+    let remote_idx = state.sessions.iter().position(|s| s.uuid == remote_uuid).unwrap();
+    drop(state);
+    window.switch_to_session(remote_idx);
+    pump_events(50);
+
+    // Verify SSH target is detected
+    assert_eq!(
+        window.ssh_target_for_active_session().as_deref(),
+        Some("deploy@builder.example.com"),
+    );
+
+    // Trigger the action
+    window.do_add_current_host();
+
+    // Verify host was saved
+    let hosts = crate::host::load();
+    assert!(hosts.iter().any(|h| h.key == "builder.example.com"), "host should be saved");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn add_current_host_skips_duplicate() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.add-current-host-dup-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Pre-save the host
+    let existing = crate::host::Host::remote("deploy@builder.example.com");
+    crate::host::save(&[existing]).unwrap();
+
+    // Add a remote managed workspace and switch to it
+    let remote_session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "deploy@builder.example.com",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let remote_uuid = remote_session.uuid.clone();
+    window.imp().state.borrow_mut().sessions.push(remote_session.clone());
+    window.build_session(&remote_session, false);
+    pump_events(50);
+
+    let state = window.imp().state.borrow();
+    let remote_idx = state.sessions.iter().position(|s| s.uuid == remote_uuid).unwrap();
+    drop(state);
+    window.switch_to_session(remote_idx);
+    pump_events(50);
+
+    // Trigger the action — should not duplicate
+    window.do_add_current_host();
+
+    let hosts = crate::host::load();
+    assert_eq!(
+        hosts.iter().filter(|h| h.key == "builder.example.com").count(),
+        1,
+        "host should not be duplicated"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn add_current_host_noop_for_local_session() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.add-current-host-local-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Default session is local — ssh_target should be None
+    assert!(window.ssh_target_for_active_session().is_none());
+
+    // Trigger the action — should not save anything
+    window.do_add_current_host();
+
+    let hosts = crate::host::load();
+    assert!(hosts.is_empty(), "no host should be saved for a local session");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

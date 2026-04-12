@@ -77,3 +77,23 @@ fn endpoint_host_key_matches_place_and_command_tags() {
     cmd.host_tags = vec!["example.com".into()];
     assert!(commands::is_visible_on(&cmd, &host_key));
 }
+
+#[test]
+fn add_host_from_remote_endpoint_saves_and_deduplicates() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("hosts.json");
+
+    let ssh_target = "deploy@builder.example.com";
+    let new_host = host::Host::remote(ssh_target);
+
+    // First save succeeds
+    let mut hosts = host::load_from(&path);
+    assert!(!hosts.iter().any(|h| h.key == new_host.key));
+    hosts.push(new_host.clone());
+    host::save_to(&hosts, &path).unwrap();
+
+    // Duplicate detection prevents second save
+    let hosts = host::load_from(&path);
+    assert!(hosts.iter().any(|h| h.key == new_host.key));
+    assert_eq!(hosts.iter().filter(|h| h.key == "builder.example.com").count(), 1);
+}

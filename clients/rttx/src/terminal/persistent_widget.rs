@@ -196,6 +196,7 @@ mod imp {
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
             session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
+            session_section.append(Some("Add Host"), Some("win.add-current-host"));
             session_section.append(Some("Preferences"), Some("win.preferences"));
             let close_section = gtk4::gio::Menu::new();
             close_section.append(Some("Close Pane"), Some("win.close-terminal"));
