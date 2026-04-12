@@ -1692,3 +1692,44 @@ fn persistent_pane_has_open_and_copy_link_actions() {
     assert!(pane.activate_action("term.open-link", None).is_err());
     assert!(pane.activate_action("term.copy-link", None).is_err());
 }
+
+/// Persistent pane must forward VTE `commit` data (mouse escape sequences)
+/// to the daemon input callback. Regression for #442.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_forwards_vte_commit_to_daemon_input() {
+    require_display!();
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("mouse-1", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(50);
+
+    let connected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Connected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    let forwarded = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+    let forwarded_clone = Rc::clone(&forwarded);
+    pane.connect_input(move |bytes| {
+        forwarded_clone.borrow_mut().push(bytes.to_vec());
+    });
+
+    // Simulate VTE emitting an SGR mouse click sequence via commit.
+    let sgr_click = "\x1b[<0;10;5M";
+    pane.vte()
+        .emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
+    pump_events(50);
+
+    assert!(
+        forwarded.borrow().contains(&sgr_click.as_bytes().to_vec()),
+        "persistent pane must forward VTE commit data to daemon input callback"
+    );
+
+    window.close();
+}
