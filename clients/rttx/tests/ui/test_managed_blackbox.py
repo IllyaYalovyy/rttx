@@ -7,7 +7,7 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi
 
-from common import AppFixture, click, wait_for_name
+from common import AppFixture, click, click_center, wait_for_name
 
 
 class TestManagedBlackBox(unittest.TestCase):
@@ -25,10 +25,13 @@ class TestManagedBlackBox(unittest.TestCase):
             Atspi.Role.TOGGLE_BUTTON, "New workspace"
         )
         self.assertIsNotNone(button, "New workspace button not visible")
-        click(button)
+        click_center(button)
         import time
         time.sleep(1.0)
-        local_item = self.fixture.wait_for_showing_by_name("Local", timeout=10.0)
+        # gio::Menu items in a PopoverMenu appear as PUSH_BUTTON in AT-SPI.
+        local_item = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Local", timeout=10.0
+        )
         self.assertIsNotNone(local_item, "Local host item not visible in New menu")
         click(local_item)
 
@@ -147,10 +150,12 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
             Atspi.Role.TOGGLE_BUTTON, "New workspace"
         )
         self.assertIsNotNone(button, "New workspace button not visible")
-        click(button)
+        click_center(button)
         import time
         time.sleep(1.0)
-        local_item = self.fixture.wait_for_showing_by_name("Local", timeout=10.0)
+        local_item = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Local", timeout=10.0
+        )
         self.assertIsNotNone(local_item, "Local host item not visible in New menu")
         click(local_item)
 
