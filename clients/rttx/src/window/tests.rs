@@ -413,7 +413,6 @@ fn new_session_from_bookmark_creates_and_focuses_named_session() {
 
     let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
     bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.tmux_session = Some("web".into());
 
     window.new_session_from_bookmark(&bookmark);
     pump_events(100);
@@ -466,13 +465,10 @@ fn new_session_from_bookmark_queues_input_before_shell_starts() {
     let window = Window::new(&app);
     let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
     bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.tmux_session = Some("web".into());
-    let expected_input = PaneTarget::RemoteTmux {
-        ssh_target: "deploy@example.com".into(),
-        tmux_session: "web".into(),
-    }
-    .managed_startup_input()
-    .unwrap();
+    let expected_input =
+        PaneTarget::RemoteShell { ssh_target: "deploy@example.com".into(), remote_folder: None }
+            .managed_startup_input()
+            .unwrap();
 
     window.new_session_from_bookmark(&bookmark);
 
@@ -519,13 +515,10 @@ fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
     let first_window = Window::new(&app);
     let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
     bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.tmux_session = Some("web".into());
-    let expected_input = PaneTarget::RemoteTmux {
-        ssh_target: "deploy@example.com".into(),
-        tmux_session: "web".into(),
-    }
-    .managed_startup_input()
-    .unwrap();
+    let expected_input =
+        PaneTarget::RemoteShell { ssh_target: "deploy@example.com".into(), remote_folder: None }
+            .managed_startup_input()
+            .unwrap();
 
     first_window.new_session_from_bookmark(&bookmark);
 
@@ -540,9 +533,9 @@ fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
         saved_recovery,
         Some(PaneRecovery {
             source: PaneSource::Bookmark { name: "Prod Web".into() },
-            target: Some(PaneTarget::RemoteTmux {
+            target: Some(PaneTarget::RemoteShell {
                 ssh_target: "deploy@example.com".into(),
-                tmux_session: "web".into(),
+                remote_folder: None,
             }),
             startup: vec![],
         })
@@ -666,58 +659,6 @@ fn new_session_from_ssh_bookmark_queues_ssh_command() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn new_session_from_local_dir_and_tmux_bookmark_uses_initial_cwd_and_queues_tmux() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.local-tmux-bookmark-tests")
-        .build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Local Dev");
-    bookmark.directory = Some("/home/user/work".into());
-    bookmark.tmux_session = Some("dev".into());
-
-    window.new_session_from_bookmark(&bookmark);
-
-    let (layout_cwd, pending_inputs, saved_recovery) = {
-        let state = window.imp().state.borrow();
-        let session = state.sessions.last().unwrap();
-        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-        let layout_cwd = match &session.layout {
-            LayoutNode::Terminal { cwd, .. } => cwd.clone(),
-            _ => None,
-        };
-        let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
-        (
-            layout_cwd,
-            term.pending_shell_inputs_for_test(),
-            session.recovery_for(&terminal_uuid).cloned(),
-        )
-    };
-
-    assert_eq!(layout_cwd.as_deref(), Some("/home/user/work"));
-    assert_eq!(pending_inputs, vec!["exec tmux attach-session -t 'dev'\n"]);
-    assert_eq!(
-        saved_recovery,
-        Some(PaneRecovery {
-            source: PaneSource::Bookmark { name: "Local Dev".into() },
-            target: Some(PaneTarget::LocalTmux { session: "dev".into() }),
-            startup: vec![],
-        })
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
 fn bookmark_active_session_captures_session_name_and_cwd() {
     require_display!();
 
@@ -757,7 +698,6 @@ fn bookmark_active_session_captures_session_name_and_cwd() {
         "bookmark directory should match the focused terminal's CWD"
     );
     assert_eq!(bookmark.ssh_target, None);
-    assert_eq!(bookmark.tmux_session, None);
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -808,8 +748,9 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
                 terminal_uuid.clone(),
                 PaneRecovery {
                     source: PaneSource::Bookmark { name: "Ops".into() },
-                    target: Some(PaneTarget::LocalTmux {
-                        session: "rttx-definitely-missing-session".into(),
+                    target: Some(PaneTarget::RemoteShell {
+                        ssh_target: "user@192.0.2.1".into(),
+                        remote_folder: None,
                     }),
                     startup: vec![],
                 },
@@ -843,9 +784,9 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
         .expect("recoverable terminal should exist");
 
     let failed = wait_until(3000, || term.recovery_message_visible_for_test());
-    assert!(failed, "missing local tmux session should leave the pane alive and show retry UI");
+    assert!(failed, "unreachable SSH host should leave the pane alive and show retry UI");
     assert!(
-        term.recovery_message_for_test().contains("Failed to attach local tmux session"),
+        term.recovery_message_for_test().contains("Failed to connect to"),
         "failure message should stay inside the pane"
     );
     assert!(

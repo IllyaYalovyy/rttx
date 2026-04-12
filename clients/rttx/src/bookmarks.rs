@@ -13,8 +13,6 @@ pub struct Bookmark {
     pub directory: Option<String>,
     #[serde(default)]
     pub ssh_target: Option<String>,
-    #[serde(default)]
-    pub tmux_session: Option<String>,
 }
 
 impl Bookmark {
@@ -25,7 +23,6 @@ impl Bookmark {
             name: name.into(),
             directory: None,
             ssh_target: None,
-            tmux_session: None,
         }
     }
 
@@ -33,8 +30,7 @@ impl Bookmark {
     pub fn command(&self) -> Option<String> {
         let directory = non_empty(self.directory.as_deref());
         let ssh_target = non_empty(self.ssh_target.as_deref());
-        let tmux_session = non_empty(self.tmux_session.as_deref());
-        let local_command = local_command(directory, tmux_session);
+        let local_command = directory.map(|d| format!("cd {}", shell_quote(d)));
 
         match (ssh_target, local_command) {
             (Some(target), Some(command)) => {
@@ -54,9 +50,6 @@ impl Bookmark {
         }
         if let Some(target) = non_empty(self.ssh_target.as_deref()) {
             parts.push(format!("ssh {target}"));
-        }
-        if let Some(session) = non_empty(self.tmux_session.as_deref()) {
-            parts.push(format!("tmux {session}"));
         }
 
         if parts.is_empty() { "Empty bookmark".into() } else { parts.join(" | ") }
@@ -78,21 +71,17 @@ impl Bookmark {
     /// None for local directory-only bookmarks — `session_initial_cwd` handles the directory.
     #[must_use]
     pub fn session_startup_command(&self) -> Option<String> {
-        let directory = non_empty(self.directory.as_deref());
         let ssh_target = non_empty(self.ssh_target.as_deref());
-        let tmux_session = non_empty(self.tmux_session.as_deref());
 
-        match (ssh_target, tmux_session) {
-            (Some(target), _) => {
-                let remote_cmd = local_command(directory, tmux_session);
-                Some(remote_cmd.map_or_else(
-                    || format!("ssh {target}"),
-                    |cmd| format!("ssh -t {target} {}", shell_quote(&cmd)),
-                ))
-            }
-            (None, Some(session)) => Some(tmux_command(session)),
-            (None, None) => None,
-        }
+        ssh_target.map(|target| {
+            let directory = non_empty(self.directory.as_deref());
+            directory.map_or_else(
+                || format!("ssh {target}"),
+                |dir| {
+                    format!("ssh -t {target} {}", shell_quote(&format!("cd {}", shell_quote(dir))))
+                },
+            )
+        })
     }
 
     /// SSH host for remote workspace creation, if this bookmark targets a remote host.
@@ -117,34 +106,28 @@ impl Bookmark {
     }
 
     /// Command to run on a remote pane that is already connected to the bookmark's host.
-    /// Returns the inner command (cd, tmux, etc.) without the SSH wrapper.
+    /// Returns the inner command (cd, etc.) without the SSH wrapper.
     /// None if the bookmark has no SSH target or no inner command beyond just connecting.
     #[must_use]
     pub fn remote_command(&self) -> Option<String> {
         non_empty(self.ssh_target.as_deref())?;
-        local_command(non_empty(self.directory.as_deref()), non_empty(self.tmux_session.as_deref()))
+        non_empty(self.directory.as_deref()).map(|d| format!("cd {}", shell_quote(d)))
     }
 
     #[must_use]
     pub fn pane_target(&self) -> Option<PaneTarget> {
         let directory = non_empty(self.directory.as_deref()).map(str::to_string);
         let ssh_target = non_empty(self.ssh_target.as_deref()).map(str::to_string);
-        let tmux_session = non_empty(self.tmux_session.as_deref()).map(str::to_string);
 
-        match (directory, ssh_target, tmux_session) {
-            (Some(path), None, None) => Some(PaneTarget::LocalFolder { path }),
-            (None, None, Some(session)) => Some(PaneTarget::LocalTmux { session }),
-            (Some(_path), None, Some(session)) => Some(PaneTarget::LocalTmux { session }),
-            (None, Some(ssh_target), None) => {
+        match (directory, ssh_target) {
+            (Some(path), None) => Some(PaneTarget::LocalFolder { path }),
+            (None, Some(ssh_target)) => {
                 Some(PaneTarget::RemoteShell { ssh_target, remote_folder: None })
             }
-            (Some(path), Some(ssh_target), None) => {
+            (Some(path), Some(ssh_target)) => {
                 Some(PaneTarget::RemoteShell { ssh_target, remote_folder: Some(path) })
             }
-            (None | Some(_), Some(ssh_target), Some(tmux_session)) => {
-                Some(PaneTarget::RemoteTmux { ssh_target, tmux_session })
-            }
-            (None, None, None) => None,
+            (None, None) => None,
         }
     }
 }
@@ -167,22 +150,6 @@ pub fn matches_query(bookmark: &Bookmark, query: &str) -> bool {
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-fn local_command(directory: Option<&str>, tmux_session: Option<&str>) -> Option<String> {
-    match (directory, tmux_session) {
-        (Some(directory), Some(session)) => {
-            Some(format!("cd {} && ({})", shell_quote(directory), tmux_command(session)))
-        }
-        (Some(directory), None) => Some(format!("cd {}", shell_quote(directory))),
-        (None, Some(session)) => Some(tmux_command(session)),
-        (None, None) => None,
-    }
-}
-
-fn tmux_command(session: &str) -> String {
-    let session = shell_quote(session);
-    format!("tmux attach-session -t {session} || tmux new-session -s {session}")
 }
 
 fn bookmarks_path() -> PathBuf {
@@ -252,44 +219,14 @@ mod tests {
     }
 
     #[test]
-    fn tmux_bookmark_builds_attach_or_create_command() {
-        let mut bookmark = Bookmark::new("Ops");
-        bookmark.tmux_session = Some("ops".into());
-
-        assert_eq!(
-            bookmark.command().as_deref(),
-            Some("tmux attach-session -t 'ops' || tmux new-session -s 'ops'")
-        );
-    }
-
-    #[test]
-    fn combined_bookmark_builds_remote_cd_then_tmux_command() {
+    fn combined_bookmark_builds_remote_cd_command() {
         let mut bookmark = Bookmark::new("Remote Ops");
         bookmark.directory = Some("/srv/app".into());
         bookmark.ssh_target = Some("deploy@example.com".into());
-        bookmark.tmux_session = Some("deploy".into());
 
         assert_eq!(
             bookmark.command().as_deref(),
-            Some(
-                "ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"' && (tmux attach-session -t '\"'\"'deploy'\"'\"' || tmux new-session -s '\"'\"'deploy'\"'\"')'"
-            )
-        );
-    }
-
-    #[test]
-    fn pane_target_prefers_remote_tmux_for_ssh_tmux_bookmarks() {
-        let mut bookmark = Bookmark::new("Remote Ops");
-        bookmark.directory = Some("/srv/app".into());
-        bookmark.ssh_target = Some("deploy@example.com".into());
-        bookmark.tmux_session = Some("deploy".into());
-
-        assert_eq!(
-            bookmark.pane_target(),
-            Some(PaneTarget::RemoteTmux {
-                ssh_target: "deploy@example.com".into(),
-                tmux_session: "deploy".into(),
-            })
+            Some("ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"''")
         );
     }
 
@@ -320,12 +257,10 @@ mod tests {
         let mut bookmark = Bookmark::new("Prod Web");
         bookmark.directory = Some("/srv/app".into());
         bookmark.ssh_target = Some("deploy@example.com".into());
-        bookmark.tmux_session = Some("web".into());
 
         assert!(matches_query(&bookmark, "prod"));
         assert!(matches_query(&bookmark, "srv/app"));
         assert!(matches_query(&bookmark, "deploy@example.com"));
-        assert!(matches_query(&bookmark, "tmux attach-session"));
         assert!(!matches_query(&bookmark, "staging"));
     }
 
@@ -343,7 +278,6 @@ mod tests {
         let mut bookmark = Bookmark::new("Work");
         bookmark.directory = Some("/work".into());
         bookmark.ssh_target = Some("dev@example.com".into());
-        bookmark.tmux_session = Some("main".into());
 
         save_to(&[bookmark.clone()], &path).unwrap();
         assert_eq!(load_from(&path), vec![bookmark]);
@@ -383,31 +317,15 @@ mod tests {
     }
 
     #[test]
-    fn local_dir_and_tmux_session_initial_cwd_is_dir_and_startup_command_is_tmux_only() {
-        let mut bookmark = Bookmark::new("Local Dev");
-        bookmark.directory = Some("/home/user/work".into());
-        bookmark.tmux_session = Some("dev".into());
-
-        assert_eq!(bookmark.session_initial_cwd(), Some("/home/user/work"));
-        assert_eq!(
-            bookmark.session_startup_command().as_deref(),
-            Some("tmux attach-session -t 'dev' || tmux new-session -s 'dev'")
-        );
-    }
-
-    #[test]
-    fn ssh_with_dir_and_tmux_session_startup_command_includes_full_chain() {
+    fn ssh_with_dir_session_startup_command_includes_cd() {
         let mut bookmark = Bookmark::new("Remote Dev");
         bookmark.ssh_target = Some("deploy@example.com".into());
         bookmark.directory = Some("/srv/app".into());
-        bookmark.tmux_session = Some("web".into());
 
         assert_eq!(bookmark.session_initial_cwd(), None);
         assert_eq!(
             bookmark.session_startup_command().as_deref(),
-            Some(
-                "ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"' && (tmux attach-session -t '\"'\"'web'\"'\"' || tmux new-session -s '\"'\"'web'\"'\"')'"
-            )
+            Some("ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"''")
         );
     }
 
@@ -508,7 +426,6 @@ mod tests {
         let mut b = Bookmark::new("Deploy");
         b.ssh_target = Some("deploy@example.com".into());
         b.directory = Some("/srv/app".into());
-        b.tmux_session = Some("web".into());
 
         let full = b.command().unwrap();
         assert!(full.starts_with("ssh"), "full command should start with ssh: {full}");
@@ -516,7 +433,6 @@ mod tests {
         let inner = b.remote_command().unwrap();
         assert!(!inner.contains("ssh"), "remote_command must not contain ssh: {inner}");
         assert!(inner.contains("/srv/app"), "remote_command must contain directory");
-        assert!(inner.contains("tmux"), "remote_command must contain tmux");
     }
 
     #[test]
@@ -531,5 +447,20 @@ mod tests {
         let mut b = Bookmark::new("Local");
         b.directory = Some("/home/user".into());
         assert!(b.remote_command().is_none());
+    }
+
+    #[test]
+    fn legacy_bookmark_with_tmux_session_field_loads_without_error() {
+        let json = r#"[{
+            "uuid": "abc",
+            "name": "Old",
+            "directory": "/work",
+            "ssh_target": "host",
+            "tmux_session": "dev"
+        }]"#;
+        let bookmarks: Vec<Bookmark> = serde_json::from_str(json).unwrap();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].name, "Old");
+        assert_eq!(bookmarks[0].directory.as_deref(), Some("/work"));
     }
 }

@@ -28,18 +28,29 @@ pub enum StartupStep {
 #[serde(rename_all = "kebab-case")]
 pub enum PaneTarget {
     LocalFolder { path: String },
-    LocalTmux { session: String },
     RemoteShell { ssh_target: String, remote_folder: Option<String> },
-    RemoteTmux { ssh_target: String, tmux_session: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaneRecovery {
     pub source: PaneSource,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_pane_target")]
     pub target: Option<PaneTarget>,
     #[serde(default)]
     pub startup: Vec<StartupStep>,
+}
+
+/// Deserializes `Option<PaneTarget>`, mapping removed variants (local-tmux,
+/// remote-tmux) to `None` so old persisted state loads without error.
+fn deserialize_pane_target<'de, D>(deserializer: D) -> Result<Option<PaneTarget>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<PaneTarget>(value).ok())
 }
 
 impl PaneRecovery {
@@ -54,7 +65,7 @@ impl PaneTarget {
     pub const fn initial_cwd(&self) -> Option<&str> {
         match self {
             Self::LocalFolder { path } => Some(path.as_str()),
-            _ => None,
+            Self::RemoteShell { .. } => None,
         }
     }
 
@@ -62,15 +73,10 @@ impl PaneTarget {
     pub fn managed_startup_input(&self) -> Option<String> {
         match self {
             Self::LocalFolder { .. } => None,
-            Self::LocalTmux { session } => Some(format!("exec {}\n", tmux_attach_command(session))),
             Self::RemoteShell { ssh_target, remote_folder } => {
                 let remote_command = remote_folder.as_deref().map(remote_shell_command);
                 Some(format!("exec {}\n", ssh_exec_command(ssh_target, remote_command.as_deref())))
             }
-            Self::RemoteTmux { ssh_target, tmux_session } => Some(format!(
-                "exec {}\n",
-                ssh_exec_command(ssh_target, Some(&tmux_attach_command(tmux_session)))
-            )),
         }
     }
 
@@ -85,16 +91,8 @@ impl PaneTarget {
             Self::LocalFolder { path } => {
                 format!("Failed to open local folder {path} (exit status {status})")
             }
-            Self::LocalTmux { session } => {
-                format!("Failed to attach local tmux session {session} (exit status {status})")
-            }
             Self::RemoteShell { ssh_target, .. } => {
                 format!("Failed to connect to {ssh_target} (exit status {status})")
-            }
-            Self::RemoteTmux { ssh_target, tmux_session } => {
-                format!(
-                    "Failed to attach tmux session {tmux_session} on {ssh_target} (exit status {status})"
-                )
             }
         }
     }
@@ -117,10 +115,6 @@ impl StartupStep {
 
 fn remote_shell_command(path: &str) -> String {
     format!("cd {} && exec ${{SHELL:-/bin/bash}} -l", shell_quote(path))
-}
-
-fn tmux_attach_command(session: &str) -> String {
-    format!("tmux attach-session -t {}", shell_quote(session))
 }
 
 fn ssh_exec_command(ssh_target: &str, remote_command: Option<&str>) -> String {
@@ -147,23 +141,6 @@ mod tests {
     }
 
     #[test]
-    fn pane_target_managed_startup_input_uses_attach_only_tmux() {
-        assert_eq!(
-            PaneTarget::LocalTmux { session: "dev".into() }.managed_startup_input().as_deref(),
-            Some("exec tmux attach-session -t 'dev'\n")
-        );
-        assert_eq!(
-            PaneTarget::RemoteTmux {
-                ssh_target: "deploy@example.com".into(),
-                tmux_session: "web".into(),
-            }
-            .managed_startup_input()
-            .as_deref(),
-            Some("exec ssh -t deploy@example.com 'tmux attach-session -t '\"'\"'web'\"'\"''\n")
-        );
-    }
-
-    #[test]
     fn pane_target_remote_shell_with_folder_builds_replayable_command() {
         assert_eq!(
             PaneTarget::RemoteShell {
@@ -176,5 +153,19 @@ mod tests {
                 "exec ssh -t deploy@example.com 'cd '\"'\"'/srv/app'\"'\"' && exec ${SHELL:-/bin/bash} -l'\n"
             )
         );
+    }
+
+    #[test]
+    fn legacy_local_tmux_target_deserializes_as_none() {
+        let json = r#"{"source":"empty-shell","target":{"local-tmux":{"session":"dev"}}}"#;
+        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.target, None);
+    }
+
+    #[test]
+    fn legacy_remote_tmux_target_deserializes_as_none() {
+        let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
+        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.target, None);
     }
 }
