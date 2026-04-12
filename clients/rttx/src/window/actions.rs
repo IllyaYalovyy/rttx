@@ -43,6 +43,7 @@ impl Window {
             }),
             ("bookmark-session", &[], Self::do_bookmark_active_session),
             ("add-current-host", &[], Self::do_add_current_host),
+            ("add-current-place", &[], Self::do_add_current_path_to_places),
             ("add-bookmark", &[], |w| {
                 crate::bookmarks_window::show_form(w, None);
             }),

@@ -670,6 +670,13 @@ mod pane_passive_tests {
     fn persistent_pane_view_is_constructible_without_action_buttons() {
         let _size = std::mem::size_of::<super::persistent_widget::PersistentPaneView>();
     }
+
+    #[test]
+    fn place_from_cwd_derives_name_for_context_menu_action() {
+        let place = crate::places::Place::from_cwd("/home/user/projects/rttx", vec![]);
+        assert_eq!(place.name, "rttx");
+        assert_eq!(place.path, "/home/user/projects/rttx");
+    }
 }
 
 #[cfg(test)]
