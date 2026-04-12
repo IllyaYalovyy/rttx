@@ -1732,3 +1732,54 @@ fn persistent_pane_forwards_vte_commit_to_daemon_input() {
 
     window.close();
 }
+
+// ── New Workspace dialog ────────────────────────────────────────
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_workspace_dialog_shows_builtin_places_for_local_host() {
+    require_display!();
+
+    let host = rttx::host::Host::local();
+    let saved = rttx::places::visible_for_host(&[], &host.key);
+
+    // Built-in places should always include Home and Root
+    let names: Vec<&str> = saved.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["Home", "Root"]);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_workspace_dialog_filters_places_by_host_key() {
+    require_display!();
+
+    let mut local_place = rttx::places::Place::new("rttx", "~/pro/rttx");
+    local_place.host_tags = vec!["local".into()];
+    let mut remote_place = rttx::places::Place::new("app", "/srv/app");
+    remote_place.host_tags = vec!["example.com".into()];
+    let global_place = rttx::places::Place::new("tmp", "/tmp");
+
+    let saved = vec![local_place, remote_place, global_place];
+
+    let local_visible = rttx::places::visible_for_host(&saved, "local");
+    let local_names: Vec<&str> = local_visible.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(local_names, vec!["Home", "Root", "rttx", "tmp"]);
+
+    let remote_visible = rttx::places::visible_for_host(&saved, "example.com");
+    let remote_names: Vec<&str> = remote_visible.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(remote_names, vec!["Home", "Root", "app", "tmp"]);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_workspace_dialog_search_filters_places() {
+    require_display!();
+
+    let places = [
+        rttx::places::Place::new("rttx", "~/pro/rttx"),
+        rttx::places::Place::new("redis", "~/src/redis"),
+    ];
+
+    assert_eq!(places.iter().filter(|p| rttx::places::matches_query(p, "rttx")).count(), 1);
+    assert_eq!(places.iter().filter(|p| rttx::places::matches_query(p, "")).count(), 2);
+}
