@@ -1,6 +1,182 @@
 use super::*;
 
+/// Sentinel value for the "All Hosts" entry in the host selector.
+const ALL_HOSTS_LABEL: &str = "All Hosts";
+
 impl Window {
+    /// Return the host key currently selected in the host dropdown,
+    /// or `None` when "All Hosts" is selected.
+    fn selected_host_key(&self) -> Option<String> {
+        let dd = &self.imp().host_selector;
+        let idx = dd.selected() as usize;
+        let keys = self.imp().host_selector_keys.borrow();
+        keys.get(idx).cloned()
+    }
+
+    /// Rebuild the host selector model and select the entry matching `host_key`.
+    pub(crate) fn sync_host_selector_to_workspace(&self, session_uuid: &str) {
+        let host_key = {
+            let state = self.imp().state.borrow();
+            state
+                .sessions
+                .iter()
+                .find(|s| s.uuid == session_uuid)
+                .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
+        };
+        self.rebuild_host_selector_model(Some(&host_key));
+    }
+
+    /// Rebuild the host selector dropdown model from saved hosts + workspace endpoints.
+    fn rebuild_host_selector_model(&self, select_key: Option<&str>) {
+        let saved_hosts = host::load();
+        let state = self.imp().state.borrow();
+
+        let mut keys: Vec<String> = Vec::new();
+        keys.push(host::LOCAL_KEY.into());
+        for h in &saved_hosts {
+            if !keys.contains(&h.key) {
+                keys.push(h.key.clone());
+            }
+        }
+        for s in &state.sessions {
+            let k = s.runtime.endpoint.host_key();
+            if !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
+        drop(state);
+
+        let mut labels: Vec<String> = keys
+            .iter()
+            .map(|k| {
+                let resolved = host::resolve(k, &saved_hosts);
+                resolved.name
+            })
+            .collect();
+        labels.push(ALL_HOSTS_LABEL.into());
+
+        // Store keys for index-based lookup (None for "All Hosts")
+        self.imp().host_selector_keys.replace(keys.clone());
+
+        let model = gtk4::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>());
+        let dd = &self.imp().host_selector;
+        dd.set_model(Some(&model));
+
+        let target_idx = select_key.and_then(|key| keys.iter().position(|k| k == key)).unwrap_or(0);
+        dd.set_selected(target_idx as u32);
+    }
+
+    pub(crate) fn refresh_place_sidebar(&self) {
+        let imp = self.imp();
+        while let Some(row) = imp.place_list.row_at_index(0) {
+            imp.place_list.remove(&row);
+        }
+
+        let query = imp.sidebar_search_entry.text();
+        let saved = places::load();
+        let saved_hosts = host::load();
+        let selected_key = self.selected_host_key();
+
+        let any_shown = selected_key.as_ref().map_or_else(
+            || {
+                // All Hosts view: group by host key
+                let mut shown = false;
+                let all_keys = self.collect_all_host_keys(&saved_hosts);
+                for key in &all_keys {
+                    let resolved = host::resolve(key, &saved_hosts);
+                    let visible: Vec<_> =
+                        saved.iter().filter(|p| p.host_tags.iter().any(|t| t == key)).collect();
+                    if !visible.is_empty() {
+                        let is_orphaned = !self.is_known_host_key(key, &saved_hosts);
+                        let label = if is_orphaned {
+                            format!("{} (orphaned)", resolved.name)
+                        } else {
+                            resolved.name.clone()
+                        };
+                        shown |= self.append_place_section(&label, &visible, query.as_str());
+                    }
+                }
+                let global_items: Vec<places::Place> = places::builtins()
+                    .into_iter()
+                    .chain(saved.iter().filter(|p| p.host_tags.is_empty()).cloned())
+                    .collect();
+                let global_refs: Vec<&places::Place> = global_items.iter().collect();
+                shown |= self.append_place_section("Global", &global_refs, query.as_str());
+                shown
+            },
+            |key| {
+                let visible = places::visible_for_host(&saved, key);
+                let (host_specific, global): (Vec<_>, Vec<_>) =
+                    visible.iter().partition(|p| !p.host_tags.is_empty());
+
+                let mut shown = false;
+                if !host_specific.is_empty() {
+                    let resolved = host::resolve(key, &saved_hosts);
+                    shown |=
+                        self.append_place_section(&resolved.name, &host_specific, query.as_str());
+                }
+                shown |= self.append_place_section("Global", &global, query.as_str());
+                shown
+            },
+        );
+
+        imp.place_scroll.set_visible(any_shown);
+        imp.place_empty.set_visible(!any_shown);
+    }
+
+    fn append_place_section(
+        &self,
+        section_label: &str,
+        items: &[&places::Place],
+        query: &str,
+    ) -> bool {
+        let imp = self.imp();
+        let filtered: Vec<_> = items.iter().filter(|p| places::matches_query(p, query)).collect();
+        if filtered.is_empty() {
+            return false;
+        }
+
+        let label = gtk4::Label::new(Some(section_label));
+        label.set_xalign(0.0);
+        label.add_css_class("dim-label");
+        label.add_css_class("caption");
+        label.set_margin_start(6);
+        label.set_margin_top(8);
+        label.set_margin_bottom(2);
+        let label_row = gtk4::ListBoxRow::new();
+        label_row.set_child(Some(&label));
+        label_row.set_selectable(false);
+        label_row.set_activatable(false);
+        imp.place_list.append(&label_row);
+
+        for place in &filtered {
+            let action_row = adw::ActionRow::new();
+            action_row.set_title(&place.name);
+            if place.name != place.path {
+                action_row.set_subtitle(&place.path);
+            }
+            action_row.set_activatable(true);
+
+            let win = self.clone();
+            let path = place.path.clone();
+            action_row.connect_activated(move |_| {
+                win.open_place_in_current_pane(&path);
+            });
+
+            imp.place_list.append(&action_row);
+        }
+        true
+    }
+
+    fn open_place_in_current_pane(&self, path: &str) {
+        let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
+            return;
+        };
+        let resolved = crate::new_workspace_dialog::resolve_place_path_public(path);
+        let cd_path = resolved.as_deref().unwrap_or("~");
+        self.send_input_to_terminal(&terminal_uuid, &format!("cd {cd_path}\n"));
+    }
+
     pub(crate) fn refresh_bookmark_sidebar(&self) {
         let imp = self.imp();
         while let Some(row) = imp.bookmark_list.row_at_index(0) {
@@ -94,10 +270,27 @@ impl Window {
         }
 
         let query = imp.command_search_entry.text();
-        for command in commands::load()
-            .into_iter()
-            .filter(|command| commands::matches_query(command, query.as_str()))
-        {
+        let sidebar_query = imp.sidebar_search_entry.text();
+        let combined_query = if sidebar_query.is_empty() {
+            query.to_string()
+        } else if query.is_empty() {
+            sidebar_query.to_string()
+        } else {
+            format!("{sidebar_query} {query}")
+        };
+
+        let all_commands = commands::load();
+        let selected_key = self.selected_host_key();
+
+        let filtered: Vec<_> = match &selected_key {
+            Some(key) => commands::visible_for_host(&all_commands, key),
+            None => all_commands,
+        }
+        .into_iter()
+        .filter(|command| commands::matches_query(command, &combined_query))
+        .collect();
+
+        for command in &filtered {
             let action_row = adw::ActionRow::new();
             action_row.set_title(&command.title);
             action_row.set_subtitle(&command.preview());
@@ -163,14 +356,45 @@ impl Window {
             });
 
             let win = self.clone();
+            let command_clone = command.clone();
             insert_button.connect_clicked(move |_| {
-                win.execute_saved_command(&command, CommandRunMode::Insert);
+                win.execute_saved_command(&command_clone, CommandRunMode::Insert);
             });
         }
 
         let is_empty = imp.command_list.row_at_index(0).is_none();
         imp.command_scroll.set_visible(!is_empty);
         imp.command_empty.set_visible(is_empty);
+    }
+
+    /// Collect all host keys referenced by places and commands.
+    fn collect_all_host_keys(&self, saved_hosts: &[host::Host]) -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+        for h in saved_hosts {
+            if !keys.contains(&h.key) {
+                keys.push(h.key.clone());
+            }
+        }
+        for p in places::load() {
+            for tag in &p.host_tags {
+                if !keys.contains(tag) {
+                    keys.push(tag.clone());
+                }
+            }
+        }
+        for c in commands::load() {
+            for tag in &c.host_tags {
+                if !keys.contains(tag) {
+                    keys.push(tag.clone());
+                }
+            }
+        }
+        keys
+    }
+
+    /// Whether a host key is known (saved or is the local key).
+    fn is_known_host_key(&self, key: &str, saved_hosts: &[host::Host]) -> bool {
+        key == host::LOCAL_KEY || saved_hosts.iter().any(|h| h.key == key)
     }
 
     fn reorder_bookmark(&self, source_uuid: &str, target_uuid: &str) {

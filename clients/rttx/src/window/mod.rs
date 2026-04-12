@@ -11,6 +11,8 @@ use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
+use crate::host;
+use crate::places;
 use crate::preferences::{self, Preferences};
 use crate::runtime::{
     ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
@@ -47,6 +49,12 @@ mod imp {
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
         pub utility_sidebar_box: gtk4::Box,
+        pub sidebar_search_entry: gtk4::SearchEntry,
+        pub host_selector: gtk4::DropDown,
+        pub utility_stack: gtk4::Stack,
+        pub place_list: gtk4::ListBox,
+        pub place_scroll: gtk4::ScrolledWindow,
+        pub place_empty: adw::StatusPage,
         pub bookmark_search_entry: gtk4::SearchEntry,
         pub bookmark_list: gtk4::ListBox,
         pub bookmark_scroll: gtk4::ScrolledWindow,
@@ -66,6 +74,7 @@ mod imp {
         pub focused_terminal_uuid: RefCell<Option<String>>,
         pub workspace_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub pending_connect_existing: RefCell<Option<crate::host::Host>>,
+        pub host_selector_keys: RefCell<Vec<String>>,
     }
 
     #[glib::object_subclass]
@@ -147,21 +156,59 @@ mod imp {
                 .child(&self.sidebar_list)
                 .build();
 
+            // ── Unified search ────────────────────────────────────
+            self.sidebar_search_entry.set_placeholder_text(Some("Search…"));
+            self.sidebar_search_entry.set_margin_start(12);
+            self.sidebar_search_entry.set_margin_end(12);
+            self.sidebar_search_entry.set_margin_top(12);
+
+            // ── Host selector ────────────────────────────────────
+            let host_model = gtk4::StringList::new(&["Local"]);
+            self.host_selector.set_model(Some(&host_model));
+            self.host_selector.set_selected(0);
+            self.host_selector.set_margin_start(12);
+            self.host_selector.set_margin_end(12);
+            self.host_selector.set_margin_top(8);
+            self.host_selector.update_property(&[gtk4::accessible::Property::Label("Host")]);
+
+            // ── Places tab ───────────────────────────────────────
+            self.place_list.set_selection_mode(gtk4::SelectionMode::None);
+            self.place_list.add_css_class("boxed-list");
+            self.place_list.update_property(&[gtk4::accessible::Property::Label("Places")]);
+
+            self.place_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
+            self.place_scroll.set_vexpand(true);
+            self.place_scroll.set_margin_start(12);
+            self.place_scroll.set_margin_end(12);
+            self.place_scroll.set_margin_bottom(12);
+            self.place_scroll.set_child(Some(&self.place_list));
+            self.place_scroll.set_visible(false);
+
+            self.place_empty.set_icon_name(Some("folder-symbolic"));
+            self.place_empty.set_title("No Places");
+            self.place_empty.set_description(Some("Save folder paths for quick navigation"));
+            self.place_empty.set_vexpand(true);
+
+            let places_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            places_page.append(&self.place_scroll);
+            places_page.append(&self.place_empty);
+
+            // ── Bookmarks tab (legacy) ───────────────────────────
             let add_bookmark_button = gtk4::Button::builder()
                 .icon_name("list-add-symbolic")
                 .tooltip_text("New bookmark")
                 .action_name("win.add-bookmark")
                 .build();
-            let utility_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
-            utility_header.set_margin_start(12);
-            utility_header.set_margin_end(12);
-            utility_header.set_margin_top(12);
-            let utility_title = gtk4::Label::new(Some("Bookmarks"));
-            utility_title.set_xalign(0.0);
-            utility_title.set_hexpand(true);
-            utility_title.add_css_class("title-4");
-            utility_header.append(&utility_title);
-            utility_header.append(&add_bookmark_button);
+            let bookmark_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+            bookmark_header.set_margin_start(12);
+            bookmark_header.set_margin_end(12);
+            bookmark_header.set_margin_top(12);
+            let bookmark_title = gtk4::Label::new(Some("Bookmarks"));
+            bookmark_title.set_xalign(0.0);
+            bookmark_title.set_hexpand(true);
+            bookmark_title.add_css_class("title-4");
+            bookmark_header.append(&bookmark_title);
+            bookmark_header.append(&add_bookmark_button);
 
             self.bookmark_search_entry.set_placeholder_text(Some("Search bookmarks"));
             self.bookmark_search_entry.set_margin_start(12);
@@ -184,6 +231,13 @@ mod imp {
             ));
             self.bookmark_empty.set_vexpand(true);
 
+            let bookmarks_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            bookmarks_page.append(&bookmark_header);
+            bookmarks_page.append(&self.bookmark_search_entry);
+            bookmarks_page.append(&self.bookmark_scroll);
+            bookmarks_page.append(&self.bookmark_empty);
+
+            // ── Commands tab ─────────────────────────────────────
             let add_command_button = gtk4::Button::builder()
                 .icon_name("list-add-symbolic")
                 .tooltip_text("New command")
@@ -221,30 +275,28 @@ mod imp {
             ));
             self.command_empty.set_vexpand(true);
 
-            let bookmarks_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            bookmarks_page.append(&utility_header);
-            bookmarks_page.append(&self.bookmark_search_entry);
-            bookmarks_page.append(&self.bookmark_scroll);
-            bookmarks_page.append(&self.bookmark_empty);
-
             let commands_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             commands_page.append(&commands_header);
             commands_page.append(&self.command_search_entry);
             commands_page.append(&self.command_scroll);
             commands_page.append(&self.command_empty);
 
-            let utility_stack = gtk4::Stack::new();
-            utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
-            utility_stack.add_titled(&commands_page, Some("commands"), "Commands");
+            // ── Tab stack ────────────────────────────────────────
+            self.utility_stack.add_titled(&places_page, Some("places"), "Places");
+            self.utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
+            self.utility_stack.add_titled(&commands_page, Some("commands"), "Commands");
 
-            let utility_switcher = gtk4::StackSwitcher::builder().stack(&utility_stack).build();
+            let utility_switcher =
+                gtk4::StackSwitcher::builder().stack(&self.utility_stack).build();
             utility_switcher.set_margin_start(12);
             utility_switcher.set_margin_end(12);
-            utility_switcher.set_margin_top(12);
+            utility_switcher.set_margin_top(8);
 
             self.utility_sidebar_box.set_orientation(gtk4::Orientation::Vertical);
+            self.utility_sidebar_box.append(&self.sidebar_search_entry);
+            self.utility_sidebar_box.append(&self.host_selector);
             self.utility_sidebar_box.append(&utility_switcher);
-            self.utility_sidebar_box.append(&utility_stack);
+            self.utility_sidebar_box.append(&self.utility_stack);
             self.utility_sidebar_box.set_width_request(320);
 
             self.session_stack.set_hexpand(true);
@@ -441,12 +493,25 @@ impl Window {
         });
 
         let win = self.clone();
+        self.imp().sidebar_search_entry.connect_changed(move |_| {
+            win.refresh_place_sidebar();
+            win.refresh_bookmark_sidebar();
+            win.refresh_command_sidebar();
+        });
+
+        let win = self.clone();
         self.imp().bookmark_search_entry.connect_changed(move |_| {
             win.refresh_bookmark_sidebar();
         });
 
         let win = self.clone();
         self.imp().command_search_entry.connect_changed(move |_| {
+            win.refresh_command_sidebar();
+        });
+
+        let win = self.clone();
+        self.imp().host_selector.connect_selected_notify(move |_| {
+            win.refresh_place_sidebar();
             win.refresh_command_sidebar();
         });
 
@@ -461,6 +526,7 @@ impl Window {
             win.reapply_terminal_preferences();
         });
 
+        self.refresh_place_sidebar();
         self.refresh_bookmark_sidebar();
         self.refresh_command_sidebar();
     }
@@ -702,6 +768,7 @@ impl Window {
         {
             session_row.clear_activity();
         }
+        self.sync_host_selector_to_workspace(&uuid);
         self.focus_session_terminal(&uuid);
         if let Some(action) = self.lookup_action("toggle-input-sync")
             && let Ok(action) = action.downcast::<gtk4::gio::SimpleAction>()
