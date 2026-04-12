@@ -792,7 +792,7 @@ fn spawn_pty_read_loop(
                         Ok(n) => {
                             let data = buf[..n].to_vec();
                             let mut s = server.lock().await;
-                            let (new_cwd, new_title) = if let Some(session) = s.sessions.get_mut(&session_id)
+                            let (new_cwd, new_title, pending_replies) = if let Some(session) = s.sessions.get_mut(&session_id)
                                 && let Some(pane) = session.panes.get_mut(&pane_id)
                             {
                                 let result = pane.feed_output(&data);
@@ -804,10 +804,28 @@ fn spawn_pty_read_loop(
                                     let rev = session.set_pane_title(pane_id, title.clone())?;
                                     Some((title, rev))
                                 });
-                                (cwd, title)
+                                (cwd, title, result.pending_replies)
                             } else {
-                                (None, None)
+                                (None, None, Vec::new())
                             };
+                            // Write DSR replies back to the PTY before broadcasting.
+                            if !pending_replies.is_empty()
+                                && let Some(writer) = s.pty_writers.get(&pane_id)
+                            {
+                                let mut w = writer.lock().await;
+                                for reply in &pending_replies {
+                                    if let Err(e) = w.write_all(reply).await {
+                                        tracing::error!(
+                                            "Failed to write DSR reply to PTY {pane_short} in session {session_label}: {e}"
+                                        );
+                                    }
+                                }
+                                if let Err(e) = w.flush().await {
+                                    tracing::error!(
+                                        "Failed to flush DSR reply to PTY {pane_short} in session {session_label}: {e}"
+                                    );
+                                }
+                            }
                             let msg = protocol::delta(session_id, pane_id, data);
                             s.broadcast_to_session(session_id, &msg);
                             if let Some((cwd, revision)) = new_cwd {
