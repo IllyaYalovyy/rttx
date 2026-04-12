@@ -20,6 +20,8 @@ pub struct WorkspacePaneRestore {
     pub title: String,
     pub cwd: String,
     pub scrollback: Vec<u8>,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 /// Pure result of reconciling a workspace against a runtime snapshot.
@@ -452,6 +454,8 @@ impl WindowState {
                     title: pane_snapshot.title.clone(),
                     cwd: pane_snapshot.cwd.clone(),
                     scrollback: pane_snapshot.scrollback.clone(),
+                    cols: pane_snapshot.cols as u16,
+                    rows: pane_snapshot.rows as u16,
                 })
             })
             .collect::<Vec<_>>();
@@ -1083,6 +1087,8 @@ mod tests {
                 title: "Shell".into(),
                 cwd: "/srv/project".into(),
                 scrollback: b"restored output".to_vec(),
+                cols: 120,
+                rows: 40,
             }],
         );
         assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
@@ -1495,5 +1501,28 @@ mod tests {
 
         // Second layout terminal should request a new pane.
         assert_eq!(opened.panes_to_create, vec!["right".to_string()]);
+    }
+
+    #[test]
+    fn snapshot_restore_carries_daemon_pane_dimensions() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let terminal_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state =
+            window_state(vec![managed_session("ws-1", "Workspace", term(&terminal_uuid))]);
+
+        let mut snap = pane_snapshot(&terminal_uuid, "Shell", "/home", b"$ ");
+        snap.cols = 200;
+        snap.rows = 50;
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![snap]),
+        });
+
+        assert_eq!(transition.pane_snapshot_restores.len(), 1);
+        let restore = &transition.pane_snapshot_restores[0];
+        assert_eq!(restore.cols, 200);
+        assert_eq!(restore.rows, 50);
     }
 }
