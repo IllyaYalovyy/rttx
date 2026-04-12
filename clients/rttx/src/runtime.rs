@@ -53,6 +53,15 @@ impl RuntimeEndpoint {
             Self::Remote { host } => format!("remote:{host}"),
         }
     }
+
+    /// Host key compatible with the host model for place/command filtering.
+    #[must_use]
+    pub fn host_key(&self) -> String {
+        match self {
+            Self::Local => crate::host::LOCAL_KEY.into(),
+            Self::Remote { host } => crate::host::normalize_ssh_key(host),
+        }
+    }
 }
 
 /// Persisted managed-runtime metadata attached to a workspace.
@@ -1099,6 +1108,23 @@ mod tests {
         assert_ne!(local.key(), remote.key());
         assert_eq!(local.key(), "local");
         assert!(remote.key().contains("host"));
+    }
+
+    #[test]
+    fn host_key_local_returns_local_key() {
+        assert_eq!(RuntimeEndpoint::Local.host_key(), crate::host::LOCAL_KEY);
+    }
+
+    #[test]
+    fn host_key_remote_normalizes_ssh_target() {
+        let endpoint = RuntimeEndpoint::Remote { host: "deploy@example.com".into() };
+        assert_eq!(endpoint.host_key(), "example.com");
+    }
+
+    #[test]
+    fn host_key_remote_bare_hostname() {
+        let endpoint = RuntimeEndpoint::Remote { host: "dev-box".into() };
+        assert_eq!(endpoint.host_key(), "dev-box");
     }
 
     #[test]

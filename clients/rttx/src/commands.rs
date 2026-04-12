@@ -74,6 +74,12 @@ pub fn is_visible_on(command: &SavedCommand, host_key: &str) -> bool {
     command.host_tags.is_empty() || command.host_tags.iter().any(|tag| tag == host_key)
 }
 
+/// Collect commands visible on `host_key`: matching saved commands.
+#[must_use]
+pub fn visible_for_host(saved: &[SavedCommand], host_key: &str) -> Vec<SavedCommand> {
+    saved.iter().filter(|c| is_visible_on(c, host_key)).cloned().collect()
+}
+
 /// Migrate legacy commands that lack host tags by tagging them with `"local"`.
 pub fn migrate_legacy(commands: &mut [SavedCommand]) {
     for command in commands.iter_mut() {
@@ -277,6 +283,26 @@ mod tests {
         assert!(is_visible_on(&command, "local"));
         assert!(is_visible_on(&command, "example.com"));
         assert!(!is_visible_on(&command, "other.com"));
+    }
+
+    #[test]
+    fn visible_for_host_returns_matching_commands() {
+        let mut local_cmd = SavedCommand::new("Local", "echo local");
+        local_cmd.host_tags = vec!["local".into()];
+        let mut remote_cmd = SavedCommand::new("Remote", "echo remote");
+        remote_cmd.host_tags = vec!["example.com".into()];
+        let global_cmd = SavedCommand::new("Global", "echo global");
+
+        let saved = vec![local_cmd, remote_cmd, global_cmd];
+        let visible = visible_for_host(&saved, "local");
+        let names: Vec<&str> = visible.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(names, vec!["Local", "Global"]);
+    }
+
+    #[test]
+    fn visible_for_host_with_no_commands_returns_empty() {
+        let visible = visible_for_host(&[], "local");
+        assert!(visible.is_empty());
     }
 
     #[test]

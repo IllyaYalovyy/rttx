@@ -172,6 +172,12 @@ fn place_icon(place: &Place) -> &'static str {
     }
 }
 
+/// Public wrapper for `resolve_place_path` used by the sidebar.
+#[must_use]
+pub fn resolve_place_path_public(path: &str) -> Option<String> {
+    resolve_place_path(path)
+}
+
 /// Resolve `~` to the actual home directory for local paths.
 fn resolve_place_path(path: &str) -> Option<String> {
     let trimmed = path.trim();
