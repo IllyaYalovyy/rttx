@@ -42,6 +42,7 @@ impl Window {
                 sidebar.set_visible(!sidebar.is_visible());
             }),
             ("bookmark-session", &[], Self::do_bookmark_active_session),
+            ("add-current-host", &[], Self::do_add_current_host),
             ("add-bookmark", &[], |w| {
                 crate::bookmarks_window::show_form(w, None);
             }),
