@@ -10,4 +10,5 @@
 /rttx.flatpak
 .claude
 .kiro
+/.codex
 __pycache__/

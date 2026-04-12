@@ -13,7 +13,7 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi
 
-from common import AppFixture, click, find_all_by_role, wait_for_name, wait_for_role
+from common import AppFixture, click, find_all_by_role, wait_for_role
 
 # Patterns that must never appear in a sidebar subtitle (RFC-015 exclusion list).
 FORBIDDEN_SUBTITLE_PATTERNS = [
@@ -33,7 +33,24 @@ FORBIDDEN_SUBTITLE_PATTERNS = [
 
 def get_sidebar_rows(app: Atspi.Accessible) -> list[Atspi.Accessible]:
     """Return all LIST_ITEM nodes (sidebar workspace rows)."""
-    return find_all_by_role(app, Atspi.Role.LIST_ITEM)
+    return [
+        row
+        for row in find_all_by_role(app, Atspi.Role.LIST_ITEM)
+        if has_ancestor_named(row, Atspi.Role.LIST, "Workspaces")
+    ]
+
+
+def has_ancestor_named(node: Atspi.Accessible, role: Atspi.Role, name: str) -> bool:
+    """Return whether *node* belongs to the named accessible container."""
+    try:
+        parent = node.get_parent()
+        while parent is not None:
+            if parent.get_role() == role and parent.get_name() == name:
+                return True
+            parent = parent.get_parent()
+    except Exception:  # noqa: BLE001
+        return False
+    return False
 
 
 def get_row_subtitle(row: Atspi.Accessible) -> str:

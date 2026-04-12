@@ -13,6 +13,7 @@ from common import (
     click,
     find_all_by_role,
     find_by_role_and_name,
+    is_showing,
     wait_for_role,
 )
 
@@ -65,10 +66,13 @@ class TestSidebar(unittest.TestCase):
             self.skipTest("Bookmarks page tab not found in AT-SPI tree")
 
         # The content panel (the actual Bookmarks stack page below the tab bar).
-        content_panels = [
-            n for n in find_all_by_role(self.fixture.atspi_app, Atspi.Role.PANEL)
-            if n.get_name() == "Bookmarks"
-        ]
+        content_panels = []
+        for node in find_all_by_role(self.fixture.atspi_app, Atspi.Role.PANEL):
+            if node.get_name() != "Bookmarks" or not is_showing(node):
+                continue
+            extents = get_extents(node)
+            if extents is not None and extents[2] > 0 and extents[3] > 0:
+                content_panels.append(node)
         if not content_panels:
             self.skipTest("Bookmarks content panel not found in AT-SPI tree")
         content = content_panels[0]
