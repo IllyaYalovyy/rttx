@@ -3,20 +3,14 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::commands::{self, CommandRunMode, SavedCommand};
+use crate::form_dialog::FormDialog;
+use crate::host;
 use crate::window::Window;
 
 pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     let existing_uuid = command.map(|c| c.uuid.clone());
 
-    let dialog = adw::Dialog::builder()
-        .title(if command.is_some() { "Edit Command" } else { "New Command" })
-        .content_width(480)
-        .build();
-
-    let header = adw::HeaderBar::new();
-    let save_button = gtk4::Button::with_label(if command.is_some() { "Save" } else { "Add" });
-    save_button.add_css_class("suggested-action");
-    header.pack_end(&save_button);
+    let form = FormDialog::new("Command", command.is_some(), 480);
 
     let title_row = adw::EntryRow::builder().title("Title").build();
 
@@ -32,42 +26,39 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     run_mode_row.add_suffix(&run_mode);
     run_mode_row.set_activatable_widget(Some(&run_mode));
 
-    let status_label = gtk4::Label::new(None);
-    status_label.set_xalign(0.0);
-    status_label.add_css_class("dim-label");
+    let host_tags_row =
+        adw::EntryRow::builder().title("Host tags (comma-separated, empty = global)").build();
 
     let title_group = adw::PreferencesGroup::new();
     title_group.add(&title_row);
 
     let behavior_group = adw::PreferencesGroup::new();
     behavior_group.add(&run_mode_row);
+    behavior_group.add(&host_tags_row);
 
-    let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
-    content_box.set_margin_start(18);
-    content_box.set_margin_end(18);
-    content_box.set_margin_top(18);
-    content_box.set_margin_bottom(18);
-    content_box.append(&title_group);
-    content_box.append(&body_scroll);
-    content_box.append(&behavior_group);
-    content_box.append(&status_label);
-
-    let toolbar_view = adw::ToolbarView::new();
-    toolbar_view.add_top_bar(&header);
-    toolbar_view.set_content(Some(&content_box));
-
-    dialog.set_child(Some(&toolbar_view));
+    form.content_box.append(&title_group);
+    form.content_box.append(&body_scroll);
+    form.content_box.append(&behavior_group);
+    form.finish_layout();
 
     if let Some(c) = command {
         title_row.set_text(&c.title);
         body_buffer.set_text(&c.body);
         run_mode.set_selected(run_mode_index(c.default_run_mode));
+        host_tags_row.set_text(&c.host_tags.join(", "));
     }
 
-    let dialog_for_save = dialog.clone();
+    let dialog = form.dialog.clone();
+    let status_label = form.status_label.clone();
     let parent_for_save = parent.clone();
-    save_button.connect_clicked(move |_| {
-        let cmd = match build_command(&title_row, &body_buffer, &run_mode, existing_uuid.clone()) {
+    form.save_button.connect_clicked(move |_| {
+        let cmd = match build_command(
+            &title_row,
+            &body_buffer,
+            &run_mode,
+            &host_tags_row,
+            existing_uuid.clone(),
+        ) {
             Ok(c) => c,
             Err(msg) => {
                 status_label.set_text(&msg);
@@ -86,16 +77,17 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
             return;
         }
         parent_for_save.refresh_command_sidebar();
-        dialog_for_save.close();
+        dialog.close();
     });
 
-    dialog.present(Some(parent));
+    form.present(parent);
 }
 
 fn build_command(
     title_row: &adw::EntryRow,
     body_buffer: &gtk4::TextBuffer,
     run_mode: &gtk4::DropDown,
+    host_tags_row: &adw::EntryRow,
     existing_uuid: Option<String>,
 ) -> Result<SavedCommand, String> {
     let title = title_row.text().trim().to_string();
@@ -114,7 +106,20 @@ fn build_command(
         command.uuid = uuid;
     }
     command.default_run_mode = run_mode_from_index(run_mode.selected());
+    command.host_tags = parse_host_tags(&host_tags_row.text());
     Ok(command)
+}
+
+/// Parse a comma-separated host tags string into a deduplicated list of host keys.
+pub(crate) fn parse_host_tags(input: &str) -> Vec<String> {
+    let mut tags: Vec<String> = input
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(host::normalize_ssh_key)
+        .collect();
+    tags.dedup();
+    tags
 }
 
 const fn run_mode_from_index(index: u32) -> CommandRunMode {
@@ -128,5 +133,36 @@ const fn run_mode_index(run_mode: CommandRunMode) -> u32 {
     match run_mode {
         CommandRunMode::Run => 0,
         CommandRunMode::Insert => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_host_tags_splits_on_comma() {
+        assert_eq!(parse_host_tags("local, example.com"), vec!["local", "example.com"]);
+    }
+
+    #[test]
+    fn parse_host_tags_trims_whitespace() {
+        assert_eq!(parse_host_tags("  local ,  example.com  "), vec!["local", "example.com"]);
+    }
+
+    #[test]
+    fn parse_host_tags_empty_string_returns_empty_vec() {
+        assert!(parse_host_tags("").is_empty());
+        assert!(parse_host_tags("  ").is_empty());
+    }
+
+    #[test]
+    fn parse_host_tags_normalizes_ssh_keys() {
+        assert_eq!(parse_host_tags("deploy@Example.COM"), vec!["example.com"]);
+    }
+
+    #[test]
+    fn parse_host_tags_deduplicates() {
+        assert_eq!(parse_host_tags("local, local"), vec!["local"]);
     }
 }

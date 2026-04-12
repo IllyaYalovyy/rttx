@@ -281,10 +281,7 @@ mod tests {
 
     #[test]
     fn migrate_legacy_tags_untagged_commands_with_local() {
-        let mut commands = vec![
-            SavedCommand::new("A", "echo a"),
-            SavedCommand::new("B", "echo b"),
-        ];
+        let mut commands = vec![SavedCommand::new("A", "echo a"), SavedCommand::new("B", "echo b")];
         migrate_legacy(&mut commands);
         assert_eq!(commands[0].host_tags, vec!["local"]);
         assert_eq!(commands[1].host_tags, vec!["local"]);
