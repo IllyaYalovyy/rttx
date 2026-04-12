@@ -33,10 +33,14 @@ impl Window {
             ("toggle-pane-zoom", &["<Ctrl><Shift>Z"], Self::toggle_pane_zoom),
             ("rotate-layout", &["<Ctrl><Shift>R"], Self::rotate_layout),
             ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
-            ("new-ephemeral-workspace", &["<Ctrl><Shift><Alt>T"], Self::add_ephemeral_session),
+            ("new-ephemeral-workspace", &[], Self::add_ephemeral_session),
             ("new-remote-workspace", &[], Self::show_new_remote_workspace_dialog),
             ("browse-remote-runtimes", &[], Self::show_browse_remote_runtimes_dialog),
-            ("connect-existing-local", &["<Ctrl><Shift>A"], Self::connect_existing_local),
+            ("connect-existing-local", &[], Self::connect_existing_local),
+            ("connect-to-existing", &["<Ctrl><Shift>A"], Self::connect_existing_local),
+            ("new-direct", &["<Ctrl><Shift>D"], |w| {
+                w.add_direct_session();
+            }),
             ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());

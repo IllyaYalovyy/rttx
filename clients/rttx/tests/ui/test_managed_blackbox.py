@@ -22,10 +22,17 @@ class TestManagedBlackBox(unittest.TestCase):
 
     def _create_managed_workspace(self) -> None:
         button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "New persistent workspace"
+            Atspi.Role.TOGGLE_BUTTON, "New workspace"
         )
-        self.assertIsNotNone(button, "persistent workspace button not visible")
+        self.assertIsNotNone(button, "New workspace button not visible")
         click(button)
+        import time
+        time.sleep(0.5)
+        local_item = self.fixture.wait_for_showing_name(
+            Atspi.Role.MENU_ITEM, "Local", timeout=5.0
+        )
+        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
+        click(local_item)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
         home_button = self.fixture.wait_for_showing_name(
@@ -139,10 +146,17 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
     def test_managed_pane_exit_is_visible_when_shell_exits(self) -> None:
         """A daemon PaneExited event must leave a clear, non-hanging pane."""
         button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "New persistent workspace"
+            Atspi.Role.TOGGLE_BUTTON, "New workspace"
         )
-        self.assertIsNotNone(button, "persistent workspace button not visible")
+        self.assertIsNotNone(button, "New workspace button not visible")
         click(button)
+        import time
+        time.sleep(0.5)
+        local_item = self.fixture.wait_for_showing_name(
+            Atspi.Role.MENU_ITEM, "Local", timeout=5.0
+        )
+        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
+        click(local_item)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
         home_button = self.fixture.wait_for_showing_name(

@@ -9,6 +9,22 @@ impl Window {
         self.add_managed_session(WorkspacePolicy::Ephemeral);
     }
 
+    pub(super) fn add_direct_session(&self) {
+        let imp = self.imp();
+        let count = imp.state.borrow().sessions.len() + 1;
+        let initial_cwd = self.resolve_default_session_folder();
+        let name = format!("Direct {count}");
+        let mut session_state = SessionState::new_with_initial_cwd(name, initial_cwd);
+        session_state.color = self.next_session_color();
+        imp.state.borrow_mut().sessions.push(session_state.clone());
+        self.build_session(&session_state, false);
+
+        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        if let Some(row) = imp.sidebar_list.row_at_index(index) {
+            imp.sidebar_list.select_row(Some(&row));
+        }
+    }
+
     pub(super) fn show_new_remote_workspace_dialog(&self) {
         let dialog =
             adw::Dialog::builder().title("New Remote Workspace").content_width(440).build();
@@ -107,7 +123,7 @@ impl Window {
 
     /// Request session inventory for a host and show the Connect to Existing
     /// dialog when the response arrives.
-    fn request_connect_existing(&self, host: &crate::host::Host) {
+    pub(super) fn request_connect_existing(&self, host: &crate::host::Host) {
         if !self.ensure_connection_manager() {
             return;
         }
