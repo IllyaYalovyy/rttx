@@ -1128,6 +1128,13 @@ mod tests {
     }
 
     #[test]
+    fn remote_endpoint_host_key_matches_saved_host_key() {
+        let endpoint = RuntimeEndpoint::Remote { host: "deploy@builder.example.com".into() };
+        let host = crate::host::Host::remote("deploy@builder.example.com");
+        assert_eq!(endpoint.host_key(), host.key);
+    }
+
+    #[test]
     fn connection_presentation_for_starting_shows_starting_label() {
         let p = present_connection_status(&ConnectionStatus::Starting);
         assert_eq!(p.header_label, "Starting");
