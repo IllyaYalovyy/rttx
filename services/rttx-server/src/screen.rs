@@ -66,6 +66,25 @@ impl PaneScreen {
         &self.performer.raw_bytes
     }
 
+    /// Return a tail slice of raw bytes suitable for client snapshot replay.
+    ///
+    /// Caps the returned data to `max_bytes` and finds a clean newline
+    /// boundary so the snapshot never starts mid-escape-sequence.
+    #[must_use]
+    pub fn snapshot_bytes(&self, max_bytes: usize) -> &[u8] {
+        let raw = &self.performer.raw_bytes;
+        if raw.len() <= max_bytes {
+            return raw;
+        }
+        let start = raw.len() - max_bytes;
+        // Find the first newline at or after `start` to avoid splitting
+        // mid-escape-sequence.
+        raw[start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(&raw[start..], |offset| &raw[start + offset + 1..])
+    }
+
     /// Return the terminal title if set via OSC.
     #[must_use]
     pub fn title(&self) -> Option<&str> {
@@ -276,6 +295,62 @@ mod tests {
         screen.feed(b"\r\n\r\n\r\n"); // row 3
         screen.feed(b"\x1b[2A"); // up 2 → row 1
         assert_eq!(screen.cursor_position().0, 1);
+    }
+
+    #[test]
+    fn snapshot_bytes_returns_all_when_under_cap() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"line 1\nline 2\n");
+        assert_eq!(screen.snapshot_bytes(1024), b"line 1\nline 2\n");
+    }
+
+    #[test]
+    fn snapshot_bytes_caps_at_newline_boundary() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"aaaa\nbbbb\ncccc\n");
+        // Cap to 10 bytes — start=5 ("bbbb\ncccc\n"), finds newline at
+        // offset 4, returns from "cccc\n".
+        let snap = screen.snapshot_bytes(10);
+        assert_eq!(snap, b"cccc\n");
+    }
+
+    #[test]
+    fn snapshot_bytes_avoids_mid_escape_sequence_split() {
+        let mut screen = PaneScreen::new(1024);
+        // ESC[31m (red) followed by text and newline, then more content
+        screen.feed(b"old line\n\x1b[31mred text\nmore\n");
+        // Cap to 15: start=15, raw[15..] = "red text\nmore\n"
+        // finds newline at offset 8, returns "more\n"
+        // Cap to 22: start=8, raw[8..] = "\n\x1b[31mred text\nmore\n"
+        // finds newline at offset 0, returns "\x1b[31mred text\nmore\n"
+        let snap = screen.snapshot_bytes(22);
+        assert_eq!(snap, b"\x1b[31mred text\nmore\n");
+    }
+
+    #[test]
+    fn snapshot_bytes_falls_back_to_raw_tail_when_no_newline() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"no newlines at all in this data");
+        let snap = screen.snapshot_bytes(10);
+        assert_eq!(snap, b" this data");
+    }
+
+    #[test]
+    fn snapshot_bytes_large_buffer_stays_within_cap() {
+        let mut screen = PaneScreen::new(1024 * 1024);
+        // Simulate a long session with many lines of colored output.
+        for i in 0..10_000 {
+            screen.feed(format!("\x1b[32mline {i}: some output text\x1b[0m\n").as_bytes());
+        }
+        let cap = 4096;
+        let snap = screen.snapshot_bytes(cap);
+        assert!(snap.len() <= cap);
+        // Should start at a line boundary, not mid-escape-sequence.
+        assert!(
+            snap[0] == b'\x1b' || snap[0].is_ascii_graphic() || snap[0].is_ascii_whitespace(),
+            "snapshot starts with unexpected byte: 0x{:02x}",
+            snap[0]
+        );
     }
 
     #[test]

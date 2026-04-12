@@ -17,6 +17,14 @@ const DEFAULT_MAX_SCROLLBACK: usize = 10 * 1024 * 1024;
 /// Default on-disk scrollback log byte limit per pane (10 MB).
 const DEFAULT_MAX_SCROLLBACK_LOG: u64 = 10 * 1024 * 1024;
 
+/// Maximum bytes sent in a snapshot to a reconnecting client (256 KB).
+///
+/// The full in-memory buffer can be up to 10 MB, but replaying all of it
+/// into VTE on the client is slow and the leading bytes may start
+/// mid-escape-sequence after the scrollback cap truncation. This smaller
+/// cap keeps reconnect fast and avoids formatting corruption.
+pub const MAX_SNAPSHOT_BYTES: usize = 256 * 1024;
+
 /// What changed after feeding PTY output to a pane.
 pub struct FeedResult {
     /// New CWD if it changed from the previous value.
