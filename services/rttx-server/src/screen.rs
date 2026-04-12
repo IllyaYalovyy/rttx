@@ -27,6 +27,8 @@ struct ScreenPerformer {
     title: Option<String>,
     /// Current working directory reported via OSC 7.
     cwd: Option<String>,
+    /// Pending replies to write back to the PTY (e.g. CPR for DSR).
+    pending_replies: Vec<Vec<u8>>,
 }
 
 impl PaneScreen {
@@ -42,6 +44,7 @@ impl PaneScreen {
                 cursor_col: 0,
                 title: None,
                 cwd: None,
+                pending_replies: Vec::new(),
             },
         }
     }
@@ -101,6 +104,11 @@ impl PaneScreen {
     #[must_use]
     pub const fn cursor_position(&self) -> (usize, usize) {
         (self.performer.cursor_row, self.performer.cursor_col)
+    }
+
+    /// Drain and return any pending replies (e.g. CPR for DSR).
+    pub fn take_pending_replies(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.performer.pending_replies)
     }
 }
 
@@ -197,6 +205,19 @@ impl vte::Perform for ScreenPerformer {
                 self.cursor_row = (row as usize).saturating_sub(1);
                 self.cursor_col = (col as usize).saturating_sub(1);
             }
+            // DSR — Device Status Report
+            'n' => match first_param {
+                5 => {
+                    // Operating status: report "OK"
+                    self.pending_replies.push(b"\x1b[0n".to_vec());
+                }
+                6 => {
+                    // Cursor position: report CPR (1-based)
+                    let reply = format!("\x1b[{};{}R", self.cursor_row + 1, self.cursor_col + 1);
+                    self.pending_replies.push(reply.into_bytes());
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -351,6 +372,62 @@ mod tests {
             "snapshot starts with unexpected byte: 0x{:02x}",
             snap[0]
         );
+    }
+
+    #[test]
+    fn dsr_cursor_position_generates_cpr_response() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"hello"); // cursor at (0, 5)
+        screen.feed(b"\x1b[6n"); // DSR: request cursor position
+        let responses = screen.take_pending_replies();
+        assert_eq!(responses.len(), 1);
+        // CPR is 1-based: row=1, col=6
+        assert_eq!(responses[0], b"\x1b[1;6R");
+    }
+
+    #[test]
+    fn dsr_after_cursor_movement_reports_correct_position() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"line1\r\nline2\r\nline3");
+        screen.feed(b"\x1b[6n");
+        let responses = screen.take_pending_replies();
+        assert_eq!(responses.len(), 1);
+        // row=3, col=6 (1-based)
+        assert_eq!(responses[0], b"\x1b[3;6R");
+    }
+
+    #[test]
+    fn dsr_operating_status_generates_ok_response() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[5n"); // DSR: request operating status
+        let responses = screen.take_pending_replies();
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0], b"\x1b[0n"); // "OK" status
+    }
+
+    #[test]
+    fn no_pending_replies_without_dsr() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"hello world");
+        assert!(screen.take_pending_replies().is_empty());
+    }
+
+    #[test]
+    fn multiple_dsr_in_single_feed() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"ab\x1b[6n\x1b[6n");
+        let responses = screen.take_pending_replies();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0], b"\x1b[1;3R");
+        assert_eq!(responses[1], b"\x1b[1;3R");
+    }
+
+    #[test]
+    fn take_pending_replies_drains() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[6n");
+        assert_eq!(screen.take_pending_replies().len(), 1);
+        assert!(screen.take_pending_replies().is_empty());
     }
 
     #[test]

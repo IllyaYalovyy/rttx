@@ -31,6 +31,8 @@ pub struct FeedResult {
     pub new_cwd: Option<String>,
     /// New title if it changed from the previous value.
     pub new_title: Option<String>,
+    /// Pending replies to write back to the PTY (e.g. CPR for DSR).
+    pub pending_replies: Vec<Vec<u8>>,
 }
 
 /// Runtime state of a single pane.
@@ -100,7 +102,8 @@ impl Pane {
                 Some(cwd)
             }
         });
-        FeedResult { new_cwd, new_title }
+        let pending_replies = self.screen.take_pending_replies();
+        FeedResult { new_cwd, new_title, pending_replies }
     }
 
     /// Flush pending scrollback bytes to the log file on disk.
@@ -412,5 +415,21 @@ mod tests {
 
         let result = pane.feed_output(osc0);
         assert!(result.new_title.is_none());
+    }
+
+    #[test]
+    fn feed_output_returns_dsr_reply() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"abc");
+        let result = pane.feed_output(b"\x1b[6n");
+        assert_eq!(result.pending_replies.len(), 1);
+        assert_eq!(result.pending_replies[0], b"\x1b[1;4R");
+    }
+
+    #[test]
+    fn feed_output_returns_empty_replies_for_plain_output() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let result = pane.feed_output(b"hello");
+        assert!(result.pending_replies.is_empty());
     }
 }
