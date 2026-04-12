@@ -293,10 +293,7 @@ async fn arrow_keys_navigate_shell_history() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let output = collect_output(&mut client, Duration::from_secs(2)).await;
-    assert!(
-        output.contains("ARROW_TEST"),
-        "Up arrow must recall previous command: {output:?}"
-    );
+    assert!(output.contains("ARROW_TEST"), "Up arrow must recall previous command: {output:?}");
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -324,10 +321,7 @@ async fn bracketed_paste_wraps_content_correctly() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let output = collect_output(&mut client, Duration::from_secs(2)).await;
-    assert!(
-        output.contains("PASTED_OK"),
-        "bracketed paste content must execute: {output:?}"
-    );
+    assert!(output.contains("PASTED_OK"), "bracketed paste content must execute: {output:?}");
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -395,21 +389,12 @@ async fn fkey_bytes_reach_pty_application() {
     wait_for_prompt(&mut client).await;
 
     // Pipe F1 escape sequence through cat -v to make it visible.
-    send_input(
-        &mut client,
-        &sid,
-        &pid,
-        b"printf '\\033OP' | cat -v\r",
-    )
-    .await;
+    send_input(&mut client, &sid, &pid, b"printf '\\033OP' | cat -v\r").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let output = collect_output(&mut client, Duration::from_secs(2)).await;
     // cat -v renders ESC as ^[
-    assert!(
-        output.contains("^[OP"),
-        "F1 escape sequence must reach PTY: {output:?}"
-    );
+    assert!(output.contains("^[OP"), "F1 escape sequence must reach PTY: {output:?}");
 
     shutdown_server(&mut client, &mut server).await;
 }

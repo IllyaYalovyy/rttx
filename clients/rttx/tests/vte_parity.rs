@@ -119,23 +119,19 @@ fn ctrl_a_through_z() {
     ];
     for (key, expected) in keys_and_expected {
         let actual = encode(*key, CTRL);
-        assert_eq!(
-            actual,
-            Some(vec![*expected]),
-            "Ctrl+{key:?} should produce 0x{expected:02x}"
-        );
+        assert_eq!(actual, Some(vec![*expected]), "Ctrl+{key:?} should produce 0x{expected:02x}");
     }
 }
 
 #[test]
 fn ctrl_special_characters() {
     assert_parity(&[
-        (Key::space, CTRL, &[0x00]),       // Ctrl+Space = NUL
-        (Key::bracketleft, CTRL, &[0x1b]), // Ctrl+[ = ESC
-        (Key::bracketright, CTRL, &[0x1d]),// Ctrl+] = GS
-        (Key::backslash, CTRL, &[0x1c]),   // Ctrl+\ = FS
-        (Key::slash, CTRL, &[0x1f]),       // Ctrl+/ = US
-        (Key::question, CTRL, &[0x7f]),    // Ctrl+? = DEL
+        (Key::space, CTRL, &[0x00]),        // Ctrl+Space = NUL
+        (Key::bracketleft, CTRL, &[0x1b]),  // Ctrl+[ = ESC
+        (Key::bracketright, CTRL, &[0x1d]), // Ctrl+] = GS
+        (Key::backslash, CTRL, &[0x1c]),    // Ctrl+\ = FS
+        (Key::slash, CTRL, &[0x1f]),        // Ctrl+/ = US
+        (Key::question, CTRL, &[0x7f]),     // Ctrl+? = DEL
     ]);
 }
 
@@ -165,10 +161,7 @@ fn arrow_keys_unmodified() {
 
 #[test]
 fn home_end_unmodified() {
-    assert_parity(&[
-        (Key::Home, NONE, b"\x1b[H"),
-        (Key::End, NONE, b"\x1b[F"),
-    ]);
+    assert_parity(&[(Key::Home, NONE, b"\x1b[H"), (Key::End, NONE, b"\x1b[F")]);
 }
 
 #[test]
@@ -237,10 +230,7 @@ fn alt_ctrl_arrow_keys() {
 
 #[test]
 fn ctrl_home_end() {
-    assert_parity(&[
-        (Key::Home, CTRL, b"\x1b[1;5H"),
-        (Key::End, CTRL, b"\x1b[1;5F"),
-    ]);
+    assert_parity(&[(Key::Home, CTRL, b"\x1b[1;5H"), (Key::End, CTRL, b"\x1b[1;5F")]);
 }
 
 #[test]
@@ -290,10 +280,7 @@ fn ctrl_fkeys() {
 
 #[test]
 fn shift_fkeys() {
-    assert_parity(&[
-        (Key::F1, SHIFT, b"\x1b[1;2P"),
-        (Key::F5, SHIFT, b"\x1b[15;2~"),
-    ]);
+    assert_parity(&[(Key::F1, SHIFT, b"\x1b[1;2P"), (Key::F5, SHIFT, b"\x1b[15;2~")]);
 }
 
 #[test]
@@ -325,10 +312,7 @@ fn keypad_navigation_keys() {
 
 #[test]
 fn keypad_enter_and_tab() {
-    assert_parity(&[
-        (Key::KP_Enter, NONE, b"\r"),
-        (Key::KP_Tab, NONE, b"\t"),
-    ]);
+    assert_parity(&[(Key::KP_Enter, NONE, b"\r"), (Key::KP_Tab, NONE, b"\t")]);
 }
 
 // ── Special keys ────────────────────────────────────────────────
@@ -387,10 +371,6 @@ fn modifier_parameter_values_follow_xterm_convention() {
     ];
     for (mods, expected) in cases {
         let actual = encode(Key::Up, *mods);
-        assert_eq!(
-            actual.as_deref(),
-            Some(*expected),
-            "Up + {mods:?} modifier param"
-        );
+        assert_eq!(actual.as_deref(), Some(*expected), "Up + {mods:?} modifier param");
     }
 }
