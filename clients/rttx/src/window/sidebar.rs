@@ -1,90 +1,99 @@
 use super::*;
 
 impl Window {
-    pub(crate) fn refresh_bookmark_sidebar(&self) {
+    pub(crate) fn refresh_place_sidebar(&self) {
         let imp = self.imp();
-        while let Some(row) = imp.bookmark_list.row_at_index(0) {
-            imp.bookmark_list.remove(&row);
+        while let Some(row) = imp.place_list.row_at_index(0) {
+            imp.place_list.remove(&row);
         }
 
-        let query = imp.bookmark_search_entry.text();
-        for bookmark in crate::bookmarks::load()
+        let query = imp.place_search_entry.text();
+        let user_places = places::load();
+        let all_places = places::places_for_host(&user_places, crate::host::LOCAL_KEY);
+        for place in all_places
             .into_iter()
-            .filter(|bookmark| crate::bookmarks::matches_query(bookmark, query.as_str()))
+            .filter(|place| places::matches_query(place, query.as_str()))
         {
             let action_row = adw::ActionRow::new();
-            action_row.set_title(&bookmark.name);
-            action_row.set_subtitle(&bookmark.summary());
+            action_row.set_title(place.display_name());
+            action_row.set_subtitle(&place.summary());
             action_row.set_activatable(true);
 
             let new_session_button = gtk4::Button::builder()
-                .icon_name(bookmark.new_workspace_icon())
-                .tooltip_text(bookmark.new_workspace_tooltip())
+                .icon_name(place.new_workspace_icon())
+                .tooltip_text(place.new_workspace_tooltip())
                 .valign(gtk4::Align::Center)
                 .build();
             new_session_button.add_css_class("flat");
 
-            let uuid = bookmark.uuid.clone();
-            let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
-            edit_item
-                .set_action_and_target_value(Some("win.edit-bookmark"), Some(&uuid.to_variant()));
-            let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
-            delete_item
-                .set_action_and_target_value(Some("win.delete-bookmark"), Some(&uuid.to_variant()));
-            let menu = gtk4::gio::Menu::new();
-            menu.append_item(&edit_item);
-            menu.append_item(&delete_item);
-            let more_button = gtk4::MenuButton::builder()
-                .icon_name("view-more-symbolic")
-                .tooltip_text("More options")
-                .valign(gtk4::Align::Center)
-                .menu_model(&menu)
-                .build();
-            more_button.add_css_class("flat");
-
             action_row.add_suffix(&new_session_button);
-            action_row.add_suffix(&more_button);
 
-            let drag_source = gtk4::DragSource::new();
-            drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
-            let drag_uuid = bookmark.uuid.clone();
-            drag_source.connect_prepare(move |_, _, _| {
-                Some(gtk4::gdk::ContentProvider::for_value(&drag_uuid.to_value()))
-            });
-            action_row.add_controller(drag_source);
+            if !places::is_builtin(&place.uuid) {
+                let uuid = place.uuid.clone();
+                let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
+                edit_item.set_action_and_target_value(
+                    Some("win.edit-place"),
+                    Some(&uuid.to_variant()),
+                );
+                let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
+                delete_item.set_action_and_target_value(
+                    Some("win.delete-place"),
+                    Some(&uuid.to_variant()),
+                );
+                let menu = gtk4::gio::Menu::new();
+                menu.append_item(&edit_item);
+                menu.append_item(&delete_item);
+                let more_button = gtk4::MenuButton::builder()
+                    .icon_name("view-more-symbolic")
+                    .tooltip_text("More options")
+                    .valign(gtk4::Align::Center)
+                    .menu_model(&menu)
+                    .build();
+                more_button.add_css_class("flat");
+                action_row.add_suffix(&more_button);
 
-            let drop_target =
-                gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+                let drag_source = gtk4::DragSource::new();
+                drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+                let drag_uuid = place.uuid.clone();
+                drag_source.connect_prepare(move |_, _, _| {
+                    Some(gtk4::gdk::ContentProvider::for_value(&drag_uuid.to_value()))
+                });
+                action_row.add_controller(drag_source);
+
+                let drop_target =
+                    gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
+                let win = self.clone();
+                let target_uuid = place.uuid.clone();
+                drop_target.connect_drop(move |_, value, _, _| {
+                    if let Ok(source_uuid) = value.get::<String>()
+                        && source_uuid != target_uuid
+                    {
+                        win.reorder_place(&source_uuid, &target_uuid);
+                        return true;
+                    }
+                    false
+                });
+                action_row.add_controller(drop_target);
+            }
+
+            imp.place_list.append(&action_row);
+
             let win = self.clone();
-            let target_uuid = bookmark.uuid.clone();
-            drop_target.connect_drop(move |_, value, _, _| {
-                if let Ok(source_uuid) = value.get::<String>()
-                    && source_uuid != target_uuid
-                {
-                    win.reorder_bookmark(&source_uuid, &target_uuid);
-                    return true;
-                }
-                false
-            });
-            action_row.add_controller(drop_target);
-
-            imp.bookmark_list.append(&action_row);
-
-            let win = self.clone();
-            let bookmark_for_run = bookmark.clone();
+            let place_for_run = place.clone();
             action_row.connect_activated(move |_| {
-                win.execute_bookmark(&bookmark_for_run);
+                win.execute_place(&place_for_run);
             });
 
             let win = self.clone();
+            let place_for_session = place.clone();
             new_session_button.connect_clicked(move |_| {
-                win.new_session_from_bookmark(&bookmark);
+                win.new_session_from_place(&place_for_session);
             });
         }
 
-        let is_empty = imp.bookmark_list.row_at_index(0).is_none();
-        imp.bookmark_scroll.set_visible(!is_empty);
-        imp.bookmark_empty.set_visible(is_empty);
+        let is_empty = imp.place_list.row_at_index(0).is_none();
+        imp.place_scroll.set_visible(!is_empty);
+        imp.place_empty.set_visible(is_empty);
     }
 
     pub(crate) fn refresh_command_sidebar(&self) {
@@ -173,11 +182,11 @@ impl Window {
         imp.command_empty.set_visible(is_empty);
     }
 
-    fn reorder_bookmark(&self, source_uuid: &str, target_uuid: &str) {
-        let mut items = crate::bookmarks::load();
-        crate::bookmarks::reorder(&mut items, source_uuid, target_uuid);
-        let _ = crate::bookmarks::save(&items);
-        self.refresh_bookmark_sidebar();
+    fn reorder_place(&self, source_uuid: &str, target_uuid: &str) {
+        let mut items = places::load();
+        places::reorder(&mut items, source_uuid, target_uuid);
+        let _ = places::save(&items);
+        self.refresh_place_sidebar();
     }
 
     fn reorder_command(&self, source_uuid: &str, target_uuid: &str) {
@@ -206,19 +215,20 @@ impl Window {
         self.send_input_to_terminal(&terminal_uuid, &command.input_for(run_mode));
     }
 
-    pub(crate) fn execute_bookmark(&self, bookmark: &Bookmark) {
+    pub(crate) fn execute_place(&self, place: &Place) {
         let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
             return;
         };
 
-        let command = self.resolve_bookmark_command(bookmark);
+        let active_host = self.active_host_key();
+        let command = self.resolve_place_command(place, &active_host);
         let Some(command) = command else {
             return;
         };
         self.set_terminal_recovery(
             &terminal_uuid,
             PaneRecovery {
-                source: PaneSource::Bookmark { name: bookmark.name.clone() },
+                source: PaneSource::Place { name: place.display_name().to_string() },
                 target: None,
                 startup: vec![StartupStep::SendText { text: command.clone(), execute: true }],
             },
@@ -226,15 +236,21 @@ impl Window {
         self.send_input_to_terminal(&terminal_uuid, &format!("{command}\n"));
     }
 
-    fn resolve_bookmark_command(&self, bookmark: &Bookmark) -> Option<String> {
-        let bookmark_host = bookmark.remote_host();
-        if let Some(bh) = bookmark_host {
+    fn resolve_place_command(&self, place: &Place, active_host_key: &str) -> Option<String> {
+        if !place.is_local() {
             let session_host = self.visible_session_remote_host();
-            if session_host.as_deref() == Some(bh) {
-                return bookmark.remote_command().or_else(|| bookmark.command());
+            if let Some(sh) = &session_host
+                && place.matches_host(sh)
+            {
+                return place.remote_command().or_else(|| place.command(active_host_key));
             }
         }
-        bookmark.command()
+        place.command(active_host_key)
+    }
+
+    fn active_host_key(&self) -> String {
+        self.visible_session_remote_host()
+            .unwrap_or_else(|| crate::host::LOCAL_KEY.to_string())
     }
 
     fn visible_session_remote_host(&self) -> Option<String> {

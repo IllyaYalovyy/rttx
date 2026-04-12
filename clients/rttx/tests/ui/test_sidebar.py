@@ -46,8 +46,8 @@ class TestSidebar(unittest.TestCase):
     def test_sidebar_vertical_layout(self) -> None:
         """The utility sidebar content must sit below the tab bar, not beside it.
 
-        In the correct vertical-box layout, the Bookmarks stack page (content)
-        has a greater y than the Bookmarks page-tab (the switcher button).
+        In the correct vertical-box layout, the Places stack page (content)
+        has a greater y than the Places page-tab (the switcher button).
         In the broken horizontal-box layout both would share the same y because
         the switcher and content are rendered side-by-side in the same row.
         """
@@ -59,18 +59,18 @@ class TestSidebar(unittest.TestCase):
 
         # The tab button (in the ViewSwitcher / StackSwitcher row).
         tab = find_by_role_and_name(
-            self.fixture.atspi_app, Atspi.Role.PAGE_TAB, "Bookmarks"
+            self.fixture.atspi_app, Atspi.Role.PAGE_TAB, "Places"
         )
         if tab is None:
-            self.skipTest("Bookmarks page tab not found in AT-SPI tree")
+            self.skipTest("Places page tab not found in AT-SPI tree")
 
-        # The content panel (the actual Bookmarks stack page below the tab bar).
+        # The content panel (the actual Places stack page below the tab bar).
         content_panels = [
             n for n in find_all_by_role(self.fixture.atspi_app, Atspi.Role.PANEL)
-            if n.get_name() == "Bookmarks"
+            if n.get_name() == "Places"
         ]
         if not content_panels:
-            self.skipTest("Bookmarks content panel not found in AT-SPI tree")
+            self.skipTest("Places content panel not found in AT-SPI tree")
         content = content_panels[0]
 
         tab_ext = get_extents(tab)
@@ -84,7 +84,7 @@ class TestSidebar(unittest.TestCase):
         self.assertGreater(
             content_y,
             tab_y + tab_h // 2,
-            "Bookmarks content panel is not below the tab bar.\n"
+            "Places content panel is not below the tab bar.\n"
             "The utility_sidebar_box must use Vertical orientation.\n"
             f"Tab y={tab_y}+h={tab_h}, Content y={content_y}",
         )

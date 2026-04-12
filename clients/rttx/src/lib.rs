@@ -7,6 +7,8 @@ pub mod config;
 pub mod daemon;
 pub mod daemon_bridge;
 pub mod host;
+pub mod places;
+pub mod places_window;
 pub mod preferences;
 pub mod runtime;
 pub mod session;

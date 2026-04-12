@@ -48,18 +48,18 @@ impl Window {
         alert.present(Some(self));
     }
 
-    pub(super) fn confirm_delete_bookmark(&self, uuid: String) {
+    pub(super) fn confirm_delete_place(&self, uuid: String) {
         let win = self.clone();
         self.confirm_delete(
-            "Delete Bookmark?",
-            "The bookmark will be permanently removed.",
+            "Delete Place?",
+            "The place will be permanently removed.",
             move || {
-                let mut items = crate::bookmarks::load();
-                items.retain(|b| b.uuid != uuid);
-                if let Err(e) = crate::bookmarks::save(&items) {
-                    log::error!("Failed to delete bookmark: {e}");
+                let mut items = places::load();
+                items.retain(|p| p.uuid != uuid);
+                if let Err(e) = places::save(&items) {
+                    log::error!("Failed to delete place: {e}");
                 }
-                win.refresh_bookmark_sidebar();
+                win.refresh_place_sidebar();
             },
         );
     }
@@ -298,24 +298,24 @@ impl Window {
         }
     }
 
-    pub(super) fn do_bookmark_active_session(&self) {
-        let Some(bookmark) = self.create_bookmark_from_active_session() else {
+    pub(super) fn do_save_place_from_session(&self) {
+        let Some(place) = self.create_place_from_active_session() else {
             return;
         };
-        let name = bookmark.name.clone();
-        let mut bookmarks = crate::bookmarks::load();
-        bookmarks.push(bookmark);
-        let _ = crate::bookmarks::save(&bookmarks);
-        self.refresh_bookmark_sidebar();
+        let name = place.display_name().to_string();
+        let mut all_places = places::load();
+        all_places.push(place);
+        let _ = places::save(&all_places);
+        self.refresh_place_sidebar();
 
-        let notification = gtk4::gio::Notification::new("Bookmark saved");
-        notification.set_body(Some(&format!("Workspace \"{name}\" was added to bookmarks")));
+        let notification = gtk4::gio::Notification::new("Place saved");
+        notification.set_body(Some(&format!("Workspace \"{name}\" was added to places")));
         if let Some(app) = self.application() {
             app.send_notification(None, &notification);
         }
     }
 
-    pub(crate) fn create_bookmark_from_active_session(&self) -> Option<Bookmark> {
+    pub(crate) fn create_place_from_active_session(&self) -> Option<Place> {
         let uuid = self.focused_terminal_uuid()?;
         let state = self.imp().state.borrow();
         let session = state.sessions.iter().find(|s| s.layout.contains_terminal(&uuid))?;
@@ -323,9 +323,8 @@ impl Window {
         drop(state);
 
         let cwd = self.terminal_handle(&uuid).and_then(|terminal| terminal.current_directory());
+        let path = cwd.unwrap_or_default();
 
-        let mut bookmark = Bookmark::new(session_name);
-        bookmark.directory = cwd;
-        Some(bookmark)
+        Some(Place::new(session_name, path))
     }
 }

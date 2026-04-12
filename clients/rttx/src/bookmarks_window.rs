@@ -74,7 +74,7 @@ pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
             status_label.set_text(&format!("Failed to save: {e}"));
             return;
         }
-        parent_for_save.refresh_bookmark_sidebar();
+        parent_for_save.refresh_place_sidebar();
         dialog_for_save.close();
     });
 

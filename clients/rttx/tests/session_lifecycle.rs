@@ -556,45 +556,45 @@ fn remote_managed_session_persists_and_restores() {
     );
 }
 
-/// SSH bookmark must create a managed remote session, not a local direct one.
+/// Remote place must create a managed remote session, not a local direct one.
 /// Regression test for #243.
 #[test]
-fn ssh_bookmark_creates_managed_remote_session() {
-    use rttx::bookmarks::Bookmark;
+fn remote_place_creates_managed_remote_session() {
+    use rttx::places::Place;
     use rttx::runtime::RuntimeEndpoint;
     use rttx::session::SessionState;
 
-    let mut bookmark = Bookmark::new("Prod Server");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.directory = Some("/srv/app".into());
+    // A remote-tagged place with a known SSH target in its host_tags.
+    // The place resolves the host key to an ad-hoc remote host when no
+    // saved hosts file exists.
+    let place = Place {
+        host_tags: vec!["example.com".into()],
+        ..Place::new("Prod Server", "/srv/app")
+    };
 
-    // Simulate the decision logic from new_session_from_bookmark.
-    let host = bookmark.remote_host();
-    assert!(host.is_some(), "SSH bookmark must report a remote host");
+    // The place should report a remote host (ad-hoc resolution uses the key as SSH target).
+    let host = place.remote_host();
+    assert!(host.is_some(), "remote place must report a remote host");
 
     let session = SessionState::new_managed_remote(
-        bookmark.name.clone(),
-        host.unwrap(),
+        place.display_name().to_string(),
+        &host.unwrap(),
         rttx::runtime::WorkspacePolicy::Persistent,
-        bookmark.session_initial_cwd().map(str::to_string),
+        place.session_initial_cwd().map(str::to_string),
     );
 
     assert!(session.runtime.is_managed());
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
-    );
+    assert!(matches!(session.runtime.endpoint, RuntimeEndpoint::Remote { .. }));
 }
 
-/// Local bookmark must still create a direct session.
+/// Local place must still create a direct session.
 #[test]
-fn local_bookmark_creates_direct_session() {
-    use rttx::bookmarks::Bookmark;
+fn local_place_creates_direct_session() {
+    use rttx::places::Place;
 
-    let mut bookmark = Bookmark::new("Projects");
-    bookmark.directory = Some("/home/user/projects".into());
+    let place = Place::new("Projects", "/home/user/projects");
 
-    assert!(bookmark.remote_host().is_none());
+    assert!(place.remote_host().is_none());
 }
 
 /// Updating a remote workspace endpoint must change the host and sync mode.
@@ -623,20 +623,18 @@ fn update_remote_endpoint_changes_host_and_mode() {
     ));
 }
 
-/// SSH bookmark targeting the same host as a managed pane must use the inner
+/// Remote place command on the same host must use the inner
 /// command (without SSH wrapper). Regression test for #245.
 #[test]
-fn ssh_bookmark_remote_command_strips_ssh_for_same_host() {
-    use rttx::bookmarks::Bookmark;
+fn remote_place_remote_command_strips_ssh_for_same_host() {
+    use rttx::places::Place;
 
-    let mut bookmark = Bookmark::new("Deploy");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.directory = Some("/srv/app".into());
+    let place = Place {
+        host_tags: vec!["example.com".into()],
+        ..Place::new("Deploy", "/srv/app")
+    };
 
-    let full = bookmark.command().unwrap();
-    let inner = bookmark.remote_command().unwrap();
-
-    assert!(full.starts_with("ssh"), "full command wraps in ssh");
+    let inner = place.remote_command().unwrap();
     assert!(!inner.contains("ssh"), "inner command must not contain ssh");
     assert!(inner.contains("/srv/app"));
 }

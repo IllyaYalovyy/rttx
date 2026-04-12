@@ -395,7 +395,7 @@ mod tests {
         terminal_recovery.insert(
             "t2".into(),
             PaneRecovery {
-                source: PaneSource::Bookmark { name: "Prod".into() },
+                source: PaneSource::Place { name: "Prod".into() },
                 target: None,
                 startup: vec![StartupStep::SendText {
                     text: "ssh prod && tmux attach -t web".into(),
@@ -648,7 +648,7 @@ mod tests {
                 (
                     "t2".into(),
                     PaneRecovery {
-                        source: PaneSource::Bookmark { name: "Prod".into() },
+                        source: PaneSource::Place { name: "Prod".into() },
                         target: None,
                         startup: vec![StartupStep::SendText {
                             text: "ssh prod".into(),
@@ -711,7 +711,7 @@ mod tests {
         terminal_recovery.insert(
             "t1".into(),
             PaneRecovery {
-                source: PaneSource::Bookmark { name: "Prod".into() },
+                source: PaneSource::Place { name: "Prod".into() },
                 target: Some(PaneTarget::RemoteShell {
                     ssh_target: "deploy@example.com".into(),
                     remote_folder: Some("/srv/app".into()),

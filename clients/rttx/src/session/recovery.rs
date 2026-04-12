@@ -12,7 +12,7 @@ use crate::shell_quote;
 #[serde(rename_all = "kebab-case")]
 pub enum PaneSource {
     EmptyShell,
-    Bookmark { name: String },
+    Place { name: String },
     Command { title: String },
     Manual,
 }
@@ -30,13 +30,14 @@ impl<'de> Deserialize<'de> for PaneSource {
         enum Raw {
             EmptyShell,
             Bookmark { name: String },
+            Place { name: String },
             Command { title: String },
             SessionTemplate { name: String },
             Manual,
         }
         match Raw::deserialize(deserializer)? {
             Raw::EmptyShell => Ok(Self::EmptyShell),
-            Raw::Bookmark { name } => Ok(Self::Bookmark { name }),
+            Raw::Bookmark { name } | Raw::Place { name } => Ok(Self::Place { name }),
             Raw::Command { title } => Ok(Self::Command { title }),
             Raw::SessionTemplate { .. } | Raw::Manual => Ok(Self::Manual),
         }
@@ -192,6 +193,28 @@ mod tests {
         let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
         let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
         assert_eq!(recovery.target, None);
+        // Legacy bookmark source should deserialize as Place
+        assert_eq!(recovery.source, PaneSource::Place { name: "Prod".into() });
+    }
+
+    #[test]
+    fn legacy_bookmark_source_deserializes_as_place() {
+        let json = r#"{"source":{"bookmark":{"name":"My Server"}}}"#;
+        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.source, PaneSource::Place { name: "My Server".into() });
+    }
+
+    #[test]
+    fn place_source_roundtrips_through_serde() {
+        let recovery = PaneRecovery {
+            source: PaneSource::Place { name: "Work".into() },
+            target: Some(PaneTarget::LocalFolder { path: "/home/user/work".into() }),
+            startup: Vec::new(),
+        };
+        let json = serde_json::to_string(&recovery).unwrap();
+        let restored: PaneRecovery = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, recovery);
+        assert!(json.contains("\"place\""), "serialized form should use 'place' key");
     }
 
     #[test]

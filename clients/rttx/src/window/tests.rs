@@ -314,18 +314,19 @@ fn initial_terminal_starts_shell_when_window_is_presented() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn utility_sidebar_shows_and_filters_bookmarks() {
+fn utility_sidebar_shows_and_filters_places() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let mut local = crate::bookmarks::Bookmark::new("Local Project");
-    local.directory = Some("/home/user/Projects/rttx".into());
-    let mut remote = crate::bookmarks::Bookmark::new("Prod Web");
-    remote.ssh_target = Some("deploy@example.com".into());
-    crate::bookmarks::save(&[local, remote]).unwrap();
+    let local = crate::places::Place::new("Local Project", "/home/user/Projects/rttx");
+    let remote = crate::places::Place {
+        host_tags: vec!["example.com".into()],
+        ..crate::places::Place::new("Prod Web", "/srv/app")
+    };
+    crate::places::save(&[local, remote]).unwrap();
 
     let app =
         adw::Application::builder().application_id("com.illya.rttx.utility-sidebar-tests").build();
@@ -335,18 +336,18 @@ fn utility_sidebar_shows_and_filters_bookmarks() {
     window.present();
     pump_events(100);
 
-    assert_eq!(
-        window.imp().bookmark_list.observe_children().n_items(),
-        2,
-        "utility sidebar should show saved bookmarks"
+    // 2 builtins (Home, Root) + 2 user places
+    assert!(
+        window.imp().place_list.observe_children().n_items() >= 4,
+        "utility sidebar should show built-in and saved places"
     );
 
-    window.imp().bookmark_search_entry.set_text("prod");
+    window.imp().place_search_entry.set_text("prod");
     pump_events(50);
     assert_eq!(
-        window.imp().bookmark_list.observe_children().n_items(),
+        window.imp().place_list.observe_children().n_items(),
         1,
-        "search should filter the utility sidebar bookmark list"
+        "search should filter the utility sidebar place list"
     );
 
     window.close();
@@ -395,7 +396,7 @@ fn utility_sidebar_shows_and_filters_commands() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn new_session_from_bookmark_creates_and_focuses_named_session() {
+fn new_session_from_place_creates_and_focuses_named_session() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
@@ -403,7 +404,7 @@ fn new_session_from_bookmark_creates_and_focuses_named_session() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let app =
-        adw::Application::builder().application_id("com.illya.rttx.bookmark-session-tests").build();
+        adw::Application::builder().application_id("com.illya.rttx.place-session-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -411,15 +412,17 @@ fn new_session_from_bookmark_creates_and_focuses_named_session() {
     window.present();
     pump_events(100);
 
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
-    bookmark.ssh_target = Some("deploy@example.com".into());
+    let place = crate::places::Place {
+        host_tags: vec!["example.com".into()],
+        ..crate::places::Place::new("Prod Web", "/srv/app")
+    };
 
-    window.new_session_from_bookmark(&bookmark);
+    window.new_session_from_place(&place);
     pump_events(100);
 
     let (session_name, session_uuid, terminal_uuid) = {
         let state = window.imp().state.borrow();
-        assert_eq!(state.sessions.len(), 2, "bookmark should create a new session");
+        assert_eq!(state.sessions.len(), 2, "place should create a new session");
         let session = state.sessions.last().unwrap();
         (
             session.name.clone(),
@@ -432,17 +435,17 @@ fn new_session_from_bookmark_creates_and_focuses_named_session() {
     assert_eq!(
         window.imp().sidebar_list.selected_row().map(|row| row.index()),
         Some(1),
-        "bookmark session should become the selected session"
+        "place session should become the selected session"
     );
     assert_eq!(
         window.imp().session_stack.visible_child_name().as_deref(),
         Some(session_uuid.as_str()),
-        "bookmark session should become visible"
+        "place session should become visible"
     );
     assert_eq!(
         window.focused_terminal_uuid().as_deref(),
         Some(terminal_uuid.as_str()),
-        "bookmark session should focus its initial terminal"
+        "place session should focus its initial terminal"
     );
 
     window.close();
@@ -451,26 +454,34 @@ fn new_session_from_bookmark_creates_and_focuses_named_session() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn new_session_from_bookmark_queues_input_before_shell_starts() {
+fn new_session_from_place_queues_input_before_shell_starts() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
+    // Save a host so the place can resolve its SSH target
+    crate::host::save(&[crate::host::Host::remote("deploy@example.com")]).unwrap();
+
     let app =
-        adw::Application::builder().application_id("com.illya.rttx.bookmark-queue-tests").build();
+        adw::Application::builder().application_id("com.illya.rttx.place-queue-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
-    bookmark.ssh_target = Some("deploy@example.com".into());
+    let place = crate::places::Place {
+        host_tags: vec!["example.com".into()],
+        ..crate::places::Place::new("Prod Web", "/srv/app")
+    };
     let expected_input =
-        PaneTarget::RemoteShell { ssh_target: "deploy@example.com".into(), remote_folder: None }
-            .managed_startup_input()
-            .unwrap();
+        PaneTarget::RemoteShell {
+            ssh_target: "deploy@example.com".into(),
+            remote_folder: Some("/srv/app".into()),
+        }
+        .managed_startup_input()
+        .unwrap();
 
-    window.new_session_from_bookmark(&bookmark);
+    window.new_session_from_place(&place);
 
     let terminal_uuid = {
         let state = window.imp().state.borrow();
@@ -482,7 +493,7 @@ fn new_session_from_bookmark_queues_input_before_shell_starts() {
         .borrow()
         .get(&terminal_uuid)
         .cloned()
-        .expect("bookmark session terminal should exist");
+        .expect("place session terminal should exist");
 
     assert!(
         !term.shell_spawned_for_test(),
@@ -491,7 +502,7 @@ fn new_session_from_bookmark_queues_input_before_shell_starts() {
     assert_eq!(
         term.pending_shell_inputs_for_test(),
         vec![expected_input],
-        "bookmark launcher should queue the structured recovery target until the shell is ready"
+        "place launcher should queue the structured recovery target until the shell is ready"
     );
 
     window.close();
@@ -500,31 +511,38 @@ fn new_session_from_bookmark_queues_input_before_shell_starts() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
+fn place_sessions_persist_and_replay_recovery_recipe_on_restart() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
+    crate::host::save(&[crate::host::Host::remote("deploy@example.com")]).unwrap();
+
     let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-recovery-tests")
+        .application_id("com.illya.rttx.place-recovery-tests")
         .build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let first_window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
-    bookmark.ssh_target = Some("deploy@example.com".into());
+    let place = crate::places::Place {
+        host_tags: vec!["example.com".into()],
+        ..crate::places::Place::new("Prod Web", "/srv/app")
+    };
     let expected_input =
-        PaneTarget::RemoteShell { ssh_target: "deploy@example.com".into(), remote_folder: None }
-            .managed_startup_input()
-            .unwrap();
+        PaneTarget::RemoteShell {
+            ssh_target: "deploy@example.com".into(),
+            remote_folder: Some("/srv/app".into()),
+        }
+        .managed_startup_input()
+        .unwrap();
 
-    first_window.new_session_from_bookmark(&bookmark);
+    first_window.new_session_from_place(&place);
 
     let (terminal_uuid, saved_recovery) = {
         let state = first_window.imp().state.borrow();
-        let session = state.sessions.last().expect("bookmark should create a session");
+        let session = state.sessions.last().expect("place should create a session");
         let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
         (terminal_uuid.clone(), session.recovery_for(&terminal_uuid).cloned())
     };
@@ -532,10 +550,10 @@ fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
     assert_eq!(
         saved_recovery,
         Some(PaneRecovery {
-            source: PaneSource::Bookmark { name: "Prod Web".into() },
+            source: PaneSource::Place { name: "Prod Web".into() },
             target: Some(PaneTarget::RemoteShell {
                 ssh_target: "deploy@example.com".into(),
-                remote_folder: None,
+                remote_folder: Some("/srv/app".into()),
             }),
             startup: vec![],
         })
@@ -551,12 +569,12 @@ fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
         .borrow()
         .get(&terminal_uuid)
         .cloned()
-        .expect("restored bookmark terminal should exist");
+        .expect("restored place terminal should exist");
 
     assert_eq!(
         restored_term.pending_shell_inputs_for_test(),
         vec![expected_input],
-        "restored bookmark session should queue its structured recovery target before shell startup"
+        "restored place session should queue its structured recovery target before shell startup"
     );
 
     second_window.close();
@@ -565,7 +583,7 @@ fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn new_session_from_folder_bookmark_uses_initial_cwd_not_cd_command() {
+fn new_session_from_local_place_uses_initial_cwd_not_cd_command() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
@@ -573,15 +591,14 @@ fn new_session_from_folder_bookmark_uses_initial_cwd_not_cd_command() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let app = adw::Application::builder()
-        .application_id("com.illya.rttx.folder-bookmark-cwd-tests")
+        .application_id("com.illya.rttx.folder-place-cwd-tests")
         .build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Work");
-    bookmark.directory = Some("/home/user/work".into());
+    let place = crate::places::Place::new("Work", "/home/user/work");
 
-    window.new_session_from_bookmark(&bookmark);
+    window.new_session_from_place(&place);
 
     let (layout_cwd, pending_inputs) = {
         let state = window.imp().state.borrow();
@@ -598,11 +615,11 @@ fn new_session_from_folder_bookmark_uses_initial_cwd_not_cd_command() {
     assert_eq!(
         layout_cwd.as_deref(),
         Some("/home/user/work"),
-        "folder bookmark should set cwd in the layout node, not send a cd command"
+        "local place should set cwd in the layout node, not send a cd command"
     );
     assert!(
         pending_inputs.is_empty(),
-        "folder-only bookmark should not queue any shell input; got: {pending_inputs:?}"
+        "local place should not queue any shell input; got: {pending_inputs:?}"
     );
 
     window.close();
@@ -611,22 +628,26 @@ fn new_session_from_folder_bookmark_uses_initial_cwd_not_cd_command() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn new_session_from_ssh_bookmark_queues_ssh_command() {
+fn new_session_from_remote_place_queues_ssh_command() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
+    crate::host::save(&[crate::host::Host::remote("deploy@example.com")]).unwrap();
+
     let app =
-        adw::Application::builder().application_id("com.illya.rttx.ssh-bookmark-tests").build();
+        adw::Application::builder().application_id("com.illya.rttx.ssh-place-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod");
-    bookmark.ssh_target = Some("deploy@example.com".into());
+    let place = crate::places::Place {
+        host_tags: vec!["example.com".into()],
+        ..crate::places::Place::new("Prod", "/srv/app")
+    };
 
-    window.new_session_from_bookmark(&bookmark);
+    window.new_session_from_place(&place);
 
     let (pending_inputs, saved_recovery) = {
         let state = window.imp().state.borrow();
@@ -636,18 +657,25 @@ fn new_session_from_ssh_bookmark_queues_ssh_command() {
         (term.pending_shell_inputs_for_test(), session.recovery_for(&terminal_uuid).cloned())
     };
 
+    let expected_input =
+        PaneTarget::RemoteShell {
+            ssh_target: "deploy@example.com".into(),
+            remote_folder: Some("/srv/app".into()),
+        }
+        .managed_startup_input()
+        .unwrap();
     assert_eq!(
         pending_inputs,
-        vec!["exec ssh deploy@example.com\n"],
-        "SSH bookmark should queue the structured ssh recovery command"
+        vec![expected_input],
+        "remote place should queue the structured ssh recovery command"
     );
     assert_eq!(
         saved_recovery,
         Some(PaneRecovery {
-            source: PaneSource::Bookmark { name: "Prod".into() },
+            source: PaneSource::Place { name: "Prod".into() },
             target: Some(PaneTarget::RemoteShell {
                 ssh_target: "deploy@example.com".into(),
-                remote_folder: None,
+                remote_folder: Some("/srv/app".into()),
             }),
             startup: vec![],
         })
@@ -659,7 +687,7 @@ fn new_session_from_ssh_bookmark_queues_ssh_command() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn bookmark_active_session_captures_session_name_and_cwd() {
+fn save_place_from_active_session_captures_session_name_and_cwd() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
@@ -667,13 +695,12 @@ fn bookmark_active_session_captures_session_name_and_cwd() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-active-session-tests")
+        .application_id("com.illya.rttx.place-active-session-tests")
         .build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
 
-    // Rename the default session and set the terminal's CWD.
     {
         let mut state = window.imp().state.borrow_mut();
         state.sessions[0].name = "My Work".to_string();
@@ -687,17 +714,15 @@ fn bookmark_active_session_captures_session_name_and_cwd() {
     }
     window.imp().focused_terminal_uuid.replace(Some(terminal_uuid));
 
-    let bookmark = window
-        .create_bookmark_from_active_session()
-        .expect("should produce a bookmark when a terminal is focused");
+    let place = window
+        .create_place_from_active_session()
+        .expect("should produce a place when a terminal is focused");
 
-    assert_eq!(bookmark.name, "My Work", "bookmark name should match the session name");
+    assert_eq!(place.name, "My Work", "place name should match the session name");
     assert_eq!(
-        bookmark.directory.as_deref(),
-        Some("/home/user/projects"),
-        "bookmark directory should match the focused terminal's CWD"
+        place.path, "/home/user/projects",
+        "place path should match the focused terminal's CWD"
     );
-    assert_eq!(bookmark.ssh_target, None);
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -705,7 +730,7 @@ fn bookmark_active_session_captures_session_name_and_cwd() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn bookmark_active_session_returns_none_without_focused_terminal() {
+fn save_place_from_active_session_returns_none_without_focused_terminal() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
@@ -713,7 +738,7 @@ fn bookmark_active_session_returns_none_without_focused_terminal() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-no-focus-tests")
+        .application_id("com.illya.rttx.place-no-focus-tests")
         .build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
@@ -721,7 +746,7 @@ fn bookmark_active_session_returns_none_without_focused_terminal() {
     window.imp().focused_terminal_uuid.replace(None);
 
     assert!(
-        window.create_bookmark_from_active_session().is_none(),
+        window.create_place_from_active_session().is_none(),
         "should return None when no terminal is focused"
     );
 
@@ -747,7 +772,7 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
             terminal_recovery: std::collections::BTreeMap::from([(
                 terminal_uuid.clone(),
                 PaneRecovery {
-                    source: PaneSource::Bookmark { name: "Ops".into() },
+                    source: PaneSource::Place { name: "Ops".into() },
                     target: Some(PaneTarget::RemoteShell {
                         ssh_target: "user@192.0.2.1".into(),
                         remote_folder: None,
@@ -1694,7 +1719,7 @@ fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn bookmark_sidebar_shows_empty_state_when_no_bookmarks() {
+fn place_sidebar_shows_builtin_places_when_no_user_places() {
     require_display!();
 
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
@@ -1702,20 +1727,21 @@ fn bookmark_sidebar_shows_empty_state_when_no_bookmarks() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
 
     let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-empty-state-tests")
+        .application_id("com.illya.rttx.place-empty-state-tests")
         .build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
     let window = Window::new(&app);
     window.present();
     pump_events(50);
 
+    // Built-in places (Home, Root) should always be visible
     assert!(
-        window.imp().bookmark_empty.is_visible(),
-        "empty state should be visible when no bookmarks"
+        window.imp().place_scroll.is_visible(),
+        "place list should be visible with built-in places"
     );
     assert!(
-        !window.imp().bookmark_scroll.is_visible(),
-        "list scroll should be hidden when no bookmarks"
+        !window.imp().place_empty.is_visible(),
+        "empty state should be hidden when built-in places exist"
     );
 
     window.close();

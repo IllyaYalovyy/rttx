@@ -7,10 +7,10 @@ use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
 use vte4::prelude::*;
 
-use crate::bookmarks::Bookmark;
 use crate::color_scheme;
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
+use crate::places::{self, Place};
 use crate::preferences::{self, Preferences};
 use crate::runtime::{
     ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
@@ -47,10 +47,10 @@ mod imp {
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
         pub utility_sidebar_box: gtk4::Box,
-        pub bookmark_search_entry: gtk4::SearchEntry,
-        pub bookmark_list: gtk4::ListBox,
-        pub bookmark_scroll: gtk4::ScrolledWindow,
-        pub bookmark_empty: adw::StatusPage,
+        pub place_search_entry: gtk4::SearchEntry,
+        pub place_list: gtk4::ListBox,
+        pub place_scroll: gtk4::ScrolledWindow,
+        pub place_empty: adw::StatusPage,
         pub command_search_entry: gtk4::SearchEntry,
         pub command_list: gtk4::ListBox,
         pub command_scroll: gtk4::ScrolledWindow,
@@ -119,7 +119,7 @@ mod imp {
             menu.append(Some("New Remote Workspace"), Some("win.new-remote-workspace"));
             menu.append(Some("Attach to Remote Runtime"), Some("win.browse-remote-runtimes"));
             menu.append(Some("About rttx"), Some("win.about"));
-            menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
+            menu.append(Some("Save as Place"), Some("win.save-place-from-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));
             menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
             menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
@@ -131,9 +131,9 @@ mod imp {
             self.sidebar_list.set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");
             self.sidebar_list.update_property(&[gtk4::accessible::Property::Label("Workspaces")]);
-            self.bookmark_list.set_selection_mode(gtk4::SelectionMode::None);
-            self.bookmark_list.add_css_class("boxed-list");
-            self.bookmark_list.update_property(&[gtk4::accessible::Property::Label("Bookmarks")]);
+            self.place_list.set_selection_mode(gtk4::SelectionMode::None);
+            self.place_list.add_css_class("boxed-list");
+            self.place_list.update_property(&[gtk4::accessible::Property::Label("Places")]);
             self.command_list.set_selection_mode(gtk4::SelectionMode::None);
             self.command_list.add_css_class("boxed-list");
             self.command_list.update_property(&[gtk4::accessible::Property::Label("Commands")]);
@@ -145,42 +145,42 @@ mod imp {
                 .child(&self.sidebar_list)
                 .build();
 
-            let add_bookmark_button = gtk4::Button::builder()
+            let add_place_button = gtk4::Button::builder()
                 .icon_name("list-add-symbolic")
-                .tooltip_text("New bookmark")
-                .action_name("win.add-bookmark")
+                .tooltip_text("New place")
+                .action_name("win.add-place")
                 .build();
             let utility_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
             utility_header.set_margin_start(12);
             utility_header.set_margin_end(12);
             utility_header.set_margin_top(12);
-            let utility_title = gtk4::Label::new(Some("Bookmarks"));
+            let utility_title = gtk4::Label::new(Some("Places"));
             utility_title.set_xalign(0.0);
             utility_title.set_hexpand(true);
             utility_title.add_css_class("title-4");
             utility_header.append(&utility_title);
-            utility_header.append(&add_bookmark_button);
+            utility_header.append(&add_place_button);
 
-            self.bookmark_search_entry.set_placeholder_text(Some("Search bookmarks"));
-            self.bookmark_search_entry.set_margin_start(12);
-            self.bookmark_search_entry.set_margin_end(12);
-            self.bookmark_search_entry.set_margin_top(12);
-            self.bookmark_search_entry.set_margin_bottom(12);
+            self.place_search_entry.set_placeholder_text(Some("Search places"));
+            self.place_search_entry.set_margin_start(12);
+            self.place_search_entry.set_margin_end(12);
+            self.place_search_entry.set_margin_top(12);
+            self.place_search_entry.set_margin_bottom(12);
 
-            self.bookmark_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
-            self.bookmark_scroll.set_vexpand(true);
-            self.bookmark_scroll.set_margin_start(12);
-            self.bookmark_scroll.set_margin_end(12);
-            self.bookmark_scroll.set_margin_bottom(12);
-            self.bookmark_scroll.set_child(Some(&self.bookmark_list));
-            self.bookmark_scroll.set_visible(false);
+            self.place_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
+            self.place_scroll.set_vexpand(true);
+            self.place_scroll.set_margin_start(12);
+            self.place_scroll.set_margin_end(12);
+            self.place_scroll.set_margin_bottom(12);
+            self.place_scroll.set_child(Some(&self.place_list));
+            self.place_scroll.set_visible(false);
 
-            self.bookmark_empty.set_icon_name(Some("bookmarks-symbolic"));
-            self.bookmark_empty.set_title("No Bookmarks");
-            self.bookmark_empty.set_description(Some(
-                "Add a bookmark to quickly open folders or connect to SSH hosts",
+            self.place_empty.set_icon_name(Some("folder-symbolic"));
+            self.place_empty.set_title("No Places");
+            self.place_empty.set_description(Some(
+                "Add a place to quickly open folders on local or remote hosts",
             ));
-            self.bookmark_empty.set_vexpand(true);
+            self.place_empty.set_vexpand(true);
 
             let add_command_button = gtk4::Button::builder()
                 .icon_name("list-add-symbolic")
@@ -219,11 +219,11 @@ mod imp {
             ));
             self.command_empty.set_vexpand(true);
 
-            let bookmarks_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            bookmarks_page.append(&utility_header);
-            bookmarks_page.append(&self.bookmark_search_entry);
-            bookmarks_page.append(&self.bookmark_scroll);
-            bookmarks_page.append(&self.bookmark_empty);
+            let places_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            places_page.append(&utility_header);
+            places_page.append(&self.place_search_entry);
+            places_page.append(&self.place_scroll);
+            places_page.append(&self.place_empty);
 
             let commands_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             commands_page.append(&commands_header);
@@ -232,7 +232,7 @@ mod imp {
             commands_page.append(&self.command_empty);
 
             let utility_stack = gtk4::Stack::new();
-            utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
+            utility_stack.add_titled(&places_page, Some("places"), "Places");
             utility_stack.add_titled(&commands_page, Some("commands"), "Commands");
 
             let utility_switcher = gtk4::StackSwitcher::builder().stack(&utility_stack).build();
@@ -439,8 +439,8 @@ impl Window {
         });
 
         let win = self.clone();
-        self.imp().bookmark_search_entry.connect_changed(move |_| {
-            win.refresh_bookmark_sidebar();
+        self.imp().place_search_entry.connect_changed(move |_| {
+            win.refresh_place_sidebar();
         });
 
         let win = self.clone();
@@ -459,7 +459,7 @@ impl Window {
             win.reapply_terminal_preferences();
         });
 
-        self.refresh_bookmark_sidebar();
+        self.refresh_place_sidebar();
         self.refresh_command_sidebar();
     }
 
@@ -643,24 +643,24 @@ impl Window {
         SessionColor::ALL[count % SessionColor::ALL.len()]
     }
 
-    pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
+    pub(crate) fn new_session_from_place(&self, place: &Place) {
         let imp = self.imp();
-        let initial_cwd = bookmark
+        let initial_cwd = place
             .pane_target()
             .as_ref()
             .and_then(PaneTarget::initial_cwd)
             .map(str::to_string)
-            .or_else(|| bookmark.session_initial_cwd().map(str::to_string));
+            .or_else(|| place.session_initial_cwd().map(str::to_string));
 
-        let mut session_state = if let Some(host) = bookmark.remote_host() {
+        let mut session_state = if let Some(host) = place.remote_host() {
             SessionState::new_managed_remote(
-                bookmark.name.clone(),
-                host,
+                place.display_name().to_string(),
+                &host,
                 WorkspacePolicy::Persistent,
                 initial_cwd,
             )
         } else {
-            SessionState::new_with_initial_cwd(bookmark.name.clone(), initial_cwd)
+            SessionState::new_with_initial_cwd(place.display_name().to_string(), initial_cwd)
         };
         session_state.color = self.next_session_color();
         let session_uuid = session_state.uuid.clone();
@@ -680,7 +680,7 @@ impl Window {
             );
             self.connect_managed_workspace(&session_state);
         } else {
-            self.setup_bookmark_terminal(&terminal_uuid, bookmark);
+            self.setup_place_terminal(&terminal_uuid, place);
         }
         self.imp().session_stack.set_visible_child_name(&session_uuid);
     }
