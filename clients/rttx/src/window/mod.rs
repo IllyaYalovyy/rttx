@@ -178,7 +178,7 @@ mod imp {
             self.bookmark_empty.set_icon_name(Some("bookmarks-symbolic"));
             self.bookmark_empty.set_title("No Bookmarks");
             self.bookmark_empty.set_description(Some(
-                "Add a bookmark to quickly open folders, connect to SSH hosts, or attach to tmux sessions",
+                "Add a bookmark to quickly open folders or connect to SSH hosts",
             ));
             self.bookmark_empty.set_vexpand(true);
 

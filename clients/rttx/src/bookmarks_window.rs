@@ -21,7 +21,6 @@ pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
     let name_row = adw::EntryRow::builder().title("Name").build();
     let directory_row = adw::EntryRow::builder().title("Directory").build();
     let ssh_target_row = adw::EntryRow::builder().title("SSH target / args").build();
-    let tmux_session_row = adw::EntryRow::builder().title("Tmux session").build();
 
     let status_label = gtk4::Label::new(None);
     status_label.set_xalign(0.0);
@@ -31,7 +30,6 @@ pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
     group.add(&name_row);
     group.add(&directory_row);
     group.add(&ssh_target_row);
-    group.add(&tmux_session_row);
 
     let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
     content_box.set_margin_start(18);
@@ -51,25 +49,20 @@ pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
         name_row.set_text(&b.name);
         directory_row.set_text(b.directory.as_deref().unwrap_or_default());
         ssh_target_row.set_text(b.ssh_target.as_deref().unwrap_or_default());
-        tmux_session_row.set_text(b.tmux_session.as_deref().unwrap_or_default());
     }
 
     let dialog_for_save = dialog.clone();
     let parent_for_save = parent.clone();
     save_button.connect_clicked(move |_| {
-        let b = match build_bookmark(
-            &name_row,
-            &directory_row,
-            &ssh_target_row,
-            &tmux_session_row,
-            existing_uuid.clone(),
-        ) {
-            Ok(b) => b,
-            Err(msg) => {
-                status_label.set_text(&msg);
-                return;
-            }
-        };
+        let b =
+            match build_bookmark(&name_row, &directory_row, &ssh_target_row, existing_uuid.clone())
+            {
+                Ok(b) => b,
+                Err(msg) => {
+                    status_label.set_text(&msg);
+                    return;
+                }
+            };
 
         let mut items = bookmarks::load();
         if let Some(existing) = items.iter_mut().find(|i| i.uuid == b.uuid) {
@@ -92,7 +85,6 @@ fn build_bookmark(
     name_row: &adw::EntryRow,
     directory_row: &adw::EntryRow,
     ssh_target_row: &adw::EntryRow,
-    tmux_session_row: &adw::EntryRow,
     existing_uuid: Option<String>,
 ) -> Result<Bookmark, String> {
     let name = name_row.text().trim().to_string();
@@ -106,10 +98,9 @@ fn build_bookmark(
     }
     bookmark.directory = entry_value(directory_row);
     bookmark.ssh_target = entry_value(ssh_target_row);
-    bookmark.tmux_session = entry_value(tmux_session_row);
 
     if !bookmark.is_actionable() {
-        return Err("Add a directory, SSH target, tmux session, or a combination of them".into());
+        return Err("Add a directory, SSH target, or both".into());
     }
 
     Ok(bookmark)

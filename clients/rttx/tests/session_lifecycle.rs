@@ -632,7 +632,6 @@ fn ssh_bookmark_remote_command_strips_ssh_for_same_host() {
     let mut bookmark = Bookmark::new("Deploy");
     bookmark.ssh_target = Some("deploy@example.com".into());
     bookmark.directory = Some("/srv/app".into());
-    bookmark.tmux_session = Some("web".into());
 
     let full = bookmark.command().unwrap();
     let inner = bookmark.remote_command().unwrap();
@@ -640,7 +639,6 @@ fn ssh_bookmark_remote_command_strips_ssh_for_same_host() {
     assert!(full.starts_with("ssh"), "full command wraps in ssh");
     assert!(!inner.contains("ssh"), "inner command must not contain ssh");
     assert!(inner.contains("/srv/app"));
-    assert!(inner.contains("tmux"));
 }
 
 /// Splitting a pane in a remote managed session must preserve the remote

@@ -712,9 +712,9 @@ mod tests {
             "t1".into(),
             PaneRecovery {
                 source: PaneSource::Bookmark { name: "Prod".into() },
-                target: Some(PaneTarget::RemoteTmux {
+                target: Some(PaneTarget::RemoteShell {
                     ssh_target: "deploy@example.com".into(),
-                    tmux_session: "web".into(),
+                    remote_folder: Some("/srv/app".into()),
                 }),
                 startup: Vec::new(),
             },
