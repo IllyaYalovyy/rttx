@@ -6,7 +6,7 @@ const ALL_HOSTS_LABEL: &str = "All Hosts";
 impl Window {
     /// Return the host key currently selected in the host dropdown,
     /// or `None` when "All Hosts" is selected.
-    fn selected_host_key(&self) -> Option<String> {
+    pub(super) fn selected_host_key(&self) -> Option<String> {
         let dd = &self.imp().host_selector;
         let idx = dd.selected() as usize;
         let keys = self.imp().host_selector_keys.borrow();
@@ -26,8 +26,14 @@ impl Window {
         self.rebuild_host_selector_model(Some(&host_key));
     }
 
+    /// Show the delete button only when a deletable remote host is selected.
+    pub(crate) fn update_host_delete_button_visibility(&self) {
+        let visible = self.selected_host_key().is_some_and(|key| key != host::LOCAL_KEY);
+        self.imp().host_delete_button.set_visible(visible);
+    }
+
     /// Rebuild the host selector dropdown model from saved hosts + workspace endpoints.
-    fn rebuild_host_selector_model(&self, select_key: Option<&str>) {
+    pub(super) fn rebuild_host_selector_model(&self, select_key: Option<&str>) {
         let saved_hosts = host::load();
         let state = self.imp().state.borrow();
 

@@ -51,6 +51,7 @@ mod imp {
         pub utility_sidebar_box: gtk4::Box,
         pub sidebar_search_entry: gtk4::SearchEntry,
         pub host_selector: gtk4::DropDown,
+        pub host_delete_button: gtk4::Button,
         pub utility_stack: gtk4::Stack,
         pub place_list: gtk4::ListBox,
         pub place_scroll: gtk4::ScrolledWindow,
@@ -166,10 +167,20 @@ mod imp {
             let host_model = gtk4::StringList::new(&["Local"]);
             self.host_selector.set_model(Some(&host_model));
             self.host_selector.set_selected(0);
-            self.host_selector.set_margin_start(12);
-            self.host_selector.set_margin_end(12);
-            self.host_selector.set_margin_top(8);
+            self.host_selector.set_hexpand(true);
             self.host_selector.update_property(&[gtk4::accessible::Property::Label("Host")]);
+
+            self.host_delete_button.set_icon_name("user-trash-symbolic");
+            self.host_delete_button.set_tooltip_text(Some("Delete selected host"));
+            self.host_delete_button.add_css_class("flat");
+            self.host_delete_button.set_visible(false);
+
+            let host_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+            host_row.set_margin_start(12);
+            host_row.set_margin_end(12);
+            host_row.set_margin_top(8);
+            host_row.append(&self.host_selector);
+            host_row.append(&self.host_delete_button);
 
             // ── Places tab ───────────────────────────────────────
             self.place_list.set_selection_mode(gtk4::SelectionMode::None);
@@ -294,7 +305,7 @@ mod imp {
 
             self.utility_sidebar_box.set_orientation(gtk4::Orientation::Vertical);
             self.utility_sidebar_box.append(&self.sidebar_search_entry);
-            self.utility_sidebar_box.append(&self.host_selector);
+            self.utility_sidebar_box.append(&host_row);
             self.utility_sidebar_box.append(&utility_switcher);
             self.utility_sidebar_box.append(&self.utility_stack);
             self.utility_sidebar_box.set_width_request(320);
@@ -513,6 +524,16 @@ impl Window {
         self.imp().host_selector.connect_selected_notify(move |_| {
             win.refresh_place_sidebar();
             win.refresh_command_sidebar();
+            win.update_host_delete_button_visibility();
+        });
+
+        let win = self.clone();
+        self.imp().host_delete_button.connect_clicked(move |_| {
+            if let Some(key) = win.selected_host_key()
+                && key != host::LOCAL_KEY
+            {
+                win.confirm_delete_host(key);
+            }
         });
 
         let win = self.clone();
