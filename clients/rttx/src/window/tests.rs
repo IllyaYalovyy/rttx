@@ -3884,3 +3884,220 @@ fn swap_terminals_works_for_managed_panes() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn right_sidebar_has_host_selector_and_search() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.sidebar-host-selector-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    assert!(
+        window.imp().host_selector.is_visible(),
+        "host selector should be visible in the right sidebar"
+    );
+    assert!(
+        window.imp().sidebar_search_entry.is_visible(),
+        "unified search entry should be visible in the right sidebar"
+    );
+
+    // Host selector should default to "Local" for a local workspace
+    let model = window
+        .imp()
+        .host_selector
+        .model()
+        .and_then(|m| m.downcast::<gtk4::StringList>().ok())
+        .expect("host selector should have a StringList model");
+    let selected_idx = window.imp().host_selector.selected();
+    let selected_label = model.string(selected_idx).unwrap();
+    assert_eq!(selected_label.as_str(), "Local");
+
+    // "All Hosts" should be the last entry
+    let last_idx = model.n_items() - 1;
+    let last_label = model.string(last_idx).unwrap();
+    assert_eq!(last_label.as_str(), "All Hosts");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn right_sidebar_has_places_tab() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.sidebar-places-tab-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // The utility stack should have a "places" page
+    let stack = &window.imp().utility_stack;
+    assert!(stack.child_by_name("places").is_some(), "utility stack should have a Places tab");
+    assert!(
+        stack.child_by_name("bookmarks").is_some(),
+        "utility stack should have a Bookmarks tab"
+    );
+    assert!(stack.child_by_name("commands").is_some(), "utility stack should have a Commands tab");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn place_sidebar_shows_builtin_places_for_local_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.sidebar-builtin-places-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Place list should show built-in places (Home, Root) under Global section
+    // Section header + Home + Root = at least 3 rows
+    let place_count = window.imp().place_list.observe_children().n_items();
+    assert!(
+        place_count >= 3,
+        "place sidebar should show at least a section header and 2 built-in places, got {place_count}"
+    );
+    assert!(
+        window.imp().place_scroll.is_visible(),
+        "place scroll should be visible when places exist"
+    );
+    assert!(
+        !window.imp().place_empty.is_visible(),
+        "place empty state should be hidden when places exist"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_selector_auto_follows_workspace_switch() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.host-selector-auto-follow-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Add a remote managed workspace
+    let remote_session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "deploy@example.com",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let remote_uuid = remote_session.uuid.clone();
+    window.imp().state.borrow_mut().sessions.push(remote_session.clone());
+    window.build_session(&remote_session, false);
+    pump_events(50);
+
+    // Switch to the remote workspace
+    let state = window.imp().state.borrow();
+    let remote_idx = state.sessions.iter().position(|s| s.uuid == remote_uuid).unwrap();
+    drop(state);
+    window.switch_to_session(remote_idx);
+    pump_events(50);
+
+    // Host selector should now show the remote host
+    let model = window
+        .imp()
+        .host_selector
+        .model()
+        .and_then(|m| m.downcast::<gtk4::StringList>().ok())
+        .expect("host selector should have a StringList model");
+    let selected_idx = window.imp().host_selector.selected();
+    let selected_label = model.string(selected_idx).unwrap();
+    assert_eq!(
+        selected_label.as_str(),
+        "example",
+        "host selector should auto-follow to the remote workspace host"
+    );
+
+    // Switch back to the first (local) workspace
+    window.switch_to_session(0);
+    pump_events(50);
+
+    let selected_idx = window.imp().host_selector.selected();
+    let selected_label = model.string(selected_idx).unwrap();
+    assert_eq!(
+        selected_label.as_str(),
+        "Local",
+        "host selector should auto-follow back to local when switching to local workspace"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_filters_by_selected_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
+    local_cmd.host_tags = vec!["local".into()];
+    let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
+    remote_cmd.host_tags = vec!["example.com".into()];
+    let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
+    crate::commands::save(&[local_cmd, remote_cmd, global_cmd]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-host-filter-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Default is local host — should show local + global commands
+    let count = window.imp().command_list.observe_children().n_items();
+    assert_eq!(count, 2, "local host should show local + global commands, got {count}");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
