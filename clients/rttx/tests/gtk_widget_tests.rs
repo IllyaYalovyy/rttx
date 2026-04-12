@@ -1722,8 +1722,7 @@ fn persistent_pane_forwards_vte_commit_to_daemon_input() {
 
     // Simulate VTE emitting an SGR mouse click sequence via commit.
     let sgr_click = "\x1b[<0;10;5M";
-    pane.vte()
-        .emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
+    pane.vte().emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
     pump_events(50);
 
     assert!(
