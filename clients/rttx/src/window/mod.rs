@@ -65,6 +65,7 @@ mod imp {
         pub workspace_reconnect_sources: RefCell<HashMap<String, glib::SourceId>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
         pub workspace_popover: RefCell<Option<gtk4::PopoverMenu>>,
+        pub pending_connect_existing: RefCell<Option<crate::host::Host>>,
     }
 
     #[glib::object_subclass]
@@ -117,7 +118,8 @@ mod imp {
             menu.append(Some("New Persistent Workspace"), Some("win.new-session"));
             menu.append(Some("New Ephemeral Workspace"), Some("win.new-ephemeral-workspace"));
             menu.append(Some("New Remote Workspace"), Some("win.new-remote-workspace"));
-            menu.append(Some("Attach to Remote Runtime"), Some("win.browse-remote-runtimes"));
+            menu.append(Some("Connect to Existing (Local)"), Some("win.connect-existing-local"));
+            menu.append(Some("Connect to Existing (Remote)"), Some("win.browse-remote-runtimes"));
             menu.append(Some("About rttx"), Some("win.about"));
             menu.append(Some("Bookmark This Workspace"), Some("win.bookmark-session"));
             menu.append(Some("Preferences"), Some("win.preferences"));

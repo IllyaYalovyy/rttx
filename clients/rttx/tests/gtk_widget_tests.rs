@@ -1783,3 +1783,130 @@ fn new_workspace_dialog_search_filters_places() {
     assert_eq!(places.iter().filter(|p| rttx::places::matches_query(p, "rttx")).count(), 1);
     assert_eq!(places.iter().filter(|p| rttx::places::matches_query(p, "")).count(), 2);
 }
+
+// ── Connect to Existing dialog ──────────────────────────────────
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn connect_existing_dialog_classifies_available_session() {
+    require_display!();
+
+    let id = uuid::Uuid::new_v4();
+    let sessions = vec![rttx_proto::proto::SessionInfo {
+        id: rttx_proto::uuid_to_bytes(id),
+        name: "workspace-1".into(),
+        pane_count: 2,
+        has_attached_client: false,
+        active_pane_id: None,
+        panes: vec![],
+        policy: 0,
+        attached_client_count: 0,
+        reconstructed: false,
+        revision: 1,
+        current_client_role: 0,
+        has_write_owner: false,
+        read_only_client_count: 0,
+    }];
+    let entries = rttx::connect_existing_dialog::classify_sessions(&sessions, &[]);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].availability,
+        rttx::connect_existing_dialog::SessionAvailability::Available
+    );
+    assert_eq!(entries[0].status_label, "2 panes");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn connect_existing_dialog_classifies_busy_session() {
+    require_display!();
+
+    let id = uuid::Uuid::new_v4();
+    let sessions = vec![rttx_proto::proto::SessionInfo {
+        id: rttx_proto::uuid_to_bytes(id),
+        name: "busy-ws".into(),
+        pane_count: 1,
+        has_attached_client: true,
+        active_pane_id: None,
+        panes: vec![],
+        policy: 0,
+        attached_client_count: 1,
+        reconstructed: false,
+        revision: 1,
+        current_client_role: 0,
+        has_write_owner: true,
+        read_only_client_count: 0,
+    }];
+    let entries = rttx::connect_existing_dialog::classify_sessions(&sessions, &[]);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].availability,
+        rttx::connect_existing_dialog::SessionAvailability::BusyElsewhere
+    );
+    assert_eq!(entries[0].status_label, "Connected elsewhere");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn connect_existing_dialog_classifies_already_open_session() {
+    require_display!();
+
+    let id = uuid::Uuid::new_v4();
+    let sessions = vec![rttx_proto::proto::SessionInfo {
+        id: rttx_proto::uuid_to_bytes(id),
+        name: "open-ws".into(),
+        pane_count: 3,
+        has_attached_client: false,
+        active_pane_id: None,
+        panes: vec![],
+        policy: 0,
+        attached_client_count: 0,
+        reconstructed: false,
+        revision: 1,
+        current_client_role: 0,
+        has_write_owner: false,
+        read_only_client_count: 0,
+    }];
+    let entries = rttx::connect_existing_dialog::classify_sessions(&sessions, &[id.to_string()]);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].availability,
+        rttx::connect_existing_dialog::SessionAvailability::AlreadyOpen
+    );
+    assert_eq!(entries[0].status_label, "Already open");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn connect_existing_dialog_search_filters_sessions() {
+    require_display!();
+
+    let entries = [
+        rttx::connect_existing_dialog::SessionEntry {
+            id: "a".into(),
+            name: "rttx project".into(),
+            pane_count: 2,
+            availability: rttx::connect_existing_dialog::SessionAvailability::Available,
+            status_label: "2 panes".into(),
+        },
+        rttx::connect_existing_dialog::SessionEntry {
+            id: "b".into(),
+            name: "redis server".into(),
+            pane_count: 1,
+            availability: rttx::connect_existing_dialog::SessionAvailability::Available,
+            status_label: "1 pane".into(),
+        },
+    ];
+
+    assert_eq!(
+        entries.iter().filter(|e| rttx::connect_existing_dialog::matches_query(e, "rttx")).count(),
+        1
+    );
+    assert_eq!(
+        entries.iter().filter(|e| rttx::connect_existing_dialog::matches_query(e, "")).count(),
+        2
+    );
+}
