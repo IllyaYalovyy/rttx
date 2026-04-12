@@ -6,10 +6,8 @@ fn places_roundtrip_all_fields() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("places.json");
 
-    let place = Place {
-        host_tags: vec!["example.com".into()],
-        ..Place::new("Remote Ops", "/srv/app")
-    };
+    let place =
+        Place { host_tags: vec!["example.com".into()], ..Place::new("Remote Ops", "/srv/app") };
 
     places::save_to(std::slice::from_ref(&place), &path).unwrap();
     assert_eq!(places::load_from(&path), vec![place]);

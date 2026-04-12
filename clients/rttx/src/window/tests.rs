@@ -473,13 +473,12 @@ fn new_session_from_place_queues_input_before_shell_starts() {
         host_tags: vec!["example.com".into()],
         ..crate::places::Place::new("Prod Web", "/srv/app")
     };
-    let expected_input =
-        PaneTarget::RemoteShell {
-            ssh_target: "deploy@example.com".into(),
-            remote_folder: Some("/srv/app".into()),
-        }
-        .managed_startup_input()
-        .unwrap();
+    let expected_input = PaneTarget::RemoteShell {
+        ssh_target: "deploy@example.com".into(),
+        remote_folder: Some("/srv/app".into()),
+    }
+    .managed_startup_input()
+    .unwrap();
 
     window.new_session_from_place(&place);
 
@@ -520,9 +519,8 @@ fn place_sessions_persist_and_replay_recovery_recipe_on_restart() {
 
     crate::host::save(&[crate::host::Host::remote("deploy@example.com")]).unwrap();
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.place-recovery-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.place-recovery-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let first_window = Window::new(&app);
@@ -530,13 +528,12 @@ fn place_sessions_persist_and_replay_recovery_recipe_on_restart() {
         host_tags: vec!["example.com".into()],
         ..crate::places::Place::new("Prod Web", "/srv/app")
     };
-    let expected_input =
-        PaneTarget::RemoteShell {
-            ssh_target: "deploy@example.com".into(),
-            remote_folder: Some("/srv/app".into()),
-        }
-        .managed_startup_input()
-        .unwrap();
+    let expected_input = PaneTarget::RemoteShell {
+        ssh_target: "deploy@example.com".into(),
+        remote_folder: Some("/srv/app".into()),
+    }
+    .managed_startup_input()
+    .unwrap();
 
     first_window.new_session_from_place(&place);
 
@@ -590,9 +587,8 @@ fn new_session_from_local_place_uses_initial_cwd_not_cd_command() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.folder-place-cwd-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.folder-place-cwd-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -637,8 +633,7 @@ fn new_session_from_remote_place_queues_ssh_command() {
 
     crate::host::save(&[crate::host::Host::remote("deploy@example.com")]).unwrap();
 
-    let app =
-        adw::Application::builder().application_id("com.illya.rttx.ssh-place-tests").build();
+    let app = adw::Application::builder().application_id("com.illya.rttx.ssh-place-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -657,13 +652,12 @@ fn new_session_from_remote_place_queues_ssh_command() {
         (term.pending_shell_inputs_for_test(), session.recovery_for(&terminal_uuid).cloned())
     };
 
-    let expected_input =
-        PaneTarget::RemoteShell {
-            ssh_target: "deploy@example.com".into(),
-            remote_folder: Some("/srv/app".into()),
-        }
-        .managed_startup_input()
-        .unwrap();
+    let expected_input = PaneTarget::RemoteShell {
+        ssh_target: "deploy@example.com".into(),
+        remote_folder: Some("/srv/app".into()),
+    }
+    .managed_startup_input()
+    .unwrap();
     assert_eq!(
         pending_inputs,
         vec![expected_input],
@@ -737,9 +731,8 @@ fn save_place_from_active_session_returns_none_without_focused_terminal() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.place-no-focus-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.place-no-focus-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);

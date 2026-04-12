@@ -567,10 +567,8 @@ fn remote_place_creates_managed_remote_session() {
     // A remote-tagged place with a known SSH target in its host_tags.
     // The place resolves the host key to an ad-hoc remote host when no
     // saved hosts file exists.
-    let place = Place {
-        host_tags: vec!["example.com".into()],
-        ..Place::new("Prod Server", "/srv/app")
-    };
+    let place =
+        Place { host_tags: vec!["example.com".into()], ..Place::new("Prod Server", "/srv/app") };
 
     // The place should report a remote host (ad-hoc resolution uses the key as SSH target).
     let host = place.remote_host();
@@ -629,10 +627,7 @@ fn update_remote_endpoint_changes_host_and_mode() {
 fn remote_place_remote_command_strips_ssh_for_same_host() {
     use rttx::places::Place;
 
-    let place = Place {
-        host_tags: vec!["example.com".into()],
-        ..Place::new("Deploy", "/srv/app")
-    };
+    let place = Place { host_tags: vec!["example.com".into()], ..Place::new("Deploy", "/srv/app") };
 
     let inner = place.remote_command().unwrap();
     assert!(!inner.contains("ssh"), "inner command must not contain ssh");

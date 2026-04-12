@@ -10,9 +10,8 @@ impl Window {
         let query = imp.place_search_entry.text();
         let user_places = places::load();
         let all_places = places::places_for_host(&user_places, crate::host::LOCAL_KEY);
-        for place in all_places
-            .into_iter()
-            .filter(|place| places::matches_query(place, query.as_str()))
+        for place in
+            all_places.into_iter().filter(|place| places::matches_query(place, query.as_str()))
         {
             let action_row = adw::ActionRow::new();
             action_row.set_title(place.display_name());
@@ -31,10 +30,8 @@ impl Window {
             if !places::is_builtin(&place.uuid) {
                 let uuid = place.uuid.clone();
                 let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
-                edit_item.set_action_and_target_value(
-                    Some("win.edit-place"),
-                    Some(&uuid.to_variant()),
-                );
+                edit_item
+                    .set_action_and_target_value(Some("win.edit-place"), Some(&uuid.to_variant()));
                 let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
                 delete_item.set_action_and_target_value(
                     Some("win.delete-place"),
@@ -249,8 +246,7 @@ impl Window {
     }
 
     fn active_host_key(&self) -> String {
-        self.visible_session_remote_host()
-            .unwrap_or_else(|| crate::host::LOCAL_KEY.to_string())
+        self.visible_session_remote_host().unwrap_or_else(|| crate::host::LOCAL_KEY.to_string())
     }
 
     fn visible_session_remote_host(&self) -> Option<String> {

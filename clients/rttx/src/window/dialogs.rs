@@ -50,18 +50,14 @@ impl Window {
 
     pub(super) fn confirm_delete_place(&self, uuid: String) {
         let win = self.clone();
-        self.confirm_delete(
-            "Delete Place?",
-            "The place will be permanently removed.",
-            move || {
-                let mut items = places::load();
-                items.retain(|p| p.uuid != uuid);
-                if let Err(e) = places::save(&items) {
-                    log::error!("Failed to delete place: {e}");
-                }
-                win.refresh_place_sidebar();
-            },
-        );
+        self.confirm_delete("Delete Place?", "The place will be permanently removed.", move || {
+            let mut items = places::load();
+            items.retain(|p| p.uuid != uuid);
+            if let Err(e) = places::save(&items) {
+                log::error!("Failed to delete place: {e}");
+            }
+            win.refresh_place_sidebar();
+        });
     }
 
     pub(super) fn confirm_delete_command(&self, uuid: String) {

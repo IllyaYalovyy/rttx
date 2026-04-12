@@ -62,8 +62,7 @@ impl Place {
 
     #[must_use]
     pub fn is_local(&self) -> bool {
-        self.host_tags.is_empty()
-            || (self.host_tags.len() == 1 && self.host_tags[0] == LOCAL_KEY)
+        self.host_tags.is_empty() || (self.host_tags.len() == 1 && self.host_tags[0] == LOCAL_KEY)
     }
 
     /// Command to execute in the current pane.
@@ -113,7 +112,10 @@ impl Place {
             return None;
         }
         let ssh_target = self.primary_remote_ssh_target()?;
-        Some(format!("ssh -t {ssh_target} {}", shell_quote(&format!("cd {}", shell_quote(&self.path)))))
+        Some(format!(
+            "ssh -t {ssh_target} {}",
+            shell_quote(&format!("cd {}", shell_quote(&self.path)))
+        ))
     }
 
     /// Remote host SSH target for workspace creation.
@@ -267,7 +269,9 @@ pub fn places_for_host(user_places: &[Place], host_key: &str) -> Vec<Place> {
 /// - bookmark with `ssh_target` + `directory` → Place tagged with that host key
 /// - bookmark with `tmux_session` → dropped (already removed)
 #[must_use]
-pub fn migrate_bookmarks(bookmarks: &[crate::bookmarks::Bookmark]) -> (Vec<Place>, Vec<crate::host::Host>) {
+pub fn migrate_bookmarks(
+    bookmarks: &[crate::bookmarks::Bookmark],
+) -> (Vec<Place>, Vec<crate::host::Host>) {
     let mut places = Vec::new();
     let mut new_hosts = Vec::new();
 
@@ -321,10 +325,8 @@ mod tests {
 
     #[test]
     fn tagged_place_matches_only_tagged_hosts() {
-        let place = Place {
-            host_tags: vec!["example.com".into()],
-            ..Place::new("Remote", "/srv/app")
-        };
+        let place =
+            Place { host_tags: vec!["example.com".into()], ..Place::new("Remote", "/srv/app") };
         assert!(!place.is_global());
         assert!(place.matches_host("example.com"));
         assert!(!place.matches_host("other.com"));
@@ -356,10 +358,8 @@ mod tests {
 
     #[test]
     fn local_tagged_place_command_is_cd() {
-        let place = Place {
-            host_tags: vec![LOCAL_KEY.into()],
-            ..Place::new("Work", "/home/user/work")
-        };
+        let place =
+            Place { host_tags: vec![LOCAL_KEY.into()], ..Place::new("Work", "/home/user/work") };
         assert_eq!(place.command(LOCAL_KEY).as_deref(), Some("cd '/home/user/work'"));
     }
 
@@ -377,17 +377,18 @@ mod tests {
 
     #[test]
     fn session_initial_cwd_none_for_remote_place() {
-        let place = Place {
-            host_tags: vec!["example.com".into()],
-            ..Place::new("Remote", "/srv/app")
-        };
+        let place =
+            Place { host_tags: vec!["example.com".into()], ..Place::new("Remote", "/srv/app") };
         assert_eq!(place.session_initial_cwd(), None);
     }
 
     #[test]
     fn pane_target_local_folder() {
         let place = Place::new("Work", "/home/user/work");
-        assert_eq!(place.pane_target(), Some(PaneTarget::LocalFolder { path: "/home/user/work".into() }));
+        assert_eq!(
+            place.pane_target(),
+            Some(PaneTarget::LocalFolder { path: "/home/user/work".into() })
+        );
     }
 
     #[test]
@@ -433,10 +434,8 @@ mod tests {
     fn roundtrip_via_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("places.json");
-        let place = Place {
-            host_tags: vec!["example.com".into()],
-            ..Place::new("Remote", "/srv/app")
-        };
+        let place =
+            Place { host_tags: vec!["example.com".into()], ..Place::new("Remote", "/srv/app") };
 
         save_to(std::slice::from_ref(&place), &path).unwrap();
         assert_eq!(load_from(&path), vec![place]);
@@ -548,10 +547,8 @@ mod tests {
 
     #[test]
     fn summary_includes_path_and_tags() {
-        let place = Place {
-            host_tags: vec!["example.com".into()],
-            ..Place::new("Remote", "/srv/app")
-        };
+        let place =
+            Place { host_tags: vec!["example.com".into()], ..Place::new("Remote", "/srv/app") };
         assert_eq!(place.summary(), "/srv/app [example.com]");
     }
 
@@ -581,10 +578,8 @@ mod tests {
 
     #[test]
     fn remote_command_for_tagged_remote() {
-        let place = Place {
-            host_tags: vec!["example.com".into()],
-            ..Place::new("Remote", "/srv/app")
-        };
+        let place =
+            Place { host_tags: vec!["example.com".into()], ..Place::new("Remote", "/srv/app") };
         assert_eq!(place.remote_command().as_deref(), Some("cd '/srv/app'"));
     }
 
@@ -596,19 +591,13 @@ mod tests {
 
     #[test]
     fn is_local_for_local_tagged() {
-        let place = Place {
-            host_tags: vec![LOCAL_KEY.into()],
-            ..Place::new("Local", "/home")
-        };
+        let place = Place { host_tags: vec![LOCAL_KEY.into()], ..Place::new("Local", "/home") };
         assert!(place.is_local());
     }
 
     #[test]
     fn is_local_false_for_remote_tagged() {
-        let place = Place {
-            host_tags: vec!["example.com".into()],
-            ..Place::new("Remote", "/srv")
-        };
+        let place = Place { host_tags: vec!["example.com".into()], ..Place::new("Remote", "/srv") };
         assert!(!place.is_local());
     }
 }
