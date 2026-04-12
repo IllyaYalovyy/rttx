@@ -46,6 +46,7 @@ mod imp {
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
         pub last_match_at_click: RefCell<Option<String>>,
+        pub places_submenu: gtk4::gio::Menu,
     }
 
     impl Default for PersistentPaneView {
@@ -73,6 +74,7 @@ mod imp {
                 search_bar: gtk4::SearchBar::default(),
                 search_entry: gtk4::SearchEntry::default(),
                 last_match_at_click: RefCell::default(),
+                places_submenu: gtk4::gio::Menu::new(),
             }
         }
     }
@@ -199,6 +201,8 @@ mod imp {
             session_section.append(Some("Add to Places"), Some("win.add-current-place"));
             session_section.append(Some("Add Host"), Some("win.add-current-host"));
             session_section.append(Some("Preferences"), Some("win.preferences"));
+            let places_submenu = &self.places_submenu;
+            session_section.append_submenu(Some("Places"), places_submenu);
             let close_section = gtk4::gio::Menu::new();
             close_section.append(Some("Close Pane"), Some("win.close-terminal"));
             menu.append_section(None, &clipboard_section);
@@ -229,6 +233,15 @@ mod imp {
                     copy_link_ref.set_enabled(has_link);
                     open_link_ref.set_enabled(has_link);
                     obj.imp().last_match_at_click.replace(matched);
+
+                    let host_key = obj
+                        .root()
+                        .and_then(|r| r.downcast::<crate::window::Window>().ok())
+                        .map_or_else(
+                            || crate::host::LOCAL_KEY.into(),
+                            |w| w.visible_session_host_key(),
+                        );
+                    crate::terminal::populate_places_submenu(&obj.imp().places_submenu, &host_key);
                 }
                 context_menu
                     .set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));

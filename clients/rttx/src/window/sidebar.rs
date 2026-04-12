@@ -174,7 +174,7 @@ impl Window {
         true
     }
 
-    fn open_place_in_current_pane(&self, path: &str) {
+    pub(super) fn open_place_in_current_pane(&self, path: &str) {
         let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
             return;
         };

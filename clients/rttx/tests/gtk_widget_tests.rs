@@ -938,9 +938,10 @@ fn terminal_context_menu_model_has_actions() {
 
         for item_idx in 0..n {
             let has_action = section.item_attribute_value(item_idx, "action", None).is_some();
+            let has_submenu = section.item_link(item_idx, "submenu").is_some();
             assert!(
-                has_action,
-                "context menu section {section_idx} item {item_idx} has no action attribute — \
+                has_action || has_submenu,
+                "context menu section {section_idx} item {item_idx} has no action or submenu — \
                  the item will silently do nothing when clicked"
             );
             total_items += 1;
@@ -963,6 +964,36 @@ fn find_popover_child(widget: &gtk4::Widget) -> Option<gtk4::PopoverMenu> {
         child = c.next_sibling();
     }
     None
+}
+
+/// The context menu must contain a "Places" submenu in one of its sections.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_context_menu_has_places_submenu() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
+        .expect("context menu must be parented");
+    let model = popover.menu_model().expect("PopoverMenu must have a menu model");
+
+    let mut found_places = false;
+    for section_idx in 0..model.n_items() {
+        let section = model.item_link(section_idx, "section").unwrap();
+        for item_idx in 0..section.n_items() {
+            if section.item_link(item_idx, "submenu").is_some() {
+                let label = section.item_attribute_value(
+                    item_idx,
+                    "label",
+                    Some(gtk4::glib::VariantTy::STRING),
+                );
+                if label.is_some_and(|v| v.get::<String>().unwrap() == "Places") {
+                    found_places = true;
+                }
+            }
+        }
+    }
+    assert!(found_places, "context menu must contain a Places submenu");
 }
 
 // ── TerminalHandle tests ────────────────────────────────────────

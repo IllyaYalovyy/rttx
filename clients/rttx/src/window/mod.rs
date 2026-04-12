@@ -732,6 +732,16 @@ impl Window {
         SessionColor::ALL[count % SessionColor::ALL.len()]
     }
 
+    /// Host key for the currently visible workspace session.
+    pub(crate) fn visible_session_host_key(&self) -> String {
+        let state = self.imp().state.borrow();
+        self.imp()
+            .session_stack
+            .visible_child_name()
+            .and_then(|name| state.sessions.iter().find(|s| s.uuid == name.as_str()))
+            .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
+    }
+
     pub(crate) fn new_session_from_bookmark(&self, bookmark: &Bookmark) {
         let imp = self.imp();
         let initial_cwd = bookmark
