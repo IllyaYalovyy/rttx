@@ -219,14 +219,6 @@ mod imp {
             ));
             self.command_empty.set_vexpand(true);
 
-            let templates_placeholder =
-                gtk4::Label::new(Some("Workspace templates will live here."));
-            templates_placeholder.set_wrap(true);
-            templates_placeholder.set_margin_start(18);
-            templates_placeholder.set_margin_end(18);
-            templates_placeholder.set_margin_top(18);
-            templates_placeholder.set_margin_bottom(18);
-
             let bookmarks_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             bookmarks_page.append(&utility_header);
             bookmarks_page.append(&self.bookmark_search_entry);
@@ -242,7 +234,6 @@ mod imp {
             let utility_stack = gtk4::Stack::new();
             utility_stack.add_titled(&bookmarks_page, Some("bookmarks"), "Bookmarks");
             utility_stack.add_titled(&commands_page, Some("commands"), "Commands");
-            utility_stack.add_titled(&templates_placeholder, Some("templates"), "Templates");
 
             let utility_switcher = gtk4::StackSwitcher::builder().stack(&utility_stack).build();
             utility_switcher.set_margin_start(12);

@@ -8,14 +8,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::shell_quote;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PaneSource {
     EmptyShell,
     Bookmark { name: String },
     Command { title: String },
-    SessionTemplate { name: String },
     Manual,
+}
+
+impl<'de> Deserialize<'de> for PaneSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// Mirror of `PaneSource` that includes removed variants for backward
+        /// compatibility with persisted state.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        #[allow(dead_code)] // fields in removed variants are intentionally discarded
+        enum Raw {
+            EmptyShell,
+            Bookmark { name: String },
+            Command { title: String },
+            SessionTemplate { name: String },
+            Manual,
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::EmptyShell => Ok(Self::EmptyShell),
+            Raw::Bookmark { name } => Ok(Self::Bookmark { name }),
+            Raw::Command { title } => Ok(Self::Command { title }),
+            Raw::SessionTemplate { .. } | Raw::Manual => Ok(Self::Manual),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,5 +192,18 @@ mod tests {
         let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
         let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
         assert_eq!(recovery.target, None);
+    }
+
+    #[test]
+    fn legacy_session_template_source_deserializes_as_manual() {
+        let json = r#"{"source":{"session-template":{"name":"Dev Setup"}}}"#;
+        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.source, PaneSource::Manual);
+    }
+
+    #[test]
+    fn session_template_variant_absent_from_enum() {
+        let json = serde_json::to_string(&PaneSource::Manual).unwrap();
+        assert!(!json.contains("session-template"));
     }
 }
