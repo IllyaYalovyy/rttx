@@ -3,47 +3,25 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::bookmarks::{self, Bookmark};
+use crate::form_dialog::{self, FormDialog};
 use crate::window::Window;
 
 pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
     let existing_uuid = bookmark.map(|b| b.uuid.clone());
 
-    let dialog = adw::Dialog::builder()
-        .title(if bookmark.is_some() { "Edit Bookmark" } else { "New Bookmark" })
-        .content_width(440)
-        .build();
-
-    let header = adw::HeaderBar::new();
-    let save_button = gtk4::Button::with_label(if bookmark.is_some() { "Save" } else { "Add" });
-    save_button.add_css_class("suggested-action");
-    header.pack_end(&save_button);
+    let form = FormDialog::new("Bookmark", bookmark.is_some(), 440);
 
     let name_row = adw::EntryRow::builder().title("Name").build();
     let directory_row = adw::EntryRow::builder().title("Directory").build();
     let ssh_target_row = adw::EntryRow::builder().title("SSH target / args").build();
-
-    let status_label = gtk4::Label::new(None);
-    status_label.set_xalign(0.0);
-    status_label.add_css_class("dim-label");
 
     let group = adw::PreferencesGroup::new();
     group.add(&name_row);
     group.add(&directory_row);
     group.add(&ssh_target_row);
 
-    let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
-    content_box.set_margin_start(18);
-    content_box.set_margin_end(18);
-    content_box.set_margin_top(18);
-    content_box.set_margin_bottom(18);
-    content_box.append(&group);
-    content_box.append(&status_label);
-
-    let toolbar_view = adw::ToolbarView::new();
-    toolbar_view.add_top_bar(&header);
-    toolbar_view.set_content(Some(&content_box));
-
-    dialog.set_child(Some(&toolbar_view));
+    form.content_box.append(&group);
+    form.finish_layout();
 
     if let Some(b) = bookmark {
         name_row.set_text(&b.name);
@@ -51,9 +29,10 @@ pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
         ssh_target_row.set_text(b.ssh_target.as_deref().unwrap_or_default());
     }
 
-    let dialog_for_save = dialog.clone();
+    let dialog = form.dialog.clone();
+    let status_label = form.status_label.clone();
     let parent_for_save = parent.clone();
-    save_button.connect_clicked(move |_| {
+    form.save_button.connect_clicked(move |_| {
         let b =
             match build_bookmark(&name_row, &directory_row, &ssh_target_row, existing_uuid.clone())
             {
@@ -75,10 +54,10 @@ pub fn show_form(parent: &Window, bookmark: Option<&Bookmark>) {
             return;
         }
         parent_for_save.refresh_bookmark_sidebar();
-        dialog_for_save.close();
+        dialog.close();
     });
 
-    dialog.present(Some(parent));
+    form.present(parent);
 }
 
 fn build_bookmark(
@@ -96,18 +75,12 @@ fn build_bookmark(
     if let Some(uuid) = existing_uuid {
         bookmark.uuid = uuid;
     }
-    bookmark.directory = entry_value(directory_row);
-    bookmark.ssh_target = entry_value(ssh_target_row);
+    bookmark.directory = form_dialog::entry_value(directory_row);
+    bookmark.ssh_target = form_dialog::entry_value(ssh_target_row);
 
     if !bookmark.is_actionable() {
         return Err("Add a directory, SSH target, or both".into());
     }
 
     Ok(bookmark)
-}
-
-fn entry_value(row: &adw::EntryRow) -> Option<String> {
-    let text = row.text();
-    let trimmed = text.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }
