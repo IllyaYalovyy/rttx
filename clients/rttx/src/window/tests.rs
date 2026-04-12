@@ -3917,10 +3917,7 @@ fn new_direct_creates_non_managed_session() {
     let state = window.imp().state.borrow();
     assert_eq!(state.sessions.len(), initial_count + 1, "direct session should be added");
     let new_session = state.sessions.last().unwrap();
-    assert!(
-        !new_session.uses_managed_runtime(),
-        "direct session should not use managed runtime"
-    );
+    assert!(!new_session.uses_managed_runtime(), "direct session should not use managed runtime");
     assert!(
         new_session.name.starts_with("Direct"),
         "direct session name should start with 'Direct'"
@@ -3938,9 +3935,8 @@ fn keyboard_shortcut_actions_are_registered() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.shortcut-actions-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.shortcut-actions-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -3949,10 +3945,7 @@ fn keyboard_shortcut_actions_are_registered() {
         window.lookup_action("connect-to-existing").is_some(),
         "connect-to-existing action should be registered"
     );
-    assert!(
-        window.lookup_action("new-direct").is_some(),
-        "new-direct action should be registered"
-    );
+    assert!(window.lookup_action("new-direct").is_some(), "new-direct action should be registered");
     assert!(
         window.lookup_action("new-session").is_some(),
         "new-session action should be registered"
