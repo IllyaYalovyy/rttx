@@ -96,8 +96,7 @@ mod imp {
             self.new_button.set_tooltip_text(Some("New workspace"));
             self.new_button.set_icon_name("list-add-symbolic");
             self.new_button.add_css_class("flat");
-            self.new_button
-                .update_property(&[gtk4::accessible::Property::Label("New workspace")]);
+            self.new_button.update_property(&[gtk4::accessible::Property::Label("New workspace")]);
             header.pack_start(&self.new_button);
 
             self.connect_button.set_label("Connect");
