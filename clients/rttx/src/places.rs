@@ -25,6 +25,18 @@ impl Place {
         }
     }
 
+    /// Create a place from a working directory path.
+    ///
+    /// The display name is derived from the last path component.
+    /// `host_tags` scopes the place to specific hosts (empty = global).
+    #[must_use]
+    pub fn from_cwd(path: &str, host_tags: Vec<String>) -> Self {
+        let name = Path::new(path)
+            .file_name()
+            .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+        Self { uuid: uuid::Uuid::new_v4().to_string(), name, path: path.to_string(), host_tags }
+    }
+
     /// Display string: name with path in parentheses when they differ.
     #[must_use]
     pub fn display_label(&self) -> String {
@@ -151,6 +163,27 @@ mod tests {
     }
 
     // ── Display label ───────────────────────────────────────────
+
+    #[test]
+    fn from_cwd_derives_name_from_last_component() {
+        let place = Place::from_cwd("/home/user/projects/rttx", vec![]);
+        assert_eq!(place.name, "rttx");
+        assert_eq!(place.path, "/home/user/projects/rttx");
+        assert!(place.host_tags.is_empty());
+    }
+
+    #[test]
+    fn from_cwd_root_path_uses_full_path_as_name() {
+        let place = Place::from_cwd("/", vec![]);
+        assert_eq!(place.name, "/");
+        assert_eq!(place.path, "/");
+    }
+
+    #[test]
+    fn from_cwd_preserves_host_tags() {
+        let place = Place::from_cwd("/srv/app", vec!["example.com".into()]);
+        assert_eq!(place.host_tags, vec!["example.com"]);
+    }
 
     #[test]
     fn display_label_shows_name_and_path_when_different() {

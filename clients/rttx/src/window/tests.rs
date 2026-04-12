@@ -4355,3 +4355,136 @@ fn add_current_host_noop_for_local_session() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn add_current_path_to_places_saves_place_with_derived_name() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.add-place-cwd-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    if let Some(term) = window.imp().terminals.borrow().get(&terminal_uuid) {
+        term.set_current_directory_for_test(Some("/home/user/projects/rttx"));
+    }
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid));
+
+    window.do_add_current_path_to_places();
+
+    let places = crate::places::load();
+    assert_eq!(places.len(), 1, "one place should be saved");
+    assert_eq!(places[0].name, "rttx");
+    assert_eq!(places[0].path, "/home/user/projects/rttx");
+    assert!(places[0].host_tags.is_empty(), "local session place should have no host tags");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn add_current_path_to_places_noop_without_cwd() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.add-place-no-cwd-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Don't set any CWD — terminal has no known directory
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid));
+
+    window.do_add_current_path_to_places();
+
+    let places = crate::places::load();
+    assert!(places.is_empty(), "no place should be saved when CWD is unknown");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn add_current_path_to_places_tags_remote_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.add-place-remote-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Add a remote managed workspace and switch to it
+    let remote_session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "deploy@builder.example.com",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let remote_uuid = remote_session.uuid.clone();
+    window.imp().state.borrow_mut().sessions.push(remote_session.clone());
+    window.build_session(&remote_session, false);
+    pump_events(50);
+
+    let state = window.imp().state.borrow();
+    let remote_idx = state.sessions.iter().position(|s| s.uuid == remote_uuid).unwrap();
+    drop(state);
+    window.switch_to_session(remote_idx);
+    pump_events(50);
+
+    // Set CWD on the persistent terminal
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        let session = state.sessions.iter().find(|s| s.uuid == remote_uuid).unwrap();
+        session.layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    if let Some(term) = window.imp().persistent_terminals.borrow().get(&terminal_uuid) {
+        term.set_current_directory(Some("/srv/app"));
+    }
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid));
+
+    window.do_add_current_path_to_places();
+
+    let places = crate::places::load();
+    assert_eq!(places.len(), 1, "one place should be saved");
+    assert_eq!(places[0].name, "app");
+    assert_eq!(places[0].path, "/srv/app");
+    assert_eq!(
+        places[0].host_tags,
+        vec!["builder.example.com"],
+        "remote session place should be tagged with the host key"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

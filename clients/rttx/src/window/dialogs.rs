@@ -520,4 +520,36 @@ impl Window {
         self.rebuild_host_selector_model(None);
         self.show_toast(&format!("Host \"{}\" added", new_host.name));
     }
+
+    pub(super) fn do_add_current_path_to_places(&self) {
+        let Some(uuid) = self.focused_terminal_uuid() else { return };
+        let cwd = self.terminal_handle(&uuid).and_then(|t| t.current_directory());
+        let Some(cwd) = cwd else {
+            self.show_toast("No working directory available");
+            return;
+        };
+
+        let host_key = {
+            let state = self.imp().state.borrow();
+            let visible = self.imp().session_stack.visible_child_name();
+            visible
+                .and_then(|name| state.sessions.iter().find(|s| s.uuid == name.as_str()))
+                .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
+        };
+
+        let host_tags = if host_key == host::LOCAL_KEY { vec![] } else { vec![host_key] };
+
+        let place = crate::places::Place::from_cwd(&cwd, host_tags);
+        let label = place.display_label();
+        let mut places = crate::places::load();
+        places.push(place);
+        if let Err(e) = crate::places::save(&places) {
+            log::error!("Failed to save places: {e}");
+            self.show_toast("Failed to save place");
+            return;
+        }
+
+        self.refresh_place_sidebar();
+        self.show_toast(&format!("Place \"{label}\" added"));
+    }
 }
