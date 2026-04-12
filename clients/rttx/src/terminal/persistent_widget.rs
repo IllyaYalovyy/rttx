@@ -136,13 +136,16 @@ mod imp {
             self.header.append(&self.zoom_button);
             self.header.append(&self.close_button);
 
-            // VTE in feed mode — no PTY spawned.
+            // VTE in feed mode — no PTY spawned.  Input stays enabled so
+            // VTE generates mouse escape sequences via `commit` when the
+            // remote app enables mouse tracking.  Keyboard input is
+            // intercepted by the Capture-phase key controller installed in
+            // `connect_input`, so VTE never emits `commit` for keystrokes.
             self.vte.set_hexpand(true);
             self.vte.set_vexpand(true);
             self.vte.set_scroll_on_output(false);
             self.vte.set_scroll_on_keystroke(true);
             self.vte.set_scrollback_lines(10000);
-            self.vte.set_input_enabled(false);
             links::configure_openable_matches(&self.vte);
             let link_target = obj.downgrade();
             links::install_openable_link_controllers(&self.vte, move || {
@@ -622,11 +625,27 @@ impl PersistentPaneView {
         (vte.column_count() as u16, vte.row_count() as u16)
     }
 
-    /// Connect a callback for keyboard input.
+    /// Connect a callback for keyboard and mouse input.
     ///
     /// The callback receives the raw terminal bytes to send to the daemon.
+    /// Keyboard input is intercepted by a Capture-phase key controller and
+    /// encoded manually.  Mouse input is handled by VTE natively — when the
+    /// remote application enables mouse tracking, VTE emits escape sequences
+    /// through the `commit` signal which are forwarded here.
     pub fn connect_input<F: Fn(&[u8]) + 'static>(&self, f: F) {
         let forward_input = std::rc::Rc::new(f);
+
+        // Forward VTE-generated data (mouse escape sequences) to the daemon.
+        let commit_forward = std::rc::Rc::clone(&forward_input);
+        let commit_pane_weak = self.downgrade();
+        self.imp().vte.connect_commit(move |_, text, _| {
+            if let Some(pane) = commit_pane_weak.upgrade()
+                && pane.imp().accepts_input.get()
+            {
+                commit_forward(text.as_bytes());
+            }
+        });
+
         let pane_weak = self.downgrade();
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
@@ -1094,6 +1113,89 @@ mod tests {
         assert!(
             wait_until(1_000, || { forwarded.borrow().contains(&b"window action paste".to_vec()) }),
             "managed clipboard paste helper should deliver clipboard bytes to daemon input"
+        );
+
+        window.close();
+    }
+
+    /// VTE input must be enabled so mouse events generate escape sequences
+    /// via the `commit` signal. Regression for #442.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn vte_input_enabled_for_mouse_events() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        assert!(
+            pane.vte().is_input_enabled(),
+            "VTE input must be enabled for mouse event propagation"
+        );
+    }
+
+    /// VTE `commit` data (mouse escape sequences) must be forwarded through
+    /// the input callback when the pane accepts input. Regression for #442.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn commit_signal_forwards_data_when_connected() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 320);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.connect_input(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes.to_vec());
+        });
+
+        // Simulate VTE emitting a mouse escape sequence via commit.
+        let sgr_click = "\x1b[<0;5;10M";
+        pane.vte().emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
+        pump_events(50);
+
+        assert!(
+            forwarded.borrow().contains(&sgr_click.as_bytes().to_vec()),
+            "VTE commit data must be forwarded to daemon input"
+        );
+
+        window.close();
+    }
+
+    /// VTE `commit` data must NOT be forwarded when the pane does not accept
+    /// input (disconnected, exited, etc.). Regression for #442.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn commit_signal_blocked_when_input_disabled() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 320);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.connect_input(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes.to_vec());
+        });
+
+        // Pane starts without accepting input (not connected).
+        let sgr_click = "\x1b[<0;5;10M";
+        pane.vte().emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
+        pump_events(50);
+
+        assert!(
+            forwarded.borrow().is_empty(),
+            "VTE commit data must not be forwarded when pane does not accept input"
         );
 
         window.close();
