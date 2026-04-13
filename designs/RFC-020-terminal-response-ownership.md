@@ -2,7 +2,7 @@
 
 | Field         | Value                                    |
 |---------------|------------------------------------------|
-| Status        | Accepted                                 |
+| Status        | Implemented                              |
 | Author(s)     | Illya Yalovyy                            |
 | Supersedes    | —                                        |
 | Superseded by | —                                        |
@@ -204,10 +204,10 @@ visible.
 ## Development Plan
 
 - [x] **Step 1** — RFC and investigation (this document)
-- [ ] **Step 2** — DA1 and DA2 responses in `ScreenPerformer` with tests *(#462)*
-- [ ] **Step 3** — Focus event mode tracking (DECSET 1004) with tests *(#463)*
-- [ ] **Step 4** — DECRQM responses for tracked modes with tests *(#464)*
-- [ ] **Step 5** — Cursor visibility tracking (DECSET 25) *(#465)*
+- [x] **Step 2** — DA1 and DA2 responses in `ScreenPerformer` with tests *(#498)*
+- [x] **Step 3** — Focus event mode tracking (DECSET 1004) with tests *(#499)*
+- [x] **Step 4** — DECRQM responses for tracked modes with tests *(#500)*
+- [x] **Step 5** — Cursor visibility tracking (DECSET 25) *(#501)*
 
 ---
 
