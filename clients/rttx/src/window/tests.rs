@@ -4909,9 +4909,8 @@ fn new_menu_includes_add_host_item() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.new-menu-add-host-test")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.new-menu-add-host-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);

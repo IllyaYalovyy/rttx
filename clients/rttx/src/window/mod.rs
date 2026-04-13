@@ -628,10 +628,7 @@ impl Window {
         }
         drop(state);
 
-        let mut hosts: Vec<host::Host> = keys
-            .iter()
-            .map(|k| host::resolve(k, &saved))
-            .collect();
+        let mut hosts: Vec<host::Host> = keys.iter().map(|k| host::resolve(k, &saved)).collect();
         // Sort remotes alphabetically, keeping Local first
         hosts[1..].sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
