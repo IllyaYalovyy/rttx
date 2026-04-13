@@ -141,9 +141,7 @@ class TestSidebarContentManaged(unittest.TestCase):
         self.fixture.stop()
 
     def _create_managed_workspace(self) -> None:
-        local_item = self.fixture.open_new_workspace_menu()
-        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
-        click(local_item)
+        self.fixture.activate_action("new-session")
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
         home_button = self.fixture.wait_for_showing_name(

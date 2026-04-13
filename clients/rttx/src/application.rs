@@ -169,5 +169,15 @@ pub fn run() -> glib::ExitCode {
 
     app.set_accels_for_action("win.new-session", &["<Ctrl><Shift>T"]);
 
+    // Application-level action so D-Bus ActivateAction works (used by UI tests).
+    let new_session_action = gtk4::gio::SimpleAction::new("new-session", None);
+    let app_ref = app.clone();
+    new_session_action.connect_activate(move |_, _| {
+        if let Some(win) = app_ref.active_window() {
+            let _ = win.activate_action("new-session", None);
+        }
+    });
+    app.add_action(&new_session_action);
+
     app.run()
 }

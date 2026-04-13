@@ -533,38 +533,31 @@ class AppFixture:
         """Inject text into the focused widget through the AT-SPI keyboard bridge."""
         return Atspi.generate_keyboard_event(0, text, Atspi.KeySynthType.STRING)
 
-    def open_new_workspace_menu(self) -> Atspi.Accessible | None:
-        """Click the New workspace MenuButton and wait for the Local item.
+    def activate_action(self, action_name: str, parameter: str | None = None) -> None:
+        """Activate a GIO application action via D-Bus.
 
-        Retries the click if the popover doesn't open on the first attempt,
-        which can happen on headless compositors.
+        This bypasses AT-SPI widget interaction, which is unreliable for
+        MenuButton popovers on headless compositors.
         """
-        for _attempt in range(3):
-            button = self.wait_for_showing_name(
-                Atspi.Role.TOGGLE_BUTTON, "New workspace", timeout=5.0
-            )
-            if button is None:
-                button = self.wait_for_showing_name(
-                    Atspi.Role.PUSH_BUTTON, "New workspace", timeout=3.0
-                )
-            if button is None:
-                continue
-            click(button)
-            time.sleep(1.0)
-            local_item = self.wait_for_showing_name(
-                Atspi.Role.PUSH_BUTTON, "Local", timeout=5.0
-            )
-            if local_item is not None:
-                return local_item
-            # Popover didn't open — try click_center as fallback.
-            click_center(button)
-            time.sleep(1.0)
-            local_item = self.wait_for_showing_name(
-                Atspi.Role.PUSH_BUTTON, "Local", timeout=5.0
-            )
-            if local_item is not None:
-                return local_item
-        return None
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        params = GLib.Variant("(sava{sv})", (
+            action_name,
+            [GLib.Variant("s", parameter)] if parameter else [],
+            {},
+        ))
+        bus.call_sync(
+            DEV_APP_ID,
+            DEV_OBJECT_PATH,
+            "org.freedesktop.Application",
+            "ActivateAction",
+            params,
+            None,
+            Gio.DBusCallFlags.NONE,
+            5000,
+            None,
+        )
 
     def showing_name(self, role: Atspi.Role, name: str) -> bool:
         """Return whether a visible accessible node with *role* and *name* exists."""
