@@ -27,8 +27,9 @@ class TestManagedBlackBox(unittest.TestCase):
         time.sleep(2.0)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
-        home_button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "Home", timeout=15.0
+        # Search without showing filter first, as adw::Dialog may not set SHOWING.
+        home_button = wait_for_name(
+            self.fixture.atspi_app, Atspi.Role.PUSH_BUTTON, "Home", timeout=15.0
         )
         self.assertIsNotNone(home_button, "Home place button not visible in dialog")
         click(home_button)
@@ -142,8 +143,8 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
         time.sleep(2.0)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
-        home_button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "Home", timeout=10.0
+        home_button = wait_for_name(
+            self.fixture.atspi_app, Atspi.Role.PUSH_BUTTON, "Home", timeout=15.0
         )
         self.assertIsNotNone(home_button, "Home place button not visible in dialog")
         click(home_button)
