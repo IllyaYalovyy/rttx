@@ -295,7 +295,7 @@ impl Window {
         let win = self.clone();
         let input_terminal_uuid = terminal_uuid.clone();
         pane_view.connect_input(move |bytes| {
-            win.send_managed_terminal_input(&input_terminal_uuid, bytes.to_vec());
+            win.send_managed_terminal_input(&input_terminal_uuid, bytes);
         });
 
         let win = self.clone();
@@ -378,14 +378,54 @@ impl Window {
         self.connect_managed_workspace(&session_state);
     }
 
-    pub(super) fn send_managed_terminal_input(&self, terminal_uuid: &str, data: Vec<u8>) {
+    pub(super) fn send_managed_terminal_input(&self, terminal_uuid: &str, data: &[u8]) {
+        let (primary, sync_targets) = {
+            let state = self.imp().state.borrow();
+            (
+                state
+                    .managed_terminal_binding(terminal_uuid)
+                    .map(|b| (b.workspace_id, b.endpoint, b.runtime_id, b.runtime_pane_id)),
+                state.input_sync_targets(terminal_uuid),
+            )
+        };
+        let Some((workspace_id, endpoint, runtime_id, runtime_pane_id)) = primary else {
+            return;
+        };
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.send_input(
+                &workspace_id,
+                &endpoint,
+                &runtime_id,
+                &runtime_pane_id,
+                data.to_vec(),
+            );
+            for target in &sync_targets {
+                manager.send_input(
+                    &target.workspace_id,
+                    &target.endpoint,
+                    &target.runtime_id,
+                    &target.runtime_pane_id,
+                    data.to_vec(),
+                );
+            }
+        }
+    }
+
+    /// Send input to a single managed pane without input-sync fan-out.
+    pub(super) fn send_managed_pane_input_direct(&self, terminal_uuid: &str, data: &[u8]) {
         let Some((workspace_id, endpoint, runtime_id, runtime_pane_id)) =
             self.managed_binding_for_terminal(terminal_uuid)
         else {
             return;
         };
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
-            manager.send_input(&workspace_id, &endpoint, &runtime_id, &runtime_pane_id, data);
+            manager.send_input(
+                &workspace_id,
+                &endpoint,
+                &runtime_id,
+                &runtime_pane_id,
+                data.to_vec(),
+            );
         }
     }
 

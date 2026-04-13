@@ -615,7 +615,7 @@ impl Window {
         let sent = self.imp().terminals.borrow().get(terminal_uuid).cloned().map_or_else(
             || {
                 if self.imp().persistent_terminals.borrow().contains_key(terminal_uuid) {
-                    self.send_managed_terminal_input(terminal_uuid, input.as_bytes().to_vec());
+                    self.send_managed_pane_input_direct(terminal_uuid, input.as_bytes());
                     true
                 } else {
                     false
