@@ -394,6 +394,7 @@ impl Server {
                             .snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES)
                             .to_vec(),
                         exit_status: pane.exit_status,
+                        bracketed_paste_mode: pane.screen.bracketed_paste_mode(),
                     })
                     .collect();
                 Some(protocol::snapshot(session_id, pane_snapshots, revision, role))

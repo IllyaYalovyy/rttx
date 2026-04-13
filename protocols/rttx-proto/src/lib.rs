@@ -287,6 +287,7 @@ mod tests {
                         rows: 40,
                         scrollback: b"hello".to_vec(),
                         exit_status: None,
+                        bracketed_paste_mode: false,
                     }],
                     revision: 10,
                     current_client_role: proto::RuntimeClientRole::Writer as i32,

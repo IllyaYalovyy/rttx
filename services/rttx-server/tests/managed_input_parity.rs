@@ -326,6 +326,57 @@ async fn bracketed_paste_wraps_content_correctly() {
     shutdown_server(&mut client, &mut server).await;
 }
 
+#[tokio::test]
+async fn snapshot_includes_bracketed_paste_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, mut server) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (sid, pid) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    // Bash enables bracketed paste by default. Detach and reattach to get a snapshot.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                session_id: sid.clone(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionDetached, got {other:?}"),
+        }
+    }
+
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                session_id: sid.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
+        .await;
+    let snapshot = loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(s)) => break s,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    };
+
+    let pane =
+        snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing from snapshot");
+    assert!(
+        pane.bracketed_paste_mode,
+        "bash enables bracketed paste by default; snapshot must reflect this"
+    );
+
+    shutdown_server(&mut client, &mut server).await;
+}
+
 // ── Reconnect preserves terminal state ──────────────────────────
 
 #[tokio::test]

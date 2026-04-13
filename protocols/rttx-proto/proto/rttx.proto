@@ -163,6 +163,7 @@ message PaneSnapshot {
     uint32 rows = 5;
     bytes scrollback = 6;
     optional int32 exit_status = 7;
+    bool bracketed_paste_mode = 8;
 }
 
 message Delta {

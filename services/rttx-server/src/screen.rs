@@ -29,6 +29,8 @@ struct ScreenPerformer {
     cwd: Option<String>,
     /// Pending replies to write back to the PTY (e.g. CPR for DSR).
     pending_replies: Vec<Vec<u8>>,
+    /// Whether bracketed paste mode (DECSET 2004) is active.
+    bracketed_paste_mode: bool,
 }
 
 impl PaneScreen {
@@ -45,6 +47,7 @@ impl PaneScreen {
                 title: None,
                 cwd: None,
                 pending_replies: Vec::new(),
+                bracketed_paste_mode: false,
             },
         }
     }
@@ -109,6 +112,12 @@ impl PaneScreen {
     /// Drain and return any pending replies (e.g. CPR for DSR).
     pub fn take_pending_replies(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.performer.pending_replies)
+    }
+
+    /// Whether bracketed paste mode (DECSET 2004) is currently active.
+    #[must_use]
+    pub const fn bracketed_paste_mode(&self) -> bool {
+        self.performer.bracketed_paste_mode
     }
 }
 
@@ -181,12 +190,23 @@ impl vte::Perform for ScreenPerformer {
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignore: bool,
         action: char,
     ) {
         let first_param = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1);
         let n = first_param as usize;
+
+        // DECSET/DECRST — private mode set/reset (CSI ? Pm h/l)
+        if intermediates == b"?" && matches!(action, 'h' | 'l') {
+            let enabled = action == 'h';
+            for param_slice in params {
+                if param_slice.first() == Some(&2004) {
+                    self.bracketed_paste_mode = enabled;
+                }
+            }
+            return;
+        }
 
         match action {
             // CUU — Cursor Up
@@ -448,5 +468,43 @@ mod tests {
     #[test]
     fn restart_safe_scrollback_uses_last_carriage_return_as_boundary() {
         assert_eq!(restart_safe_scrollback(b"status\rpartial"), b"status\r");
+    }
+
+    #[test]
+    fn bracketed_paste_mode_default_off() {
+        let screen = PaneScreen::new(1024);
+        assert!(!screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn decset_2004_enables_bracketed_paste_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?2004h");
+        assert!(screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn decrst_2004_disables_bracketed_paste_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?2004h");
+        assert!(screen.bracketed_paste_mode());
+        screen.feed(b"\x1b[?2004l");
+        assert!(!screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn bracketed_paste_mode_survives_interleaved_output() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?2004h");
+        screen.feed(b"some terminal output\r\n");
+        assert!(screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn other_private_modes_do_not_affect_bracketed_paste() {
+        let mut screen = PaneScreen::new(1024);
+        // DECSET 1049 (alternate screen) should not enable bracketed paste
+        screen.feed(b"\x1b[?1049h");
+        assert!(!screen.bracketed_paste_mode());
     }
 }
