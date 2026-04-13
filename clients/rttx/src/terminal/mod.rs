@@ -1,6 +1,7 @@
 pub mod handle;
 #[doc(hidden)]
 pub mod links;
+pub(crate) mod paste_guard;
 pub mod persistent_widget;
 pub mod widget;
 

@@ -81,6 +81,10 @@ pub struct Preferences {
     pub auto_start_daemon: bool,
     #[serde(default = "default_reconnect_delay_secs")]
     pub reconnect_delay_secs: u32,
+    #[serde(default = "default_true")]
+    pub paste_guard: bool,
+    #[serde(default = "default_paste_guard_threshold")]
+    pub paste_guard_threshold: usize,
 }
 
 fn default_font() -> String {
@@ -107,6 +111,10 @@ const fn default_true() -> bool {
 const fn default_reconnect_delay_secs() -> u32 {
     10
 }
+
+const fn default_paste_guard_threshold() -> usize {
+    1024
+}
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -126,6 +134,8 @@ impl Default for Preferences {
             pane_navigation_keys: PaneNavigationKeys::default(),
             auto_start_daemon: true,
             reconnect_delay_secs: default_reconnect_delay_secs(),
+            paste_guard: true,
+            paste_guard_threshold: default_paste_guard_threshold(),
         }
     }
 }
@@ -181,6 +191,10 @@ struct PreferencesDisk {
     auto_start_daemon: bool,
     #[serde(default = "default_reconnect_delay_secs")]
     reconnect_delay_secs: u32,
+    #[serde(default = "default_true")]
+    paste_guard: bool,
+    #[serde(default = "default_paste_guard_threshold")]
+    paste_guard_threshold: usize,
 }
 
 impl From<PreferencesDisk> for Preferences {
@@ -214,6 +228,8 @@ impl From<PreferencesDisk> for Preferences {
             pane_navigation_keys: raw.pane_navigation_keys,
             auto_start_daemon: raw.auto_start_daemon,
             reconnect_delay_secs: raw.reconnect_delay_secs,
+            paste_guard: raw.paste_guard,
+            paste_guard_threshold: raw.paste_guard_threshold,
         }
     }
 }
@@ -284,6 +300,8 @@ mod tests {
         assert!(!prefs.smart_clipboard);
         assert!(prefs.auto_start_daemon);
         assert_eq!(prefs.reconnect_delay_secs, 10);
+        assert!(prefs.paste_guard);
+        assert_eq!(prefs.paste_guard_threshold, 1024);
     }
 
     #[test]
@@ -497,5 +515,34 @@ mod tests {
         let path = dir.path().join("prefs.json");
         std::fs::write(&path, "{}").unwrap();
         assert_eq!(load_from(&path).reconnect_delay_secs, 10);
+    }
+
+    #[test]
+    fn paste_guard_defaults_to_enabled() {
+        let prefs = Preferences::default();
+        assert!(prefs.paste_guard);
+        assert_eq!(prefs.paste_guard_threshold, 1024);
+    }
+
+    #[test]
+    fn paste_guard_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        let prefs =
+            Preferences { paste_guard: false, paste_guard_threshold: 4096, ..Default::default() };
+        save_to(&prefs, &path).unwrap();
+        let loaded = load_from(&path);
+        assert!(!loaded.paste_guard);
+        assert_eq!(loaded.paste_guard_threshold, 4096);
+    }
+
+    #[test]
+    fn missing_paste_guard_defaults_to_enabled() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{}").unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.paste_guard);
+        assert_eq!(loaded.paste_guard_threshold, 1024);
     }
 }

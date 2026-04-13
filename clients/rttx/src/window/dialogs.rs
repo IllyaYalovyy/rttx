@@ -552,4 +552,40 @@ impl Window {
         self.refresh_place_sidebar();
         self.show_toast(&format!("Place \"{label}\" added"));
     }
+
+    pub(super) fn confirm_paste(&self, terminal_uuid: &str, text: &str) {
+        use crate::terminal::paste_guard::{analyse, flatten_to_single_line};
+
+        let analysis = analyse(text);
+        let body = format!(
+            "{} lines, {} bytes\n\n{}",
+            analysis.line_count, analysis.byte_len, analysis.preview
+        );
+
+        let alert = adw::AlertDialog::new(Some("Confirm Paste"), Some(&body));
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("single-line", "Paste as Single Line");
+        alert.add_response("paste", "Paste");
+        alert.set_response_appearance("paste", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+
+        let win = self.clone();
+        let uuid = terminal_uuid.to_string();
+        let original_text = text.to_string();
+        alert.connect_response(None, move |_, response| {
+            let Some(terminal) = win.terminal_handle(&uuid) else { return };
+            match response {
+                "paste" => {
+                    Self::execute_paste_text(&terminal, &win, &uuid, &original_text);
+                }
+                "single-line" => {
+                    let flat = flatten_to_single_line(&original_text);
+                    Self::execute_paste_text(&terminal, &win, &uuid, &flat);
+                }
+                _ => {}
+            }
+        });
+        alert.present(Some(self));
+    }
 }

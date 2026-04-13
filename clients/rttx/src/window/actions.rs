@@ -305,18 +305,70 @@ impl Window {
     }
 
     fn clipboard_paste(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(terminal) = self.terminal_handle(&uuid)
-        {
-            match terminal {
-                TerminalHandle::Direct(terminal) => terminal.vte().paste_clipboard(),
-                TerminalHandle::Managed(pane) => {
-                    let win = self.clone();
-                    let terminal_uuid = uuid.clone();
-                    pane.request_clipboard_paste(move |bytes| {
-                        win.send_managed_terminal_input(&terminal_uuid, &bytes);
-                    });
+        let Some(uuid) = self.focused_terminal_uuid() else { return };
+        let Some(terminal) = self.terminal_handle(&uuid) else { return };
+
+        let prefs = crate::preferences::load();
+        if !prefs.paste_guard {
+            Self::execute_paste(&terminal, self, &uuid);
+            return;
+        }
+
+        let Some(display) = gtk4::gdk::Display::default() else {
+            Self::execute_paste(&terminal, self, &uuid);
+            return;
+        };
+        let clipboard = display.clipboard();
+        let win = self.clone();
+        let terminal_uuid = uuid;
+        clipboard.read_text_async(None::<&gtk4::gio::Cancellable>, move |result| {
+            let text = match result {
+                Ok(Some(t)) if !t.is_empty() => t.to_string(),
+                _ => return,
+            };
+
+            let threshold = crate::preferences::load().paste_guard_threshold;
+            if !crate::terminal::paste_guard::needs_confirmation(&text, threshold) {
+                if let Some(terminal) = win.terminal_handle(&terminal_uuid) {
+                    Self::execute_paste(&terminal, &win, &terminal_uuid);
                 }
+                return;
+            }
+
+            win.confirm_paste(&terminal_uuid, &text);
+        });
+    }
+
+    fn execute_paste(terminal: &TerminalHandle, win: &Self, terminal_uuid: &str) {
+        match terminal {
+            TerminalHandle::Direct(terminal) => terminal.vte().paste_clipboard(),
+            TerminalHandle::Managed(pane) => {
+                let win = win.clone();
+                let terminal_uuid = terminal_uuid.to_string();
+                pane.request_clipboard_paste(move |bytes| {
+                    win.send_managed_terminal_input(&terminal_uuid, &bytes);
+                });
+            }
+        }
+    }
+
+    pub(super) fn execute_paste_text(
+        terminal: &TerminalHandle,
+        win: &Self,
+        terminal_uuid: &str,
+        text: &str,
+    ) {
+        match terminal {
+            TerminalHandle::Direct(t) => {
+                let bytes = crate::terminal::persistent_widget::pastify(text.as_bytes());
+                t.vte().feed_child(&bytes);
+            }
+            TerminalHandle::Managed(pane) => {
+                let bytes =
+                    crate::terminal::persistent_widget::pastify_for_pane(pane, text.as_bytes());
+                let win = win.clone();
+                let terminal_uuid = terminal_uuid.to_string();
+                win.send_managed_terminal_input(&terminal_uuid, &bytes);
             }
         }
     }
