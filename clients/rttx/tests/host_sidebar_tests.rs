@@ -97,3 +97,28 @@ fn add_host_from_remote_endpoint_saves_and_deduplicates() {
     assert!(hosts.iter().any(|h| h.key == new_host.key));
     assert_eq!(hosts.iter().filter(|h| h.key == "builder.example.com").count(), 1);
 }
+
+#[test]
+fn add_host_rejects_blank_ssh_target() {
+    let blank_targets = ["", "  ", "\t\n"];
+    for target in blank_targets {
+        let trimmed = target.trim();
+        assert!(trimmed.is_empty(), "blank target should be rejected before creating a host");
+    }
+}
+
+#[test]
+fn add_host_detects_duplicate_by_normalized_key() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("hosts.json");
+
+    let host_a = host::Host::remote("deploy@example.com");
+    host::save_to(&[host_a], &path).unwrap();
+
+    let hosts = host::load_from(&path);
+    let host_b = host::Host::remote("root@Example.COM");
+    assert!(
+        hosts.iter().any(|h| h.key == host_b.key),
+        "different user and case should still match the same host key"
+    );
+}

@@ -51,6 +51,7 @@ mod imp {
         pub utility_sidebar_box: gtk4::Box,
         pub sidebar_search_entry: gtk4::SearchEntry,
         pub host_selector: gtk4::DropDown,
+        pub host_add_button: gtk4::Button,
         pub host_delete_button: gtk4::Button,
         pub utility_stack: gtk4::Stack,
         pub place_list: gtk4::ListBox,
@@ -190,11 +191,16 @@ mod imp {
             self.host_delete_button.add_css_class("flat");
             self.host_delete_button.set_visible(false);
 
+            self.host_add_button.set_icon_name("list-add-symbolic");
+            self.host_add_button.set_tooltip_text(Some("Add host"));
+            self.host_add_button.add_css_class("flat");
+
             let host_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
             host_row.set_margin_start(12);
             host_row.set_margin_end(12);
             host_row.set_margin_top(8);
             host_row.append(&self.host_selector);
+            host_row.append(&self.host_add_button);
             host_row.append(&self.host_delete_button);
 
             // ── Places tab ───────────────────────────────────────
@@ -551,6 +557,11 @@ impl Window {
             {
                 win.confirm_delete_host(key);
             }
+        });
+
+        let win = self.clone();
+        self.imp().host_add_button.connect_clicked(move |_| {
+            win.show_add_host_dialog();
         });
 
         let win = self.clone();

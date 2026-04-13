@@ -234,6 +234,74 @@ impl Window {
         dialog.present(Some(self));
     }
 
+    pub(super) fn show_add_host_dialog(&self) {
+        let dialog = adw::Dialog::builder().title("Add Host").content_width(360).build();
+        let header = adw::HeaderBar::new();
+
+        let add_button = gtk4::Button::with_label("Add");
+        add_button.add_css_class("suggested-action");
+        add_button.set_sensitive(false);
+        header.pack_end(&add_button);
+
+        let entry = adw::EntryRow::builder().title("SSH target (e.g. user@host)").build();
+
+        let group = adw::PreferencesGroup::new();
+        group.add(&entry);
+
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
+        content.set_margin_top(18);
+        content.set_margin_bottom(18);
+        content.append(&group);
+
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
+        toolbar_view.set_content(Some(&content));
+        dialog.set_child(Some(&toolbar_view));
+
+        let add_ref = add_button.clone();
+        entry.connect_changed(move |e| {
+            add_ref.set_sensitive(!e.text().trim().is_empty());
+        });
+
+        let dialog_ref = dialog.clone();
+        let win = self.clone();
+        let entry_ref = entry.clone();
+        let commit = move || {
+            let text = entry_ref.text();
+            let ssh_target = text.trim();
+            if ssh_target.is_empty() {
+                return;
+            }
+            let new_host = host::Host::remote(ssh_target);
+            let mut hosts = host::load();
+            if hosts.iter().any(|h| h.key == new_host.key) {
+                win.show_toast(&format!("Host \"{}\" already exists", new_host.name));
+                dialog_ref.close();
+                return;
+            }
+            hosts.push(new_host.clone());
+            if let Err(e) = host::save(&hosts) {
+                log::error!("Failed to save hosts: {e}");
+                win.show_toast("Failed to save host");
+                dialog_ref.close();
+                return;
+            }
+            win.rebuild_host_selector_model(Some(&new_host.key));
+            win.refresh_place_sidebar();
+            win.refresh_command_sidebar();
+            win.show_toast(&format!("Host \"{}\" added", new_host.name));
+            dialog_ref.close();
+        };
+
+        let commit_for_button = commit.clone();
+        add_button.connect_clicked(move |_| commit_for_button());
+        entry.connect_entry_activated(move |_| commit());
+
+        dialog.present(Some(self));
+    }
+
     pub(super) fn show_about_window(&self) {
         let about = adw::AboutWindow::new();
         about.set_transient_for(Some(self));
