@@ -47,8 +47,8 @@ class TestSidebar(unittest.TestCase):
     def test_sidebar_vertical_layout(self) -> None:
         """The utility sidebar content must sit below the tab bar, not beside it.
 
-        In the correct vertical-box layout, the Bookmarks stack page (content)
-        has a greater y than the Bookmarks page-tab (the switcher button).
+        In the correct vertical-box layout, the Commands stack page (content)
+        has a greater y than the Commands page-tab (the switcher button).
         In the broken horizontal-box layout both would share the same y because
         the switcher and content are rendered side-by-side in the same row.
         """
@@ -60,21 +60,21 @@ class TestSidebar(unittest.TestCase):
 
         # The tab button (in the ViewSwitcher / StackSwitcher row).
         tab = find_by_role_and_name(
-            self.fixture.atspi_app, Atspi.Role.PAGE_TAB, "Bookmarks"
+            self.fixture.atspi_app, Atspi.Role.PAGE_TAB, "Commands"
         )
         if tab is None:
-            self.skipTest("Bookmarks page tab not found in AT-SPI tree")
+            self.skipTest("Commands page tab not found in AT-SPI tree")
 
-        # The content panel (the actual Bookmarks stack page below the tab bar).
+        # The content panel (the actual Commands stack page below the tab bar).
         content_panels = []
         for node in find_all_by_role(self.fixture.atspi_app, Atspi.Role.PANEL):
-            if node.get_name() != "Bookmarks" or not is_showing(node):
+            if node.get_name() != "Commands" or not is_showing(node):
                 continue
             extents = get_extents(node)
             if extents is not None and extents[2] > 0 and extents[3] > 0:
                 content_panels.append(node)
         if not content_panels:
-            self.skipTest("Bookmarks content panel not found in AT-SPI tree")
+            self.skipTest("Commands content panel not found in AT-SPI tree")
         content = content_panels[0]
 
         tab_ext = get_extents(tab)
@@ -88,7 +88,7 @@ class TestSidebar(unittest.TestCase):
         self.assertGreater(
             content_y,
             tab_y + tab_h // 2,
-            "Bookmarks content panel is not below the tab bar.\n"
+            "Commands content panel is not below the tab bar.\n"
             "The utility_sidebar_box must use Vertical orientation.\n"
             f"Tab y={tab_y}+h={tab_h}, Content y={content_y}",
         )
