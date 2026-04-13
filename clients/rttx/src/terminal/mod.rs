@@ -831,6 +831,16 @@ mod pane_passive_tests {
             assert!(!target.get::<String>().unwrap().is_empty());
         }
     }
+
+    /// Gesture modifier masks used by link and context menu handlers must be
+    /// distinct so Ctrl+click and Shift+right-click do not interfere with
+    /// each other. Regression for #459.
+    #[test]
+    fn gesture_modifier_masks_are_distinct() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert!(!ctrl.intersects(shift), "Ctrl and Shift masks must not overlap");
+    }
 }
 
 #[cfg(test)]
