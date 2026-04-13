@@ -314,7 +314,7 @@ impl Window {
                     let win = self.clone();
                     let terminal_uuid = uuid.clone();
                     pane.request_clipboard_paste(move |bytes| {
-                        win.send_managed_terminal_input(&terminal_uuid, bytes);
+                        win.send_managed_terminal_input(&terminal_uuid, &bytes);
                     });
                 }
             }

@@ -263,6 +263,41 @@ impl WindowState {
         })
     }
 
+    /// Return managed bindings for all sibling panes when input sync is active.
+    ///
+    /// Returns an empty vec when input sync is off, the workspace is not
+    /// managed, or the source terminal has no routable binding.
+    #[must_use]
+    pub fn input_sync_targets(&self, source_uuid: &str) -> Vec<ManagedTerminalBinding> {
+        let session = self.sessions.iter().find(|s| {
+            s.input_sync && s.uses_managed_runtime() && s.layout.contains_terminal(source_uuid)
+        });
+        let Some(session) = session else {
+            return Vec::new();
+        };
+        let Some(runtime_id) = session.runtime.runtime_id.as_deref() else {
+            return Vec::new();
+        };
+        session
+            .layout
+            .terminal_uuids()
+            .into_iter()
+            .filter(|uuid| uuid != source_uuid)
+            .filter_map(|uuid| {
+                let pane_id = session.runtime.pane_bindings.get(&uuid)?;
+                if session.runtime.is_layout_pane_pending(&uuid) {
+                    return None;
+                }
+                Some(ManagedTerminalBinding {
+                    workspace_id: session.uuid.clone(),
+                    endpoint: session.runtime.endpoint.clone(),
+                    runtime_id: runtime_id.to_string(),
+                    runtime_pane_id: pane_id.clone(),
+                })
+            })
+            .collect()
+    }
+
     /// Resolve a runtime ID back to its workspace.
     #[must_use]
     pub fn workspace_for_runtime(
@@ -1578,5 +1613,72 @@ mod tests {
         let restore = &transition.pane_snapshot_restores[0];
         assert_eq!(restore.cols, 200);
         assert_eq!(restore.rows, 50);
+    }
+
+    #[test]
+    fn input_sync_targets_returns_siblings_when_enabled() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let mut session = managed_session_with_runtime(
+            "ws-1",
+            "Workspace",
+            hsplit(term("pane-1"), term("pane-2")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        session.input_sync = true;
+        session.runtime.bind_runtime_pane("pane-1", "daemon-pane-1");
+        session.runtime.bind_runtime_pane("pane-2", "daemon-pane-2");
+        let state = window_state(vec![session]);
+
+        let targets = state.input_sync_targets("pane-1");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].runtime_pane_id, "daemon-pane-2");
+    }
+
+    #[test]
+    fn input_sync_targets_empty_when_disabled() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let mut session = managed_session_with_runtime(
+            "ws-1",
+            "Workspace",
+            hsplit(term("pane-1"), term("pane-2")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        session.runtime.bind_runtime_pane("pane-1", "daemon-pane-1");
+        session.runtime.bind_runtime_pane("pane-2", "daemon-pane-2");
+        let state = window_state(vec![session]);
+
+        assert!(state.input_sync_targets("pane-1").is_empty());
+    }
+
+    #[test]
+    fn input_sync_targets_skips_pending_panes() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let mut session = managed_session_with_runtime(
+            "ws-1",
+            "Workspace",
+            hsplit(term("pane-1"), term("pane-2")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(&runtime_id),
+        );
+        session.input_sync = true;
+        session.runtime.bind_runtime_pane("pane-1", "daemon-pane-1");
+        // pane-2 stays pending (placeholder binding only)
+        let state = window_state(vec![session]);
+
+        assert!(state.input_sync_targets("pane-1").is_empty());
+    }
+
+    #[test]
+    fn input_sync_targets_empty_for_direct_workspace() {
+        let mut session = session("s1", "Direct", hsplit(term("pane-1"), term("pane-2")));
+        session.input_sync = true;
+        let state = window_state(vec![session]);
+
+        assert!(state.input_sync_targets("pane-1").is_empty());
     }
 }

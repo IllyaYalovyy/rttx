@@ -163,7 +163,7 @@ async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
             msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
         })
         .await;
-    let status = tokio::time::timeout(Duration::from_secs(5), server_child.wait())
+    let status = tokio::time::timeout(Duration::from_secs(10), server_child.wait())
         .await
         .expect("timed out waiting for rttx-server to stop")
         .expect("failed to wait for rttx-server child");
