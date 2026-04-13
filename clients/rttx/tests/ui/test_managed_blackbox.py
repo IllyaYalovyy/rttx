@@ -21,18 +21,9 @@ class TestManagedBlackBox(unittest.TestCase):
         self.fixture.stop()
 
     def _create_managed_workspace(self) -> None:
-        # Activate via D-Bus — MenuButton popover is unreliable via AT-SPI.
-        self.fixture.activate_action("new-session")
-        import time
-        time.sleep(2.0)
-
-        # The New Workspace dialog opens — select "Home" to create the workspace.
-        # Search without showing filter first, as adw::Dialog may not set SHOWING.
-        home_button = wait_for_name(
-            self.fixture.atspi_app, Atspi.Role.PUSH_BUTTON, "Home", timeout=15.0
-        )
-        self.assertIsNotNone(home_button, "Home place button not visible in dialog")
-        click(home_button)
+        # Create managed workspace via D-Bus — bypasses MenuButton popover
+        # and dialog which are unreliable via AT-SPI on headless compositors.
+        self.fixture.activate_action("create-managed-local")
 
         close_pane = self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
@@ -138,16 +129,7 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
 
     def test_managed_pane_exit_is_visible_when_shell_exits(self) -> None:
         """A daemon PaneExited event must leave a clear, non-hanging pane."""
-        self.fixture.activate_action("new-session")
-        import time
-        time.sleep(2.0)
-
-        # The New Workspace dialog opens — select "Home" to create the workspace.
-        home_button = wait_for_name(
-            self.fixture.atspi_app, Atspi.Role.PUSH_BUTTON, "Home", timeout=15.0
-        )
-        self.assertIsNotNone(home_button, "Home place button not visible in dialog")
-        click(home_button)
+        self.fixture.activate_action("create-managed-local")
 
         close_pane = self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0

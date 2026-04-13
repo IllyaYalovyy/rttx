@@ -179,5 +179,17 @@ pub fn run() -> glib::ExitCode {
     });
     app.add_action(&new_session_action);
 
+    // Create a managed local workspace directly (used by UI tests to bypass dialogs).
+    let create_managed_action = gtk4::gio::SimpleAction::new("create-managed-local", None);
+    let app_ref = app.clone();
+    create_managed_action.connect_activate(move |_, _| {
+        if let Some(win) = app_ref.active_window()
+            && let Ok(win) = win.downcast::<Window>()
+        {
+            win.add_managed_session_at(None);
+        }
+    });
+    app.add_action(&create_managed_action);
+
     app.run()
 }
