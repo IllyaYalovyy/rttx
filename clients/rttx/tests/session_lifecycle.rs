@@ -1174,3 +1174,47 @@ fn rotate_layout_persists_through_serialization() {
     assert_eq!(restored.sessions[0].layout, vsplit(term("t1"), hsplit(term("t2"), term("t3"))));
     assert_eq!(restored.sessions[0].layout.terminal_uuids(), original_uuids);
 }
+
+#[test]
+fn input_sync_fan_out_targets_all_bound_managed_siblings() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+
+    let layout = hsplit(term("pane-1"), hsplit(term("pane-2"), term("pane-3")));
+    let terminal_uuids = layout.terminal_uuids();
+    let mut session = SessionState::new("Sync test".into());
+    session.uuid = "ws-sync".into();
+    session.layout = layout;
+    session.input_sync = true;
+    session.runtime = WorkspaceRuntime {
+        managed: true,
+        endpoint: RuntimeEndpoint::Local,
+        policy: WorkspacePolicy::Persistent,
+        runtime_id: Some("rt-1".into()),
+        pane_bindings: std::collections::BTreeMap::default(),
+        pending_layout_panes: std::collections::BTreeSet::default(),
+    };
+    session.runtime.ensure_placeholder_bindings(&terminal_uuids);
+    session.runtime.bind_runtime_pane("pane-1", "daemon-1");
+    session.runtime.bind_runtime_pane("pane-2", "daemon-2");
+    session.runtime.bind_runtime_pane("pane-3", "daemon-3");
+    session.sync_legacy_mode_from_runtime();
+
+    let state = WindowState { active_session_index: 0, sessions: vec![session], ..WindowState::default() };
+
+    let targets = state.input_sync_targets("pane-1");
+    assert_eq!(targets.len(), 2);
+    let target_pane_ids: Vec<&str> = targets.iter().map(|t| t.runtime_pane_id.as_str()).collect();
+    assert!(target_pane_ids.contains(&"daemon-2"));
+    assert!(target_pane_ids.contains(&"daemon-3"));
+
+    // Verify no targets when input sync is off.
+    let mut state_off = state.clone();
+    state_off.sessions[0].input_sync = false;
+    assert!(state_off.input_sync_targets("pane-1").is_empty());
+
+    // Verify serialization roundtrip preserves input_sync.
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: WindowState = serde_json::from_str(&json).unwrap();
+    assert!(restored.sessions[0].input_sync);
+    assert_eq!(restored.input_sync_targets("pane-1").len(), 2);
+}
