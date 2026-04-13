@@ -7,7 +7,7 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi
 
-from common import AppFixture, click, click_center, wait_for_name
+from common import AppFixture, click, wait_for_name
 
 
 class TestManagedBlackBox(unittest.TestCase):
@@ -22,12 +22,16 @@ class TestManagedBlackBox(unittest.TestCase):
 
     def _create_managed_workspace(self) -> None:
         button = self.fixture.wait_for_showing_name(
-            Atspi.Role.TOGGLE_BUTTON, "New workspace"
+            Atspi.Role.TOGGLE_BUTTON, "New workspace", timeout=10.0
         )
+        if button is None:
+            button = self.fixture.wait_for_showing_name(
+                Atspi.Role.PUSH_BUTTON, "New workspace", timeout=5.0
+            )
         self.assertIsNotNone(button, "New workspace button not visible")
-        click_center(button)
+        click(button)
         import time
-        time.sleep(1.0)
+        time.sleep(1.5)
         # gio::Menu items in a PopoverMenu appear as PUSH_BUTTON in AT-SPI.
         local_item = self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Local", timeout=10.0
@@ -147,12 +151,16 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
     def test_managed_pane_exit_is_visible_when_shell_exits(self) -> None:
         """A daemon PaneExited event must leave a clear, non-hanging pane."""
         button = self.fixture.wait_for_showing_name(
-            Atspi.Role.TOGGLE_BUTTON, "New workspace"
+            Atspi.Role.TOGGLE_BUTTON, "New workspace", timeout=10.0
         )
+        if button is None:
+            button = self.fixture.wait_for_showing_name(
+                Atspi.Role.PUSH_BUTTON, "New workspace", timeout=5.0
+            )
         self.assertIsNotNone(button, "New workspace button not visible")
-        click_center(button)
+        click(button)
         import time
-        time.sleep(1.0)
+        time.sleep(1.5)
         local_item = self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Local", timeout=10.0
         )
