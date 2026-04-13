@@ -215,7 +215,7 @@ mod imp {
 
             let context_menu = gtk4::PopoverMenu::from_model(Some(&menu));
             context_menu.set_has_arrow(false);
-            context_menu.set_halign(gtk4::Align::Start);
+            context_menu.set_halign(crate::terminal::CONTEXT_MENU_HALIGN);
             context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
 
             let right_click = gtk4::GestureClick::new();
