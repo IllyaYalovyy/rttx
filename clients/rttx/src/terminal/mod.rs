@@ -967,4 +967,11 @@ mod search_tests {
         assert!(prefs.audible_bell, "audible_bell should default to true");
         assert!(prefs.visual_bell, "visual_bell should default to true");
     }
+
+    #[test]
+    fn paste_guard_preferences_default_enabled() {
+        let prefs = crate::preferences::Preferences::default();
+        assert!(prefs.paste_guard);
+        assert_eq!(prefs.paste_guard_threshold, 1024);
+    }
 }
