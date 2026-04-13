@@ -1199,11 +1199,8 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     session.runtime.bind_runtime_pane("pane-3", "daemon-3");
     session.sync_legacy_mode_from_runtime();
 
-    let state = WindowState {
-        active_session_index: 0,
-        sessions: vec![session],
-        ..WindowState::default()
-    };
+    let state =
+        WindowState { active_session_index: 0, sessions: vec![session], ..WindowState::default() };
 
     let targets = state.input_sync_targets("pane-1");
     assert_eq!(targets.len(), 2);
