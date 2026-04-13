@@ -1118,11 +1118,8 @@ mod tests {
     fn reconcile_snapshot_carries_interaction_modes_to_restore() {
         let runtime_id = uuid::Uuid::new_v4().to_string();
         let terminal_uuid = uuid::Uuid::new_v4().to_string();
-        let mut state = window_state(vec![managed_session(
-            "workspace-1",
-            "Workspace",
-            term(&terminal_uuid),
-        )]);
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term(&terminal_uuid))]);
 
         let mut snap = pane_snapshot(&terminal_uuid, "vim", "/home", b"");
         snap.application_cursor_keys = true;

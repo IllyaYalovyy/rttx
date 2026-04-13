@@ -452,10 +452,7 @@ async fn fkey_bytes_reach_pty_application() {
 
 // ── Mode restoration across reattach ────────────────────────────
 
-async fn reattach_snapshot(
-    client: &mut TestClient,
-    session_id: &[u8],
-) -> proto::Snapshot {
+async fn reattach_snapshot(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
@@ -504,10 +501,7 @@ async fn snapshot_includes_application_cursor_keys_mode() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert!(
-        pane.application_cursor_keys,
-        "DECSET 1 must be reflected in snapshot"
-    );
+    assert!(pane.application_cursor_keys, "DECSET 1 must be reflected in snapshot");
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -528,10 +522,7 @@ async fn snapshot_includes_application_keypad_mode() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert!(
-        pane.application_keypad,
-        "DECKPAM must be reflected in snapshot"
-    );
+    assert!(pane.application_keypad, "DECKPAM must be reflected in snapshot");
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -552,14 +543,8 @@ async fn snapshot_includes_mouse_tracking_mode() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert_eq!(
-        pane.mouse_tracking_mode, 1003,
-        "DECSET 1003 must be reflected in snapshot"
-    );
-    assert!(
-        pane.sgr_mouse_mode,
-        "DECSET 1006 must be reflected in snapshot"
-    );
+    assert_eq!(pane.mouse_tracking_mode, 1003, "DECSET 1003 must be reflected in snapshot");
+    assert!(pane.sgr_mouse_mode, "DECSET 1006 must be reflected in snapshot");
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -582,10 +567,7 @@ async fn snapshot_modes_reset_when_disabled() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert!(
-        !pane.application_cursor_keys,
-        "DECRST 1 must clear the flag in snapshot"
-    );
+    assert!(!pane.application_cursor_keys, "DECRST 1 must clear the flag in snapshot");
 
     shutdown_server(&mut client, &mut server).await;
 }
