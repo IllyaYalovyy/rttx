@@ -395,6 +395,10 @@ impl Server {
                             .to_vec(),
                         exit_status: pane.exit_status,
                         bracketed_paste_mode: pane.screen.bracketed_paste_mode(),
+                        application_cursor_keys: pane.screen.application_cursor_keys(),
+                        application_keypad: pane.screen.application_keypad(),
+                        mouse_tracking_mode: u32::from(pane.screen.mouse_tracking_mode()),
+                        sgr_mouse_mode: pane.screen.sgr_mouse_mode(),
                     })
                     .collect();
                 Some(protocol::snapshot(session_id, pane_snapshots, revision, role))

@@ -31,6 +31,18 @@ struct ScreenPerformer {
     pending_replies: Vec<Vec<u8>>,
     /// Whether bracketed paste mode (DECSET 2004) is active.
     bracketed_paste_mode: bool,
+    /// Whether application cursor keys mode (DECSET 1) is active.
+    application_cursor_keys: bool,
+    /// Whether application keypad mode (DECKPAM) is active.
+    application_keypad: bool,
+    /// Active mouse tracking mode: 0=off, 1000/1002/1003.
+    mouse_tracking_mode: u16,
+    /// Whether SGR mouse mode (DECSET 1006) is active.
+    sgr_mouse_mode: bool,
+    /// Whether focus event mode (DECSET 1004) is active.
+    focus_event_mode: bool,
+    /// Whether the cursor is visible (DECSET 25, default true).
+    cursor_visible: bool,
 }
 
 impl PaneScreen {
@@ -48,6 +60,12 @@ impl PaneScreen {
                 cwd: None,
                 pending_replies: Vec::new(),
                 bracketed_paste_mode: false,
+                application_cursor_keys: false,
+                application_keypad: false,
+                mouse_tracking_mode: 0,
+                sgr_mouse_mode: false,
+                focus_event_mode: false,
+                cursor_visible: true,
             },
         }
     }
@@ -118,6 +136,42 @@ impl PaneScreen {
     #[must_use]
     pub const fn bracketed_paste_mode(&self) -> bool {
         self.performer.bracketed_paste_mode
+    }
+
+    /// Whether application cursor keys mode (DECSET 1) is currently active.
+    #[must_use]
+    pub const fn application_cursor_keys(&self) -> bool {
+        self.performer.application_cursor_keys
+    }
+
+    /// Whether application keypad mode (DECKPAM) is currently active.
+    #[must_use]
+    pub const fn application_keypad(&self) -> bool {
+        self.performer.application_keypad
+    }
+
+    /// Active mouse tracking mode: 0=off, 1000/1002/1003.
+    #[must_use]
+    pub const fn mouse_tracking_mode(&self) -> u16 {
+        self.performer.mouse_tracking_mode
+    }
+
+    /// Whether SGR mouse mode (DECSET 1006) is currently active.
+    #[must_use]
+    pub const fn sgr_mouse_mode(&self) -> bool {
+        self.performer.sgr_mouse_mode
+    }
+
+    /// Whether focus event mode (DECSET 1004) is currently active.
+    #[must_use]
+    pub const fn focus_event_mode(&self) -> bool {
+        self.performer.focus_event_mode
+    }
+
+    /// Whether the cursor is visible (DECSET 25, default true).
+    #[must_use]
+    pub const fn cursor_visible(&self) -> bool {
+        self.performer.cursor_visible
     }
 }
 
@@ -201,10 +255,53 @@ impl vte::Perform for ScreenPerformer {
         if intermediates == b"?" && matches!(action, 'h' | 'l') {
             let enabled = action == 'h';
             for param_slice in params {
-                if param_slice.first() == Some(&2004) {
-                    self.bracketed_paste_mode = enabled;
+                match param_slice.first().copied() {
+                    Some(1) => self.application_cursor_keys = enabled,
+                    Some(25) => self.cursor_visible = enabled,
+                    Some(1000) => {
+                        self.mouse_tracking_mode = if enabled { 1000 } else { 0 };
+                    }
+                    Some(1002) => {
+                        self.mouse_tracking_mode = if enabled { 1002 } else { 0 };
+                    }
+                    Some(1003) => {
+                        self.mouse_tracking_mode = if enabled { 1003 } else { 0 };
+                    }
+                    Some(1004) => self.focus_event_mode = enabled,
+                    Some(1006) => self.sgr_mouse_mode = enabled,
+                    Some(2004) => self.bracketed_paste_mode = enabled,
+                    _ => {}
                 }
             }
+            return;
+        }
+
+        // DECRQM — Request Mode (CSI ? Ps $ p) → DECRPM (CSI ? Ps ; Pm $ y)
+        // Pm: 0=not recognized, 1=set, 2=reset
+        if intermediates == b"?$" && action == 'p' {
+            let mode = first_param;
+            let is_set = match mode {
+                1 => Some(self.application_cursor_keys),
+                25 => Some(self.cursor_visible),
+                1000 | 1002 | 1003 => Some(self.mouse_tracking_mode == mode),
+                1004 => Some(self.focus_event_mode),
+                1006 => Some(self.sgr_mouse_mode),
+                2004 => Some(self.bracketed_paste_mode),
+                _ => None,
+            };
+            let pm = match is_set {
+                Some(true) => 1,
+                Some(false) => 2,
+                None => 0,
+            };
+            let reply = format!("\x1b[?{mode};{pm}$y");
+            self.pending_replies.push(reply.into_bytes());
+            return;
+        }
+
+        // DA2 — Secondary Device Attributes (CSI > c)
+        if intermediates == b">" && action == 'c' {
+            self.pending_replies.push(b"\x1b[>65;0;0c".to_vec());
             return;
         }
 
@@ -238,11 +335,24 @@ impl vte::Perform for ScreenPerformer {
                 }
                 _ => {}
             },
+            // DA1 — Primary Device Attributes (CSI c / CSI 0 c)
+            'c' if intermediates.is_empty() && first_param <= 1 => {
+                // VT420 with 132-column, printer, selective erase, ANSI color
+                self.pending_replies.push(b"\x1b[?64;1;2;6;22c".to_vec());
+            }
             _ => {}
         }
     }
 
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            // DECKPAM — Application Keypad Mode
+            b'=' => self.application_keypad = true,
+            // DECKPNM — Normal Keypad Mode
+            b'>' => self.application_keypad = false,
+            _ => {}
+        }
+    }
 }
 
 fn parse_osc7_current_directory(uri: &str) -> Option<String> {
@@ -506,5 +616,300 @@ mod tests {
         // DECSET 1049 (alternate screen) should not enable bracketed paste
         screen.feed(b"\x1b[?1049h");
         assert!(!screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn application_cursor_keys_default_off() {
+        let screen = PaneScreen::new(1024);
+        assert!(!screen.application_cursor_keys());
+    }
+
+    #[test]
+    fn decset_1_enables_application_cursor_keys() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1h");
+        assert!(screen.application_cursor_keys());
+    }
+
+    #[test]
+    fn decrst_1_disables_application_cursor_keys() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1h");
+        screen.feed(b"\x1b[?1l");
+        assert!(!screen.application_cursor_keys());
+    }
+
+    #[test]
+    fn application_keypad_default_off() {
+        let screen = PaneScreen::new(1024);
+        assert!(!screen.application_keypad());
+    }
+
+    #[test]
+    fn deckpam_enables_application_keypad() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b=");
+        assert!(screen.application_keypad());
+    }
+
+    #[test]
+    fn deckpnm_disables_application_keypad() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b=");
+        screen.feed(b"\x1b>");
+        assert!(!screen.application_keypad());
+    }
+
+    #[test]
+    fn mouse_tracking_default_none() {
+        let screen = PaneScreen::new(1024);
+        assert_eq!(screen.mouse_tracking_mode(), 0);
+    }
+
+    #[test]
+    fn decset_1000_enables_basic_mouse_tracking() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1000h");
+        assert_eq!(screen.mouse_tracking_mode(), 1000);
+    }
+
+    #[test]
+    fn decset_1002_enables_button_event_tracking() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1002h");
+        assert_eq!(screen.mouse_tracking_mode(), 1002);
+    }
+
+    #[test]
+    fn decset_1003_enables_any_event_tracking() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1003h");
+        assert_eq!(screen.mouse_tracking_mode(), 1003);
+    }
+
+    #[test]
+    fn decrst_1003_disables_mouse_tracking() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1003h");
+        screen.feed(b"\x1b[?1003l");
+        assert_eq!(screen.mouse_tracking_mode(), 0);
+    }
+
+    #[test]
+    fn sgr_mouse_mode_default_off() {
+        let screen = PaneScreen::new(1024);
+        assert!(!screen.sgr_mouse_mode());
+    }
+
+    #[test]
+    fn decset_1006_enables_sgr_mouse_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1006h");
+        assert!(screen.sgr_mouse_mode());
+    }
+
+    #[test]
+    fn decrst_1006_disables_sgr_mouse_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1006h");
+        screen.feed(b"\x1b[?1006l");
+        assert!(!screen.sgr_mouse_mode());
+    }
+
+    #[test]
+    fn multiple_modes_tracked_independently() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1h\x1b[?1003h\x1b[?1006h\x1b[?2004h");
+        assert!(screen.application_cursor_keys());
+        assert_eq!(screen.mouse_tracking_mode(), 1003);
+        assert!(screen.sgr_mouse_mode());
+        assert!(screen.bracketed_paste_mode());
+
+        screen.feed(b"\x1b[?1l");
+        assert!(!screen.application_cursor_keys());
+        assert_eq!(screen.mouse_tracking_mode(), 1003);
+    }
+
+    // --- DA1 (Primary Device Attributes) ---
+
+    #[test]
+    fn da1_generates_response() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[c");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[?64;1;2;6;22c");
+    }
+
+    #[test]
+    fn da1_explicit_zero_param_generates_response() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[0c");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[?64;1;2;6;22c");
+    }
+
+    #[test]
+    fn da1_nonzero_param_ignored() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[2c");
+        assert!(screen.take_pending_replies().is_empty());
+    }
+
+    // --- DA2 (Secondary Device Attributes) ---
+
+    #[test]
+    fn da2_generates_response() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[>c");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[>65;0;0c");
+    }
+
+    #[test]
+    fn da2_explicit_zero_param_generates_response() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[>0c");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[>65;0;0c");
+    }
+
+    // --- Focus event mode (DECSET 1004) ---
+
+    #[test]
+    fn focus_event_mode_default_off() {
+        let screen = PaneScreen::new(1024);
+        assert!(!screen.focus_event_mode());
+    }
+
+    #[test]
+    fn decset_1004_enables_focus_event_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1004h");
+        assert!(screen.focus_event_mode());
+    }
+
+    #[test]
+    fn decrst_1004_disables_focus_event_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1004h");
+        screen.feed(b"\x1b[?1004l");
+        assert!(!screen.focus_event_mode());
+    }
+
+    // --- Cursor visibility (DECSET 25) ---
+
+    #[test]
+    fn cursor_visible_default_on() {
+        let screen = PaneScreen::new(1024);
+        assert!(screen.cursor_visible());
+    }
+
+    #[test]
+    fn decrst_25_hides_cursor() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?25l");
+        assert!(!screen.cursor_visible());
+    }
+
+    #[test]
+    fn decset_25_shows_cursor() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?25l");
+        screen.feed(b"\x1b[?25h");
+        assert!(screen.cursor_visible());
+    }
+
+    // --- DECRQM (Request Mode) ---
+
+    #[test]
+    fn decrqm_reports_bracketed_paste_set() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?2004h");
+        screen.feed(b"\x1b[?2004$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[?2004;1$y");
+    }
+
+    #[test]
+    fn decrqm_reports_bracketed_paste_reset() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?2004$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[?2004;2$y");
+    }
+
+    #[test]
+    fn decrqm_reports_unknown_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?9999$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[?9999;0$y");
+    }
+
+    #[test]
+    fn decrqm_reports_application_cursor_keys() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1h");
+        screen.feed(b"\x1b[?1$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0], b"\x1b[?1;1$y");
+    }
+
+    #[test]
+    fn decrqm_reports_cursor_visible() {
+        let mut screen = PaneScreen::new(1024);
+        // Default is visible (set)
+        screen.feed(b"\x1b[?25$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies[0], b"\x1b[?25;1$y");
+    }
+
+    #[test]
+    fn decrqm_reports_focus_event_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1004h");
+        screen.feed(b"\x1b[?1004$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies[0], b"\x1b[?1004;1$y");
+    }
+
+    #[test]
+    fn decrqm_reports_mouse_tracking_mode() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1003h");
+        // Query 1003 — should be set
+        screen.feed(b"\x1b[?1003$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies[0], b"\x1b[?1003;1$y");
+        // Query 1000 — should be reset (1003 is active, not 1000)
+        screen.feed(b"\x1b[?1000$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies[0], b"\x1b[?1000;2$y");
+    }
+
+    // --- Detached session scenario ---
+
+    #[test]
+    fn da1_and_dsr_work_without_client_attachment() {
+        let mut screen = PaneScreen::new(1024);
+        // Simulate application startup sequence without any client
+        screen.feed(b"\x1b[c"); // DA1
+        screen.feed(b"\x1b[>c"); // DA2
+        screen.feed(b"\x1b[5n"); // DSR status
+        screen.feed(b"\x1b[6n"); // DSR cursor
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies.len(), 4);
+        assert_eq!(replies[0], b"\x1b[?64;1;2;6;22c"); // DA1
+        assert_eq!(replies[1], b"\x1b[>65;0;0c"); // DA2
+        assert_eq!(replies[2], b"\x1b[0n"); // status OK
+        assert_eq!(replies[3], b"\x1b[1;1R"); // cursor at 1,1
     }
 }

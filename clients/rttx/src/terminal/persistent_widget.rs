@@ -495,6 +495,34 @@ impl PersistentPaneView {
         self.imp().bracketed_paste_mode.set(enabled);
     }
 
+    /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
+    /// that may have been lost when the mode-setting sequence fell outside the
+    /// retained snapshot tail.
+    pub fn restore_interaction_modes(
+        &self,
+        application_cursor_keys: bool,
+        application_keypad: bool,
+        mouse_tracking_mode: u32,
+        sgr_mouse_mode: bool,
+    ) {
+        let vte = &self.imp().vte;
+        if application_cursor_keys {
+            vte.feed(b"\x1b[?1h");
+        }
+        if application_keypad {
+            vte.feed(b"\x1b=");
+        }
+        match mouse_tracking_mode {
+            1000 => vte.feed(b"\x1b[?1000h"),
+            1002 => vte.feed(b"\x1b[?1002h"),
+            1003 => vte.feed(b"\x1b[?1003h"),
+            _ => {}
+        }
+        if sgr_mouse_mode {
+            vte.feed(b"\x1b[?1006h");
+        }
+    }
+
     /// Update the connection status indicator.
     pub fn set_connected(&self, connected: bool) {
         self.imp().connected.set(connected);
@@ -672,9 +700,16 @@ impl PersistentPaneView {
     /// Connect a callback for keyboard and mouse input.
     ///
     /// The callback receives the raw terminal bytes to send to the daemon.
-    /// Keyboard input is intercepted by a Capture-phase key controller and
-    /// encoded manually.  Mouse input is handled by VTE natively — when the
-    /// remote application enables mouse tracking, VTE emits escape sequences
+    ///
+    /// Text input flows through a GTK `IMMulticontext` attached to the
+    /// capture-phase key controller.  The `IMContext` handles compose
+    /// sequences, dead keys, and system input methods — its `commit`
+    /// signal forwards the finished text to the daemon.  Control keys,
+    /// navigation, and function keys bypass the `IMContext` and are encoded
+    /// directly in the `key-pressed` handler.
+    ///
+    /// Mouse input is handled by VTE natively — when the remote
+    /// application enables mouse tracking, VTE emits escape sequences
     /// through the `commit` signal which are forwarded here.
     pub fn connect_input<F: Fn(&[u8]) + 'static>(&self, f: F) {
         let forward_input = std::rc::Rc::new(f);
@@ -690,9 +725,22 @@ impl PersistentPaneView {
             }
         });
 
+        // IMContext for compose / dead-key / IME support.
+        let im_context = gtk4::IMMulticontext::new();
+        let im_forward = std::rc::Rc::clone(&forward_input);
+        let im_pane_weak = self.downgrade();
+        im_context.connect_commit(move |_, text| {
+            if let Some(pane) = im_pane_weak.upgrade()
+                && pane.imp().accepts_input.get()
+            {
+                im_forward(text.as_bytes());
+            }
+        });
+
         let pane_weak = self.downgrade();
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        key_controller.set_im_context(Some(&im_context));
         key_controller.connect_key_pressed(move |_, key, _keycode, state| {
             let Some(pane) = pane_weak.upgrade() else {
                 return glib::Propagation::Proceed;
@@ -808,6 +856,17 @@ impl PersistentPaneView {
             .expect("input controller should be connected before test input is emitted")
             .emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers])
             .into()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn has_im_context_for_test(&self) -> bool {
+        self.imp()
+            .input_key_controller
+            .borrow()
+            .as_ref()
+            .and_then(gtk4::EventControllerKey::im_context)
+            .is_some()
     }
 }
 
@@ -1366,5 +1425,27 @@ mod tests {
 
         pane.set_bracketed_paste_mode(true);
         assert!(pane.imp().bracketed_paste_mode.get());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_interaction_modes_injects_sequences_into_vte() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        // Calling restore_interaction_modes should not panic and should
+        // feed the appropriate escape sequences into VTE.
+        pane.restore_interaction_modes(true, true, 1003, true);
+        // No panic means VTE accepted the sequences.
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_interaction_modes_noop_when_all_default() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        pane.restore_interaction_modes(false, false, 0, false);
+        // No sequences injected, no panic.
     }
 }

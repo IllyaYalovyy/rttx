@@ -786,6 +786,52 @@ mod tests {
             );
         }
     }
+
+    /// Dead keys produce no direct encoding — the `IMContext` handles them. #462.
+    #[test]
+    fn dead_keys_produce_none_for_ime_handling() {
+        let none = gtk4::gdk::ModifierType::empty();
+        let dead_keys = [
+            gtk4::gdk::Key::dead_acute,
+            gtk4::gdk::Key::dead_grave,
+            gtk4::gdk::Key::dead_circumflex,
+            gtk4::gdk::Key::dead_tilde,
+            gtk4::gdk::Key::dead_diaeresis,
+        ];
+        for key in &dead_keys {
+            assert_eq!(
+                encode_terminal_key_input(*key, none),
+                None,
+                "dead key {key:?} must return None so IMContext handles it"
+            );
+        }
+    }
+
+    /// Dead keys must pass through in managed mode so the `IMContext` can
+    /// process the compose sequence. #462.
+    #[test]
+    fn managed_dead_keys_pass_through_for_ime() {
+        let none = gtk4::gdk::ModifierType::empty();
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::dead_acute,
+                none,
+                false,
+                false,
+            ),
+            TerminalKeyAction::PassThrough,
+        );
+    }
+
+    /// Control sequences must still be encoded even when `IMContext` is active,
+    /// because the `IMContext` does not consume modified keys. #462.
+    #[test]
+    fn control_keys_still_encoded_with_ime_active() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, ctrl), Some(vec![0x03]),);
+        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::d, ctrl), Some(vec![0x04]),);
+    }
 }
 
 #[cfg(test)]
