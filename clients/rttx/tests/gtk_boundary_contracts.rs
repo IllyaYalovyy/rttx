@@ -789,6 +789,7 @@ fn connection_icon_always_has_tooltip() {
         (&local, ConnectionStatus::Connecting),
         (&remote, ConnectionStatus::Recovered),
         (&remote, ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied)),
+        (&local, ConnectionStatus::SessionMissing),
     ] {
         let icon = connection_icon(endpoint, &status, true);
         assert!(

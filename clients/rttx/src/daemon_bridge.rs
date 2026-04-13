@@ -1062,15 +1062,19 @@ impl EndpointActor {
                         Err(ref error) => {
                             let problem = classify_connection_problem(error);
                             log::warn!("Reattach {workspace_id} failed during reconnect: {error}");
-                            self.emit_error(
-                                &workspace_id,
-                                ManagerOperation::OpenWorkspace,
-                                problem.clone(),
-                                error.to_string(),
-                            );
-                            if problem.is_transient() {
-                                any_transient_failure = true;
-                                break;
+                            if matches!(problem, ConnectionProblem::SessionMissing) {
+                                self.emit_status(&workspace_id, ConnectionStatus::SessionMissing);
+                            } else {
+                                self.emit_error(
+                                    &workspace_id,
+                                    ManagerOperation::OpenWorkspace,
+                                    problem.clone(),
+                                    error.to_string(),
+                                );
+                                if problem.is_transient() {
+                                    any_transient_failure = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1256,7 +1260,8 @@ impl EndpointActor {
     /// When `existing_runtime_id` is provided, tries to reattach first.
     /// If the runtime no longer exists (daemon restarted, ephemeral gone),
     /// falls back to creating a fresh runtime so "Retry Connection" works.
-    /// Ownership conflicts and transport errors are reported immediately.
+    /// Ownership conflicts, transport errors, and missing sessions are
+    /// reported immediately.
     async fn resolve_and_attach_runtime(
         &mut self,
         workspace_id: &str,
@@ -1278,7 +1283,21 @@ impl EndpointActor {
                     self.handle_command_error(workspace_id, ManagerOperation::OpenWorkspace, error);
                     return Err(());
                 }
-                // Runtime gone — fall through to create a new one.
+                // Session gone on daemon — report as SessionMissing, don't create new.
+                Err(ref error)
+                    if matches!(
+                        classify_connection_problem(error),
+                        ConnectionProblem::SessionMissing
+                    ) =>
+                {
+                    log::warn!(
+                        "Session {runtime_id} no longer exists on daemon for workspace \
+                         {workspace_id}"
+                    );
+                    self.emit_status(workspace_id, ConnectionStatus::SessionMissing);
+                    return Err(());
+                }
+                // Runtime gone for other reasons — fall through to create a new one.
                 Err(error) => {
                     log::info!(
                         "Reattach to {runtime_id} failed for {workspace_id}: \
@@ -1499,6 +1518,10 @@ impl EndpointActor {
         error: &DaemonError,
     ) {
         let problem = classify_connection_problem(error);
+        if matches!(problem, ConnectionProblem::SessionMissing) {
+            self.emit_status(workspace_id, ConnectionStatus::SessionMissing);
+            return;
+        }
         self.emit_error(workspace_id, operation, problem.clone(), error.to_string());
         if problem.is_transient() {
             self.handle_disconnect();
@@ -1979,7 +2002,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_and_attach_falls_back_to_new_runtime_on_stale_id() {
+    async fn resolve_and_attach_reports_session_missing_on_stale_id() {
         let ((reader, writer), mut server_stream) = split_duplex_connection();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (self_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -2002,13 +2025,11 @@ mod tests {
         };
 
         let stale_runtime = Uuid::new_v4();
-        let new_runtime = Uuid::new_v4();
-        let pane_id = Uuid::new_v4();
 
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
 
-            // 1. Receive AttachSession for the stale runtime — reply "not found".
+            // Receive AttachSession for the stale runtime — reply "not found".
             let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
             assert!(
                 matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))),
@@ -2024,55 +2045,6 @@ mod tests {
                 },
             )
             .await;
-
-            // 2. Receive CreateSession — reply with new runtime id.
-            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
-            assert!(
-                matches!(msg.msg, Some(proto::client_message::Msg::CreateSession(_))),
-                "expected CreateSession, got {msg:?}"
-            );
-            send_server_message(
-                &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
-                        session_id: rttx_proto::uuid_to_bytes(new_runtime),
-                        revision: 1,
-                    })),
-                },
-            )
-            .await;
-
-            // 3. Receive AttachSession for the new runtime — reply with snapshot.
-            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
-            assert!(
-                matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))),
-                "expected AttachSession, got {msg:?}"
-            );
-            send_server_message(
-                &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-                        session_id: rttx_proto::uuid_to_bytes(new_runtime),
-                        panes: vec![proto::PaneSnapshot {
-                            pane_id: rttx_proto::uuid_to_bytes(pane_id),
-                            title: "shell".into(),
-                            cwd: "/home".into(),
-                            cols: 80,
-                            rows: 24,
-                            scrollback: Vec::new(),
-                            exit_status: None,
-                            bracketed_paste_mode: false,
-                            application_cursor_keys: false,
-                            application_keypad: false,
-                            mouse_tracking_mode: 0,
-                            sgr_mouse_mode: false,
-                        }],
-                        revision: 2,
-                        current_client_role: proto::RuntimeClientRole::Writer as i32,
-                    })),
-                },
-            )
-            .await;
         });
 
         let result = actor
@@ -2084,19 +2056,23 @@ mod tests {
             )
             .await;
 
-        let (runtime_id, snapshot) = result.expect("should fall back to new runtime");
-        assert_eq!(runtime_id, new_runtime.to_string());
-        assert_eq!(snapshot.panes.len(), 1);
+        assert!(result.is_err(), "session-not-found should not fall back to new runtime");
 
-        // Verify no error events were emitted (the stale attach failure is
-        // handled internally, not surfaced as a workspace error).
+        // Should have emitted SessionMissing status, not a WorkspaceError.
+        let mut saw_session_missing = false;
         let mut saw_error = false;
         while let Ok(event) = event_rx.try_recv() {
-            if matches!(event, EndpointEvent::WorkspaceError { .. }) {
-                saw_error = true;
+            match event {
+                EndpointEvent::WorkspaceConnectionChanged {
+                    status: ConnectionStatus::SessionMissing,
+                    ..
+                } => saw_session_missing = true,
+                EndpointEvent::WorkspaceError { .. } => saw_error = true,
+                _ => {}
             }
         }
-        assert!(!saw_error, "stale-runtime fallback should not emit WorkspaceError");
+        assert!(saw_session_missing, "should emit SessionMissing status");
+        assert!(!saw_error, "should not emit WorkspaceError for missing session");
 
         server.await.expect("fake server task should complete");
     }

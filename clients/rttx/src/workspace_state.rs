@@ -1681,4 +1681,23 @@ mod tests {
 
         assert!(state.input_sync_targets("pane-1").is_empty());
     }
+
+    #[test]
+    fn reconcile_session_missing_emits_status_update() {
+        let mut state = WindowState::default_for_test();
+
+        let transition =
+            state.reconcile_endpoint_event(&EndpointEvent::WorkspaceConnectionChanged {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::SessionMissing,
+            });
+
+        assert_eq!(
+            transition.connection_status_updates,
+            vec![ConnectionStatusUpdate {
+                workspace_id: "workspace-1".into(),
+                status: ConnectionStatus::SessionMissing,
+            }],
+        );
+    }
 }
