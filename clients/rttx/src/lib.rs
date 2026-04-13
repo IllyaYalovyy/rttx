@@ -10,6 +10,7 @@ pub mod form_dialog;
 pub mod host;
 pub mod new_workspace_dialog;
 pub mod places;
+pub mod places_window;
 pub mod preferences;
 pub mod runtime;
 pub mod session;

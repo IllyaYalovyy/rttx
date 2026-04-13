@@ -195,6 +195,22 @@ mod imp {
             host_row.append(&self.host_delete_button);
 
             // ── Places tab ───────────────────────────────────────
+            let add_place_button = gtk4::Button::builder()
+                .icon_name("list-add-symbolic")
+                .tooltip_text("New place")
+                .action_name("win.add-place")
+                .build();
+            let places_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+            places_header.set_margin_start(12);
+            places_header.set_margin_end(12);
+            places_header.set_margin_top(12);
+            let places_title = gtk4::Label::new(Some("Places"));
+            places_title.set_xalign(0.0);
+            places_title.set_hexpand(true);
+            places_title.add_css_class("title-4");
+            places_header.append(&places_title);
+            places_header.append(&add_place_button);
+
             self.place_list.set_selection_mode(gtk4::SelectionMode::None);
             self.place_list.add_css_class("boxed-list");
             self.place_list.update_property(&[gtk4::accessible::Property::Label("Places")]);
@@ -213,6 +229,7 @@ mod imp {
             self.place_empty.set_vexpand(true);
 
             let places_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            places_page.append(&places_header);
             places_page.append(&self.place_scroll);
             places_page.append(&self.place_empty);
 

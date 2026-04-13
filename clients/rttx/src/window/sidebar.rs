@@ -165,6 +165,32 @@ impl Window {
             }
             action_row.set_activatable(true);
 
+            let is_builtin = place.uuid.starts_with("builtin:");
+            if !is_builtin {
+                let uuid = place.uuid.clone();
+                let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
+                edit_item.set_action_and_target_value(
+                    Some("win.edit-place"),
+                    Some(&uuid.to_variant()),
+                );
+                let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
+                delete_item.set_action_and_target_value(
+                    Some("win.delete-place"),
+                    Some(&uuid.to_variant()),
+                );
+                let menu = gtk4::gio::Menu::new();
+                menu.append_item(&edit_item);
+                menu.append_item(&delete_item);
+                let more_button = gtk4::MenuButton::builder()
+                    .icon_name("view-more-symbolic")
+                    .tooltip_text("More options")
+                    .valign(gtk4::Align::Center)
+                    .menu_model(&menu)
+                    .build();
+                more_button.add_css_class("flat");
+                action_row.add_suffix(&more_button);
+            }
+
             let win = self.clone();
             let path = place.path.clone();
             action_row.connect_activated(move |_| {
