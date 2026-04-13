@@ -723,8 +723,8 @@ fn double_split_remote_session_keeps_all_panes_pending() {
 #[test]
 fn close_remote_workspace_prevents_resurrection_on_reconnect() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::state::WindowState;
     use rttx::session::SessionState;
+    use rttx::session::state::WindowState;
 
     let runtime_id = uuid::Uuid::new_v4().to_string();
     let endpoint = RuntimeEndpoint::Remote { host: "prod-server".into() };
@@ -801,8 +801,8 @@ fn active_session_index_clamped_on_restore() {
 #[test]
 fn connection_status_survives_session_reorder() {
     use rttx::runtime::WorkspacePolicy;
-    use rttx::session::state::WindowState;
     use rttx::session::SessionState;
+    use rttx::session::state::WindowState;
 
     let mut state = WindowState::default();
     state.sessions.clear();
@@ -848,7 +848,7 @@ fn application_flags_enforce_single_instance() {
 #[test]
 fn connection_status_lifecycle_is_deterministic() {
     use rttx::runtime::{
-        advance_connection_status, ConnectionEvent, ConnectionProblem, ConnectionStatus,
+        ConnectionEvent, ConnectionProblem, ConnectionStatus, advance_connection_status,
     };
 
     let s = advance_connection_status(&ConnectionStatus::Connecting, ConnectionEvent::Connected);
@@ -1199,8 +1199,11 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     session.runtime.bind_runtime_pane("pane-3", "daemon-3");
     session.sync_legacy_mode_from_runtime();
 
-    let state =
-        WindowState { active_session_index: 0, sessions: vec![session], ..WindowState::default() };
+    let state = WindowState {
+        active_session_index: 0,
+        sessions: vec![session],
+        ..WindowState::default()
+    };
 
     let targets = state.input_sync_targets("pane-1");
     assert_eq!(targets.len(), 2);
