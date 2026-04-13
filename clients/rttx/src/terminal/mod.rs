@@ -664,23 +664,22 @@ mod tests {
     fn ctrl_alt_letter_preserves_alt_prefix() {
         let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::ALT_MASK;
         // Ctrl+Alt+a → ESC 0x01
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::a, mods),
-            Some(vec![0x1b, 0x01])
-        );
+        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::a, mods), Some(vec![0x1b, 0x01]));
         // Ctrl+Alt+c → ESC 0x03
-        assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::c, mods),
-            Some(vec![0x1b, 0x03])
-        );
+        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, mods), Some(vec![0x1b, 0x03]));
     }
 
     /// Ctrl+Alt+letter must be forwarded as `ForwardToPty` in managed mode. #457.
     #[test]
     fn managed_ctrl_alt_letter_forwards_to_pty() {
         let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::ALT_MASK;
-        let action =
-            terminal_key_action(TerminalInputBackend::Managed, gtk4::gdk::Key::a, mods, false, false);
+        let action = terminal_key_action(
+            TerminalInputBackend::Managed,
+            gtk4::gdk::Key::a,
+            mods,
+            false,
+            false,
+        );
         assert_eq!(action, TerminalKeyAction::ForwardToPty(vec![0x1b, 0x01]));
     }
 
