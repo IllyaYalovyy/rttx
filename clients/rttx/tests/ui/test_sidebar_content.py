@@ -13,7 +13,7 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi
 
-from common import AppFixture, click, click_center, find_all_by_role, wait_for_name, wait_for_role
+from common import AppFixture, find_all_by_role, wait_for_role
 
 # Patterns that must never appear in a sidebar subtitle (RFC-015 exclusion list).
 FORBIDDEN_SUBTITLE_PATTERNS = [
@@ -141,25 +141,7 @@ class TestSidebarContentManaged(unittest.TestCase):
         self.fixture.stop()
 
     def _create_managed_workspace(self) -> None:
-        button = self.fixture.wait_for_showing_name(
-            Atspi.Role.TOGGLE_BUTTON, "New workspace"
-        )
-        self.assertIsNotNone(button, "New workspace button not visible")
-        click_center(button)
-        import time
-        time.sleep(1.0)
-        local_item = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "Local", timeout=10.0
-        )
-        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
-        click(local_item)
-
-        # The New Workspace dialog opens — select "Home" to create the workspace.
-        home_button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "Home", timeout=10.0
-        )
-        self.assertIsNotNone(home_button, "Home place button not visible in dialog")
-        click(home_button)
+        self.fixture.activate_action("create-managed-local")
 
         self.fixture.wait_for_showing_name(
             Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
