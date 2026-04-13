@@ -495,6 +495,34 @@ impl PersistentPaneView {
         self.imp().bracketed_paste_mode.set(enabled);
     }
 
+    /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
+    /// that may have been lost when the mode-setting sequence fell outside the
+    /// retained snapshot tail.
+    pub fn restore_interaction_modes(
+        &self,
+        application_cursor_keys: bool,
+        application_keypad: bool,
+        mouse_tracking_mode: u32,
+        sgr_mouse_mode: bool,
+    ) {
+        let vte = &self.imp().vte;
+        if application_cursor_keys {
+            vte.feed(b"\x1b[?1h");
+        }
+        if application_keypad {
+            vte.feed(b"\x1b=");
+        }
+        match mouse_tracking_mode {
+            1000 => vte.feed(b"\x1b[?1000h"),
+            1002 => vte.feed(b"\x1b[?1002h"),
+            1003 => vte.feed(b"\x1b[?1003h"),
+            _ => {}
+        }
+        if sgr_mouse_mode {
+            vte.feed(b"\x1b[?1006h");
+        }
+    }
+
     /// Update the connection status indicator.
     pub fn set_connected(&self, connected: bool) {
         self.imp().connected.set(connected);
@@ -1366,5 +1394,27 @@ mod tests {
 
         pane.set_bracketed_paste_mode(true);
         assert!(pane.imp().bracketed_paste_mode.get());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_interaction_modes_injects_sequences_into_vte() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        // Calling restore_interaction_modes should not panic and should
+        // feed the appropriate escape sequences into VTE.
+        pane.restore_interaction_modes(true, true, 1003, true);
+        // No panic means VTE accepted the sequences.
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_interaction_modes_noop_when_all_default() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        pane.restore_interaction_modes(false, false, 0, false);
+        // No sequences injected, no panic.
     }
 }

@@ -164,6 +164,10 @@ message PaneSnapshot {
     bytes scrollback = 6;
     optional int32 exit_status = 7;
     bool bracketed_paste_mode = 8;
+    bool application_cursor_keys = 9;
+    bool application_keypad = 10;
+    uint32 mouse_tracking_mode = 11;
+    bool sgr_mouse_mode = 12;
 }
 
 message Delta {

@@ -449,3 +449,125 @@ async fn fkey_bytes_reach_pty_application() {
 
     shutdown_server(&mut client, &mut server).await;
 }
+
+// ── Mode restoration across reattach ────────────────────────────
+
+async fn reattach_snapshot(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+                session_id: session_id.to_vec(),
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected SessionDetached, got {other:?}"),
+        }
+    }
+
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                session_id: session_id.to_vec(),
+                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(s)) => return s,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn snapshot_includes_application_cursor_keys_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, mut server) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (sid, pid) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    // Enable application cursor keys (DECSET 1) via printf.
+    send_input(&mut client, &sid, &pid, b"printf '\\033[?1h'\r").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    collect_output(&mut client, Duration::from_secs(1)).await;
+
+    let snapshot = reattach_snapshot(&mut client, &sid).await;
+    let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
+    assert!(pane.application_cursor_keys, "DECSET 1 must be reflected in snapshot");
+
+    shutdown_server(&mut client, &mut server).await;
+}
+
+#[tokio::test]
+async fn snapshot_includes_application_keypad_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, mut server) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (sid, pid) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    // Enable application keypad (DECKPAM = ESC =) via printf.
+    send_input(&mut client, &sid, &pid, b"printf '\\033='\r").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    collect_output(&mut client, Duration::from_secs(1)).await;
+
+    let snapshot = reattach_snapshot(&mut client, &sid).await;
+    let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
+    assert!(pane.application_keypad, "DECKPAM must be reflected in snapshot");
+
+    shutdown_server(&mut client, &mut server).await;
+}
+
+#[tokio::test]
+async fn snapshot_includes_mouse_tracking_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, mut server) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (sid, pid) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    // Enable SGR mouse tracking (DECSET 1003 + 1006) via printf.
+    send_input(&mut client, &sid, &pid, b"printf '\\033[?1003h\\033[?1006h'\r").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    collect_output(&mut client, Duration::from_secs(1)).await;
+
+    let snapshot = reattach_snapshot(&mut client, &sid).await;
+    let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
+    assert_eq!(pane.mouse_tracking_mode, 1003, "DECSET 1003 must be reflected in snapshot");
+    assert!(pane.sgr_mouse_mode, "DECSET 1006 must be reflected in snapshot");
+
+    shutdown_server(&mut client, &mut server).await;
+}
+
+#[tokio::test]
+async fn snapshot_modes_reset_when_disabled() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, mut server) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (sid, pid) = setup_attached_pane(&mut client).await;
+    wait_for_prompt(&mut client).await;
+
+    // Enable then disable application cursor keys.
+    send_input(&mut client, &sid, &pid, b"printf '\\033[?1h'\r").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    send_input(&mut client, &sid, &pid, b"printf '\\033[?1l'\r").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    collect_output(&mut client, Duration::from_secs(1)).await;
+
+    let snapshot = reattach_snapshot(&mut client, &sid).await;
+    let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
+    assert!(!pane.application_cursor_keys, "DECRST 1 must clear the flag in snapshot");
+
+    shutdown_server(&mut client, &mut server).await;
+}
