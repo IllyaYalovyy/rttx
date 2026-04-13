@@ -867,6 +867,49 @@ fn connection_status_lifecycle_is_deterministic() {
     assert_eq!(s, ConnectionStatus::SessionMissing);
 }
 
+/// When a workspace's runtime is gone on the daemon, the reconciliation
+/// pipeline must emit `SessionMissing` without affecting sibling workspaces.
+/// Regression test for #478.
+#[test]
+fn session_missing_does_not_affect_sibling_workspaces() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::{ConnectionStatus, WorkspacePolicy};
+    use rttx::session::SessionState;
+    use rttx::workspace_state::ConnectionStatusUpdate;
+
+    let runtime_a = uuid::Uuid::new_v4().to_string();
+    let runtime_b = uuid::Uuid::new_v4().to_string();
+
+    let mut session_a =
+        SessionState::new_managed_local("Workspace A".into(), WorkspacePolicy::Persistent, None);
+    session_a.runtime.runtime_id = Some(runtime_a);
+
+    let mut session_b =
+        SessionState::new_managed_local("Workspace B".into(), WorkspacePolicy::Persistent, None);
+    session_b.runtime.runtime_id = Some(runtime_b.clone());
+
+    let ws_a_id = session_a.uuid.clone();
+    let ws_b_id = session_b.uuid.clone();
+
+    let mut state = WindowState { sessions: vec![session_a, session_b], ..Default::default() };
+
+    // Workspace A gets SessionMissing — workspace B must not be affected.
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceConnectionChanged {
+        workspace_id: ws_a_id.clone(),
+        status: ConnectionStatus::SessionMissing,
+    });
+
+    assert_eq!(transition.connection_status_updates.len(), 1);
+    assert_eq!(
+        transition.connection_status_updates[0],
+        ConnectionStatusUpdate { workspace_id: ws_a_id, status: ConnectionStatus::SessionMissing }
+    );
+
+    // Workspace B's runtime_id is untouched.
+    let session_b = state.sessions.iter().find(|s| s.uuid == ws_b_id).unwrap();
+    assert_eq!(session_b.runtime.runtime_id.as_deref(), Some(runtime_b.as_str()));
+}
+
 /// F-keys must produce xterm escape sequences for managed terminals. Regression for #293.
 #[test]
 fn managed_fkeys_encode_to_escape_sequences() {
