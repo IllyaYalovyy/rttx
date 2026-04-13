@@ -50,6 +50,9 @@ impl Window {
             ("add-command", &[], |w| {
                 crate::commands_window::show_form(w, None);
             }),
+            ("add-place", &[], |w| {
+                crate::places_window::show_form(w, None);
+            }),
         ];
 
         for (name, accels, callback) in actions {
@@ -105,6 +108,29 @@ impl Window {
             }
         });
         self.add_action(&delete_command_action);
+
+        let edit_place_action =
+            gtk4::gio::SimpleAction::new("edit-place", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        edit_place_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            let all_places = places::load();
+            if let Some(place) = all_places.iter().find(|p| p.uuid == uuid) {
+                crate::places_window::show_form(&win, Some(place));
+            }
+        });
+        self.add_action(&edit_place_action);
+
+        let delete_place_action =
+            gtk4::gio::SimpleAction::new("delete-place", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        delete_place_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            if !uuid.is_empty() {
+                win.confirm_delete_place(uuid);
+            }
+        });
+        self.add_action(&delete_place_action);
 
         let open_place_action =
             gtk4::gio::SimpleAction::new("open-place", Some(glib::VariantTy::STRING));

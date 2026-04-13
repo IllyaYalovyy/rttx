@@ -1398,6 +1398,12 @@ fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
         window.lookup_action("delete-command").is_some(),
         "delete-command action should be registered"
     );
+    assert!(window.lookup_action("add-place").is_some(), "add-place action should be registered");
+    assert!(window.lookup_action("edit-place").is_some(), "edit-place action should be registered");
+    assert!(
+        window.lookup_action("delete-place").is_some(),
+        "delete-place action should be registered"
+    );
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -4619,6 +4625,100 @@ fn new_menu_includes_session_derived_hosts() {
         labels.contains(&"builder".into()),
         "menu should contain session-derived remote host; got: {labels:?}"
     );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn place_sidebar_shows_edit_delete_for_user_places_not_builtins() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let user_place = crate::places::Place::new("MyProject", "~/projects/myproject");
+    crate::places::save_to(&[user_place], &tmp.path().join("rttx-devel/places.json")).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.place-sidebar-crud-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    window.refresh_place_sidebar();
+    pump_events(50);
+
+    let place_list = &window.imp().place_list;
+    let mut found_builtin_with_menu = false;
+    let mut found_user_with_menu = false;
+    let mut idx = 0;
+    while let Some(row) = place_list.row_at_index(idx) {
+        if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+            let title = action_row.title().to_string();
+            let has_menu = has_menu_button_suffix(action_row);
+            if title == "Home" || title == "Root" {
+                if has_menu {
+                    found_builtin_with_menu = true;
+                }
+            } else if title == "MyProject" && has_menu {
+                found_user_with_menu = true;
+            }
+        }
+        idx += 1;
+    }
+
+    assert!(!found_builtin_with_menu, "built-in places should not have edit/delete menu");
+    assert!(found_user_with_menu, "user places should have edit/delete menu");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+fn has_menu_button_suffix(action_row: &adw::ActionRow) -> bool {
+    let mut child = action_row.first_child();
+    while let Some(widget) = child {
+        if widget.downcast_ref::<gtk4::MenuButton>().is_some() {
+            return true;
+        }
+        if let Some(inner) = widget.first_child() {
+            let mut inner_child = Some(inner);
+            while let Some(w) = inner_child {
+                if w.downcast_ref::<gtk4::MenuButton>().is_some() {
+                    return true;
+                }
+                inner_child = w.next_sibling();
+            }
+        }
+        child = widget.next_sibling();
+    }
+    false
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn place_sidebar_has_add_button_in_header() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.place-sidebar-add-btn-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    assert!(window.lookup_action("add-place").is_some(), "add-place action should be registered");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
