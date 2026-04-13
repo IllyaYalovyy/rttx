@@ -70,6 +70,8 @@ impl Window {
 
         let target_idx = select_key.and_then(|key| keys.iter().position(|k| k == key)).unwrap_or(0);
         dd.set_selected(target_idx as u32);
+
+        self.refresh_host_menus();
     }
 
     pub(crate) fn refresh_place_sidebar(&self) {

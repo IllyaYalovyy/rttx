@@ -288,6 +288,83 @@ fn top_bar_has_new_connect_direct_buttons() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
+fn new_button_menu_model_survives_activation() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.new-btn-menu-survives-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Menu model must be present before any interaction.
+    let model_before = window.imp().new_button.menu_model();
+    assert!(model_before.is_some(), "New button should have a menu model");
+    assert!(
+        model_before.unwrap().n_items() > 0,
+        "New button menu should contain at least one host item"
+    );
+
+    // Simulate the MenuButton becoming active (popover opening).
+    window.imp().new_button.set_active(true);
+    pump_events(50);
+
+    // Menu model must still be present and non-empty after activation.
+    let model_after = window.imp().new_button.menu_model();
+    assert!(model_after.is_some(), "New button menu model must survive activation");
+    assert!(
+        model_after.unwrap().n_items() > 0,
+        "New button menu must still have items after activation"
+    );
+
+    // Same check for the Connect button.
+    let connect_model = window.imp().connect_button.menu_model();
+    assert!(connect_model.is_some(), "Connect button should have a menu model");
+    assert!(
+        connect_model.unwrap().n_items() > 0,
+        "Connect button menu should contain at least one host item"
+    );
+
+    window.imp().new_button.set_active(false);
+    window.close();
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_for_host_action_opens_dialog() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.new-for-host-action-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // The new-for-host action must be registered.
+    assert!(
+        window.lookup_action("new-for-host").is_some(),
+        "new-for-host action should be registered"
+    );
+    assert!(
+        window.lookup_action("connect-for-host").is_some(),
+        "connect-for-host action should be registered"
+    );
+
+    window.close();
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
 fn initial_terminal_starts_shell_when_window_is_presented() {
     require_display!();
 
