@@ -55,23 +55,27 @@ where
     vte.add_controller(open_match_click);
 
     // Show pointer cursor only when Ctrl is held over a link.
+    // Only call set_cursor_from_name on state transitions to avoid
+    // fighting VTE's own cursor management on every motion event (#479).
     let hover_vte = vte.clone();
     let hover_current_directory = Rc::clone(&current_directory);
     let hover_controller = gtk4::EventControllerMotion::new();
+    let showing_pointer = Rc::new(std::cell::Cell::new(false));
+    let showing_pointer_motion = Rc::clone(&showing_pointer);
     hover_controller.connect_motion(move |ctrl, x, y| {
         let mods = ctrl.current_event_state();
         let current_directory = hover_current_directory();
-        let cursor_name = if mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
-            && openable_uri_at(&hover_vte, x, y, current_directory.as_deref()).is_some()
-        {
-            Some("pointer")
-        } else {
-            None
-        };
-        hover_vte.set_cursor_from_name(cursor_name);
+        let want_pointer = mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+            && openable_uri_at(&hover_vte, x, y, current_directory.as_deref()).is_some();
+        if want_pointer != showing_pointer_motion.get() {
+            showing_pointer_motion.set(want_pointer);
+            hover_vte
+                .set_cursor_from_name(if want_pointer { Some("pointer") } else { None });
+        }
     });
     let leave_vte = vte.clone();
     hover_controller.connect_leave(move |_| {
+        showing_pointer.set(false);
         leave_vte.set_cursor_from_name(None);
     });
     vte.add_controller(hover_controller);
@@ -375,5 +379,46 @@ mod tests {
             super::display_text_for_uri("file:///home/user/my%20project"),
             "/home/user/my project"
         );
+    }
+
+    /// Hover controller must only update the cursor on state transitions,
+    /// not on every motion event. Repeated non-link motion must not call
+    /// `set_cursor_from_name`, which would fight VTE's own I-beam cursor. #479.
+    #[test]
+    fn hover_cursor_updates_only_on_state_transition() {
+        use std::cell::Cell;
+
+        let showing_pointer = Cell::new(false);
+        let cursor_set_count = Cell::new(0u32);
+
+        let simulate_motion = |want_pointer: bool| {
+            if want_pointer != showing_pointer.get() {
+                showing_pointer.set(want_pointer);
+                cursor_set_count.set(cursor_set_count.get() + 1);
+            }
+        };
+
+        // Repeated non-link motion must not trigger cursor updates.
+        simulate_motion(false);
+        simulate_motion(false);
+        simulate_motion(false);
+        assert_eq!(cursor_set_count.get(), 0, "no cursor update when state unchanged from default");
+
+        // Transition to pointer triggers one update.
+        simulate_motion(true);
+        assert_eq!(cursor_set_count.get(), 1);
+
+        // Staying on pointer triggers no further updates.
+        simulate_motion(true);
+        assert_eq!(cursor_set_count.get(), 1);
+
+        // Transition back triggers one update.
+        simulate_motion(false);
+        assert_eq!(cursor_set_count.get(), 2);
+
+        // Repeated non-link motion again triggers nothing.
+        simulate_motion(false);
+        simulate_motion(false);
+        assert_eq!(cursor_set_count.get(), 2);
     }
 }
