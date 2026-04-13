@@ -141,22 +141,15 @@ class TestSidebarContentManaged(unittest.TestCase):
         self.fixture.stop()
 
     def _create_managed_workspace(self) -> None:
-        button = self.fixture.wait_for_showing_name(
-            Atspi.Role.TOGGLE_BUTTON, "New workspace", timeout=10.0
-        )
-        if button is None:
-            button = self.fixture.wait_for_showing_name(
-                Atspi.Role.PUSH_BUTTON, "New workspace", timeout=5.0
-            )
-        self.assertIsNotNone(button, "New workspace button not visible")
-        click(button)
+        self.fixture.activate_action("new-session")
         import time
         time.sleep(1.5)
-        local_item = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "Local", timeout=10.0
+
+        home_button = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Home", timeout=10.0
         )
-        self.assertIsNotNone(local_item, "Local host item not visible in New menu")
-        click(local_item)
+        self.assertIsNotNone(home_button, "Home place button not visible in dialog")
+        click(home_button)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
         home_button = self.fixture.wait_for_showing_name(

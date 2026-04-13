@@ -533,6 +533,32 @@ class AppFixture:
         """Inject text into the focused widget through the AT-SPI keyboard bridge."""
         return Atspi.generate_keyboard_event(0, text, Atspi.KeySynthType.STRING)
 
+    def activate_action(self, action_name: str, parameter: str | None = None) -> None:
+        """Activate a GIO action on the application via D-Bus.
+
+        This bypasses AT-SPI widget interaction, which is unreliable for
+        MenuButton popovers on headless compositors.
+        """
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        params = GLib.Variant("(sava{sv})", (
+            action_name,
+            [GLib.Variant("s", parameter)] if parameter else [],
+            {},
+        ))
+        bus.call_sync(
+            DEV_APP_ID,
+            DEV_OBJECT_PATH,
+            "org.freedesktop.Application",
+            "ActivateAction",
+            params,
+            None,
+            Gio.DBusCallFlags.NONE,
+            5000,
+            None,
+        )
+
     def showing_name(self, role: Atspi.Role, name: str) -> bool:
         """Return whether a visible accessible node with *role* and *name* exists."""
         return find_showing_by_role_and_name(self.atspi_app, role, name) is not None
