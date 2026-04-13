@@ -1277,7 +1277,7 @@ dependencies = [
 
 [[package]]
 name = "rttx"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "bytes",
  "gtk4",
@@ -1300,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "rttx-proto"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "bytes",
  "prost",
@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "rttx-server"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "anyhow",
  "bytes",

@@ -570,20 +570,28 @@ impl Window {
     }
 
     fn setup_host_menu_buttons(&self) {
+        let new_action =
+            gtk4::gio::SimpleAction::new("new-for-host", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        new_action.connect_activate(move |_, param| {
+            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            win.new_workspace_for_host(&key);
+        });
+        self.add_action(&new_action);
+
+        let connect_action =
+            gtk4::gio::SimpleAction::new("connect-for-host", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        connect_action.connect_activate(move |_, param| {
+            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            win.connect_for_host(&key);
+        });
+        self.add_action(&connect_action);
+
         self.refresh_host_menus();
-
-        let win = self.clone();
-        self.imp().new_button.connect_notify_local(Some("active"), move |_, _| {
-            win.refresh_host_menus();
-        });
-
-        let win = self.clone();
-        self.imp().connect_button.connect_notify_local(Some("active"), move |_, _| {
-            win.refresh_host_menus();
-        });
     }
 
-    fn refresh_host_menus(&self) {
+    pub(super) fn refresh_host_menus(&self) {
         let mut hosts: Vec<host::Host> = vec![host::Host::local()];
         let saved = host::load();
         let mut remotes: Vec<host::Host> =
@@ -612,24 +620,6 @@ impl Window {
 
         self.imp().new_button.set_menu_model(Some(&new_menu));
         self.imp().connect_button.set_menu_model(Some(&connect_menu));
-
-        let new_action =
-            gtk4::gio::SimpleAction::new("new-for-host", Some(glib::VariantTy::STRING));
-        let win = self.clone();
-        new_action.connect_activate(move |_, param| {
-            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
-            win.new_workspace_for_host(&key);
-        });
-        self.add_action(&new_action);
-
-        let connect_action =
-            gtk4::gio::SimpleAction::new("connect-for-host", Some(glib::VariantTy::STRING));
-        let win = self.clone();
-        connect_action.connect_activate(move |_, param| {
-            let key: String = param.and_then(glib::Variant::get).unwrap_or_default();
-            win.connect_for_host(&key);
-        });
-        self.add_action(&connect_action);
     }
 
     fn new_workspace_for_host(&self, host_key: &str) {
