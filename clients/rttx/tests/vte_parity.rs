@@ -355,6 +355,17 @@ fn modifier_only_keys_produce_none() {
 
 // ── Xterm modifier parameter encoding ───────────────────────────
 
+/// Ctrl+Alt+letter must produce ESC + control-char. Regression for #457.
+#[test]
+fn ctrl_alt_printable_preserves_alt_prefix() {
+    let mods = CTRL.union(ALT);
+    assert_parity(&[
+        (Key::a, mods, &[0x1b, 0x01]),
+        (Key::c, mods, &[0x1b, 0x03]),
+        (Key::z, mods, &[0x1b, 0x1a]),
+    ]);
+}
+
 #[test]
 fn modifier_parameter_values_follow_xterm_convention() {
     // xterm modifier = 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)
