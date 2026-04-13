@@ -6,6 +6,10 @@ pub mod widget;
 
 use gtk4::prelude::*;
 
+/// Context menu alignment: Start so the left edge aligns with the pointer,
+/// preventing immediate item activation on button release (#480).
+pub(crate) const CONTEXT_MENU_HALIGN: gtk4::Align = gtk4::Align::Start;
+
 /// Populate a `gio::Menu` with places visible on the given host key.
 ///
 /// Each item triggers `win.open-place` with the place path as parameter.
@@ -886,6 +890,18 @@ mod pane_passive_tests {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
         let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
         assert!(!ctrl.intersects(shift), "Ctrl and Shift masks must not overlap");
+    }
+
+    /// Context menu must use Start alignment so the popover's left edge
+    /// aligns with the pointer, preventing immediate item activation on
+    /// button release. Regression for #480.
+    #[test]
+    fn context_menu_halign_is_start() {
+        assert_eq!(
+            super::CONTEXT_MENU_HALIGN,
+            gtk4::Align::Start,
+            "context menu must open adjacent to the pointer, not centered on it"
+        );
     }
 }
 

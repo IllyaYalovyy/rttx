@@ -996,6 +996,41 @@ fn terminal_context_menu_has_places_submenu() {
     assert!(found_places, "context menu must contain a Places submenu");
 }
 
+/// Regression for #480: the context menu popover must use halign=Start so its
+/// left edge aligns with the pointer position. Without this, the popover
+/// centers on the click point and the pointer lands on a menu item, causing
+/// immediate activation on button release.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn direct_terminal_context_menu_popover_uses_start_halign() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t-halign", None);
+    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
+        .expect("context menu must be parented");
+    assert_eq!(
+        popover.halign(),
+        gtk4::Align::Start,
+        "context menu popover must use halign=Start so the pointer is outside the menu on open"
+    );
+}
+
+/// Regression for #480: same as above but for persistent pane context menu.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_context_menu_popover_uses_start_halign() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p-halign", "s1");
+    let popover = find_popover_child(pane.upcast_ref::<gtk4::Widget>())
+        .expect("context menu must be parented");
+    assert_eq!(
+        popover.halign(),
+        gtk4::Align::Start,
+        "context menu popover must use halign=Start so the pointer is outside the menu on open"
+    );
+}
+
 // ── TerminalHandle tests ────────────────────────────────────────
 
 #[test]
