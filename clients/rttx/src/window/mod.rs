@@ -19,8 +19,8 @@ use crate::runtime::{
     present_workspace_actions, workspace_connection_summary,
 };
 use crate::session::{
-    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource,
-    SessionColor, SessionState, SplitOrientation, StartupStep, WindowState,
+    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, SessionColor,
+    SessionState, SplitOrientation, StartupStep, WindowState,
 };
 use crate::sidebar::SessionRow;
 use crate::terminal::handle::TerminalHandle;
