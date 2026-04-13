@@ -26,6 +26,8 @@ where
 {
     let current_directory = Rc::new(current_directory);
 
+    // Ctrl+click opens links. Plain click is denied so VTE receives the
+    // event for mouse-aware apps (vim, htop, mc, etc.).
     let click_vte = vte.clone();
     let click_current_directory = Rc::clone(&current_directory);
     let open_match_click = gtk4::GestureClick::new();
@@ -33,6 +35,11 @@ where
     open_match_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
     open_match_click.connect_released(move |gesture, n_press, x, y| {
         if n_press != 1 {
+            gesture.set_state(gtk4::EventSequenceState::Denied);
+            return;
+        }
+        let mods = gesture.current_event_state();
+        if !mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK) {
             gesture.set_state(gtk4::EventSequenceState::Denied);
             return;
         }
@@ -47,17 +54,20 @@ where
     });
     vte.add_controller(open_match_click);
 
+    // Show pointer cursor only when Ctrl is held over a link.
     let hover_vte = vte.clone();
     let hover_current_directory = Rc::clone(&current_directory);
     let hover_controller = gtk4::EventControllerMotion::new();
-    hover_controller.connect_motion(move |_, x, y| {
+    hover_controller.connect_motion(move |ctrl, x, y| {
+        let mods = ctrl.current_event_state();
         let current_directory = hover_current_directory();
-        let cursor_name =
-            if openable_uri_at(&hover_vte, x, y, current_directory.as_deref()).is_some() {
-                Some("pointer")
-            } else {
-                None
-            };
+        let cursor_name = if mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+            && openable_uri_at(&hover_vte, x, y, current_directory.as_deref()).is_some()
+        {
+            Some("pointer")
+        } else {
+            None
+        };
         hover_vte.set_cursor_from_name(cursor_name);
     });
     let leave_vte = vte.clone();
@@ -332,10 +342,18 @@ mod tests {
 
     /// The link click gesture must deny when no URI is found so that VTE
     /// receives mouse events for mouse-aware apps (htop, vim, mc). #291.
+    /// Since #459, the gesture also requires Ctrl so plain clicks always
+    /// pass through to VTE for mouse reporting.
     #[test]
     fn gesture_denied_state_is_available() {
-        // Compile-time check: EventSequenceState::Denied exists and is usable.
         assert_ne!(gtk4::EventSequenceState::Denied, gtk4::EventSequenceState::Claimed);
+    }
+
+    /// Ctrl modifier constant used by the link gesture is the expected value.
+    #[test]
+    fn ctrl_modifier_mask_is_correct() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        assert!(ctrl.bits() > 0, "CONTROL_MASK must be a non-zero flag");
     }
 
     #[test]

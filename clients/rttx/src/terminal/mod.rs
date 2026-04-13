@@ -197,7 +197,10 @@ fn encode_terminal_key_input(
         gtk4::gdk::Key::F12 => return Some(csi_tilde("24", m)),
         _ => {
             let ch = key.to_unicode()?;
-            if ctrl {
+            if ctrl && alt {
+                let ctrl_byte = encode_control_character(ch)?;
+                vec![0x1b, ctrl_byte]
+            } else if ctrl {
                 vec![encode_control_character(ch)?]
             } else if alt {
                 let mut prefixed = vec![0x1b];
@@ -656,6 +659,111 @@ mod tests {
         );
     }
 
+    /// Ctrl+Alt+letter must produce ESC + control-char so Alt is not lost. #457.
+    #[test]
+    fn ctrl_alt_letter_preserves_alt_prefix() {
+        let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::ALT_MASK;
+        // Ctrl+Alt+a → ESC 0x01
+        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::a, mods), Some(vec![0x1b, 0x01]));
+        // Ctrl+Alt+c → ESC 0x03
+        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, mods), Some(vec![0x1b, 0x03]));
+    }
+
+    /// Ctrl+Alt+letter must be forwarded as `ForwardToPty` in managed mode. #457.
+    #[test]
+    fn managed_ctrl_alt_letter_forwards_to_pty() {
+        let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::ALT_MASK;
+        let action = terminal_key_action(
+            TerminalInputBackend::Managed,
+            gtk4::gdk::Key::a,
+            mods,
+            false,
+            false,
+        );
+        assert_eq!(action, TerminalKeyAction::ForwardToPty(vec![0x1b, 0x01]));
+    }
+
+    /// Keypad digits produce their ASCII digit in normal (numeric) mode. #457.
+    #[test]
+    fn keypad_digits_produce_ascii_in_normal_mode() {
+        let none = gtk4::gdk::ModifierType::empty();
+        let expected: &[(gtk4::gdk::Key, u8)] = &[
+            (gtk4::gdk::Key::KP_0, b'0'),
+            (gtk4::gdk::Key::KP_1, b'1'),
+            (gtk4::gdk::Key::KP_2, b'2'),
+            (gtk4::gdk::Key::KP_3, b'3'),
+            (gtk4::gdk::Key::KP_4, b'4'),
+            (gtk4::gdk::Key::KP_5, b'5'),
+            (gtk4::gdk::Key::KP_6, b'6'),
+            (gtk4::gdk::Key::KP_7, b'7'),
+            (gtk4::gdk::Key::KP_8, b'8'),
+            (gtk4::gdk::Key::KP_9, b'9'),
+        ];
+        for (key, byte) in expected {
+            assert_eq!(
+                encode_terminal_key_input(*key, none),
+                Some(vec![*byte]),
+                "KP digit {key:?} should produce ASCII digit"
+            );
+        }
+    }
+
+    /// Keypad operators produce their ASCII character in normal mode. #457.
+    #[test]
+    fn keypad_operators_produce_ascii_in_normal_mode() {
+        let none = gtk4::gdk::ModifierType::empty();
+        let expected: &[(gtk4::gdk::Key, &[u8])] = &[
+            (gtk4::gdk::Key::KP_Add, b"+"),
+            (gtk4::gdk::Key::KP_Subtract, b"-"),
+            (gtk4::gdk::Key::KP_Multiply, b"*"),
+            (gtk4::gdk::Key::KP_Divide, b"/"),
+            (gtk4::gdk::Key::KP_Decimal, b"."),
+        ];
+        for (key, bytes) in expected {
+            assert_eq!(
+                encode_terminal_key_input(*key, none),
+                Some(bytes.to_vec()),
+                "KP operator {key:?} should produce ASCII"
+            );
+        }
+    }
+
+    /// Modified Insert/Delete/PageUp/PageDown use xterm tilde format. #457.
+    #[test]
+    fn shift_tilde_keys_use_modified_format() {
+        let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Insert, shift).as_deref(),
+            Some(b"\x1b[2;2~" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Delete, shift).as_deref(),
+            Some(b"\x1b[3;2~" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Page_Up, shift).as_deref(),
+            Some(b"\x1b[5;2~" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Page_Down, shift).as_deref(),
+            Some(b"\x1b[6;2~" as &[u8])
+        );
+    }
+
+    /// Shift+Home/End use xterm modified letter format. #457.
+    #[test]
+    fn shift_home_end_uses_modified_format() {
+        let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Home, shift).as_deref(),
+            Some(b"\x1b[1;2H" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::End, shift).as_deref(),
+            Some(b"\x1b[1;2F" as &[u8])
+        );
+    }
+
     /// Managed backend must intercept all printable and control keys so VTE's
     /// `commit` signal only fires for mouse events. Regression for #442.
     #[test]
@@ -722,6 +830,16 @@ mod pane_passive_tests {
                 .expect("each item must have a target path");
             assert!(!target.get::<String>().unwrap().is_empty());
         }
+    }
+
+    /// Gesture modifier masks used by link and context menu handlers must be
+    /// distinct so Ctrl+click and Shift+right-click do not interfere with
+    /// each other. Regression for #459.
+    #[test]
+    fn gesture_modifier_masks_are_distinct() {
+        let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
+        let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert!(!ctrl.intersects(shift), "Ctrl and Shift masks must not overlap");
     }
 }
 

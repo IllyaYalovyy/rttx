@@ -251,6 +251,13 @@ mod imp {
             let open_link_ref = open_link_action;
             let obj_weak = obj.downgrade();
             right_click.connect_pressed(move |gesture, _, x, y| {
+                // Shift+right-click opens the context menu. Plain right-click
+                // is denied so VTE can forward it to mouse-aware apps.
+                let mods = gesture.current_event_state();
+                if !mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+                    gesture.set_state(gtk4::EventSequenceState::Denied);
+                    return;
+                }
                 if let Some(obj) = obj_weak.upgrade() {
                     let matched = links::openable_uri_at(
                         &obj.imp().vte,

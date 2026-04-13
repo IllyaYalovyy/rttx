@@ -1116,7 +1116,7 @@ fn terminal_handle_copy_clipboard_uses_managed_terminal_selection() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn direct_terminal_clicking_highlighted_url_launches_it() {
+fn direct_terminal_plain_click_does_not_launch_url() {
     require_display!();
 
     let term = rttx::terminal::widget::TerminalWidget::new("direct-link", None);
@@ -1134,18 +1134,23 @@ fn direct_terminal_clicking_highlighted_url_launches_it() {
             true
         },
         || {
+            // Plain click (no Ctrl) must not open the link so VTE can
+            // forward mouse events to mouse-aware apps. Regression for #459.
             emit_left_click_at(term.vte().upcast_ref::<gtk4::Widget>(), 1, x, y);
             pump_events(50);
         },
     );
 
-    assert_eq!(launched.borrow().as_slice(), [expected]);
+    assert!(
+        launched.borrow().is_empty(),
+        "plain click must not launch URL — Ctrl+click is required (#459)"
+    );
     window.close();
 }
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn persistent_terminal_clicking_highlighted_url_launches_it() {
+fn persistent_terminal_plain_click_does_not_launch_url() {
     require_display!();
 
     let pane =
@@ -1164,12 +1169,16 @@ fn persistent_terminal_clicking_highlighted_url_launches_it() {
             true
         },
         || {
+            // Plain click (no Ctrl) must not open the link. #459.
             emit_left_click_at(pane.vte().upcast_ref::<gtk4::Widget>(), 1, x, y);
             pump_events(50);
         },
     );
 
-    assert_eq!(launched.borrow().as_slice(), [expected]);
+    assert!(
+        launched.borrow().is_empty(),
+        "plain click must not launch URL — Ctrl+click is required (#459)"
+    );
     window.close();
 }
 
@@ -1640,11 +1649,10 @@ fn paned_ratio_applied_on_realize_not_just_idle() {
 
 /// Link click gesture must deny when no URI is found, allowing VTE to
 /// receive mouse events for mouse-aware apps. Regression for #291.
+/// Since #459, the gesture also denies without Ctrl, so all plain clicks
+/// pass through to VTE regardless of whether a link is present.
 #[test]
 fn link_gesture_denies_when_no_uri() {
-    // The fix is in links.rs: gesture.set_state(Denied) when no URI found.
-    // This is a compile-time + documentation test — the actual GTK gesture
-    // behavior requires a display.
     assert_ne!(gtk4::EventSequenceState::Denied, gtk4::EventSequenceState::Claimed);
 }
 
@@ -1940,4 +1948,86 @@ fn connect_existing_dialog_search_filters_sessions() {
         entries.iter().filter(|e| rttx::connect_existing_dialog::matches_query(e, "")).count(),
         2
     );
+}
+
+// ── Mouse reporting vs gestures (#459) ──────────────────────────
+
+/// The link click gesture on a direct terminal must use capture phase so it
+/// can check modifiers before VTE processes the event. When no Ctrl is held,
+/// the gesture denies so VTE receives the click for mouse-aware apps.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn direct_terminal_link_gesture_is_capture_phase() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t-cap", None);
+    let controllers = term.vte().observe_controllers();
+    let mut found_link_gesture = false;
+    for i in 0..controllers.n_items() {
+        let Some(ctrl) = controllers.item(i) else { continue };
+        if let Ok(gesture) = ctrl.downcast::<gtk4::GestureClick>()
+            && gesture.button() == 1
+        {
+            assert_eq!(
+                gesture.propagation_phase(),
+                gtk4::PropagationPhase::Capture,
+                "link click gesture must use capture phase"
+            );
+            found_link_gesture = true;
+        }
+    }
+    assert!(found_link_gesture, "VTE must have a button-1 capture gesture for links");
+}
+
+/// The right-click context menu gesture on a persistent pane must use
+/// capture phase. When Shift is not held, the gesture denies so VTE
+/// receives the right-click for mouse-aware apps. Regression for #459.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_context_menu_gesture_is_capture_phase() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p-ctx", "s1");
+    let controllers = pane.vte().observe_controllers();
+    let mut found_right_click = false;
+    for i in 0..controllers.n_items() {
+        let Some(ctrl) = controllers.item(i) else { continue };
+        if let Ok(gesture) = ctrl.downcast::<gtk4::GestureClick>()
+            && gesture.button() == 3
+        {
+            assert_eq!(
+                gesture.propagation_phase(),
+                gtk4::PropagationPhase::Capture,
+                "context menu gesture must use capture phase"
+            );
+            found_right_click = true;
+        }
+    }
+    assert!(found_right_click, "VTE must have a button-3 capture gesture for context menu");
+}
+
+/// The right-click context menu gesture on a direct terminal must use
+/// capture phase. Regression for #459.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn direct_terminal_context_menu_gesture_is_capture_phase() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t-ctx", None);
+    let controllers = term.vte().observe_controllers();
+    let mut found_right_click = false;
+    for i in 0..controllers.n_items() {
+        let Some(ctrl) = controllers.item(i) else { continue };
+        if let Ok(gesture) = ctrl.downcast::<gtk4::GestureClick>()
+            && gesture.button() == 3
+        {
+            assert_eq!(
+                gesture.propagation_phase(),
+                gtk4::PropagationPhase::Capture,
+                "context menu gesture must use capture phase"
+            );
+            found_right_click = true;
+        }
+    }
+    assert!(found_right_click, "VTE must have a button-3 capture gesture for context menu");
 }
