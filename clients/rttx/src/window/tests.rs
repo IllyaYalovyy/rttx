@@ -4796,11 +4796,7 @@ fn managed_pane_focus_change_updates_sidebar_subtitle() {
         first: Box::new(LayoutNode::new_terminal_with_uuid("pane-a")),
         second: Box::new(LayoutNode::new_terminal_with_uuid("pane-b")),
     };
-    let session_state = crate::test_helpers::managed_session(
-        "ws-focus-test",
-        "Focus Test",
-        layout,
-    );
+    let session_state = crate::test_helpers::managed_session("ws-focus-test", "Focus Test", layout);
     window.imp().state.borrow_mut().sessions.push(session_state.clone());
     window.build_session(&session_state, false);
 
