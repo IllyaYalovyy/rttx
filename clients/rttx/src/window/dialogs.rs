@@ -48,22 +48,6 @@ impl Window {
         alert.present(Some(self));
     }
 
-    pub(super) fn confirm_delete_bookmark(&self, uuid: String) {
-        let win = self.clone();
-        self.confirm_delete(
-            "Delete Bookmark?",
-            "The bookmark will be permanently removed.",
-            move || {
-                let mut items = crate::bookmarks::load();
-                items.retain(|b| b.uuid != uuid);
-                if let Err(e) = crate::bookmarks::save(&items) {
-                    log::error!("Failed to delete bookmark: {e}");
-                }
-                win.refresh_bookmark_sidebar();
-            },
-        );
-    }
-
     pub(super) fn confirm_delete_command(&self, uuid: String) {
         let win = self.clone();
         self.confirm_delete(
@@ -518,37 +502,6 @@ impl Window {
             }
             idx += 1;
         }
-    }
-
-    pub(super) fn do_bookmark_active_session(&self) {
-        let Some(bookmark) = self.create_bookmark_from_active_session() else {
-            return;
-        };
-        let name = bookmark.name.clone();
-        let mut bookmarks = crate::bookmarks::load();
-        bookmarks.push(bookmark);
-        let _ = crate::bookmarks::save(&bookmarks);
-        self.refresh_bookmark_sidebar();
-
-        let notification = gtk4::gio::Notification::new("Bookmark saved");
-        notification.set_body(Some(&format!("Workspace \"{name}\" was added to bookmarks")));
-        if let Some(app) = self.application() {
-            app.send_notification(None, &notification);
-        }
-    }
-
-    pub(crate) fn create_bookmark_from_active_session(&self) -> Option<Bookmark> {
-        let uuid = self.focused_terminal_uuid()?;
-        let state = self.imp().state.borrow();
-        let session = state.sessions.iter().find(|s| s.layout.contains_terminal(&uuid))?;
-        let session_name = session.name.clone();
-        drop(state);
-
-        let cwd = self.terminal_handle(&uuid).and_then(|terminal| terminal.current_directory());
-
-        let mut bookmark = Bookmark::new(session_name);
-        bookmark.directory = cwd;
-        Some(bookmark)
     }
 
     /// Extract the SSH target from the active session's remote endpoint.

@@ -578,28 +578,6 @@ impl Window {
         imp.terminals.borrow_mut().remove(uuid);
     }
 
-    pub(super) fn setup_bookmark_terminal(&self, terminal_uuid: &str, bookmark: &Bookmark) {
-        let target = bookmark.pane_target();
-        let startup = if target.is_none() {
-            bookmark
-                .session_startup_command()
-                .as_deref()
-                .map(|cmd| vec![StartupStep::SendText { text: cmd.to_string(), execute: true }])
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let recovery = PaneRecovery {
-            source: PaneSource::Bookmark { name: bookmark.name.clone() },
-            target,
-            startup,
-        };
-        self.set_terminal_recovery(terminal_uuid, recovery.clone());
-        if let Some(term) = self.imp().terminals.borrow().get(terminal_uuid).cloned() {
-            self.attempt_recovery_for_terminal(&term, &recovery);
-        }
-    }
-
     pub(super) fn trigger_managed_recovery_for_terminal(&self, terminal_uuid: &str) {
         let Some(recovery) = self.recovery_for_terminal(terminal_uuid) else {
             return;

@@ -1,5 +1,4 @@
 pub mod bookmarks;
-pub mod bookmarks_window;
 pub mod color_scheme;
 pub mod commands;
 pub mod commands_window;

@@ -45,12 +45,8 @@ impl Window {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
             }),
-            ("bookmark-session", &[], Self::do_bookmark_active_session),
             ("add-current-host", &[], Self::do_add_current_host),
             ("add-current-place", &[], Self::do_add_current_path_to_places),
-            ("add-bookmark", &[], |w| {
-                crate::bookmarks_window::show_form(w, None);
-            }),
             ("add-command", &[], |w| {
                 crate::commands_window::show_form(w, None);
             }),
@@ -86,29 +82,6 @@ impl Window {
         });
         self.add_action(&prefs_action);
         app.set_accels_for_action("win.preferences", &["<Ctrl>comma"]);
-
-        let edit_bookmark_action =
-            gtk4::gio::SimpleAction::new("edit-bookmark", Some(glib::VariantTy::STRING));
-        let win = self.clone();
-        edit_bookmark_action.connect_activate(move |_, param| {
-            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
-            let bookmarks = crate::bookmarks::load();
-            if let Some(bookmark) = bookmarks.iter().find(|b| b.uuid == uuid) {
-                crate::bookmarks_window::show_form(&win, Some(bookmark));
-            }
-        });
-        self.add_action(&edit_bookmark_action);
-
-        let delete_bookmark_action =
-            gtk4::gio::SimpleAction::new("delete-bookmark", Some(glib::VariantTy::STRING));
-        let win = self.clone();
-        delete_bookmark_action.connect_activate(move |_, param| {
-            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
-            if !uuid.is_empty() {
-                win.confirm_delete_bookmark(uuid);
-            }
-        });
-        self.add_action(&delete_bookmark_action);
 
         let edit_command_action =
             gtk4::gio::SimpleAction::new("edit-command", Some(glib::VariantTy::STRING));

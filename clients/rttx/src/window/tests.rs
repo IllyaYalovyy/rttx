@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::PaneTarget;
 use std::time::{Duration, Instant};
 
 macro_rules! require_display {
@@ -401,47 +402,6 @@ fn initial_terminal_starts_shell_when_window_is_presented() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn utility_sidebar_shows_and_filters_bookmarks() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let mut local = crate::bookmarks::Bookmark::new("Local Project");
-    local.directory = Some("/home/user/Projects/rttx".into());
-    let mut remote = crate::bookmarks::Bookmark::new("Prod Web");
-    remote.ssh_target = Some("deploy@example.com".into());
-    crate::bookmarks::save(&[local, remote]).unwrap();
-
-    let app =
-        adw::Application::builder().application_id("com.illya.rttx.utility-sidebar-tests").build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    window.present();
-    pump_events(100);
-
-    assert_eq!(
-        window.imp().bookmark_list.observe_children().n_items(),
-        2,
-        "utility sidebar should show saved bookmarks"
-    );
-
-    window.imp().bookmark_search_entry.set_text("prod");
-    pump_events(50);
-    assert_eq!(
-        window.imp().bookmark_list.observe_children().n_items(),
-        1,
-        "search should filter the utility sidebar bookmark list"
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
 fn utility_sidebar_shows_and_filters_commands() {
     require_display!();
 
@@ -474,342 +434,6 @@ fn utility_sidebar_shows_and_filters_commands() {
         window.imp().command_list.observe_children().n_items(),
         1,
         "search should filter the utility sidebar command list"
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn new_session_from_bookmark_creates_and_focuses_named_session() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app =
-        adw::Application::builder().application_id("com.illya.rttx.bookmark-session-tests").build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    window.set_default_size(900, 600);
-    window.present();
-    pump_events(100);
-
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-
-    window.new_session_from_bookmark(&bookmark);
-    pump_events(100);
-
-    let (session_name, session_uuid, terminal_uuid) = {
-        let state = window.imp().state.borrow();
-        assert_eq!(state.sessions.len(), 2, "bookmark should create a new session");
-        let session = state.sessions.last().unwrap();
-        (
-            session.name.clone(),
-            session.uuid.clone(),
-            session.layout.terminal_uuids().into_iter().next().unwrap(),
-        )
-    };
-
-    assert_eq!(session_name, "Prod Web");
-    assert_eq!(
-        window.imp().sidebar_list.selected_row().map(|row| row.index()),
-        Some(1),
-        "bookmark session should become the selected session"
-    );
-    assert_eq!(
-        window.imp().session_stack.visible_child_name().as_deref(),
-        Some(session_uuid.as_str()),
-        "bookmark session should become visible"
-    );
-    assert_eq!(
-        window.focused_terminal_uuid().as_deref(),
-        Some(terminal_uuid.as_str()),
-        "bookmark session should focus its initial terminal"
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn new_session_from_bookmark_queues_input_before_shell_starts() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app =
-        adw::Application::builder().application_id("com.illya.rttx.bookmark-queue-tests").build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-    let expected_input =
-        PaneTarget::RemoteShell { ssh_target: "deploy@example.com".into(), remote_folder: None }
-            .managed_startup_input()
-            .unwrap();
-
-    window.new_session_from_bookmark(&bookmark);
-
-    let terminal_uuid = {
-        let state = window.imp().state.borrow();
-        state.sessions.last().unwrap().layout.terminal_uuids().into_iter().next().unwrap()
-    };
-    let term = window
-        .imp()
-        .terminals
-        .borrow()
-        .get(&terminal_uuid)
-        .cloned()
-        .expect("bookmark session terminal should exist");
-
-    assert!(
-        !term.shell_spawned_for_test(),
-        "shell should not start before the window is presented"
-    );
-    assert_eq!(
-        term.pending_shell_inputs_for_test(),
-        vec![expected_input],
-        "bookmark launcher should queue the structured recovery target until the shell is ready"
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn bookmark_sessions_persist_and_replay_recovery_recipe_on_restart() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-recovery-tests")
-        .build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let first_window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod Web");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-    let expected_input =
-        PaneTarget::RemoteShell { ssh_target: "deploy@example.com".into(), remote_folder: None }
-            .managed_startup_input()
-            .unwrap();
-
-    first_window.new_session_from_bookmark(&bookmark);
-
-    let (terminal_uuid, saved_recovery) = {
-        let state = first_window.imp().state.borrow();
-        let session = state.sessions.last().expect("bookmark should create a session");
-        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-        (terminal_uuid.clone(), session.recovery_for(&terminal_uuid).cloned())
-    };
-
-    assert_eq!(
-        saved_recovery,
-        Some(PaneRecovery {
-            source: PaneSource::Bookmark { name: "Prod Web".into() },
-            target: Some(PaneTarget::RemoteShell {
-                ssh_target: "deploy@example.com".into(),
-                remote_folder: None,
-            }),
-            startup: vec![],
-        })
-    );
-
-    first_window.save_state();
-    first_window.close();
-
-    let second_window = Window::new(&app);
-    let restored_term = second_window
-        .imp()
-        .terminals
-        .borrow()
-        .get(&terminal_uuid)
-        .cloned()
-        .expect("restored bookmark terminal should exist");
-
-    assert_eq!(
-        restored_term.pending_shell_inputs_for_test(),
-        vec![expected_input],
-        "restored bookmark session should queue its structured recovery target before shell startup"
-    );
-
-    second_window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn new_session_from_folder_bookmark_uses_initial_cwd_not_cd_command() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.folder-bookmark-cwd-tests")
-        .build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Work");
-    bookmark.directory = Some("/home/user/work".into());
-
-    window.new_session_from_bookmark(&bookmark);
-
-    let (layout_cwd, pending_inputs) = {
-        let state = window.imp().state.borrow();
-        let session = state.sessions.last().unwrap();
-        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-        let layout_cwd = match &session.layout {
-            LayoutNode::Terminal { cwd, .. } => cwd.clone(),
-            _ => None,
-        };
-        let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
-        (layout_cwd, term.pending_shell_inputs_for_test())
-    };
-
-    assert_eq!(
-        layout_cwd.as_deref(),
-        Some("/home/user/work"),
-        "folder bookmark should set cwd in the layout node, not send a cd command"
-    );
-    assert!(
-        pending_inputs.is_empty(),
-        "folder-only bookmark should not queue any shell input; got: {pending_inputs:?}"
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn new_session_from_ssh_bookmark_queues_ssh_command() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app =
-        adw::Application::builder().application_id("com.illya.rttx.ssh-bookmark-tests").build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    let mut bookmark = crate::bookmarks::Bookmark::new("Prod");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-
-    window.new_session_from_bookmark(&bookmark);
-
-    let (pending_inputs, saved_recovery) = {
-        let state = window.imp().state.borrow();
-        let session = state.sessions.last().unwrap();
-        let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
-        let term = window.imp().terminals.borrow().get(&terminal_uuid).cloned().unwrap();
-        (term.pending_shell_inputs_for_test(), session.recovery_for(&terminal_uuid).cloned())
-    };
-
-    assert_eq!(
-        pending_inputs,
-        vec!["exec ssh deploy@example.com\n"],
-        "SSH bookmark should queue the structured ssh recovery command"
-    );
-    assert_eq!(
-        saved_recovery,
-        Some(PaneRecovery {
-            source: PaneSource::Bookmark { name: "Prod".into() },
-            target: Some(PaneTarget::RemoteShell {
-                ssh_target: "deploy@example.com".into(),
-                remote_folder: None,
-            }),
-            startup: vec![],
-        })
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn bookmark_active_session_captures_session_name_and_cwd() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-active-session-tests")
-        .build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-
-    // Rename the default session and set the terminal's CWD.
-    {
-        let mut state = window.imp().state.borrow_mut();
-        state.sessions[0].name = "My Work".to_string();
-    }
-    let terminal_uuid = {
-        let state = window.imp().state.borrow();
-        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
-    };
-    if let Some(term) = window.imp().terminals.borrow().get(&terminal_uuid) {
-        term.set_current_directory_for_test(Some("/home/user/projects"));
-    }
-    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid));
-
-    let bookmark = window
-        .create_bookmark_from_active_session()
-        .expect("should produce a bookmark when a terminal is focused");
-
-    assert_eq!(bookmark.name, "My Work", "bookmark name should match the session name");
-    assert_eq!(
-        bookmark.directory.as_deref(),
-        Some("/home/user/projects"),
-        "bookmark directory should match the focused terminal's CWD"
-    );
-    assert_eq!(bookmark.ssh_target, None);
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn bookmark_active_session_returns_none_without_focused_terminal() {
-    require_display!();
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-no-focus-tests")
-        .build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-
-    let window = Window::new(&app);
-    window.imp().focused_terminal_uuid.replace(None);
-
-    assert!(
-        window.create_bookmark_from_active_session().is_none(),
-        "should return None when no terminal is focused"
     );
 
     window.close();
@@ -1751,20 +1375,20 @@ fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
         "manage-commands action should be removed"
     );
     assert!(
-        window.lookup_action("add-bookmark").is_some(),
-        "add-bookmark action should be registered"
+        window.lookup_action("add-bookmark").is_none(),
+        "add-bookmark action should be removed"
     );
     assert!(
         window.lookup_action("add-command").is_some(),
         "add-command action should be registered"
     );
     assert!(
-        window.lookup_action("edit-bookmark").is_some(),
-        "edit-bookmark action should be registered"
+        window.lookup_action("edit-bookmark").is_none(),
+        "edit-bookmark action should be removed"
     );
     assert!(
-        window.lookup_action("delete-bookmark").is_some(),
-        "delete-bookmark action should be registered"
+        window.lookup_action("delete-bookmark").is_none(),
+        "delete-bookmark action should be removed"
     );
     assert!(
         window.lookup_action("edit-command").is_some(),
@@ -1773,36 +1397,6 @@ fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
     assert!(
         window.lookup_action("delete-command").is_some(),
         "delete-command action should be registered"
-    );
-
-    window.close();
-    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
-}
-
-#[test]
-#[ignore = "requires isolated GTK harness"]
-fn bookmark_sidebar_shows_empty_state_when_no_bookmarks() {
-    require_display!();
-
-    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
-    let tmp = tempfile::TempDir::new().unwrap();
-    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
-
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.bookmark-empty-state-tests")
-        .build();
-    app.register(gtk4::gio::Cancellable::NONE).unwrap();
-    let window = Window::new(&app);
-    window.present();
-    pump_events(50);
-
-    assert!(
-        window.imp().bookmark_empty.is_visible(),
-        "empty state should be visible when no bookmarks"
-    );
-    assert!(
-        !window.imp().bookmark_scroll.is_visible(),
-        "list scroll should be hidden when no bookmarks"
     );
 
     window.close();
@@ -4051,8 +3645,8 @@ fn right_sidebar_has_places_tab() {
     let stack = &window.imp().utility_stack;
     assert!(stack.child_by_name("places").is_some(), "utility stack should have a Places tab");
     assert!(
-        stack.child_by_name("bookmarks").is_some(),
-        "utility stack should have a Bookmarks tab"
+        stack.child_by_name("bookmarks").is_none(),
+        "utility stack should not have a Bookmarks tab"
     );
     assert!(stack.child_by_name("commands").is_some(), "utility stack should have a Commands tab");
 
