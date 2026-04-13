@@ -551,6 +551,12 @@ impl Window {
         pane.vte().reset(true, true);
         pane.feed_snapshot(&restore.scrollback);
         pane.set_bracketed_paste_mode(restore.bracketed_paste_mode);
+        pane.restore_interaction_modes(
+            restore.application_cursor_keys,
+            restore.application_keypad,
+            restore.mouse_tracking_mode,
+            restore.sgr_mouse_mode,
+        );
         pane.set_current_directory(Some(&restore.cwd));
         if !restore.title.is_empty() && pane.custom_title().is_none() {
             pane.set_title(&restore.title);

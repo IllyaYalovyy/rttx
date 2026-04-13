@@ -23,6 +23,10 @@ pub struct WorkspacePaneRestore {
     pub cols: u16,
     pub rows: u16,
     pub bracketed_paste_mode: bool,
+    pub application_cursor_keys: bool,
+    pub application_keypad: bool,
+    pub mouse_tracking_mode: u32,
+    pub sgr_mouse_mode: bool,
 }
 
 /// Pure result of reconciling a workspace against a runtime snapshot.
@@ -458,6 +462,10 @@ impl WindowState {
                     cols: pane_snapshot.cols as u16,
                     rows: pane_snapshot.rows as u16,
                     bracketed_paste_mode: pane_snapshot.bracketed_paste_mode,
+                    application_cursor_keys: pane_snapshot.application_cursor_keys,
+                    application_keypad: pane_snapshot.application_keypad,
+                    mouse_tracking_mode: pane_snapshot.mouse_tracking_mode,
+                    sgr_mouse_mode: pane_snapshot.sgr_mouse_mode,
                 })
             })
             .collect::<Vec<_>>();
@@ -579,6 +587,10 @@ mod tests {
             scrollback: scrollback.to_vec(),
             exit_status: None,
             bracketed_paste_mode: false,
+            application_cursor_keys: false,
+            application_keypad: false,
+            mouse_tracking_mode: 0,
+            sgr_mouse_mode: false,
         }
     }
 
@@ -1093,9 +1105,45 @@ mod tests {
                 cols: 120,
                 rows: 40,
                 bracketed_paste_mode: false,
+                application_cursor_keys: false,
+                application_keypad: false,
+                mouse_tracking_mode: 0,
+                sgr_mouse_mode: false,
             }],
         );
         assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+    }
+
+    #[test]
+    fn reconcile_snapshot_carries_interaction_modes_to_restore() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let terminal_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session(
+            "workspace-1",
+            "Workspace",
+            term(&terminal_uuid),
+        )]);
+
+        let mut snap = pane_snapshot(&terminal_uuid, "vim", "/home", b"");
+        snap.application_cursor_keys = true;
+        snap.application_keypad = true;
+        snap.mouse_tracking_mode = 1003;
+        snap.sgr_mouse_mode = true;
+        snap.bracketed_paste_mode = true;
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "workspace-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![snap]),
+        });
+
+        assert_eq!(transition.pane_snapshot_restores.len(), 1);
+        let restore = &transition.pane_snapshot_restores[0];
+        assert!(restore.application_cursor_keys);
+        assert!(restore.application_keypad);
+        assert_eq!(restore.mouse_tracking_mode, 1003);
+        assert!(restore.sgr_mouse_mode);
+        assert!(restore.bracketed_paste_mode);
     }
 
     #[test]
@@ -1360,6 +1408,10 @@ mod tests {
                     scrollback: Vec::new(),
                     exit_status: None,
                     bracketed_paste_mode: false,
+                    application_cursor_keys: false,
+                    application_keypad: false,
+                    mouse_tracking_mode: 0,
+                    sgr_mouse_mode: false,
                 }],
                 revision: 2,
                 current_client_role: proto::RuntimeClientRole::Writer as i32,
