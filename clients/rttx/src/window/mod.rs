@@ -599,16 +599,41 @@ impl Window {
         });
         self.add_action(&connect_action);
 
+        let add_host_action = gtk4::gio::SimpleAction::new("add-host", None);
+        let win = self.clone();
+        add_host_action.connect_activate(move |_, _| {
+            win.show_add_host_dialog();
+        });
+        self.add_action(&add_host_action);
+
         self.refresh_host_menus();
     }
 
     pub(super) fn refresh_host_menus(&self) {
-        let mut hosts: Vec<host::Host> = vec![host::Host::local()];
         let saved = host::load();
-        let mut remotes: Vec<host::Host> =
-            saved.into_iter().filter(host::Host::is_remote).collect();
-        remotes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        hosts.extend(remotes);
+
+        let mut keys: Vec<String> = vec![host::LOCAL_KEY.into()];
+        for h in &saved {
+            if !keys.contains(&h.key) {
+                keys.push(h.key.clone());
+            }
+        }
+        // Include hosts from active sessions (matching sidebar behavior)
+        let state = self.imp().state.borrow();
+        for s in &state.sessions {
+            let k = s.runtime.endpoint.host_key();
+            if !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
+        drop(state);
+
+        let mut hosts: Vec<host::Host> = keys
+            .iter()
+            .map(|k| host::resolve(k, &saved))
+            .collect();
+        // Sort remotes alphabetically, keeping Local first
+        hosts[1..].sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
         let new_menu = gtk4::gio::Menu::new();
         let connect_menu = gtk4::gio::Menu::new();
@@ -628,6 +653,9 @@ impl Window {
             );
             connect_menu.append_item(&connect_item);
         }
+
+        new_menu.append(Some("Add Host\u{2026}"), Some("win.add-host"));
+        connect_menu.append(Some("Add Host\u{2026}"), Some("win.add-host"));
 
         self.imp().new_button.set_menu_model(Some(&new_menu));
         self.imp().connect_button.set_menu_model(Some(&connect_menu));
