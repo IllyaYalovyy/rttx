@@ -153,6 +153,12 @@ impl Window {
             win.refresh_sidebar_subtitle_if_active(&uuid);
         });
 
+        let win = self.clone();
+        let uuid = term.uuid();
+        term.vte().connect_current_directory_uri_changed(move |_| {
+            win.refresh_sidebar_subtitle_if_active(&uuid);
+        });
+
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let uuid = term.uuid();

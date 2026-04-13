@@ -331,6 +331,22 @@ impl Window {
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
             win.set_focused_terminal(Some(&focus_uuid));
+            let session_uuid = {
+                let mut state = win.imp().state.borrow_mut();
+                let session = state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.layout.contains_terminal(&focus_uuid));
+                if let Some(session) = session {
+                    session.active_terminal_uuid = Some(focus_uuid.clone());
+                    Some(session.uuid.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(session_uuid) = session_uuid {
+                win.refresh_sidebar_subtitle(&session_uuid);
+            }
         });
         pane_view.vte().add_controller(focus_controller);
 
