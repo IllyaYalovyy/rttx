@@ -4732,3 +4732,114 @@ fn keyboard_shortcut_actions_are_registered() {
 
     window.close();
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn sidebar_subtitle_updates_on_cwd_change() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.subtitle-cwd-change-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    let session_uuid = window.imp().state.borrow().sessions[0].uuid.clone();
+
+    // Mark the terminal as active so refresh_sidebar_subtitle_if_active finds it.
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions[0].active_terminal_uuid = Some(terminal_uuid.clone());
+    }
+
+    // Simulate a CWD change (as if the shell emitted OSC 7).
+    if let Some(term) = window.imp().terminals.borrow().get(&terminal_uuid) {
+        term.set_current_directory_for_test(Some("/tmp/new-dir"));
+    }
+    window.refresh_sidebar_subtitle_if_active(&terminal_uuid);
+
+    let row = session_row_for_uuid(&window, &session_uuid);
+    let subtitle = row.subtitle().map(|v| v.to_string());
+    assert_eq!(subtitle.as_deref(), Some("/tmp/new-dir"), "subtitle should reflect the new CWD");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_pane_focus_change_updates_sidebar_subtitle() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.managed-focus-subtitle-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout = LayoutNode::Split {
+        orientation: SplitOrientation::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::new_terminal_with_uuid("pane-a")),
+        second: Box::new(LayoutNode::new_terminal_with_uuid("pane-b")),
+    };
+    let session_state = crate::test_helpers::managed_session(
+        "ws-focus-test",
+        "Focus Test",
+        layout,
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Set different CWDs on the two managed panes.
+    {
+        let panes = window.imp().persistent_terminals.borrow();
+        panes.get("pane-a").unwrap().set_current_directory(Some("/home/user/alpha"));
+        panes.get("pane-b").unwrap().set_current_directory(Some("/home/user/beta"));
+    }
+
+    // Simulate focusing pane-a: update active_terminal_uuid and refresh subtitle.
+    {
+        let mut state = window.imp().state.borrow_mut();
+        let session = state.sessions.iter_mut().find(|s| s.uuid == session_state.uuid).unwrap();
+        session.active_terminal_uuid = Some("pane-a".to_string());
+    }
+    window.refresh_sidebar_subtitle(&session_state.uuid);
+
+    let row = session_row_for_uuid(&window, &session_state.uuid);
+    let subtitle_a = row.subtitle().map(|v| v.to_string());
+    assert!(
+        subtitle_a.as_deref().is_some_and(|s| s.contains("alpha")),
+        "subtitle should show pane-a's CWD, got: {subtitle_a:?}"
+    );
+
+    // Now simulate focusing pane-b.
+    {
+        let mut state = window.imp().state.borrow_mut();
+        let session = state.sessions.iter_mut().find(|s| s.uuid == session_state.uuid).unwrap();
+        session.active_terminal_uuid = Some("pane-b".to_string());
+    }
+    window.refresh_sidebar_subtitle(&session_state.uuid);
+
+    let subtitle_b = row.subtitle().map(|v| v.to_string());
+    assert!(
+        subtitle_b.as_deref().is_some_and(|s| s.contains("beta")),
+        "subtitle should update to pane-b's CWD, got: {subtitle_b:?}"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
