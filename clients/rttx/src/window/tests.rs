@@ -4899,3 +4899,133 @@ fn host_add_button_has_correct_icon_and_tooltip() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_menu_includes_add_host_item() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.new-menu-add-host-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let model = window.imp().new_button.menu_model().unwrap();
+    let n = model.n_items();
+    assert!(n >= 2, "New menu should have at least Local + Add Host…");
+
+    // Last item should be "Add Host…"
+    let last_label = model.item_attribute_value(n - 1, "label", None);
+    assert_eq!(
+        last_label.and_then(|v| v.get::<String>()),
+        Some("Add Host…".into()),
+        "last item in New menu should be 'Add Host…'"
+    );
+
+    // Connect menu should also have "Add Host…"
+    let connect_model = window.imp().connect_button.menu_model().unwrap();
+    let cn = connect_model.n_items();
+    let connect_last = connect_model.item_attribute_value(cn - 1, "label", None);
+    assert_eq!(
+        connect_last.and_then(|v| v.get::<String>()),
+        Some("Add Host…".into()),
+        "last item in Connect menu should be 'Add Host…'"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_menu_includes_saved_remote_hosts() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let config_dir = tmp.path().join("rttx-devel");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let hosts = vec![crate::host::Host::remote("deploy@example.com")];
+    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.new-menu-saved-hosts-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let model = window.imp().new_button.menu_model().unwrap();
+    // Should have: Local, example, Add Host…
+    assert!(model.n_items() >= 3, "New menu should have Local + remote host + Add Host…");
+
+    let labels: Vec<String> = (0..model.n_items())
+        .filter_map(|i| {
+            model.item_attribute_value(i, "label", None).and_then(|v| v.get::<String>())
+        })
+        .collect();
+    assert!(labels.contains(&"Local".into()), "menu should contain Local");
+    assert!(labels.contains(&"example".into()), "menu should contain saved remote host");
+    assert!(labels.contains(&"Add Host…".into()), "menu should contain Add Host…");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn new_menu_includes_session_derived_hosts() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.new-menu-session-hosts-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Add a remote managed workspace (not saved in hosts.json)
+    let remote_session = SessionState::new_managed_remote(
+        "Remote Work".into(),
+        "deploy@builder.example.com",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    window.imp().state.borrow_mut().sessions.push(remote_session.clone());
+    window.build_session(&remote_session, false);
+    pump_events(50);
+
+    // Refresh menus to pick up session-derived hosts
+    window.refresh_host_menus();
+
+    let model = window.imp().new_button.menu_model().unwrap();
+    let labels: Vec<String> = (0..model.n_items())
+        .filter_map(|i| {
+            model.item_attribute_value(i, "label", None).and_then(|v| v.get::<String>())
+        })
+        .collect();
+    assert!(
+        labels.contains(&"builder".into()),
+        "menu should contain session-derived remote host; got: {labels:?}"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
