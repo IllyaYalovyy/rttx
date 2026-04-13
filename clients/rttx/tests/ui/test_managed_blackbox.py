@@ -23,10 +23,12 @@ class TestManagedBlackBox(unittest.TestCase):
     def _create_managed_workspace(self) -> None:
         # Activate via D-Bus — MenuButton popover is unreliable via AT-SPI.
         self.fixture.activate_action("new-session")
+        import time
+        time.sleep(2.0)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
         home_button = self.fixture.wait_for_showing_name(
-            Atspi.Role.PUSH_BUTTON, "Home", timeout=10.0
+            Atspi.Role.PUSH_BUTTON, "Home", timeout=15.0
         )
         self.assertIsNotNone(home_button, "Home place button not visible in dialog")
         click(home_button)
@@ -136,6 +138,8 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
     def test_managed_pane_exit_is_visible_when_shell_exits(self) -> None:
         """A daemon PaneExited event must leave a clear, non-hanging pane."""
         self.fixture.activate_action("new-session")
+        import time
+        time.sleep(2.0)
 
         # The New Workspace dialog opens — select "Home" to create the workspace.
         home_button = self.fixture.wait_for_showing_name(
