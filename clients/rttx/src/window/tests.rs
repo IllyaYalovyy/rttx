@@ -1398,14 +1398,8 @@ fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
         window.lookup_action("delete-command").is_some(),
         "delete-command action should be registered"
     );
-    assert!(
-        window.lookup_action("add-place").is_some(),
-        "add-place action should be registered"
-    );
-    assert!(
-        window.lookup_action("edit-place").is_some(),
-        "edit-place action should be registered"
-    );
+    assert!(window.lookup_action("add-place").is_some(), "add-place action should be registered");
+    assert!(window.lookup_action("edit-place").is_some(), "edit-place action should be registered");
     assert!(
         window.lookup_action("delete-place").is_some(),
         "delete-place action should be registered"
@@ -4724,10 +4718,7 @@ fn place_sidebar_has_add_button_in_header() {
     window.present();
     pump_events(50);
 
-    assert!(
-        window.lookup_action("add-place").is_some(),
-        "add-place action should be registered"
-    );
+    assert!(window.lookup_action("add-place").is_some(), "add-place action should be registered");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

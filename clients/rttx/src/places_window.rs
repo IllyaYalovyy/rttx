@@ -34,8 +34,7 @@ pub fn show_form(parent: &Window, place: Option<&Place>) {
     let status_label = form.status_label.clone();
     let parent_for_save = parent.clone();
     form.save_button.connect_clicked(move |_| {
-        let place = match build_place(&name_row, &path_row, &host_tags_row, existing_uuid.clone())
-        {
+        let place = match build_place(&name_row, &path_row, &host_tags_row, existing_uuid.clone()) {
             Ok(p) => p,
             Err(msg) => {
                 status_label.set_text(&msg);

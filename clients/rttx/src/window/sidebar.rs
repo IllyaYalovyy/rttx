@@ -169,10 +169,8 @@ impl Window {
             if !is_builtin {
                 let uuid = place.uuid.clone();
                 let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
-                edit_item.set_action_and_target_value(
-                    Some("win.edit-place"),
-                    Some(&uuid.to_variant()),
-                );
+                edit_item
+                    .set_action_and_target_value(Some("win.edit-place"), Some(&uuid.to_variant()));
                 let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
                 delete_item.set_action_and_target_value(
                     Some("win.delete-place"),
