@@ -1,6 +1,7 @@
 pub mod handle;
 #[doc(hidden)]
 pub mod links;
+pub(crate) mod paste_guard;
 pub mod persistent_widget;
 pub mod widget;
 
@@ -965,5 +966,12 @@ mod search_tests {
         let prefs = crate::preferences::Preferences::default();
         assert!(prefs.audible_bell, "audible_bell should default to true");
         assert!(prefs.visual_bell, "visual_bell should default to true");
+    }
+
+    #[test]
+    fn paste_guard_preferences_default_enabled() {
+        let prefs = crate::preferences::Preferences::default();
+        assert!(prefs.paste_guard);
+        assert_eq!(prefs.paste_guard_threshold, 1024);
     }
 }
