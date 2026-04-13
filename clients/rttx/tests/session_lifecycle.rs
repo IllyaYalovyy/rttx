@@ -862,6 +862,9 @@ fn connection_status_lifecycle_is_deterministic() {
         ConnectionEvent::Failed(ConnectionProblem::OwnershipConflict),
     );
     assert!(matches!(s, ConnectionStatus::Blocked(_)));
+
+    let s = advance_connection_status(&s, ConnectionEvent::SessionMissing);
+    assert_eq!(s, ConnectionStatus::SessionMissing);
 }
 
 /// F-keys must produce xterm escape sequences for managed terminals. Regression for #293.

@@ -171,10 +171,15 @@ pub enum ConnectionStatus {
     Starting,
     Connecting,
     Connected,
-    Reconnecting { attempt: u32, retry_in_secs: u32 },
+    Reconnecting {
+        attempt: u32,
+        retry_in_secs: u32,
+    },
     Blocked(ConnectionProblem),
     Disconnected,
     Recovered,
+    /// The daemon has no record of this workspace's runtime.
+    SessionMissing,
 }
 
 impl ConnectionStatus {
@@ -191,6 +196,7 @@ impl ConnectionStatus {
             Self::Blocked(problem) => format!("Action Required: {}", problem.label()),
             Self::Disconnected => "Disconnected".into(),
             Self::Recovered => "Recovered".into(),
+            Self::SessionMissing => "Session no longer exists".into(),
         }
     }
 
@@ -210,6 +216,7 @@ impl ConnectionStatus {
             Self::Reconnecting { retry_in_secs, .. } => format!("Retry {retry_in_secs}s"),
             Self::Blocked(_) => "Action Required".into(),
             Self::Disconnected => "Disconnected".into(),
+            Self::SessionMissing => "Session Missing".into(),
         }
     }
 }
@@ -221,6 +228,7 @@ pub enum ConnectionProblem {
     VersionMismatch,
     OwnershipConflict,
     PermissionDenied,
+    SessionMissing,
     Protocol(String),
     UserActionRequired(String),
 }
@@ -240,6 +248,7 @@ impl ConnectionProblem {
             Self::VersionMismatch => "Version mismatch".into(),
             Self::OwnershipConflict => "Runtime already owned".into(),
             Self::PermissionDenied => "Permission denied".into(),
+            Self::SessionMissing => "Session no longer exists".into(),
             Self::Protocol(detail) | Self::UserActionRequired(detail) => detail.clone(),
         }
     }
@@ -251,13 +260,11 @@ pub fn classify_connection_problem(error: &DaemonError) -> ConnectionProblem {
     match error {
         DaemonError::VersionMismatch { .. } => ConnectionProblem::VersionMismatch,
         DaemonError::AttachBlocked(_) => ConnectionProblem::OwnershipConflict,
+        DaemonError::ServerError { code, .. } if *code == 4 => ConnectionProblem::SessionMissing,
         DaemonError::ServerError { code, message } if *code == 8 => {
             ConnectionProblem::UserActionRequired(message.clone())
         }
         DaemonError::ServerError { code, .. } if *code == 9 => ConnectionProblem::OwnershipConflict,
-        DaemonError::ServerError { code, message } if *code == 4 => {
-            ConnectionProblem::UserActionRequired(message.clone())
-        }
         DaemonError::ServerError { message, .. } => {
             ConnectionProblem::UserActionRequired(message.clone())
         }
@@ -278,6 +285,7 @@ pub enum ConnectionEvent {
     RetryScheduled { attempt: u32, retry_in_secs: u32 },
     Failed(ConnectionProblem),
     Recovered,
+    SessionMissing,
 }
 
 /// Advance a connection status without involving GTK or daemon I/O.
@@ -295,6 +303,7 @@ pub fn advance_connection_status(
         }
         ConnectionEvent::Recovered => ConnectionStatus::Recovered,
         ConnectionEvent::Failed(problem) => ConnectionStatus::Blocked(problem),
+        ConnectionEvent::SessionMissing => ConnectionStatus::SessionMissing,
     }
 }
 
@@ -441,6 +450,7 @@ pub const fn connection_icon(
             ("accent", tooltip)
         }
         ConnectionStatus::Disconnected => ("warning", "Disconnected from runtime"),
+        ConnectionStatus::SessionMissing => ("warning", "Session no longer exists on daemon"),
         ConnectionStatus::Blocked(_) => ("error", "Connection blocked"),
         _ => ("dim-label", "Connecting…"),
     };
@@ -1208,5 +1218,62 @@ mod tests {
         assert!(!items.show_edit_connection);
         assert!(!items.show_reconnect);
         assert!(!items.show_detach);
+    }
+
+    // ── SessionMissing state ────────────────────────────────────
+
+    #[test]
+    fn classify_session_not_found_as_session_missing() {
+        let problem = classify_connection_problem(&DaemonError::ServerError {
+            code: 4,
+            message: "session not found".into(),
+        });
+        assert_eq!(problem, ConnectionProblem::SessionMissing);
+        assert!(!problem.is_transient());
+    }
+
+    #[test]
+    fn session_missing_status_disables_input() {
+        assert!(!ConnectionStatus::SessionMissing.accepts_input());
+    }
+
+    #[test]
+    fn session_missing_label_describes_state() {
+        assert_eq!(ConnectionStatus::SessionMissing.short_label(), "Session Missing");
+        assert!(ConnectionStatus::SessionMissing.label().contains("no longer exists"));
+    }
+
+    #[test]
+    fn advance_to_session_missing() {
+        let status = advance_connection_status(
+            &ConnectionStatus::Connecting,
+            ConnectionEvent::SessionMissing,
+        );
+        assert_eq!(status, ConnectionStatus::SessionMissing);
+    }
+
+    #[test]
+    fn session_missing_icon_uses_warning_class() {
+        let icon =
+            connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::SessionMissing, true);
+        assert_eq!(icon.css_class, "warning");
+        assert!(icon.tooltip.contains("no longer exists"));
+    }
+
+    #[test]
+    fn session_missing_problem_label_is_nonempty() {
+        assert!(!ConnectionProblem::SessionMissing.label().is_empty());
+    }
+
+    #[test]
+    fn menu_items_session_missing_hides_reconnect() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: false,
+        });
+        assert!(!items.show_reconnect);
     }
 }
