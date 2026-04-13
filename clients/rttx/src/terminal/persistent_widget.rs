@@ -617,17 +617,17 @@ impl PersistentPaneView {
 
             match result {
                 Ok(Some(text)) if !text.is_empty() => {
-                    let payload = text.as_bytes();
+                    let payload = pastify(text.as_bytes());
                     if pane.imp().bracketed_paste_mode.get() {
                         let mut wrapped = Vec::with_capacity(
                             b"\x1b[200~".len() + payload.len() + b"\x1b[201~".len(),
                         );
                         wrapped.extend_from_slice(b"\x1b[200~");
-                        wrapped.extend_from_slice(payload);
+                        wrapped.extend_from_slice(&payload);
                         wrapped.extend_from_slice(b"\x1b[201~");
                         f(wrapped);
                     } else {
-                        f(payload.to_vec());
+                        f(payload);
                     }
                 }
                 Ok(Some(_) | None) => {}
@@ -873,6 +873,29 @@ impl PersistentPaneView {
 
 const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
 const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
+
+/// Convert clipboard text to terminal input bytes.
+///
+/// Replaces `\r\n` and standalone `\n` with `\r`, matching VTE's
+/// `pastify_string()` behavior. Terminals expect `\r` for line endings
+/// on the input side.
+fn pastify(text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] == b'\r' && text.get(i + 1) == Some(&b'\n') {
+            out.push(b'\r');
+            i += 2;
+        } else if text[i] == b'\n' {
+            out.push(b'\r');
+            i += 1;
+        } else {
+            out.push(text[i]);
+            i += 1;
+        }
+    }
+    out
+}
 
 /// Scan terminal output for DECSET/DECRST 2004 and update the mode flag.
 fn update_bracketed_paste_mode(mode: &std::cell::Cell<bool>, data: &[u8]) {
@@ -1361,6 +1384,31 @@ mod tests {
 
         pane.set_visual_bell(true);
         assert!(pane.imp().visual_bell.get());
+    }
+
+    #[test]
+    fn pastify_converts_lf_to_cr() {
+        assert_eq!(pastify(b"line1\nline2\n"), b"line1\rline2\r");
+    }
+
+    #[test]
+    fn pastify_converts_crlf_to_cr() {
+        assert_eq!(pastify(b"line1\r\nline2\r\n"), b"line1\rline2\r");
+    }
+
+    #[test]
+    fn pastify_preserves_standalone_cr() {
+        assert_eq!(pastify(b"line1\rline2"), b"line1\rline2");
+    }
+
+    #[test]
+    fn pastify_handles_mixed_line_endings() {
+        assert_eq!(pastify(b"a\nb\r\nc\rd"), b"a\rb\rc\rd");
+    }
+
+    #[test]
+    fn pastify_no_newlines_unchanged() {
+        assert_eq!(pastify(b"hello world"), b"hello world");
     }
 
     #[test]
