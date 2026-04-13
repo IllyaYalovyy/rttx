@@ -33,6 +33,7 @@ mod imp {
         pub connected: Cell<bool>,
         pub accepts_input: Cell<bool>,
         pub exited: Cell<bool>,
+        pub bracketed_paste_mode: Cell<bool>,
         pub input_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
@@ -61,6 +62,7 @@ mod imp {
                 connected: Cell::default(),
                 accepts_input: Cell::default(),
                 exited: Cell::default(),
+                bracketed_paste_mode: Cell::default(),
                 input_key_controller: RefCell::default(),
                 vte: vte4::Terminal::new(),
                 terminal_scroller: gtk4::ScrolledWindow::new(),
@@ -458,6 +460,7 @@ impl PersistentPaneView {
     ///
     /// Called when a `Delta` message arrives from the daemon.
     pub fn feed_output(&self, data: &[u8]) {
+        update_bracketed_paste_mode(&self.imp().bracketed_paste_mode, data);
         self.imp().vte.feed(data);
     }
 
@@ -478,6 +481,11 @@ impl PersistentPaneView {
         if let Some(adj) = adj {
             adj.set_value(adj.upper() - adj.page_size());
         }
+    }
+
+    /// Set the bracketed paste mode state from a snapshot.
+    pub fn set_bracketed_paste_mode(&self, enabled: bool) {
+        self.imp().bracketed_paste_mode.set(enabled);
     }
 
     /// Update the connection status indicator.
@@ -572,7 +580,20 @@ impl PersistentPaneView {
             }
 
             match result {
-                Ok(Some(text)) if !text.is_empty() => f(text.as_bytes().to_vec()),
+                Ok(Some(text)) if !text.is_empty() => {
+                    let payload = text.as_bytes();
+                    if pane.imp().bracketed_paste_mode.get() {
+                        let mut wrapped = Vec::with_capacity(
+                            b"\x1b[200~".len() + payload.len() + b"\x1b[201~".len(),
+                        );
+                        wrapped.extend_from_slice(b"\x1b[200~");
+                        wrapped.extend_from_slice(payload);
+                        wrapped.extend_from_slice(b"\x1b[201~");
+                        f(wrapped);
+                    } else {
+                        f(payload.to_vec());
+                    }
+                }
                 Ok(Some(_) | None) => {}
                 Err(error) => {
                     log::warn!("Failed to read clipboard text for managed paste: {error}");
@@ -780,6 +801,30 @@ impl PersistentPaneView {
             .expect("input controller should be connected before test input is emitted")
             .emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers])
             .into()
+    }
+}
+
+const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
+const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
+
+/// Scan terminal output for DECSET/DECRST 2004 and update the mode flag.
+fn update_bracketed_paste_mode(mode: &std::cell::Cell<bool>, data: &[u8]) {
+    // Scan backwards — only the last occurrence matters.
+    if let Some(pos) =
+        data.windows(BRACKETED_PASTE_DISABLE.len()).rposition(|w| w == BRACKETED_PASTE_DISABLE)
+    {
+        // Check if there's a later enable after this disable.
+        let after_disable = pos + BRACKETED_PASTE_DISABLE.len();
+        if data[after_disable..]
+            .windows(BRACKETED_PASTE_ENABLE.len())
+            .any(|w| w == BRACKETED_PASTE_ENABLE)
+        {
+            mode.set(true);
+        } else {
+            mode.set(false);
+        }
+    } else if data.windows(BRACKETED_PASTE_ENABLE.len()).any(|w| w == BRACKETED_PASTE_ENABLE) {
+        mode.set(true);
     }
 }
 
@@ -1249,5 +1294,70 @@ mod tests {
 
         pane.set_visual_bell(true);
         assert!(pane.imp().visual_bell.get());
+    }
+
+    #[test]
+    fn update_bracketed_paste_mode_enable() {
+        let mode = std::cell::Cell::new(false);
+        update_bracketed_paste_mode(&mode, b"\x1b[?2004h");
+        assert!(mode.get());
+    }
+
+    #[test]
+    fn update_bracketed_paste_mode_disable() {
+        let mode = std::cell::Cell::new(true);
+        update_bracketed_paste_mode(&mode, b"\x1b[?2004l");
+        assert!(!mode.get());
+    }
+
+    #[test]
+    fn update_bracketed_paste_mode_ignores_unrelated_output() {
+        let mode = std::cell::Cell::new(false);
+        update_bracketed_paste_mode(&mode, b"hello world\r\n");
+        assert!(!mode.get());
+    }
+
+    #[test]
+    fn update_bracketed_paste_mode_last_wins() {
+        let mode = std::cell::Cell::new(false);
+        update_bracketed_paste_mode(&mode, b"\x1b[?2004h\x1b[?2004l");
+        assert!(!mode.get());
+
+        update_bracketed_paste_mode(&mode, b"\x1b[?2004l\x1b[?2004h");
+        assert!(mode.get());
+    }
+
+    #[test]
+    fn update_bracketed_paste_mode_embedded_in_output() {
+        let mode = std::cell::Cell::new(false);
+        update_bracketed_paste_mode(&mode, b"prompt$ \x1b[?2004hmore output");
+        assert!(mode.get());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn feed_output_tracks_bracketed_paste_mode() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        assert!(!pane.imp().bracketed_paste_mode.get());
+
+        pane.feed_output(b"\x1b[?2004h");
+        assert!(pane.imp().bracketed_paste_mode.get());
+
+        pane.feed_output(b"\x1b[?2004l");
+        assert!(!pane.imp().bracketed_paste_mode.get());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn set_bracketed_paste_mode_from_snapshot() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        assert!(!pane.imp().bracketed_paste_mode.get());
+
+        pane.set_bracketed_paste_mode(true);
+        assert!(pane.imp().bracketed_paste_mode.get());
     }
 }

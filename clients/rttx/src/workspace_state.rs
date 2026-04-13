@@ -22,6 +22,7 @@ pub struct WorkspacePaneRestore {
     pub scrollback: Vec<u8>,
     pub cols: u16,
     pub rows: u16,
+    pub bracketed_paste_mode: bool,
 }
 
 /// Pure result of reconciling a workspace against a runtime snapshot.
@@ -456,6 +457,7 @@ impl WindowState {
                     scrollback: pane_snapshot.scrollback.clone(),
                     cols: pane_snapshot.cols as u16,
                     rows: pane_snapshot.rows as u16,
+                    bracketed_paste_mode: pane_snapshot.bracketed_paste_mode,
                 })
             })
             .collect::<Vec<_>>();
@@ -576,6 +578,7 @@ mod tests {
             rows: 40,
             scrollback: scrollback.to_vec(),
             exit_status: None,
+            bracketed_paste_mode: false,
         }
     }
 
@@ -1089,6 +1092,7 @@ mod tests {
                 scrollback: b"restored output".to_vec(),
                 cols: 120,
                 rows: 40,
+                bracketed_paste_mode: false,
             }],
         );
         assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
@@ -1355,6 +1359,7 @@ mod tests {
                     rows: 24,
                     scrollback: Vec::new(),
                     exit_status: None,
+                    bracketed_paste_mode: false,
                 }],
                 revision: 2,
                 current_client_role: proto::RuntimeClientRole::Writer as i32,

@@ -2061,6 +2061,7 @@ mod tests {
                             rows: 24,
                             scrollback: Vec::new(),
                             exit_status: None,
+                            bracketed_paste_mode: false,
                         }],
                         revision: 2,
                         current_client_role: proto::RuntimeClientRole::Writer as i32,
