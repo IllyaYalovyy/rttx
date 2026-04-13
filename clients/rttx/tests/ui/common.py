@@ -534,7 +534,7 @@ class AppFixture:
         return Atspi.generate_keyboard_event(0, text, Atspi.KeySynthType.STRING)
 
     def activate_action(self, action_name: str, parameter: str | None = None) -> None:
-        """Activate a GIO action on the application via D-Bus.
+        """Activate a GIO window action on the application via D-Bus.
 
         This bypasses AT-SPI widget interaction, which is unreliable for
         MenuButton popovers on headless compositors.
@@ -542,16 +542,19 @@ class AppFixture:
         from gi.repository import Gio, GLib
 
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        # Window actions are exported with a "win." prefix on the app's
+        # org.gtk.Actions interface.
+        full_name = f"win.{action_name}" if "." not in action_name else action_name
         params = GLib.Variant("(sava{sv})", (
-            action_name,
+            full_name,
             [GLib.Variant("s", parameter)] if parameter else [],
             {},
         ))
         bus.call_sync(
             DEV_APP_ID,
             DEV_OBJECT_PATH,
-            "org.freedesktop.Application",
-            "ActivateAction",
+            "org.gtk.Actions",
+            "Activate",
             params,
             None,
             Gio.DBusCallFlags.NONE,
