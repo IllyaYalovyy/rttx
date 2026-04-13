@@ -700,9 +700,16 @@ impl PersistentPaneView {
     /// Connect a callback for keyboard and mouse input.
     ///
     /// The callback receives the raw terminal bytes to send to the daemon.
-    /// Keyboard input is intercepted by a Capture-phase key controller and
-    /// encoded manually.  Mouse input is handled by VTE natively — when the
-    /// remote application enables mouse tracking, VTE emits escape sequences
+    ///
+    /// Text input flows through a GTK `IMMulticontext` attached to the
+    /// capture-phase key controller.  The `IMContext` handles compose
+    /// sequences, dead keys, and system input methods — its `commit`
+    /// signal forwards the finished text to the daemon.  Control keys,
+    /// navigation, and function keys bypass the `IMContext` and are encoded
+    /// directly in the `key-pressed` handler.
+    ///
+    /// Mouse input is handled by VTE natively — when the remote
+    /// application enables mouse tracking, VTE emits escape sequences
     /// through the `commit` signal which are forwarded here.
     pub fn connect_input<F: Fn(&[u8]) + 'static>(&self, f: F) {
         let forward_input = std::rc::Rc::new(f);
@@ -718,9 +725,22 @@ impl PersistentPaneView {
             }
         });
 
+        // IMContext for compose / dead-key / IME support.
+        let im_context = gtk4::IMMulticontext::new();
+        let im_forward = std::rc::Rc::clone(&forward_input);
+        let im_pane_weak = self.downgrade();
+        im_context.connect_commit(move |_, text| {
+            if let Some(pane) = im_pane_weak.upgrade()
+                && pane.imp().accepts_input.get()
+            {
+                im_forward(text.as_bytes());
+            }
+        });
+
         let pane_weak = self.downgrade();
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        key_controller.set_im_context(Some(&im_context));
         key_controller.connect_key_pressed(move |_, key, _keycode, state| {
             let Some(pane) = pane_weak.upgrade() else {
                 return glib::Propagation::Proceed;
@@ -836,6 +856,17 @@ impl PersistentPaneView {
             .expect("input controller should be connected before test input is emitted")
             .emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers])
             .into()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn has_im_context_for_test(&self) -> bool {
+        self.imp()
+            .input_key_controller
+            .borrow()
+            .as_ref()
+            .and_then(gtk4::EventControllerKey::im_context)
+            .is_some()
     }
 }
 

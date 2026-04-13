@@ -1772,6 +1772,34 @@ fn persistent_pane_forwards_vte_commit_to_daemon_input() {
     window.close();
 }
 
+/// The key controller must have an IMContext set so compose sequences,
+/// dead keys, and system input methods work in managed panes. #462.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_key_controller_has_im_context() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("ime-1", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(50);
+
+    let connected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Connected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    pane.connect_input(|_| {});
+
+    assert!(
+        pane.has_im_context_for_test(),
+        "key controller must have an IMContext for compose/dead-key/IME support"
+    );
+
+    window.close();
+}
+
 // ── New Workspace dialog ────────────────────────────────────────
 
 #[test]
