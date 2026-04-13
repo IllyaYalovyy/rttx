@@ -1,4 +1,4 @@
-# RFC-020: Client/Server Protocol v3
+# RFC-021: Client/Server Protocol v3
 
 | Field         | Value                                                       |
 |---------------|-------------------------------------------------------------|
