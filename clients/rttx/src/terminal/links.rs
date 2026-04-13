@@ -69,8 +69,7 @@ where
             && openable_uri_at(&hover_vte, x, y, current_directory.as_deref()).is_some();
         if want_pointer != showing_pointer_motion.get() {
             showing_pointer_motion.set(want_pointer);
-            hover_vte
-                .set_cursor_from_name(if want_pointer { Some("pointer") } else { None });
+            hover_vte.set_cursor_from_name(if want_pointer { Some("pointer") } else { None });
         }
     });
     let leave_vte = vte.clone();
