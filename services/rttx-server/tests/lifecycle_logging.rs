@@ -18,7 +18,8 @@ async fn full_lifecycle_produces_expected_responses() {
     client.handshake().await;
 
     // Create → attach → create pane → close pane → detach → terminate.
-    let sid = create_session(&mut client, "lifecycle-log-test", proto::RuntimePolicy::Persistent).await;
+    let sid =
+        create_session(&mut client, "lifecycle-log-test", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
     close_pane(&mut client, &sid, &pane_id).await;
