@@ -558,7 +558,7 @@ impl Window {
         entry.grab_focus();
     }
 
-    pub(super) fn rename_session(&self, session_uuid: &str, new_name: &str) {
+    pub(crate) fn rename_session(&self, session_uuid: &str, new_name: &str) {
         let runtime_info = {
             let mut state = self.imp().state.borrow_mut();
             let Some(session) =

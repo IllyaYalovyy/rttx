@@ -216,5 +216,30 @@ pub fn run() -> glib::ExitCode {
     });
     app.add_action(&close_workspace_action);
 
+    let rename_workspace_action =
+        gtk4::gio::SimpleAction::new("rename-current-workspace", Some(glib::VariantTy::STRING));
+    let app_ref = app.clone();
+    rename_workspace_action.connect_activate(move |_, param| {
+        if let Some(win) = app_ref.active_window()
+            && let Ok(win) = win.downcast::<Window>()
+            && let Some(name) = param.and_then(glib::Variant::get::<String>)
+            && let Some(uuid) = win.visible_session_uuid()
+        {
+            win.rename_session(&uuid, &name);
+        }
+    });
+    app.add_action(&rename_workspace_action);
+
+    let save_state_action = gtk4::gio::SimpleAction::new("save-state", None);
+    let app_ref = app.clone();
+    save_state_action.connect_activate(move |_, _| {
+        if let Some(win) = app_ref.active_window()
+            && let Ok(win) = win.downcast::<Window>()
+        {
+            win.save_state();
+        }
+    });
+    app.add_action(&save_state_action);
+
     app.run()
 }
