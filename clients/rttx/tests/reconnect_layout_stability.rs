@@ -65,10 +65,7 @@ fn layout_stays_stable_across_reconnect_cycles_with_fresh_pane_ids() {
     session.runtime.runtime_id = Some(runtime_id.into());
     session.sync_legacy_mode_from_runtime();
 
-    let mut state = WindowState {
-        sessions: vec![session],
-        ..WindowState::default()
-    };
+    let mut state = WindowState { sessions: vec![session], ..WindowState::default() };
 
     for cycle in 0..5 {
         let pane_a = uuid::Uuid::new_v4().to_string();
