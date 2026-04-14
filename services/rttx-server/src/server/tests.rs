@@ -683,3 +683,401 @@ async fn resize_with_overflow_cols_returns_none() {
     };
     assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
 }
+
+#[tokio::test]
+async fn resize_with_overflow_rows_returns_none() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+            session_id: uuid_to_bytes(Uuid::new_v4()),
+            pane_id: uuid_to_bytes(Uuid::new_v4()),
+            cols: 80,
+            rows: u32::from(u16::MAX) + 1,
+        })),
+    };
+    assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
+}
+
+// ── Resize nonexistent pane in existing session ─────────────────
+
+#[tokio::test]
+async fn resize_nonexistent_pane_in_existing_session_returns_none() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: uuid_to_bytes(Uuid::new_v4()),
+            cols: 120,
+            rows: 40,
+        })),
+    };
+    assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+}
+
+// ── DetachSession success ───────────────────────────────────────
+
+#[tokio::test]
+async fn detach_attached_client_returns_session_detached() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+            session_id: uuid_to_bytes(session_id),
+        })),
+    };
+    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::SessionDetached(sd)) => {
+            assert_eq!(bytes_to_uuid(&sd.session_id).unwrap(), session_id);
+        }
+        other => panic!("expected SessionDetached, got {other:?}"),
+    }
+    // Session still exists after detach (persistent policy).
+    assert!(server.lock().await.sessions.contains_key(&session_id));
+}
+
+// ── Ephemeral last-detach terminates session ────────────────────
+
+#[tokio::test]
+async fn detach_last_client_from_ephemeral_session_terminates() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+
+    // Create an ephemeral session manually.
+    let mut session = Session::new("ephemeral".into());
+    session.policy = RuntimePolicy::Ephemeral;
+    let session_id = session.id;
+    let pane = Pane::new(Uuid::new_v4(), 80, 24);
+    session.add_pane(pane);
+    let _ = session.attach_client(client_id, AttachMode::ReadWrite);
+    server.lock().await.sessions.insert(session_id, session);
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+            session_id: uuid_to_bytes(session_id),
+        })),
+    };
+    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::SessionTerminated(st)) => {
+            assert_eq!(bytes_to_uuid(&st.session_id).unwrap(), session_id);
+            assert_eq!(
+                st.reason,
+                proto::RuntimeTerminationReason::EphemeralLastDetach as i32
+            );
+        }
+        other => panic!("expected SessionTerminated, got {other:?}"),
+    }
+    // Session removed after ephemeral last-detach.
+    assert!(!server.lock().await.sessions.contains_key(&session_id));
+}
+
+// ── ClosePane success ───────────────────────────────────────────
+
+#[tokio::test]
+async fn close_pane_removes_pane_from_session() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: uuid_to_bytes(pane_id),
+        })),
+    };
+    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::PaneClosed(pc)) => {
+            assert_eq!(bytes_to_uuid(&pc.session_id).unwrap(), session_id);
+            assert_eq!(bytes_to_uuid(&pc.pane_id).unwrap(), pane_id);
+        }
+        other => panic!("expected PaneClosed, got {other:?}"),
+    }
+    let s = server.lock().await;
+    assert!(!s.sessions[&session_id].panes.contains_key(&pane_id));
+    drop(s);
+}
+
+// ── ClosePane invalid pane UUID ─────────────────────────────────
+
+#[tokio::test]
+async fn close_pane_with_invalid_pane_uuid_returns_invalid_parameter() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: vec![0u8; 3],
+        })),
+    };
+    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+// ── Invalid UUID in remaining dispatch arms ─────────────────────
+
+#[tokio::test]
+async fn terminate_with_invalid_uuid_returns_invalid_parameter() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
+            session_id: vec![0u8; 5],
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn set_pane_title_with_invalid_session_uuid_returns_invalid_parameter() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+            session_id: vec![0u8; 1],
+            pane_id: uuid_to_bytes(Uuid::new_v4()),
+            title: "x".into(),
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn set_pane_title_with_invalid_pane_uuid_returns_invalid_parameter() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: vec![0u8; 7],
+            title: "x".into(),
+        })),
+    };
+    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rename_session_with_invalid_uuid_returns_invalid_parameter() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
+            session_id: vec![0u8; 6],
+            name: "x".into(),
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn create_pane_with_invalid_uuid_returns_invalid_parameter() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            session_id: vec![0u8; 3],
+            cwd: None,
+            dark_background: None,
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+// ── CreatePane ownership violation ──────────────────────────────
+
+#[tokio::test]
+async fn create_pane_without_write_access_returns_ownership_error() {
+    let server = new_server();
+    let owner = Uuid::new_v4();
+    let reader = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, owner).await;
+    let _ = server
+        .lock()
+        .await
+        .sessions
+        .get_mut(&session_id)
+        .unwrap()
+        .attach_client(reader, AttachMode::ReadOnly);
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            session_id: uuid_to_bytes(session_id),
+            cwd: None,
+            dark_background: None,
+        })),
+    };
+    let resp = Server::handle_message(&server, reader, msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+// ── CreatePane nonexistent session ──────────────────────────────
+
+#[tokio::test]
+async fn create_pane_nonexistent_session_returns_session_not_found() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            session_id: uuid_to_bytes(Uuid::new_v4()),
+            cwd: None,
+            dark_background: None,
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+// ── Attach with TakeOver mode ───────────────────────────────────
+
+#[tokio::test]
+async fn attach_with_takeover_returns_unsupported() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: uuid_to_bytes(session_id),
+            attach_mode: proto::RuntimeAttachMode::TakeOver as i32,
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, protocol::ERR_UNSUPPORTED);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+// ── Attach blocked by existing writer ───────────────────────────
+
+#[tokio::test]
+async fn second_writer_attach_returns_attach_blocked() {
+    let server = new_server();
+    let owner = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, owner).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: uuid_to_bytes(session_id),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::AttachBlocked(ab)) => {
+            assert_eq!(bytes_to_uuid(&ab.session_id).unwrap(), session_id);
+        }
+        other => panic!("expected AttachBlocked, got {other:?}"),
+    }
+}
+
+// ── CreateSession with ephemeral policy ─────────────────────────
+
+#[tokio::test]
+async fn create_session_with_ephemeral_policy() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            name: "ephemeral-ws".into(),
+            policy: proto::RuntimePolicy::Ephemeral as i32,
+        })),
+    };
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    match resp.msg {
+        Some(proto::server_message::Msg::SessionCreated(sc)) => {
+            let id = bytes_to_uuid(&sc.session_id).unwrap();
+            let s = server.lock().await;
+            assert_eq!(s.sessions[&id].policy, RuntimePolicy::Ephemeral);
+            drop(s);
+        }
+        other => panic!("expected SessionCreated, got {other:?}"),
+    }
+}
+
+// ── Shutdown message returns None ───────────────────────────────
+
+#[tokio::test]
+async fn shutdown_message_returns_none() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
+    };
+    assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
+}
+
+// ── Terminate cleans up PTY state ───────────────────────────────
+
+#[tokio::test]
+async fn terminate_session_cleans_up_pty_writers() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+
+    // Simulate PTY state by inserting a kill sender.
+    let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
+    server.lock().await.pty_kill_senders.insert(pane_id, kill_tx);
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
+            session_id: uuid_to_bytes(session_id),
+        })),
+    };
+    Server::handle_message(&server, client_id, msg).await.unwrap();
+
+    let s = server.lock().await;
+    assert!(!s.sessions.contains_key(&session_id));
+    assert!(!s.pty_kill_senders.contains_key(&pane_id));
+    drop(s);
+}
