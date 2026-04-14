@@ -198,6 +198,12 @@ impl WindowState {
                 });
             }
             EndpointEvent::InventoryLoaded { endpoint, sessions } => {
+                let inventory_ids: std::collections::BTreeSet<String> = sessions
+                    .iter()
+                    .filter_map(|s| rttx_proto::bytes_to_uuid(&s.id).ok().map(|u| u.to_string()))
+                    .collect();
+                self.dismissed_runtime_ids.retain(|id| inventory_ids.contains(id));
+
                 let recovered = self.recover_managed_workspaces_from_inventory(endpoint, sessions);
                 if recovered.is_empty() {
                     return transition;
@@ -1397,7 +1403,11 @@ mod tests {
             );
         }
 
-        assert_eq!(state.dismissed_runtime_ids.len(), 5);
+        assert_eq!(
+            state.dismissed_runtime_ids.len(),
+            1,
+            "only the last dismissed ID should survive — earlier ones were pruned by inventory reconciliation"
+        );
     }
 
     #[test]
@@ -1876,6 +1886,39 @@ mod tests {
             transition.rebuilt_workspaces[0].session_state.layout.terminal_uuids(),
             vec!["left".to_string(), "right".to_string()],
             "both terminals should remain in the reconciled layout",
+        );
+    }
+
+    #[test]
+    fn dismissed_runtime_ids_pruned_after_inventory_reconciliation() {
+        let mut state = WindowState::default_for_test();
+        let stale_id = uuid::Uuid::new_v4().to_string();
+        let live_id = uuid::Uuid::new_v4().to_string();
+        let pane_id = uuid::Uuid::new_v4().to_string();
+
+        state.dismiss_runtime(&RuntimeEndpoint::Local, &stale_id);
+        state.dismiss_runtime(&RuntimeEndpoint::Local, &live_id);
+        assert_eq!(state.dismissed_runtime_ids.len(), 2);
+
+        // Inventory only contains live_id — stale_id was already removed by daemon.
+        let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+            endpoint: RuntimeEndpoint::Local,
+            sessions: vec![session_info(
+                &live_id,
+                "Still Running",
+                proto::RuntimePolicy::Persistent,
+                vec![pane_info(&pane_id, "bash", "/tmp")],
+                Some(&pane_id),
+            )],
+        });
+
+        assert!(
+            !state.dismissed_runtime_ids.contains(&stale_id),
+            "stale dismissed ID should be pruned after inventory reconciliation"
+        );
+        assert!(
+            state.dismissed_runtime_ids.contains(&live_id),
+            "live dismissed ID should be retained"
         );
     }
 }

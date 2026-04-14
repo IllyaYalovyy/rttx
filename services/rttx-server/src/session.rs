@@ -10,6 +10,9 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use uuid::Uuid;
 
+/// Maximum number of entries retained in per-session command history.
+pub const MAX_COMMAND_HISTORY: usize = 1000;
+
 /// Runtime retention policy for a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -207,11 +210,18 @@ impl Session {
             })
             .collect();
 
+        let command_history = if persisted.command_history.len() > MAX_COMMAND_HISTORY {
+            persisted.command_history[persisted.command_history.len() - MAX_COMMAND_HISTORY..]
+                .to_vec()
+        } else {
+            persisted.command_history.clone()
+        };
+
         Self {
             id: persisted.id,
             name: persisted.name.clone(),
             active_pane_id: persisted.active_pane_id,
-            command_history: persisted.command_history.clone(),
+            command_history,
             policy: persisted.policy,
             reconstructed: true,
             revision: persisted.revision.max(default_session_revision()),
@@ -397,6 +407,15 @@ impl Session {
         self.panes.get(&pane_id)?;
         self.bump_revision();
         Some(self.revision())
+    }
+
+    /// Append a history entry, evicting the oldest if the cap is reached.
+    pub fn add_history_entry(&mut self, entry: HistoryEntry) {
+        self.command_history.push(entry);
+        if self.command_history.len() > MAX_COMMAND_HISTORY {
+            let excess = self.command_history.len() - MAX_COMMAND_HISTORY;
+            self.command_history.drain(..excess);
+        }
     }
 
     /// Update a pane's exit status and return the resulting session revision.
@@ -699,5 +718,44 @@ mod tests {
             Err(AttachError::UnsupportedTakeOver)
         );
         assert_eq!(session.revision(), 1);
+    }
+
+    fn make_history_entry(i: usize) -> HistoryEntry {
+        HistoryEntry {
+            command: format!("cmd-{i}"),
+            cwd: "/tmp".into(),
+            timestamp: SystemTime::UNIX_EPOCH,
+            pane_id: Uuid::new_v4(),
+        }
+    }
+
+    #[test]
+    fn add_history_entry_caps_at_max() {
+        let mut session = Session::new("test".into());
+        for i in 0..MAX_COMMAND_HISTORY + 50 {
+            session.add_history_entry(make_history_entry(i));
+        }
+        assert_eq!(session.command_history.len(), MAX_COMMAND_HISTORY);
+        assert_eq!(
+            session.command_history[0].command,
+            "cmd-50",
+            "oldest entries should be evicted"
+        );
+    }
+
+    #[test]
+    fn from_persisted_truncates_oversized_history() {
+        let mut session = Session::new("test".into());
+        session.command_history = (0..MAX_COMMAND_HISTORY + 200)
+            .map(make_history_entry)
+            .collect();
+        let persisted = session.to_persisted();
+        let restored = Session::from_persisted(&persisted);
+        assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
+        assert_eq!(
+            restored.command_history[0].command,
+            "cmd-200",
+            "oldest entries should be dropped on load"
+        );
     }
 }
