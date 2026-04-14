@@ -12,3 +12,4 @@
 .kiro
 /.codex
 __pycache__/
+/coverage
