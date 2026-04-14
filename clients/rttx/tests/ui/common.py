@@ -1,13 +1,27 @@
 """Shared fixture and helpers for AT-SPI2 UI tests."""
 
+import ctypes
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
 import uuid
 
 import gi
+
+
+def _set_pdeathsig() -> None:
+    """Ask the kernel to send SIGTERM when the parent process dies.
+
+    This prevents orphaned child processes when the test runner is
+    interrupted or crashes before tearDown can run cleanup.
+    """
+    try:
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)
+    except OSError:
+        pass
 
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
@@ -300,6 +314,7 @@ class TestEnvironment:
             env={**os.environ, "XDG_RUNTIME_DIR": self.runtime_dir},
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            preexec_fn=_set_pdeathsig,
         )
 
         deadline = time.monotonic() + 10.0
@@ -338,6 +353,7 @@ class TestEnvironment:
             env=self.process_env(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            preexec_fn=_set_pdeathsig,
         )
 
         deadline = time.monotonic() + 10.0
