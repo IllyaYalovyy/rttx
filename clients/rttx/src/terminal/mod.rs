@@ -848,6 +848,21 @@ mod pane_passive_tests {
         let _size = std::mem::size_of::<super::persistent_widget::PersistentPaneView>();
     }
 
+    /// Guard flags default to `false` so `connect_input`/`connect_resize` run
+    /// on the first call but are rejected on subsequent calls. #538.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn persistent_pane_connect_guards_default_to_false() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+        let pane = super::persistent_widget::PersistentPaneView::new("guard-mod", "runtime-1");
+        assert!(!pane.input_connected_for_test());
+        assert!(!pane.resize_connected_for_test());
+        assert!(!pane.has_resize_tick_for_test());
+    }
+
     #[test]
     fn place_from_cwd_derives_name_for_context_menu_action() {
         let place = crate::places::Place::from_cwd("/home/user/projects/rttx", vec![]);
