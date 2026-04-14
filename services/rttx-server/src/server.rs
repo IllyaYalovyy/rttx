@@ -921,9 +921,9 @@ fn spawn_pty_read_loop(
 
         let mut s = server.lock().await;
         let exit_msg = if let Some(session) = s.sessions.get_mut(&session_id) {
-            let msg = session.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
-                protocol::pane_exited(session_id, pane_id, status, revision)
-            });
+            let msg = session
+                .set_pane_exit_status(pane_id, Some(status))
+                .map(|revision| protocol::pane_exited(session_id, pane_id, status, revision));
             if let Some(pane) = session.panes.get_mut(&pane_id) {
                 pane.release_scrollback();
             }
