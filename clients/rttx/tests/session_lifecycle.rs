@@ -1259,3 +1259,51 @@ fn legacy_bookmark_sourced_pane_loads_after_removal() {
     let recovery = &state.sessions[0].terminal_recovery["t1"];
     assert_eq!(recovery.source, PaneSource::Manual);
 }
+
+/// Dismissed runtime IDs that are no longer in the daemon inventory
+/// should be pruned after inventory reconciliation.
+#[test]
+fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::RuntimeEndpoint;
+
+    let mut state = WindowState::default();
+    let stale = uuid::Uuid::new_v4().to_string();
+    let live = uuid::Uuid::new_v4().to_string();
+    let pane = uuid::Uuid::new_v4().to_string();
+
+    state.dismiss_runtime(&RuntimeEndpoint::Local, &stale);
+    state.dismiss_runtime(&RuntimeEndpoint::Local, &live);
+    assert_eq!(state.dismissed_runtime_ids.len(), 2);
+
+    // Inventory contains only `live` — `stale` was already cleaned up by daemon.
+    let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+        endpoint: RuntimeEndpoint::Local,
+        sessions: vec![rttx_proto::proto::SessionInfo {
+            id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&live).unwrap()),
+            name: "Live".into(),
+            pane_count: 1,
+            has_attached_client: false,
+            active_pane_id: Some(rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane).unwrap())),
+            panes: vec![rttx_proto::proto::PaneInfo {
+                id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane).unwrap()),
+                title: "bash".into(),
+                cwd: "/tmp".into(),
+                cols: 80,
+                rows: 24,
+                exit_status: None,
+                reconstructed: false,
+            }],
+            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
+            attached_client_count: 0,
+            reconstructed: false,
+            revision: 1,
+            current_client_role: rttx_proto::proto::RuntimeClientRole::Unattached as i32,
+            has_write_owner: false,
+            read_only_client_count: 0,
+        }],
+    });
+
+    assert!(!state.dismissed_runtime_ids.contains(&stale), "stale dismissed ID should be pruned");
+    assert!(state.dismissed_runtime_ids.contains(&live), "live dismissed ID should be retained");
+}

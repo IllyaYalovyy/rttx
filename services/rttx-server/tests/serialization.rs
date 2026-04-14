@@ -68,3 +68,48 @@ fn corrupt_state_file_returns_error() {
     let result = load_state(&state_path);
     assert!(result.is_err());
 }
+
+#[test]
+fn oversized_command_history_truncated_on_resurrection() {
+    use rttx_server::pane::HistoryEntry;
+    use rttx_server::session::MAX_COMMAND_HISTORY;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let state_path = default_state_path(tmp.path());
+
+    let oversized_history: Vec<HistoryEntry> = (0..MAX_COMMAND_HISTORY + 300)
+        .map(|i| HistoryEntry {
+            command: format!("cmd-{i}"),
+            cwd: "/tmp".into(),
+            timestamp: SystemTime::UNIX_EPOCH,
+            pane_id: Uuid::new_v4(),
+        })
+        .collect();
+
+    let state = ServerState {
+        sessions: vec![PersistedSession {
+            id: Uuid::new_v4(),
+            name: "history-cap".into(),
+            panes: vec![],
+            active_pane_id: None,
+            command_history: oversized_history,
+            policy: RuntimePolicy::Persistent,
+            revision: 1,
+            created_at: SystemTime::now(),
+            last_active_at: SystemTime::now(),
+        }],
+        serialized_at: SystemTime::now(),
+        server_version: "0.1.0".into(),
+    };
+
+    write_state_atomic(&state, &state_path).unwrap();
+    let loaded = load_state(&state_path).unwrap().unwrap();
+    let session = Session::from_persisted(&loaded.sessions[0]);
+
+    assert_eq!(
+        session.command_history.len(),
+        MAX_COMMAND_HISTORY,
+        "oversized history should be truncated on resurrection"
+    );
+    assert_eq!(session.command_history[0].command, "cmd-300", "oldest entries should be dropped");
+}
