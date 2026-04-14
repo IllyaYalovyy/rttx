@@ -638,10 +638,7 @@ impl Server {
                 if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
                     let _ = kill_tx.send(());
                 }
-                tracing::info!(
-                    "Pane {} closed in session {session_label}",
-                    short_id(pane_id),
-                );
+                tracing::info!("Pane {} closed in session {session_label}", short_id(pane_id),);
                 Some(protocol::pane_closed(session_id, pane_id, revision))
             }
 

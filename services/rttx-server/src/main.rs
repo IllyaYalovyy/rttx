@@ -95,11 +95,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     init_tracing(dev_mode, &os.cache_dir());
 
-    tracing::info!(
-        "rttx-server {} ({}) starting",
-        env!("CARGO_PKG_VERSION"),
-        env!("GIT_HASH"),
-    );
+    tracing::info!("rttx-server {} ({}) starting", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"),);
 
     if dev_mode {
         tracing::info!("Running in DEVELOPMENT mode");
