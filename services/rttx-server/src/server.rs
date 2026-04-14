@@ -336,7 +336,13 @@ impl Server {
                 let revision = session.revision();
                 let mut session = session;
                 session.policy = policy;
+                let label = format!("\"{}\" ({})", session.name, short_id(session_id));
+                let policy_str = match policy {
+                    RuntimePolicy::Persistent => "persistent",
+                    RuntimePolicy::Ephemeral => "ephemeral",
+                };
                 s.sessions.insert(session_id, session);
+                tracing::info!("Session created: {label}, policy={policy_str}");
                 Some(protocol::session_created(session_id, revision))
             }
 
@@ -401,6 +407,11 @@ impl Server {
                         sgr_mouse_mode: pane.screen.sgr_mouse_mode(),
                     })
                     .collect();
+                let session_label = s.session_label(session_id);
+                tracing::info!(
+                    "Client {} attached to session {session_label} as {role:?}",
+                    short_id(client_id),
+                );
                 Some(protocol::snapshot(session_id, pane_snapshots, revision, role))
             }
 
@@ -424,9 +435,19 @@ impl Server {
                 match session.detach_client(client_id, DetachReason::ExplicitRequest) {
                     DetachOutcome::Detached { revision }
                     | DetachOutcome::NotAttached { revision } => {
+                        let session_label = s.session_label(session_id);
+                        tracing::info!(
+                            "Client {} detached from session {session_label}",
+                            short_id(client_id),
+                        );
                         Some(protocol::session_detached(session_id, revision))
                     }
                     DetachOutcome::Terminated { final_revision, reason } => {
+                        let session_label = s.session_label(session_id);
+                        tracing::info!(
+                            "Client {} detached from session {session_label} (terminated: {reason:?})",
+                            short_id(client_id),
+                        );
                         let _ = s.terminate_session(
                             session_id,
                             final_revision,
@@ -462,12 +483,14 @@ impl Server {
                     ));
                 }
                 let final_revision = session.revision().saturating_add(1);
+                let session_label = s.session_label(session_id);
                 let _ = s.terminate_session(
                     session_id,
                     final_revision,
                     TerminationReason::Explicit,
                     Some(client_id),
                 );
+                tracing::info!("Session terminated: {session_label}");
                 Some(protocol::session_terminated(
                     session_id,
                     final_revision,
@@ -550,6 +573,12 @@ impl Server {
                             child,
                             kill_rx,
                         );
+                        tracing::info!(
+                            "Pane {} created in session \"{}\" ({})",
+                            short_id(pane_id),
+                            session_name,
+                            short_id(session_id),
+                        );
                         Some(protocol::pane_created(session_id, pane_id, revision))
                     }
                     Err(e) => {
@@ -604,10 +633,15 @@ impl Server {
                     ));
                 };
                 let revision = session.revision();
+                let session_label = s.session_label(session_id);
                 s.pty_writers.remove(&pane_id);
                 if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
                     let _ = kill_tx.send(());
                 }
+                tracing::info!(
+                    "Pane {} closed in session {session_label}",
+                    short_id(pane_id),
+                );
                 Some(protocol::pane_closed(session_id, pane_id, revision))
             }
 
@@ -766,7 +800,14 @@ impl Server {
                         "runtime is currently owned by another client".into(),
                     ));
                 }
+                let old_name = session.name.clone();
                 let revision = session.rename(req.name.clone());
+                tracing::info!(
+                    "Session renamed: \"{}\" -> \"{}\" ({})",
+                    old_name,
+                    req.name,
+                    short_id(session_id),
+                );
                 Some(protocol::session_renamed(session_id, req.name, revision))
             }
 
