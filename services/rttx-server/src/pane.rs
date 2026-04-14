@@ -487,10 +487,7 @@ mod tests {
         pane.flush_scrollback(tmp.path(), session_id).unwrap();
         // After flush, capacity should be released, not retained at 2 MB.
         let cap = pane.pending_flush.capacity();
-        assert!(
-            cap < 1024 * 1024,
-            "pending_flush capacity {cap} should shrink after flush"
-        );
+        assert!(cap < 1024 * 1024, "pending_flush capacity {cap} should shrink after flush");
     }
 
     #[test]

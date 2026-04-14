@@ -460,10 +460,7 @@ mod tests {
         assert_eq!(screen.raw_bytes().len(), max);
         // Capacity should be close to max, not 3x max.
         let cap = screen.raw_bytes_capacity();
-        assert!(
-            cap <= max * 2,
-            "capacity {cap} should shrink toward max {max} after drain"
-        );
+        assert!(cap <= max * 2, "capacity {cap} should shrink toward max {max} after drain");
     }
 
     #[test]
