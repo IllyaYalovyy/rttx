@@ -84,6 +84,11 @@ impl Pane {
     pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
         self.screen.feed(data);
         self.pending_flush.extend_from_slice(data);
+        if self.pending_flush.len() > DEFAULT_MAX_SCROLLBACK {
+            let excess = self.pending_flush.len() - DEFAULT_MAX_SCROLLBACK;
+            self.pending_flush.drain(..excess);
+            self.pending_flush.shrink_to(DEFAULT_MAX_SCROLLBACK);
+        }
         let new_title = self.screen.title().and_then(|title| {
             let title = title.to_string();
             if self.title.as_deref() == Some(&title) {
@@ -127,7 +132,7 @@ impl Pane {
 
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
         file.write_all(&self.pending_flush)?;
-        self.pending_flush.clear();
+        self.pending_flush = Vec::new();
         self.scrollback_log_path = Some(path.clone());
 
         // Cap the file size.
@@ -453,6 +458,39 @@ mod tests {
 
         assert!(pane.screen.raw_bytes().is_empty());
         assert!(!pane.has_pending_flush());
+    }
+
+    #[test]
+    fn pending_flush_capped_at_scrollback_limit() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        // Feed more than DEFAULT_MAX_SCROLLBACK (10 MB) without flushing.
+        let chunk = vec![b'A'; 4 * 1024 * 1024];
+        for _ in 0..4 {
+            pane.feed_output(&chunk);
+        }
+        // pending_flush should be capped, not 16 MB.
+        assert!(
+            pane.pending_flush.len() <= DEFAULT_MAX_SCROLLBACK,
+            "pending_flush {} exceeds cap {DEFAULT_MAX_SCROLLBACK}",
+            pane.pending_flush.len()
+        );
+    }
+
+    #[test]
+    fn pending_flush_capacity_shrinks_after_flush() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        // Grow pending_flush to a large size.
+        let chunk = vec![b'B'; 2 * 1024 * 1024];
+        pane.feed_output(&chunk);
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+        // After flush, capacity should be released, not retained at 2 MB.
+        let cap = pane.pending_flush.capacity();
+        assert!(
+            cap < 1024 * 1024,
+            "pending_flush capacity {cap} should shrink after flush"
+        );
     }
 
     #[test]
