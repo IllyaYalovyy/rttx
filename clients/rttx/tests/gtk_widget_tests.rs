@@ -2149,3 +2149,109 @@ fn terminal_widget_stores_context_menu_for_disposal() {
         "TerminalWidget must store context_menu for disposal"
     );
 }
+
+/// `connect_input` must be idempotent: calling it twice must not stack
+/// duplicate signal handlers or event controllers. Regression for #538.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_connect_input_is_idempotent() {
+    require_display!();
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("idem-in", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(50);
+
+    let connected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Connected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    let forwarded = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+    let f1 = Rc::clone(&forwarded);
+    pane.connect_input(move |bytes| {
+        f1.borrow_mut().push(bytes.to_vec());
+    });
+    assert!(pane.input_connected_for_test(), "flag must be set after first call");
+
+    // Second call must be a no-op.
+    let second_called = Rc::new(RefCell::new(false));
+    let sc = Rc::clone(&second_called);
+    pane.connect_input(move |_| {
+        *sc.borrow_mut() = true;
+    });
+
+    let sgr = "\x1b[<0;10;5M";
+    pane.vte().emit_by_name::<()>("commit", &[&sgr, &(sgr.len() as u32)]);
+    pump_events(50);
+
+    assert_eq!(
+        forwarded.borrow().len(),
+        1,
+        "commit must fire the first callback exactly once, not stack duplicates"
+    );
+    assert!(!*second_called.borrow(), "second connect_input call must be ignored");
+
+    window.close();
+}
+
+/// `connect_resize` must be idempotent: calling it twice must not create
+/// a second tick callback. Regression for #538.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_connect_resize_is_idempotent() {
+    require_display!();
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("idem-rs", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(50);
+
+    let resizes = Rc::new(RefCell::new(Vec::<(u16, u16)>::new()));
+    let r1 = Rc::clone(&resizes);
+    pane.connect_resize(move |cols, rows| {
+        r1.borrow_mut().push((cols, rows));
+    });
+    assert!(pane.resize_connected_for_test(), "flag must be set after first call");
+    assert!(pane.has_resize_tick_for_test(), "tick callback must be registered");
+
+    // Second call must be a no-op.
+    let second_called = Rc::new(RefCell::new(false));
+    let sc = Rc::clone(&second_called);
+    pane.connect_resize(move |_, _| {
+        *sc.borrow_mut() = true;
+    });
+
+    // Pump a few frames so the tick callback fires.
+    pump_events(100);
+
+    assert!(!*second_called.borrow(), "second connect_resize call must be ignored");
+
+    window.close();
+}
+
+/// After `connect_resize`, the pane must use a tick callback instead of a
+/// free-running `glib::timeout_add_local` timer. Regression for #538.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_resize_uses_tick_callback() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("tick-rs", "runtime-1");
+    assert!(!pane.has_resize_tick_for_test(), "no tick callback before connect_resize");
+
+    pane.connect_resize(|_, _| {});
+    assert!(
+        pane.has_resize_tick_for_test(),
+        "tick callback must be registered after connect_resize"
+    );
+}

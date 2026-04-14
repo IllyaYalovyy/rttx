@@ -34,7 +34,10 @@ mod imp {
         pub accepts_input: Cell<bool>,
         pub exited: Cell<bool>,
         pub bracketed_paste_mode: Cell<bool>,
+        pub input_connected: Cell<bool>,
+        pub resize_connected: Cell<bool>,
         pub input_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
+        pub resize_tick_id: RefCell<Option<gtk4::TickCallbackId>>,
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
         pub header: gtk4::Box,
@@ -64,7 +67,10 @@ mod imp {
                 accepts_input: Cell::default(),
                 exited: Cell::default(),
                 bracketed_paste_mode: Cell::default(),
+                input_connected: Cell::default(),
+                resize_connected: Cell::default(),
                 input_key_controller: RefCell::default(),
+                resize_tick_id: RefCell::default(),
                 vte: vte4::Terminal::new(),
                 terminal_scroller: gtk4::ScrolledWindow::new(),
                 header: gtk4::Box::default(),
@@ -723,6 +729,11 @@ impl PersistentPaneView {
     /// application enables mouse tracking, VTE emits escape sequences
     /// through the `commit` signal which are forwarded here.
     pub fn connect_input<F: Fn(&[u8]) + 'static>(&self, f: F) {
+        if self.imp().input_connected.get() {
+            return;
+        }
+        self.imp().input_connected.set(true);
+
         let forward_input = std::rc::Rc::new(f);
 
         // Forward VTE-generated data (mouse escape sequences) to the daemon.
@@ -797,6 +808,11 @@ impl PersistentPaneView {
         use std::cell::Cell;
         use std::rc::Rc;
 
+        if self.imp().resize_connected.get() {
+            return;
+        }
+        self.imp().resize_connected.set(true);
+
         let vte = self.imp().vte.clone();
         let last_cols = Rc::new(Cell::new(0u16));
         let last_rows = Rc::new(Cell::new(0u16));
@@ -829,19 +845,39 @@ impl PersistentPaneView {
         }
 
         let pane_weak = self.downgrade();
-        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-            let Some(pane) = pane_weak.upgrade() else {
+        let tick_vte = vte.clone();
+        let tick_id = vte.add_tick_callback(move |_widget, _frame_clock| {
+            if pane_weak.upgrade().is_none() {
                 return glib::ControlFlow::Break;
-            };
-            emit_size(pane.vte());
+            }
+            emit_size(&tick_vte);
             glib::ControlFlow::Continue
         });
+        self.imp().resize_tick_id.replace(Some(tick_id));
     }
 
     #[cfg(test)]
     #[must_use]
     pub(crate) fn input_enabled_for_test(&self) -> bool {
         self.imp().accepts_input.get()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn input_connected_for_test(&self) -> bool {
+        self.imp().input_connected.get()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn resize_connected_for_test(&self) -> bool {
+        self.imp().resize_connected.get()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn has_resize_tick_for_test(&self) -> bool {
+        self.imp().resize_tick_id.borrow().is_some()
     }
 
     #[cfg(test)]
@@ -1537,5 +1573,18 @@ mod tests {
         );
         drop(pane);
         // No critical GLib warnings about orphaned popover means dispose ran.
+    }
+
+    /// Guard flags must start `false` and flip to `true` after the first
+    /// connect call. Regression for #538.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn connect_guards_start_false() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("guard-init", "runtime-1");
+        assert!(!pane.imp().input_connected.get());
+        assert!(!pane.imp().resize_connected.get());
+        assert!(pane.imp().resize_tick_id.borrow().is_none());
     }
 }
