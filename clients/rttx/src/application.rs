@@ -5,7 +5,7 @@ use libadwaita as adw;
 use crate::config;
 use crate::window::Window;
 
-pub(crate) const APP_CSS: &str = "\
+pub const APP_CSS: &str = "\
     .terminal-pane {
         border-radius: 10px;
         border: 1px solid alpha(@window_fg_color, 0.10);
@@ -75,7 +75,8 @@ const ACCENT_CSS_LIGHT: &str = "\
     .accent-orange { color: @orange_5; }";
 
 /// Return the accent color CSS for the current color scheme.
-pub(crate) const fn accent_css_for_dark(is_dark: bool) -> &'static str {
+#[must_use]
+pub const fn accent_css_for_dark(is_dark: bool) -> &'static str {
     if is_dark { ACCENT_CSS_DARK } else { ACCENT_CSS_LIGHT }
 }
 

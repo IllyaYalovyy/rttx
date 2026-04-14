@@ -2094,3 +2094,28 @@ fn direct_terminal_context_menu_gesture_is_capture_phase() {
     }
     assert!(found_right_click, "VTE must have a button-3 capture gesture for context menu");
 }
+
+#[test]
+#[ignore = "requires display backend"]
+fn app_css_loads_without_parser_errors() {
+    require_display!();
+    let display = gtk4::gdk::Display::default().unwrap();
+    let css = gtk4::CssProvider::new();
+    css.load_from_string(rttx::application::APP_CSS);
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &css,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
+    for is_dark in [true, false] {
+        let accent = gtk4::CssProvider::new();
+        accent.load_from_string(rttx::application::accent_css_for_dark(is_dark));
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &accent,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        gtk4::style_context_remove_provider_for_display(&display, &accent);
+    }
+}
