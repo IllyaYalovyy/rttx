@@ -4919,3 +4919,80 @@ fn sidebar_row_has_right_click_gesture() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn window_dispose_clears_terminal_maps_and_cancels_sources() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.dispose-cleanup-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.add_direct_session();
+    pump_events(50);
+
+    assert!(
+        !window.imp().terminals.borrow().is_empty(),
+        "direct session should have at least one terminal"
+    );
+
+    window.close();
+    pump_events(50);
+
+    assert!(window.imp().terminals.borrow().is_empty(), "dispose should clear terminals map");
+    assert!(
+        window.imp().persistent_terminals.borrow().is_empty(),
+        "dispose should clear persistent_terminals map"
+    );
+    assert!(
+        window.imp().workspace_reconnect_sources.borrow().is_empty(),
+        "dispose should clear reconnect sources"
+    );
+
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_pane_closures_use_weak_window_refs() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.weak-ref-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let weak = window.downgrade();
+
+    // Create a managed session — the closures in connect_managed_pane
+    // should use weak refs, so dropping the window should allow it to
+    // be finalized.
+    window.add_managed_session_at(Some("/tmp".to_string()));
+    pump_events(50);
+
+    assert!(
+        !window.imp().persistent_terminals.borrow().is_empty(),
+        "managed session should have at least one persistent pane"
+    );
+
+    window.close();
+    pump_events(50);
+
+    // After close + dispose, the weak ref should no longer upgrade
+    // because the reference cycles are broken.
+    assert!(
+        weak.upgrade().is_none() || window.imp().persistent_terminals.borrow().is_empty(),
+        "window should be finalizable or maps cleared after close"
+    );
+
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

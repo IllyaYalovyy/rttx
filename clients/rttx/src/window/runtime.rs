@@ -292,16 +292,20 @@ impl Window {
         let presentation = self.connection_presentation_for_workspace(&status);
         pane_view.set_connection_presentation(&status, &presentation);
 
-        let win = self.clone();
+        let win = self.downgrade();
         let input_terminal_uuid = terminal_uuid.clone();
         pane_view.connect_input(move |bytes| {
-            win.send_managed_terminal_input(&input_terminal_uuid, bytes);
+            if let Some(win) = win.upgrade() {
+                win.send_managed_terminal_input(&input_terminal_uuid, bytes);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let resize_terminal_uuid = terminal_uuid.clone();
         pane_view.connect_resize(move |cols, rows| {
-            win.send_managed_terminal_resize(&resize_terminal_uuid, cols, rows);
+            if let Some(win) = win.upgrade() {
+                win.send_managed_terminal_resize(&resize_terminal_uuid, cols, rows);
+            }
         });
 
         let drag_source = gtk4::DragSource::new();
@@ -313,11 +317,12 @@ impl Window {
         pane_view.header().add_controller(drag_source);
 
         let drop_target = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
-        let win = self.clone();
+        let win = self.downgrade();
         let target_uuid = terminal_uuid.clone();
         drop_target.connect_drop(move |_, value, _, _| {
             if let Ok(source_uuid) = value.get::<String>()
                 && source_uuid != target_uuid
+                && let Some(win) = win.upgrade()
             {
                 win.swap_terminals(&source_uuid, &target_uuid);
                 return true;
@@ -326,10 +331,11 @@ impl Window {
         });
         pane_view.add_controller(drop_target);
 
-        let win = self.clone();
+        let win = self.downgrade();
         let focus_uuid = terminal_uuid.clone();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
+            let Some(win) = win.upgrade() else { return };
             win.set_focused_terminal(Some(&focus_uuid));
             let session_uuid = {
                 let mut state = win.imp().state.borrow_mut();
@@ -350,27 +356,35 @@ impl Window {
         });
         pane_view.vte().add_controller(focus_controller);
 
-        let win = self.clone();
+        let win = self.downgrade();
         let split_h_uuid = terminal_uuid.clone();
         pane_view.split_h_button().connect_clicked(move |_| {
-            win.split_terminal(&split_h_uuid, SplitOrientation::Horizontal);
+            if let Some(win) = win.upgrade() {
+                win.split_terminal(&split_h_uuid, SplitOrientation::Horizontal);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let split_v_uuid = terminal_uuid.clone();
         pane_view.split_v_button().connect_clicked(move |_| {
-            win.split_terminal(&split_v_uuid, SplitOrientation::Vertical);
+            if let Some(win) = win.upgrade() {
+                win.split_terminal(&split_v_uuid, SplitOrientation::Vertical);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let close_uuid = terminal_uuid;
         pane_view.close_button().connect_clicked(move |_| {
-            win.close_terminal(&close_uuid);
+            if let Some(win) = win.upgrade() {
+                win.close_terminal(&close_uuid);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         pane_view.zoom_button().connect_clicked(move |_| {
-            win.toggle_pane_zoom();
+            if let Some(win) = win.upgrade() {
+                win.toggle_pane_zoom();
+            }
         });
 
         let bell_pane = pane_view.clone();
@@ -477,13 +491,17 @@ impl Window {
         &self,
         mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::daemon_bridge::EndpointEvent>,
     ) {
-        let win = self.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
+        let win = self.downgrade();
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
+            let Some(win) = win.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
             while let Ok(event) = rx.try_recv() {
                 win.handle_endpoint_event(event);
             }
             glib::ControlFlow::Continue
         });
+        self.imp().event_poller_source.replace(Some(source));
     }
 
     pub(super) fn handle_endpoint_event(&self, event: crate::daemon_bridge::EndpointEvent) {
@@ -668,11 +686,14 @@ impl Window {
             return;
         }
 
-        let win = self.clone();
+        let win = self.downgrade();
         let workspace_id = workspace_id.to_string();
         let timer_workspace_id = workspace_id.clone();
         let mut remaining = retry_in_secs;
         let source_id = glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+            let Some(win) = win.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
             let current =
                 win.imp().workspace_connection_status.borrow().get(&timer_workspace_id).cloned();
             let Some(ConnectionStatus::Reconnecting { attempt: current_attempt, .. }) = current

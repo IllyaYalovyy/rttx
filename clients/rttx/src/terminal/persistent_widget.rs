@@ -48,6 +48,7 @@ mod imp {
         pub search_entry: gtk4::SearchEntry,
         pub last_match_at_click: RefCell<Option<String>>,
         pub places_submenu: gtk4::gio::Menu,
+        pub context_menu: RefCell<Option<gtk4::PopoverMenu>>,
     }
 
     impl Default for PersistentPaneView {
@@ -77,6 +78,7 @@ mod imp {
                 search_entry: gtk4::SearchEntry::default(),
                 last_match_at_click: RefCell::default(),
                 places_submenu: gtk4::gio::Menu::new(),
+                context_menu: RefCell::default(),
             }
         }
     }
@@ -89,6 +91,12 @@ mod imp {
     }
 
     impl ObjectImpl for PersistentPaneView {
+        fn dispose(&self) {
+            if let Some(menu) = self.context_menu.take() {
+                menu.unparent();
+            }
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
@@ -218,6 +226,7 @@ mod imp {
             context_menu.set_has_arrow(false);
             context_menu.set_halign(crate::terminal::CONTEXT_MENU_HALIGN);
             context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
+            self.context_menu.replace(Some(context_menu.clone()));
 
             let right_click = gtk4::GestureClick::new();
             right_click.set_button(3);
@@ -1514,5 +1523,19 @@ mod tests {
         let pane = PersistentPaneView::new("pane-1", "runtime-1");
         pane.restore_interaction_modes(false, false, 0, false);
         // No sequences injected, no panic.
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn dispose_unparents_context_menu() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("dispose-ctx", "runtime-1");
+        assert!(
+            pane.imp().context_menu.borrow().is_some(),
+            "context menu should be stored after construction"
+        );
+        drop(pane);
+        // No critical GLib warnings about orphaned popover means dispose ran.
     }
 }

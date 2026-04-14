@@ -15,6 +15,7 @@
 /// These tests are ignored by default so `cargo test` works headless.
 use gtk4::gio::prelude::*;
 use gtk4::prelude::*;
+use gtk4::subclass::prelude::ObjectSubclassIsExt;
 use libadwaita as adw;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -2118,4 +2119,33 @@ fn app_css_loads_without_parser_errors() {
         );
         gtk4::style_context_remove_provider_for_display(&display, &accent);
     }
+}
+
+/// Verify that PersistentPaneView stores its context menu for disposal.
+/// Without this, the PopoverMenu created with set_parent() leaks because
+/// dispose() cannot unparent it (#537).
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_view_stores_context_menu_for_disposal() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("ctx-test", "rt-1");
+    // The context menu must be stored so dispose() can unparent it.
+    assert!(
+        pane.imp().context_menu.borrow().is_some(),
+        "PersistentPaneView must store context_menu for disposal"
+    );
+}
+
+/// Verify that TerminalWidget stores its context menu for disposal (#537).
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_stores_context_menu_for_disposal() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("ctx-test", None);
+    assert!(
+        term.imp().context_menu.borrow().is_some(),
+        "TerminalWidget must store context_menu for disposal"
+    );
 }

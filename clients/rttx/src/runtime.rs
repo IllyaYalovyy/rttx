@@ -1276,4 +1276,26 @@ mod tests {
         });
         assert!(!items.show_reconnect);
     }
+
+    #[test]
+    fn connection_presentation_accepts_input_matches_status_accepts_input() {
+        let statuses = [
+            ConnectionStatus::Starting,
+            ConnectionStatus::Connecting,
+            ConnectionStatus::Connected,
+            ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 5 },
+            ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+            ConnectionStatus::Disconnected,
+            ConnectionStatus::Recovered,
+            ConnectionStatus::SessionMissing,
+        ];
+        for status in &statuses {
+            let presentation = present_connection_status(status);
+            assert_eq!(
+                presentation.input_enabled,
+                status.accepts_input(),
+                "presentation.input_enabled should match status.accepts_input() for {status:?}"
+            );
+        }
+    }
 }
