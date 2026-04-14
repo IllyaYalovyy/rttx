@@ -182,7 +182,7 @@ mod tests {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
-                    data: b"hello".to_vec(),
+                    data: bytes::Bytes::from_static(b"hello"),
                 })),
             },
             proto::ClientMessage {
@@ -285,7 +285,7 @@ mod tests {
                         cwd: "/tmp/project".into(),
                         cols: 120,
                         rows: 40,
-                        scrollback: b"hello".to_vec(),
+                        scrollback: bytes::Bytes::from_static(b"hello"),
                         exit_status: None,
                         bracketed_paste_mode: false,
                         application_cursor_keys: false,
@@ -301,7 +301,7 @@ mod tests {
                 msg: Some(proto::server_message::Msg::Delta(proto::Delta {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
-                    data: b"output".to_vec(),
+                    data: bytes::Bytes::from_static(b"output"),
                 })),
             },
             proto::ServerMessage {

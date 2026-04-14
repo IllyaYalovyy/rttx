@@ -59,7 +59,7 @@ async fn slow_client_does_not_block_server() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: b"echo bounded-channel-test\n".to_vec(),
+            data: bytes::Bytes::from_static(b"echo bounded-channel-test\n"),
         })),
     })
     .await;

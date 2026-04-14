@@ -62,7 +62,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: format!("echo {marker}\n").into_bytes(),
+            data: bytes::Bytes::from(format!("echo {marker}\n").into_bytes()),
         })),
     };
     client.send(&input).await;
@@ -150,7 +150,7 @@ async fn scrollback_log_capped_at_max_size() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: b"head -c 12000000 /dev/zero | tr '\\0' 'A'\n".to_vec(),
+            data: bytes::Bytes::from_static(b"head -c 12000000 /dev/zero | tr '\\0' 'A'\n"),
         })),
     };
     client.send(&input).await;

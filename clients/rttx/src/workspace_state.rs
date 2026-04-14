@@ -19,7 +19,7 @@ pub struct WorkspacePaneRestore {
     pub layout_terminal_uuid: String,
     pub title: String,
     pub cwd: String,
-    pub scrollback: Vec<u8>,
+    pub scrollback: bytes::Bytes,
     pub cols: u16,
     pub rows: u16,
     pub bracketed_paste_mode: bool,
@@ -625,7 +625,7 @@ mod tests {
             cwd: cwd.to_string(),
             cols: 120,
             rows: 40,
-            scrollback: scrollback.to_vec(),
+            scrollback: bytes::Bytes::copy_from_slice(scrollback),
             exit_status: None,
             bracketed_paste_mode: false,
             application_cursor_keys: false,
@@ -869,13 +869,13 @@ mod tests {
             restore.layout_terminal_uuid == "left"
                 && restore.title == "Shell"
                 && restore.cwd == "/srv/project"
-                && restore.scrollback == b"shell"
+                && restore.scrollback[..] == b"shell"[..]
         }));
         assert!(opened.snapshot_restores.iter().any(|restore| {
             restore.layout_terminal_uuid == recovered_terminal_uuid
                 && restore.title == "Logs"
                 && restore.cwd == "/srv/project"
-                && restore.scrollback == b"logs"
+                && restore.scrollback[..] == b"logs"[..]
         }));
     }
 
@@ -1142,7 +1142,7 @@ mod tests {
                 layout_terminal_uuid: first_terminal_uuid,
                 title: "Shell".into(),
                 cwd: "/srv/project".into(),
-                scrollback: b"restored output".to_vec(),
+                scrollback: bytes::Bytes::from_static(b"restored output"),
                 cols: 120,
                 rows: 40,
                 bracketed_paste_mode: false,
@@ -1447,7 +1447,7 @@ mod tests {
                     cwd: "/new/project".into(),
                     cols: 80,
                     rows: 24,
-                    scrollback: Vec::new(),
+                    scrollback: bytes::Bytes::new(),
                     exit_status: None,
                     bracketed_paste_mode: false,
                     application_cursor_keys: false,

@@ -67,7 +67,7 @@ async fn reconnect_restores_scrollback() {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.clone(),
                 pane_id: pane_id.clone(),
-                data: b"echo LIFECYCLE_MARKER_12345\n".to_vec(),
+                data: bytes::Bytes::from_static(b"echo LIFECYCLE_MARKER_12345\n"),
             })),
         })
         .await;
@@ -239,7 +239,7 @@ async fn restart_preserves_session_count_and_scrollback() {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.clone(),
                 pane_id: pane_id.clone(),
-                data: b"echo RESTART_STABLE_MARKER\n".to_vec(),
+                data: bytes::Bytes::from_static(b"echo RESTART_STABLE_MARKER\n"),
             })),
         })
         .await;

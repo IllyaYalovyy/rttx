@@ -166,7 +166,7 @@ pub fn snapshot(
 
 /// Build a `Delta` message.
 #[must_use]
-pub fn delta(session_id: Uuid, pane_id: Uuid, data: Vec<u8>) -> proto::ServerMessage {
+pub fn delta(session_id: Uuid, pane_id: Uuid, data: bytes::Bytes) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::Delta(proto::Delta {
             session_id: uuid_to_bytes(session_id),

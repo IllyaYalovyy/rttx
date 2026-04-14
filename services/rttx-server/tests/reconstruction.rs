@@ -64,7 +64,7 @@ async fn reconstruct_session_after_restart() {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.clone(),
                 pane_id: pane_id.clone(),
-                data: b"echo RECONSTRUCT_MARKER\n".to_vec(),
+                data: bytes::Bytes::from_static(b"echo RECONSTRUCT_MARKER\n"),
             })),
         };
         client.send(&input).await;
@@ -194,7 +194,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
-                    data: cwd_command.into_bytes(),
+                    data: bytes::Bytes::from(cwd_command.into_bytes()),
                 })),
             })
             .await;
@@ -240,7 +240,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: session_id.clone(),
                     pane_id: pane_id.clone(),
-                    data: b"pwd\n".to_vec(),
+                    data: bytes::Bytes::from_static(b"pwd\n"),
                 })),
             })
             .await;

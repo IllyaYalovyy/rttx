@@ -409,10 +409,9 @@ impl Server {
                         cwd: pane.effective_cwd().unwrap_or_default(),
                         cols: u32::from(pane.cols),
                         rows: u32::from(pane.rows),
-                        scrollback: pane
-                            .screen
-                            .snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES)
-                            .to_vec(),
+                        scrollback: bytes::Bytes::copy_from_slice(
+                            pane.screen.snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES),
+                        ),
                         exit_status: pane.exit_status,
                         bracketed_paste_mode: pane.screen.bracketed_paste_mode(),
                         application_cursor_keys: pane.screen.application_cursor_keys(),
@@ -847,7 +846,7 @@ fn spawn_pty_read_loop(
                     match result {
                         Ok(0) => break,
                         Ok(n) => {
-                            let data = buf[..n].to_vec();
+                            let data = bytes::Bytes::copy_from_slice(&buf[..n]);
                             let mut s = server.lock().await;
                             let (new_cwd, new_title, pending_replies) = if let Some(session) = s.sessions.get_mut(&session_id)
                                 && let Some(pane) = session.panes.get_mut(&pane_id)

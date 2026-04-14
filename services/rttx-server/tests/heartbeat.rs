@@ -93,7 +93,7 @@ fn ping_answered_during_pty_output() {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: session_id.clone(),
                     pane_id,
-                    data: b"echo hello\n".to_vec(),
+                    data: bytes::Bytes::from_static(b"echo hello\n"),
                 })),
             })
             .await;

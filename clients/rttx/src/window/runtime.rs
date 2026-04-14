@@ -422,12 +422,13 @@ impl Window {
             return;
         };
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            let shared = bytes::Bytes::copy_from_slice(data);
             manager.send_input(
                 &workspace_id,
                 &endpoint,
                 &runtime_id,
                 &runtime_pane_id,
-                data.to_vec(),
+                shared.clone(),
             );
             for target in &sync_targets {
                 manager.send_input(
@@ -435,7 +436,7 @@ impl Window {
                     &target.endpoint,
                     &target.runtime_id,
                     &target.runtime_pane_id,
-                    data.to_vec(),
+                    shared.clone(),
                 );
             }
         }
@@ -454,7 +455,7 @@ impl Window {
                 &endpoint,
                 &runtime_id,
                 &runtime_pane_id,
-                data.to_vec(),
+                bytes::Bytes::copy_from_slice(data),
             );
         }
     }

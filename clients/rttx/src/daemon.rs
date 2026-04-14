@@ -443,7 +443,7 @@ impl DaemonWriter {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: uuid_to_bytes(session_id),
                 pane_id: uuid_to_bytes(pane_id),
-                data: data.to_vec(),
+                data: bytes::Bytes::copy_from_slice(data),
             })),
         })
         .await
@@ -756,7 +756,7 @@ mod tests {
             if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
                 match msg.msg {
                     Some(proto::client_message::Msg::Input(input)) => {
-                        assert_eq!(input.data, b"hello");
+                        assert_eq!(input.data, &b"hello"[..]);
                         assert_eq!(bytes_to_uuid(&input.session_id).unwrap(), session_id);
                         assert_eq!(bytes_to_uuid(&input.pane_id).unwrap(), pane_id);
                     }
@@ -850,7 +850,7 @@ mod tests {
             msg: Some(proto::server_message::Msg::Delta(proto::Delta {
                 session_id: uuid_to_bytes(Uuid::new_v4()),
                 pane_id: uuid_to_bytes(pane_id),
-                data: vec![],
+                data: bytes::Bytes::new(),
             })),
         };
         assert_eq!(extract_pane_id(&msg), Some(pane_id));

@@ -66,7 +66,7 @@ async fn da1_request_gets_device_attributes_response() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: format!("{script}\n").into_bytes(),
+            data: bytes::Bytes::from(format!("{script}\n").into_bytes()),
         })),
     };
     client.send(&input).await;

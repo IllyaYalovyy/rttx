@@ -155,7 +155,7 @@ async fn resize_pane(
     }
 }
 
-fn pane_scrollback(snapshot: &proto::Snapshot, pane_id: &[u8]) -> Vec<u8> {
+fn pane_scrollback(snapshot: &proto::Snapshot, pane_id: &[u8]) -> bytes::Bytes {
     snapshot
         .panes
         .iter()
@@ -169,7 +169,7 @@ async fn reattach_snapshot_bytes(
     client: &mut TestClient,
     session_id: &[u8],
     pane_id: &[u8],
-) -> Vec<u8> {
+) -> bytes::Bytes {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
@@ -211,7 +211,7 @@ async fn attach_snapshot_bytes(
     client: &mut TestClient,
     session_id: &[u8],
     pane_id: &[u8],
-) -> Vec<u8> {
+) -> bytes::Bytes {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
@@ -235,7 +235,7 @@ async fn attach_and_collect_prompt(
     session_id: &[u8],
     pane_id: &[u8],
 ) -> String {
-    let mut output = attach_snapshot_bytes(client, session_id, pane_id).await;
+    let mut output = attach_snapshot_bytes(client, session_id, pane_id).await.to_vec();
     if String::from_utf8_lossy(&output).contains(PROMPT) {
         return normalize_scrollback(&output);
     }
@@ -245,7 +245,7 @@ async fn attach_and_collect_prompt(
         if let Some(message) = client.try_recv(Duration::from_millis(200)).await
             && let Some(proto::server_message::Msg::Delta(delta)) = message.msg
         {
-            output.extend(delta.data);
+            output.extend(&delta.data);
             if String::from_utf8_lossy(&output).contains(PROMPT) {
                 return normalize_scrollback(&output);
             }
@@ -261,7 +261,7 @@ async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], 
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.to_vec(),
                 pane_id: pane_id.to_vec(),
-                data: data.to_vec(),
+                data: bytes::Bytes::copy_from_slice(data),
             })),
         })
         .await;

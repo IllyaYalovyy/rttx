@@ -68,7 +68,7 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.clone(),
                 pane_id: pane_id.clone(),
-                data: b"echo rttx_pty_test\n".to_vec(),
+                data: bytes::Bytes::from_static(b"echo rttx_pty_test\n"),
             })),
         })
         .await;
@@ -103,7 +103,7 @@ async fn input_reaches_pty_and_echoes_back_as_delta() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: input_data.into_bytes(),
+            data: bytes::Bytes::from(input_data.into_bytes()),
         })),
     };
     client.send(&input).await;
@@ -269,7 +269,7 @@ async fn pane_exit_produces_pane_exited_message() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: b"exit 7\n".to_vec(),
+            data: bytes::Bytes::from_static(b"exit 7\n"),
         })),
     };
     client.send(&input).await;
@@ -302,7 +302,7 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.clone(),
                 pane_id: pane_id.clone(),
-                data: vec![0x04],
+                data: bytes::Bytes::from_static(&[0x04]),
             })),
         })
         .await;

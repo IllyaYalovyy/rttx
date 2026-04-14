@@ -70,7 +70,7 @@ async fn make_pane_persistent_flow() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: b"echo PERSIST_OK\n".to_vec(),
+            data: bytes::Bytes::from_static(b"echo PERSIST_OK\n"),
         })),
     })
     .await;
