@@ -30,6 +30,15 @@ pub fn short_id(id: Uuid) -> String {
     id.to_string()[..8].to_string()
 }
 
+/// Capacity for the per-client push channel (Deltas, broadcasts).
+/// Large enough to absorb short bursts; slow clients that fall behind
+/// will have messages dropped (Deltas are replaceable by a snapshot on
+/// reconnect).
+pub const PUSH_CHANNEL_BOUND: usize = 4096;
+
+/// Capacity for the per-client response channel (pong, snapshots).
+const RESP_CHANNEL_BOUND: usize = 256;
+
 /// Shared mutable server state.
 pub struct Server {
     /// All active sessions.
@@ -40,8 +49,8 @@ pub struct Server {
     pub engine: Box<dyn Engine>,
     /// OS abstraction for paths.
     pub os: Box<dyn OsInterface>,
-    /// Per-client push channels for server-initiated messages (Deltas, etc.).
-    client_senders: HashMap<Uuid, mpsc::UnboundedSender<proto::ServerMessage>>,
+    /// Per-client bounded push channels for server-initiated messages (Deltas, etc.).
+    client_senders: HashMap<Uuid, mpsc::Sender<proto::ServerMessage>>,
     /// Per-pane PTY write handles for Input and Resize routing.
     pty_writers: HashMap<Uuid, Arc<tokio::sync::Mutex<pty_process::OwnedWritePty>>>,
     /// Per-pane kill signals to cancel PTY read loops.
@@ -257,8 +266,13 @@ impl Server {
             if Some(client_id) == exclude_client_id {
                 continue;
             }
-            if let Some(sender) = self.client_senders.get(&client_id) {
-                let _ = sender.send(msg.clone());
+            if let Some(sender) = self.client_senders.get(&client_id)
+                && let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(msg.clone())
+            {
+                tracing::warn!(
+                    "Client {} push channel full — dropping message",
+                    short_id(client_id),
+                );
             }
         }
     }
@@ -1060,11 +1074,11 @@ where
     let client_short = short_id(client_id);
     tracing::info!("Client {client_short} connected");
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     // Channel for responses that the reader task needs to send back to the
     // client (e.g. pong replies, session snapshots). The writer task drains
     // this alongside the push channel so writes never block reads.
-    let (resp_tx, resp_rx) = mpsc::unbounded_channel::<proto::ServerMessage>();
+    let (resp_tx, resp_rx) = mpsc::channel::<proto::ServerMessage>(RESP_CHANNEL_BOUND);
     {
         let mut s = server.lock().await;
         s.client_senders.insert(client_id, tx);
@@ -1104,7 +1118,7 @@ async fn client_reader(
     client_id: Uuid,
     client_short: &str,
     mut reader: ClientConnectionReader,
-    resp_tx: mpsc::UnboundedSender<proto::ServerMessage>,
+    resp_tx: mpsc::Sender<proto::ServerMessage>,
 ) -> anyhow::Result<()> {
     loop {
         let Some(msg) = reader.read_message().await? else {
@@ -1119,7 +1133,7 @@ async fn client_reader(
         }
 
         if let Some(response) = Server::handle_message(&server, client_id, msg).await
-            && resp_tx.send(response).is_err()
+            && resp_tx.send(response).await.is_err()
         {
             return Ok(());
         }
@@ -1131,8 +1145,8 @@ async fn client_reader(
 /// a write error occurs.
 async fn client_writer(
     mut writer: ClientConnectionWriter,
-    mut push_rx: mpsc::UnboundedReceiver<proto::ServerMessage>,
-    mut resp_rx: mpsc::UnboundedReceiver<proto::ServerMessage>,
+    mut push_rx: mpsc::Receiver<proto::ServerMessage>,
+    mut resp_rx: mpsc::Receiver<proto::ServerMessage>,
     client_short: String,
 ) {
     loop {
