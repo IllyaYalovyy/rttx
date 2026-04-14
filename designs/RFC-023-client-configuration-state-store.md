@@ -1,4 +1,4 @@
-# RFC-022: Client Configuration and State Store
+# RFC-023: Client Configuration and State Store
 
 | Field         | Value  |
 |---------------|--------|
