@@ -106,10 +106,11 @@ impl Window {
             Self::apply_preferences_to_terminal(term, &prefs, &font_desc, scheme.as_ref());
         }
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
+            let Some(win) = win.upgrade() else { return };
             win.set_focused_terminal(Some(&uuid));
             let session_uuid = {
                 let mut state = win.imp().state.borrow_mut();
@@ -130,10 +131,12 @@ impl Window {
         });
         term.vte().add_controller(focus_controller);
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.vte().connect_commit(move |_, text, _| {
-            win.forward_input(&uuid, text);
+            if let Some(win) = win.upgrade() {
+                win.forward_input(&uuid, text);
+            }
         });
 
         let bell_term = term.clone();
@@ -141,22 +144,28 @@ impl Window {
             bell_term.flash_bell();
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.vte().connect_contents_changed(move |_| {
-            win.mark_session_activity(&uuid);
+            if let Some(win) = win.upgrade() {
+                win.mark_session_activity(&uuid);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.vte().connect_window_title_changed(move |_| {
-            win.refresh_sidebar_subtitle_if_active(&uuid);
+            if let Some(win) = win.upgrade() {
+                win.refresh_sidebar_subtitle_if_active(&uuid);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.vte().connect_current_directory_uri_changed(move |_| {
-            win.refresh_sidebar_subtitle_if_active(&uuid);
+            if let Some(win) = win.upgrade() {
+                win.refresh_sidebar_subtitle_if_active(&uuid);
+            }
         });
 
         let drag_source = gtk4::DragSource::new();
@@ -168,11 +177,12 @@ impl Window {
         term.imp().header.add_controller(drag_source);
 
         let drop_target = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
-        let win = self.clone();
+        let win = self.downgrade();
         let target_uuid = term.uuid();
         drop_target.connect_drop(move |_, value, _, _| {
             if let Ok(source_uuid) = value.get::<String>()
                 && source_uuid != target_uuid
+                && let Some(win) = win.upgrade()
             {
                 win.swap_terminals(&source_uuid, &target_uuid);
                 return true;
@@ -181,34 +191,43 @@ impl Window {
         });
         term.add_controller(drop_target);
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.split_h_button().connect_clicked(move |_| {
-            win.split_terminal(&uuid, SplitOrientation::Horizontal);
+            if let Some(win) = win.upgrade() {
+                win.split_terminal(&uuid, SplitOrientation::Horizontal);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.split_v_button().connect_clicked(move |_| {
-            win.split_terminal(&uuid, SplitOrientation::Vertical);
+            if let Some(win) = win.upgrade() {
+                win.split_terminal(&uuid, SplitOrientation::Vertical);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         term.close_button().connect_clicked(move |_| {
-            win.close_terminal(&uuid);
+            if let Some(win) = win.upgrade() {
+                win.close_terminal(&uuid);
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         term.zoom_button().connect_clicked(move |_| {
-            win.toggle_pane_zoom();
+            if let Some(win) = win.upgrade() {
+                win.toggle_pane_zoom();
+            }
         });
 
-        let win = self.clone();
+        let win = self.downgrade();
         let uuid = term.uuid();
         let recoverable_term = term.clone();
         let handler_id = term.vte().connect_child_exited(move |_, status| {
             recoverable_term.reset_terminal_state();
+            let Some(win) = win.upgrade() else { return };
             if win.handle_recoverable_terminal_exit(&recoverable_term, &uuid, status) {
                 return;
             }
@@ -224,10 +243,12 @@ impl Window {
         });
         term.imp().child_exited_handler.replace(Some(handler_id));
 
-        let win = self.clone();
+        let win = self.downgrade();
         let term_for_retry = term.clone();
         term.recovery_retry_button().connect_clicked(move |_| {
-            win.retry_terminal_recovery(&term_for_retry);
+            if let Some(win) = win.upgrade() {
+                win.retry_terminal_recovery(&term_for_retry);
+            }
         });
     }
 

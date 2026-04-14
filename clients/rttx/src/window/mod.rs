@@ -71,6 +71,7 @@ mod imp {
         pub workspace_connection_status: RefCell<HashMap<String, ConnectionStatus>>,
         pub workspace_reconnect_sources: RefCell<HashMap<String, glib::SourceId>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
+        pub event_poller_source: RefCell<Option<glib::SourceId>>,
         pub workspace_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub pending_connect_existing: RefCell<Option<crate::host::Host>>,
         pub host_selector_keys: RefCell<Vec<String>>,
@@ -84,6 +85,17 @@ mod imp {
     }
 
     impl ObjectImpl for Window {
+        fn dispose(&self) {
+            if let Some(source) = self.event_poller_source.take() {
+                source.remove();
+            }
+            for (_, source) in self.workspace_reconnect_sources.borrow_mut().drain() {
+                source.remove();
+            }
+            self.persistent_terminals.borrow_mut().clear();
+            self.terminals.borrow_mut().clear();
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();

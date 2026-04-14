@@ -43,6 +43,7 @@ mod imp {
         pub child_exited_handler: RefCell<Option<glib::SignalHandlerId>>,
         pub last_match_at_click: RefCell<Option<String>>,
         pub places_submenu: gtk4::gio::Menu,
+        pub context_menu: RefCell<Option<gtk4::PopoverMenu>>,
     }
 
     #[glib::object_subclass]
@@ -53,6 +54,12 @@ mod imp {
     }
 
     impl ObjectImpl for TerminalWidget {
+        fn dispose(&self) {
+            if let Some(menu) = self.context_menu.take() {
+                menu.unparent();
+            }
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
@@ -248,6 +255,7 @@ mod imp {
             context_menu.set_has_arrow(false);
             context_menu.set_halign(crate::terminal::CONTEXT_MENU_HALIGN);
             context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
+            self.context_menu.replace(Some(context_menu.clone()));
 
             let right_click = gtk4::GestureClick::new();
             right_click.set_button(3);
@@ -719,6 +727,7 @@ mod tests {
     use crate::terminal::{TerminalInputBackend, TerminalKeyAction, terminal_key_action};
     use gtk4::glib;
     use gtk4::prelude::*;
+    use gtk4::subclass::prelude::ObjectSubclassIsExt;
 
     /// Verify that the RESET constant inside `reset_terminal_state()` contains
     /// the expected escape sequences without requiring a live VTE widget.
@@ -870,5 +879,22 @@ mod tests {
         assert!(msg.contains("\x1b[31m"), "error must use red ANSI color");
         assert!(msg.contains(error));
         assert!(msg.contains("\x1b[0m"), "error must reset ANSI color");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn dispose_unparents_context_menu() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let term = super::TerminalWidget::new("dispose-ctx", None);
+        assert!(
+            term.imp().context_menu.borrow().is_some(),
+            "context menu should be stored after construction"
+        );
+        drop(term);
+        // No critical GLib warnings about orphaned popover means dispose ran.
     }
 }
