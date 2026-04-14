@@ -316,3 +316,65 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
     let exited = exited.expect("Ctrl+D at shell prompt must produce PaneExited");
     assert_eq!(exited.pane_id, pane_id);
 }
+
+#[tokio::test]
+async fn multi_client_delta_broadcast_delivers_identical_data() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client_a = TestClient::connect(&sock).await;
+    let (session_id, pane_id) = setup_attached_pane(&mut client_a).await;
+    client_a.drain(Duration::from_millis(500)).await;
+
+    // Second client attaches read-only to the same session.
+    let mut client_b = TestClient::connect(&sock).await;
+    client_b.handshake().await;
+    client_b
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+                session_id: session_id.clone(),
+                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+            })),
+        })
+        .await;
+    loop {
+        match client_b.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+    client_b.drain(Duration::from_millis(300)).await;
+
+    // Send a command that produces deterministic output.
+    let marker = "BYTES_BROADCAST_TEST_42";
+    common::send_input(&mut client_a, &session_id, &pane_id, format!("echo {marker}\n").as_bytes())
+        .await;
+
+    // Collect Delta data from both clients.
+    let collect = |msgs: &[proto::ServerMessage]| -> Vec<u8> {
+        msgs.iter()
+            .filter_map(|m| match &m.msg {
+                Some(proto::server_message::Msg::Delta(d))
+                    if bytes_to_uuid(&d.pane_id).ok() == bytes_to_uuid(&pane_id).ok() =>
+                {
+                    Some(d.data.to_vec())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+
+    let msgs_a = client_a.drain(Duration::from_secs(5)).await;
+    let msgs_b = client_b.drain(Duration::from_secs(5)).await;
+
+    let data_a = collect(&msgs_a);
+    let data_b = collect(&msgs_b);
+
+    let text_a = String::from_utf8_lossy(&data_a);
+    let text_b = String::from_utf8_lossy(&data_b);
+
+    assert!(text_a.contains(marker), "client A should receive the marker in Delta stream");
+    assert!(text_b.contains(marker), "client B should receive the marker in Delta stream");
+}
