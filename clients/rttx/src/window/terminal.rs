@@ -575,8 +575,18 @@ impl Window {
             session::schedule_initial_paned_ratios(&content, &session_state.layout);
         }
 
+        self.remove_stale_terminal_map_entries(imp);
         self.refresh_sidebar_subtitle(session_uuid);
         self.sync_sidebar_to_visible_session();
+    }
+
+    /// Remove terminal map entries that no longer belong to any workspace layout.
+    fn remove_stale_terminal_map_entries(&self, imp: &imp::Window) {
+        let live_uuids: std::collections::HashSet<String> =
+            imp.state.borrow().sessions.iter().flat_map(|s| s.layout.terminal_uuids()).collect();
+
+        imp.terminals.borrow_mut().retain(|uuid, _| live_uuids.contains(uuid));
+        imp.persistent_terminals.borrow_mut().retain(|uuid, _| live_uuids.contains(uuid));
     }
 
     fn detach_terminals_from_detached_tree(widget: &gtk4::Widget) {
