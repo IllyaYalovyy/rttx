@@ -458,7 +458,7 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
             terminal_recovery: std::collections::BTreeMap::from([(
                 terminal_uuid.clone(),
                 PaneRecovery {
-                    source: PaneSource::Bookmark { name: "Ops".into() },
+                    source: PaneSource::Manual,
                     target: Some(PaneTarget::RemoteShell {
                         ssh_target: "user@192.0.2.1".into(),
                         remote_folder: None,

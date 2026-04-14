@@ -2,7 +2,7 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-/// Shared scaffolding for add/edit form dialogs (bookmarks, commands, etc.).
+/// Shared scaffolding for add/edit form dialogs (places, commands, etc.).
 ///
 /// Builds the dialog chrome — header bar, save button, status label, content
 /// box, and toolbar view — so callers only supply the form-specific widgets

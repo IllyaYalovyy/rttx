@@ -12,7 +12,6 @@ use crate::shell_quote;
 #[serde(rename_all = "kebab-case")]
 pub enum PaneSource {
     EmptyShell,
-    Bookmark { name: String },
     Command { title: String },
     Manual,
 }
@@ -36,9 +35,8 @@ impl<'de> Deserialize<'de> for PaneSource {
         }
         match Raw::deserialize(deserializer)? {
             Raw::EmptyShell => Ok(Self::EmptyShell),
-            Raw::Bookmark { name } => Ok(Self::Bookmark { name }),
             Raw::Command { title } => Ok(Self::Command { title }),
-            Raw::SessionTemplate { .. } | Raw::Manual => Ok(Self::Manual),
+            Raw::Bookmark { .. } | Raw::SessionTemplate { .. } | Raw::Manual => Ok(Self::Manual),
         }
     }
 }
@@ -192,6 +190,7 @@ mod tests {
         let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
         let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
         assert_eq!(recovery.target, None);
+        assert_eq!(recovery.source, PaneSource::Manual);
     }
 
     #[test]
@@ -202,8 +201,21 @@ mod tests {
     }
 
     #[test]
+    fn legacy_bookmark_source_deserializes_as_manual() {
+        let json = r#"{"source":{"bookmark":{"name":"Prod"}}}"#;
+        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.source, PaneSource::Manual);
+    }
+
+    #[test]
     fn session_template_variant_absent_from_enum() {
         let json = serde_json::to_string(&PaneSource::Manual).unwrap();
         assert!(!json.contains("session-template"));
+    }
+
+    #[test]
+    fn bookmark_variant_absent_from_serialized_enum() {
+        let json = serde_json::to_string(&PaneSource::Manual).unwrap();
+        assert!(!json.contains("bookmark"));
     }
 }

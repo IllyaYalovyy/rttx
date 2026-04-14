@@ -556,27 +556,18 @@ fn remote_managed_session_persists_and_restores() {
     );
 }
 
-/// SSH bookmark must create a managed remote session, not a local direct one.
+/// Remote host must create a managed remote session.
 /// Regression test for #243.
 #[test]
-fn ssh_bookmark_creates_managed_remote_session() {
-    use rttx::bookmarks::Bookmark;
+fn remote_host_creates_managed_remote_session() {
     use rttx::runtime::RuntimeEndpoint;
     use rttx::session::SessionState;
 
-    let mut bookmark = Bookmark::new("Prod Server");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.directory = Some("/srv/app".into());
-
-    // Simulate the decision logic from new_session_from_bookmark.
-    let host = bookmark.remote_host();
-    assert!(host.is_some(), "SSH bookmark must report a remote host");
-
     let session = SessionState::new_managed_remote(
-        bookmark.name.clone(),
-        host.unwrap(),
+        "Prod Server".into(),
+        "deploy@example.com",
         rttx::runtime::WorkspacePolicy::Persistent,
-        bookmark.session_initial_cwd().map(str::to_string),
+        None,
     );
 
     assert!(session.runtime.is_managed());
@@ -584,17 +575,6 @@ fn ssh_bookmark_creates_managed_remote_session() {
         session.runtime.endpoint,
         RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
     );
-}
-
-/// Local bookmark must still create a direct session.
-#[test]
-fn local_bookmark_creates_direct_session() {
-    use rttx::bookmarks::Bookmark;
-
-    let mut bookmark = Bookmark::new("Projects");
-    bookmark.directory = Some("/home/user/projects".into());
-
-    assert!(bookmark.remote_host().is_none());
 }
 
 /// Updating a remote workspace endpoint must change the host and sync mode.
@@ -621,24 +601,6 @@ fn update_remote_endpoint_changes_host_and_mode() {
         session.mode,
         SessionMode::RemotePersistent { ref host, .. } if host == "new-host.example.com"
     ));
-}
-
-/// SSH bookmark targeting the same host as a managed pane must use the inner
-/// command (without SSH wrapper). Regression test for #245.
-#[test]
-fn ssh_bookmark_remote_command_strips_ssh_for_same_host() {
-    use rttx::bookmarks::Bookmark;
-
-    let mut bookmark = Bookmark::new("Deploy");
-    bookmark.ssh_target = Some("deploy@example.com".into());
-    bookmark.directory = Some("/srv/app".into());
-
-    let full = bookmark.command().unwrap();
-    let inner = bookmark.remote_command().unwrap();
-
-    assert!(full.starts_with("ssh"), "full command wraps in ssh");
-    assert!(!inner.contains("ssh"), "inner command must not contain ssh");
-    assert!(inner.contains("/srv/app"));
 }
 
 /// Splitting a pane in a remote managed session must preserve the remote
