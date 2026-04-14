@@ -673,6 +673,17 @@ impl Window {
         });
         row.add_controller(rename_gesture);
 
+        let win = self.clone();
+        let session_uuid = session_state.uuid.clone();
+        let row_for_ctx = row.clone();
+        let right_click = gtk4::GestureClick::new();
+        right_click.set_button(3);
+        right_click.connect_released(move |gesture, _, _, _| {
+            win.show_workspace_popover_menu(&row_for_ctx, &session_uuid);
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        row.add_controller(right_click);
+
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
         let drag_uuid = session_state.uuid.clone();

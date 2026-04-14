@@ -16,6 +16,66 @@ impl Window {
         alert.present(Some(self));
     }
 
+    pub(super) fn confirm_close_others(&self, keep_uuid: &str) {
+        let other_uuids: Vec<String> = {
+            let state = self.imp().state.borrow();
+            state.sessions.iter().filter(|s| s.uuid != keep_uuid).map(|s| s.uuid.clone()).collect()
+        };
+        if other_uuids.is_empty() {
+            return;
+        }
+        let count = other_uuids.len();
+        let body = format!(
+            "Close {count} other workspace{}? All panes and running processes in those workspaces will be stopped.",
+            if count == 1 { "" } else { "s" }
+        );
+        let win = self.clone();
+        let alert = adw::AlertDialog::new(Some("Close Other Workspaces?"), Some(&body));
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("close", "Close Others");
+        alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+        alert.connect_response(None, move |_, response| {
+            if response == "close" {
+                for uuid in &other_uuids {
+                    win.close_session(uuid);
+                }
+            }
+        });
+        alert.present(Some(self));
+    }
+
+    pub(super) fn confirm_close_all(&self) {
+        let all_uuids: Vec<String> = {
+            let state = self.imp().state.borrow();
+            state.sessions.iter().map(|s| s.uuid.clone()).collect()
+        };
+        if all_uuids.is_empty() {
+            return;
+        }
+        let count = all_uuids.len();
+        let body = format!(
+            "Close {count} workspace{}? All panes and running processes will be stopped.",
+            if count == 1 { "" } else { "s" }
+        );
+        let win = self.clone();
+        let alert = adw::AlertDialog::new(Some("Close All Workspaces?"), Some(&body));
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("close", "Close All");
+        alert.set_response_appearance("close", adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+        alert.connect_response(None, move |_, response| {
+            if response == "close" {
+                for uuid in &all_uuids {
+                    win.close_session(uuid);
+                }
+            }
+        });
+        alert.present(Some(self));
+    }
+
     pub(super) fn confirm_close_session(&self, session_uuid: &str) {
         let should_close_immediately = {
             let state = self.imp().state.borrow();
@@ -357,6 +417,8 @@ impl Window {
             menu.append(Some("Detach"), Some("win.ctx-detach"));
         }
         menu.append(Some("Close"), Some("win.ctx-close"));
+        menu.append(Some("Close Others"), Some("win.ctx-close-others"));
+        menu.append(Some("Close All"), Some("win.ctx-close-all"));
 
         let popover = gtk4::PopoverMenu::from_model(Some(&menu));
         popover.set_has_arrow(true);
@@ -409,6 +471,21 @@ impl Window {
             w.confirm_close_session(&u);
         });
         self.add_action(&close_action);
+
+        let w = self.clone();
+        let u = session_uuid.to_string();
+        let close_others_action = gtk4::gio::SimpleAction::new("ctx-close-others", None);
+        close_others_action.connect_activate(move |_, _| {
+            w.confirm_close_others(&u);
+        });
+        self.add_action(&close_others_action);
+
+        let w = self.clone();
+        let close_all_action = gtk4::gio::SimpleAction::new("ctx-close-all", None);
+        close_all_action.connect_activate(move |_, _| {
+            w.confirm_close_all();
+        });
+        self.add_action(&close_all_action);
 
         self.imp().workspace_popover.replace(Some(popover.clone()));
         popover.popup();
