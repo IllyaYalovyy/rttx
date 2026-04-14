@@ -388,14 +388,6 @@ impl WindowState {
         let session = self.sessions.iter_mut().find(|session| session.uuid == workspace_id)?;
 
         let had_runtime_id = session.runtime.runtime_id.is_some();
-        let had_only_placeholder_bindings =
-            session.layout.terminal_uuids().iter().all(|layout_terminal_uuid| {
-                session
-                    .runtime
-                    .pane_bindings
-                    .get(layout_terminal_uuid)
-                    .is_some_and(|runtime_pane_id| runtime_pane_id == layout_terminal_uuid)
-            });
         session.runtime.runtime_id = Some(runtime_id.to_string());
         session.sync_legacy_mode_from_runtime();
 
@@ -408,12 +400,11 @@ impl WindowState {
             &runtime_pane_uuids,
         );
 
-        // When all bindings were placeholders (state saved before PaneCreated
-        // events arrived), match disconnected layout terminals to unclaimed
-        // runtime panes by position so the panes reconnect instead of staying
-        // blank.
-        if had_only_placeholder_bindings
-            && !reconciliation.disconnected_layout_panes.is_empty()
+        // Match disconnected layout terminals to unclaimed runtime panes by
+        // position. This covers both placeholder bindings (state saved before
+        // PaneCreated arrived) and stale bindings (daemon restarted with new
+        // pane IDs), preventing layout growth on repeated reconnect cycles.
+        if !reconciliation.disconnected_layout_panes.is_empty()
             && !reconciliation.recovered_runtime_panes.is_empty()
         {
             let mut recovered =
@@ -435,20 +426,18 @@ impl WindowState {
         session.runtime.pending_layout_panes =
             reconciliation.disconnected_layout_panes.iter().cloned().collect();
 
-        let panes_to_create = if !had_runtime_id {
+        let panes_to_create = if had_runtime_id {
+            // Reconnecting: create panes for any layout terminals that
+            // couldn't be matched to existing runtime panes (covers both
+            // placeholder-only and stale-binding reconnects).
+            reconciliation.disconnected_layout_panes.clone()
+        } else {
             let mut placeholders = reconciliation.disconnected_layout_panes.clone();
             if let Some(initial_terminal_uuid) = layout_terminal_uuids.first() {
                 placeholders
                     .retain(|layout_terminal_uuid| layout_terminal_uuid != initial_terminal_uuid);
             }
             placeholders
-        } else if had_only_placeholder_bindings {
-            // Placeholder-only bindings: state was saved before PaneCreated
-            // events arrived. Create panes for any layout terminals that
-            // couldn't be matched to existing runtime panes.
-            reconciliation.disconnected_layout_panes.clone()
-        } else {
-            Vec::new()
         };
 
         let mut skipped_runtime_panes = Vec::new();
@@ -1680,6 +1669,106 @@ mod tests {
         let state = window_state(vec![session]);
 
         assert!(state.input_sync_targets("pane-1").is_empty());
+    }
+
+    /// Regression test for #547: repeated reconnect cycles must not grow the
+    /// layout. When bindings become stale (e.g. daemon restart assigns new
+    /// pane IDs), disconnected layout terminals should be matched to
+    /// unclaimed runtime panes by position instead of creating new splits.
+    #[test]
+    fn repeated_reconnect_cycles_do_not_grow_layout() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+
+        let session = managed_session_with_runtime(
+            "workspace-1",
+            "Home",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        let mut state = window_state(vec![session]);
+
+        // Simulate 5 reconnect cycles, each with fresh daemon pane IDs
+        // (as if the daemon restarted between cycles).
+        for cycle in 0..5 {
+            let pane_a = uuid::Uuid::new_v4().to_string();
+            let pane_b = uuid::Uuid::new_v4().to_string();
+            let snap = snapshot(
+                runtime_id,
+                vec![
+                    pane_snapshot(&pane_a, "Shell", "/home", b"$ ls"),
+                    pane_snapshot(&pane_b, "Logs", "/var/log", b"tail"),
+                ],
+            );
+
+            let opened = state
+                .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
+                .expect("workspace open should succeed");
+
+            assert_eq!(
+                opened.session_state.layout.terminal_count(),
+                2,
+                "cycle {cycle}: layout must stay at 2 terminals",
+            );
+            assert!(
+                opened.skipped_runtime_panes.is_empty(),
+                "cycle {cycle}: no runtime panes should be skipped",
+            );
+        }
+    }
+
+    /// When stale bindings can't match current runtime panes, disconnected
+    /// layout terminals should be positionally matched to unclaimed runtime
+    /// panes — not left blank while new splits are created.
+    #[test]
+    fn stale_bindings_reconnect_matches_by_position() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let old_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let old_pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+        let new_pane_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let new_pane_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
+        // Workspace has real (non-placeholder) bindings from a previous connection.
+        let mut session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        session.runtime.bind_runtime_pane("left", old_pane_a);
+        session.runtime.bind_runtime_pane("right", old_pane_b);
+        let mut state = window_state(vec![session]);
+
+        // Daemon restarted — new pane IDs.
+        let snap = snapshot(
+            runtime_id,
+            vec![
+                pane_snapshot(new_pane_a, "Shell", "/home", b"$ ls"),
+                pane_snapshot(new_pane_b, "Logs", "/var/log", b"tail"),
+            ],
+        );
+
+        let opened = state
+            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
+            .expect("workspace open should succeed");
+
+        assert_eq!(
+            opened.session_state.layout.terminal_count(),
+            2,
+            "layout must not grow when daemon pane count matches layout terminal count",
+        );
+        assert_eq!(
+            opened.session_state.runtime.pane_bindings.get("left").map(String::as_str),
+            Some(new_pane_a),
+        );
+        assert_eq!(
+            opened.session_state.runtime.pane_bindings.get("right").map(String::as_str),
+            Some(new_pane_b),
+        );
+        assert!(opened.skipped_runtime_panes.is_empty());
     }
 
     #[test]
