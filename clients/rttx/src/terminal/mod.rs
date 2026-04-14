@@ -983,4 +983,11 @@ mod search_tests {
         let recovery: crate::session::PaneRecovery = serde_json::from_str(json).unwrap();
         assert_eq!(recovery.source, crate::session::PaneSource::Manual);
     }
+
+    #[test]
+    fn accent_css_for_dark_returns_distinct_variants() {
+        let dark = crate::application::accent_css_for_dark(true);
+        let light = crate::application::accent_css_for_dark(false);
+        assert_ne!(dark, light);
+    }
 }

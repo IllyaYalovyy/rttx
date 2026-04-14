@@ -852,30 +852,30 @@ mod module_boundary_tests {
     }
 
     #[test]
-    fn app_css_has_dark_and_light_rules_for_every_color() {
+    fn app_css_contains_no_unsupported_at_rules() {
         let css = crate::application::APP_CSS;
-        assert!(css.contains("prefers-color-scheme: dark"), "missing dark media query");
-        assert!(css.contains("prefers-color-scheme: light"), "missing light media query");
+        assert!(!css.contains("@media"), "GTK4 CSS does not support @media queries");
+    }
+
+    #[test]
+    fn accent_css_has_dark_and_light_rules_for_every_color() {
+        let dark = crate::application::accent_css_for_dark(true);
+        let light = crate::application::accent_css_for_dark(false);
         for color in SessionColor::ALL {
             let cls = color.css_class();
-            assert!(
-                css.matches(&format!(".{cls}")).count() >= 2,
-                ".{cls} should appear in both dark and light sections"
-            );
+            assert!(dark.contains(&format!(".{cls}")), ".{cls} missing from dark accent CSS");
+            assert!(light.contains(&format!(".{cls}")), ".{cls} missing from light accent CSS");
         }
     }
 
     #[test]
-    fn app_css_uses_different_palette_tiers_for_light_and_dark() {
-        let css = crate::application::APP_CSS;
-        // Dark mode uses _3 variants (good contrast on dark backgrounds)
-        assert!(css.contains("dark") && css.contains("@blue_3"));
-        // Light mode uses _5 variants (good contrast on light backgrounds)
-        assert!(css.contains("light") && css.contains("@blue_5"));
-        // Verify no _3 appears after the light query starts
-        let light_start = css.find("prefers-color-scheme: light").unwrap();
-        let light_section = &css[light_start..];
-        assert!(!light_section.contains("_3;"), "light section should not use _3 tier");
+    fn accent_css_uses_different_palette_tiers_for_light_and_dark() {
+        let dark = crate::application::accent_css_for_dark(true);
+        let light = crate::application::accent_css_for_dark(false);
+        assert!(dark.contains("@blue_3"), "dark should use _3 tier");
+        assert!(light.contains("@blue_5"), "light should use _5 tier");
+        assert!(!dark.contains("_5;"), "dark should not use _5 tier");
+        assert!(!light.contains("_3;"), "light should not use _3 tier");
     }
 
     #[test]

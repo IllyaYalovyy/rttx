@@ -5,7 +5,7 @@ use libadwaita as adw;
 use crate::config;
 use crate::window::Window;
 
-pub(crate) const APP_CSS: &str = "\
+pub const APP_CSS: &str = "\
     .terminal-pane {
         border-radius: 10px;
         border: 1px solid alpha(@window_fg_color, 0.10);
@@ -52,27 +52,33 @@ pub(crate) const APP_CSS: &str = "\
     }
     .session-row .subtitle {
         opacity: 0.55;
-    }
-    @media (prefers-color-scheme: dark) {
-        .accent-blue   { color: @blue_3; }
-        .accent-green  { color: @green_3; }
-        .accent-yellow { color: @yellow_3; }
-        .accent-red    { color: @red_3; }
-        .accent-purple { color: @purple_3; }
-        .accent-pink   { color: @pink_3; }
-        .accent-teal   { color: @teal_3; }
-        .accent-orange { color: @orange_3; }
-    }
-    @media (prefers-color-scheme: light) {
-        .accent-blue   { color: @blue_5; }
-        .accent-green  { color: @green_5; }
-        .accent-yellow { color: @yellow_5; }
-        .accent-red    { color: @red_5; }
-        .accent-purple { color: @purple_5; }
-        .accent-pink   { color: @pink_5; }
-        .accent-teal   { color: @teal_5; }
-        .accent-orange { color: @orange_5; }
     }";
+
+const ACCENT_CSS_DARK: &str = "\
+    .accent-blue   { color: @blue_3; }
+    .accent-green  { color: @green_3; }
+    .accent-yellow { color: @yellow_3; }
+    .accent-red    { color: @red_3; }
+    .accent-purple { color: @purple_3; }
+    .accent-pink   { color: @pink_3; }
+    .accent-teal   { color: @teal_3; }
+    .accent-orange { color: @orange_3; }";
+
+const ACCENT_CSS_LIGHT: &str = "\
+    .accent-blue   { color: @blue_5; }
+    .accent-green  { color: @green_5; }
+    .accent-yellow { color: @yellow_5; }
+    .accent-red    { color: @red_5; }
+    .accent-purple { color: @purple_5; }
+    .accent-pink   { color: @pink_5; }
+    .accent-teal   { color: @teal_5; }
+    .accent-orange { color: @orange_5; }";
+
+/// Return the accent color CSS for the current color scheme.
+#[must_use]
+pub const fn accent_css_for_dark(is_dark: bool) -> &'static str {
+    if is_dark { ACCENT_CSS_DARK } else { ACCENT_CSS_LIGHT }
+}
 
 fn init_logging() {
     use tracing_subscriber::EnvFilter;
@@ -139,6 +145,19 @@ pub fn run() -> glib::ExitCode {
             &css,
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+
+        let accent_css = gtk4::CssProvider::new();
+        let is_dark = adw::StyleManager::default().is_dark();
+        accent_css.load_from_string(accent_css_for_dark(is_dark));
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &accent_css,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
+        adw::StyleManager::default().connect_dark_notify(move |mgr| {
+            accent_css.load_from_string(accent_css_for_dark(mgr.is_dark()));
+        });
 
         if !config::is_development() {
             return;
