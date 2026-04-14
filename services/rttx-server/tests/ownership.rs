@@ -268,8 +268,7 @@ async fn read_only_client_cannot_set_pane_title() {
     writer.handshake().await;
 
     let session_id =
-        common::create_session(&mut writer, "title-denied", proto::RuntimePolicy::Persistent)
-            .await;
+        common::create_session(&mut writer, "title-denied", proto::RuntimePolicy::Persistent).await;
     common::attach_rw(&mut writer, &session_id).await;
     let pane_id = common::create_pane(&mut writer, &session_id).await;
 

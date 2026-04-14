@@ -766,10 +766,7 @@ async fn detach_last_client_from_ephemeral_session_terminates() {
     match resp.msg {
         Some(proto::server_message::Msg::SessionTerminated(st)) => {
             assert_eq!(bytes_to_uuid(&st.session_id).unwrap(), session_id);
-            assert_eq!(
-                st.reason,
-                proto::RuntimeTerminationReason::EphemeralLastDetach as i32
-            );
+            assert_eq!(st.reason, proto::RuntimeTerminationReason::EphemeralLastDetach as i32);
         }
         other => panic!("expected SessionTerminated, got {other:?}"),
     }
