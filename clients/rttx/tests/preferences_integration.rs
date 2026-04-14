@@ -33,6 +33,8 @@ fn preferences_roundtrip_all_fields() {
         pane_navigation_keys: PaneNavigationKeys::AltArrow,
         auto_start_daemon: true,
         reconnect_delay_secs: 10,
+        paste_guard: false,
+        paste_guard_threshold: 2048,
     };
 
     preferences::save_to(&prefs, &path).unwrap();
@@ -207,4 +209,34 @@ fn pane_navigation_keys_persists_across_save_load() {
     std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
     let loaded = preferences::load_from(&path);
     assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
+}
+
+#[test]
+fn paste_guard_defaults_to_enabled_with_1k_threshold() {
+    let prefs = Preferences::default();
+    assert!(prefs.paste_guard);
+    assert_eq!(prefs.paste_guard_threshold, 1024);
+}
+
+#[test]
+fn paste_guard_roundtrips() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+
+    let prefs =
+        Preferences { paste_guard: false, paste_guard_threshold: 4096, ..Default::default() };
+    preferences::save_to(&prefs, &path).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert!(!loaded.paste_guard);
+    assert_eq!(loaded.paste_guard_threshold, 4096);
+}
+
+#[test]
+fn paste_guard_backward_compat_missing_fields() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert!(loaded.paste_guard);
+    assert_eq!(loaded.paste_guard_threshold, 1024);
 }

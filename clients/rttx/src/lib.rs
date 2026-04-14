@@ -1,5 +1,4 @@
 pub mod bookmarks;
-pub mod bookmarks_window;
 pub mod color_scheme;
 pub mod commands;
 pub mod commands_window;
@@ -11,6 +10,7 @@ pub mod form_dialog;
 pub mod host;
 pub mod new_workspace_dialog;
 pub mod places;
+pub mod places_window;
 pub mod preferences;
 pub mod runtime;
 pub mod session;

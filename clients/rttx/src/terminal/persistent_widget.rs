@@ -759,10 +759,11 @@ impl PersistentPaneView {
                     glib::Propagation::Stop
                 }
                 TerminalKeyAction::PasteClipboard => {
-                    let forward_input = std::rc::Rc::clone(&forward_input);
-                    pane.request_clipboard_paste(move |bytes| {
-                        forward_input(&bytes);
-                    });
+                    if let Some(root) = pane.root()
+                        && let Some(win) = root.downcast_ref::<gtk4::Window>()
+                    {
+                        win.activate_action("win.paste", None).ok();
+                    }
                     glib::Propagation::Stop
                 }
                 TerminalKeyAction::ForwardToPty(bytes) => {
@@ -879,7 +880,7 @@ const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
 /// Replaces `\r\n` and standalone `\n` with `\r`, matching VTE's
 /// `pastify_string()` behavior. Terminals expect `\r` for line endings
 /// on the input side.
-fn pastify(text: &[u8]) -> Vec<u8> {
+pub(crate) fn pastify(text: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len());
     let mut i = 0;
     while i < text.len() {
@@ -895,6 +896,22 @@ fn pastify(text: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Build paste bytes for a managed pane, wrapping in bracketed paste if the
+/// pane has that mode enabled.
+pub(crate) fn pastify_for_pane(pane: &PersistentPaneView, text: &[u8]) -> Vec<u8> {
+    let payload = pastify(text);
+    if pane.imp().bracketed_paste_mode.get() {
+        let mut wrapped =
+            Vec::with_capacity(b"\x1b[200~".len() + payload.len() + b"\x1b[201~".len());
+        wrapped.extend_from_slice(b"\x1b[200~");
+        wrapped.extend_from_slice(&payload);
+        wrapped.extend_from_slice(b"\x1b[201~");
+        wrapped
+    } else {
+        payload
+    }
 }
 
 /// Scan terminal output for DECSET/DECRST 2004 and update the mode flag.

@@ -99,6 +99,12 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     smart_clipboard_row.set_active(prefs.smart_clipboard);
     terminal_group.add(&smart_clipboard_row);
 
+    let paste_guard_row = adw::SwitchRow::new();
+    paste_guard_row.set_title("Paste guard");
+    paste_guard_row.set_subtitle("Confirm before pasting multiline or large text");
+    paste_guard_row.set_active(prefs.paste_guard);
+    terminal_group.add(&paste_guard_row);
+
     let session_group = adw::PreferencesGroup::new();
     session_group.set_title("Workspaces");
 
@@ -200,6 +206,8 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             },
             auto_start_daemon: prefs.auto_start_daemon,
             reconnect_delay_secs: prefs.reconnect_delay_secs,
+            paste_guard: paste_guard_row.is_active(),
+            paste_guard_threshold: prefs.paste_guard_threshold,
         };
         if let Err(e) = preferences::save(&new_prefs) {
             log::error!("Failed to save preferences: {e}");

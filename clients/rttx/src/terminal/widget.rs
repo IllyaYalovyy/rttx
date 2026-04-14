@@ -170,7 +170,11 @@ mod imp {
                         glib::Propagation::Stop
                     }
                     TerminalKeyAction::PasteClipboard => {
-                        vte.paste_clipboard();
+                        if let Some(root) = term.root()
+                            && let Some(win) = root.downcast_ref::<gtk4::Window>()
+                        {
+                            win.activate_action("win.paste", None).ok();
+                        }
                         glib::Propagation::Stop
                     }
                     TerminalKeyAction::PassThrough | TerminalKeyAction::ForwardToPty(_) => {

@@ -48,22 +48,6 @@ impl Window {
         alert.present(Some(self));
     }
 
-    pub(super) fn confirm_delete_bookmark(&self, uuid: String) {
-        let win = self.clone();
-        self.confirm_delete(
-            "Delete Bookmark?",
-            "The bookmark will be permanently removed.",
-            move || {
-                let mut items = crate::bookmarks::load();
-                items.retain(|b| b.uuid != uuid);
-                if let Err(e) = crate::bookmarks::save(&items) {
-                    log::error!("Failed to delete bookmark: {e}");
-                }
-                win.refresh_bookmark_sidebar();
-            },
-        );
-    }
-
     pub(super) fn confirm_delete_command(&self, uuid: String) {
         let win = self.clone();
         self.confirm_delete(
@@ -78,6 +62,18 @@ impl Window {
                 win.refresh_command_sidebar();
             },
         );
+    }
+
+    pub(super) fn confirm_delete_place(&self, uuid: String) {
+        let win = self.clone();
+        self.confirm_delete("Delete Place?", "The place will be permanently removed.", move || {
+            let mut items = places::load();
+            items.retain(|p| p.uuid != uuid);
+            if let Err(e) = places::save(&items) {
+                log::error!("Failed to delete place: {e}");
+            }
+            win.refresh_place_sidebar();
+        });
     }
 
     pub(super) fn confirm_delete_host(&self, host_key: String) {
@@ -230,6 +226,74 @@ impl Window {
             win.refresh_command_sidebar();
             dialog_ref.close();
         });
+
+        dialog.present(Some(self));
+    }
+
+    pub(super) fn show_add_host_dialog(&self) {
+        let dialog = adw::Dialog::builder().title("Add Host").content_width(360).build();
+        let header = adw::HeaderBar::new();
+
+        let add_button = gtk4::Button::with_label("Add");
+        add_button.add_css_class("suggested-action");
+        add_button.set_sensitive(false);
+        header.pack_end(&add_button);
+
+        let entry = adw::EntryRow::builder().title("SSH target (e.g. user@host)").build();
+
+        let group = adw::PreferencesGroup::new();
+        group.add(&entry);
+
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
+        content.set_margin_top(18);
+        content.set_margin_bottom(18);
+        content.append(&group);
+
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
+        toolbar_view.set_content(Some(&content));
+        dialog.set_child(Some(&toolbar_view));
+
+        let add_ref = add_button.clone();
+        entry.connect_changed(move |e| {
+            add_ref.set_sensitive(!e.text().trim().is_empty());
+        });
+
+        let dialog_ref = dialog.clone();
+        let win = self.clone();
+        let entry_ref = entry.clone();
+        let commit = move || {
+            let text = entry_ref.text();
+            let ssh_target = text.trim();
+            if ssh_target.is_empty() {
+                return;
+            }
+            let new_host = host::Host::remote(ssh_target);
+            let mut hosts = host::load();
+            if hosts.iter().any(|h| h.key == new_host.key) {
+                win.show_toast(&format!("Host \"{}\" already exists", new_host.name));
+                dialog_ref.close();
+                return;
+            }
+            hosts.push(new_host.clone());
+            if let Err(e) = host::save(&hosts) {
+                log::error!("Failed to save hosts: {e}");
+                win.show_toast("Failed to save host");
+                dialog_ref.close();
+                return;
+            }
+            win.rebuild_host_selector_model(Some(&new_host.key));
+            win.refresh_place_sidebar();
+            win.refresh_command_sidebar();
+            win.show_toast(&format!("Host \"{}\" added", new_host.name));
+            dialog_ref.close();
+        };
+
+        let commit_for_button = commit.clone();
+        add_button.connect_clicked(move |_| commit_for_button());
+        entry.connect_entry_activated(move |_| commit());
 
         dialog.present(Some(self));
     }
@@ -452,37 +516,6 @@ impl Window {
         }
     }
 
-    pub(super) fn do_bookmark_active_session(&self) {
-        let Some(bookmark) = self.create_bookmark_from_active_session() else {
-            return;
-        };
-        let name = bookmark.name.clone();
-        let mut bookmarks = crate::bookmarks::load();
-        bookmarks.push(bookmark);
-        let _ = crate::bookmarks::save(&bookmarks);
-        self.refresh_bookmark_sidebar();
-
-        let notification = gtk4::gio::Notification::new("Bookmark saved");
-        notification.set_body(Some(&format!("Workspace \"{name}\" was added to bookmarks")));
-        if let Some(app) = self.application() {
-            app.send_notification(None, &notification);
-        }
-    }
-
-    pub(crate) fn create_bookmark_from_active_session(&self) -> Option<Bookmark> {
-        let uuid = self.focused_terminal_uuid()?;
-        let state = self.imp().state.borrow();
-        let session = state.sessions.iter().find(|s| s.layout.contains_terminal(&uuid))?;
-        let session_name = session.name.clone();
-        drop(state);
-
-        let cwd = self.terminal_handle(&uuid).and_then(|terminal| terminal.current_directory());
-
-        let mut bookmark = Bookmark::new(session_name);
-        bookmark.directory = cwd;
-        Some(bookmark)
-    }
-
     /// Extract the SSH target from the active session's remote endpoint.
     ///
     /// Returns `None` for local or unmanaged sessions.
@@ -551,5 +584,41 @@ impl Window {
 
         self.refresh_place_sidebar();
         self.show_toast(&format!("Place \"{label}\" added"));
+    }
+
+    pub(super) fn confirm_paste(&self, terminal_uuid: &str, text: &str) {
+        use crate::terminal::paste_guard::{analyse, flatten_to_single_line};
+
+        let analysis = analyse(text);
+        let body = format!(
+            "{} lines, {} bytes\n\n{}",
+            analysis.line_count, analysis.byte_len, analysis.preview
+        );
+
+        let alert = adw::AlertDialog::new(Some("Confirm Paste"), Some(&body));
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("single-line", "Paste as Single Line");
+        alert.add_response("paste", "Paste");
+        alert.set_response_appearance("paste", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+
+        let win = self.clone();
+        let uuid = terminal_uuid.to_string();
+        let original_text = text.to_string();
+        alert.connect_response(None, move |_, response| {
+            let Some(terminal) = win.terminal_handle(&uuid) else { return };
+            match response {
+                "paste" => {
+                    Self::execute_paste_text(&terminal, &win, &uuid, &original_text);
+                }
+                "single-line" => {
+                    let flat = flatten_to_single_line(&original_text);
+                    Self::execute_paste_text(&terminal, &win, &uuid, &flat);
+                }
+                _ => {}
+            }
+        });
+        alert.present(Some(self));
     }
 }
