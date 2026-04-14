@@ -77,6 +77,7 @@ impl PaneScreen {
         if self.performer.raw_bytes.len() > self.performer.max_bytes {
             let excess = self.performer.raw_bytes.len() - self.performer.max_bytes;
             self.performer.raw_bytes.drain(..excess);
+            self.performer.raw_bytes.shrink_to(self.performer.max_bytes);
         }
 
         for &byte in data {
@@ -88,6 +89,13 @@ impl PaneScreen {
     #[must_use]
     pub fn raw_bytes(&self) -> &[u8] {
         &self.performer.raw_bytes
+    }
+
+    /// Return the allocated capacity of the raw bytes buffer.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn raw_bytes_capacity(&self) -> usize {
+        self.performer.raw_bytes.capacity()
     }
 
     /// Release the in-memory scrollback buffer, freeing its allocation.
@@ -440,6 +448,19 @@ mod tests {
         assert_eq!(screen.raw_bytes().len(), 10);
         // Should keep the tail.
         assert_eq!(screen.raw_bytes(), b"6789abcdef");
+    }
+
+    #[test]
+    fn raw_bytes_capacity_shrinks_after_drain() {
+        let max = 1024;
+        let mut screen = PaneScreen::new(max);
+        // Feed a large burst that exceeds max, triggering drain.
+        let burst = vec![b'X'; max * 3];
+        screen.feed(&burst);
+        assert_eq!(screen.raw_bytes().len(), max);
+        // Capacity should be close to max, not 3x max.
+        let cap = screen.raw_bytes_capacity();
+        assert!(cap <= max * 2, "capacity {cap} should shrink toward max {max} after drain");
     }
 
     #[test]
