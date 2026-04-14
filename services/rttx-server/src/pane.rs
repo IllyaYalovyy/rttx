@@ -166,6 +166,15 @@ impl Pane {
         self.exit_status = Some(status);
     }
 
+    /// Release the in-memory scrollback buffer and pending flush data.
+    ///
+    /// Called when the pane process exits so the up-to-10 MB `raw_bytes`
+    /// buffer does not linger in memory indefinitely.
+    pub fn release_scrollback(&mut self) {
+        self.screen.clear_scrollback();
+        self.pending_flush = Vec::new();
+    }
+
     /// Whether the pane process has exited.
     #[must_use]
     pub const fn is_exited(&self) -> bool {
@@ -431,5 +440,27 @@ mod tests {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         let result = pane.feed_output(b"hello");
         assert!(result.pending_replies.is_empty());
+    }
+
+    #[test]
+    fn release_scrollback_clears_raw_bytes_and_pending_flush() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello world\r\nsome output\r\n");
+        assert!(!pane.screen.raw_bytes().is_empty());
+        assert!(pane.has_pending_flush());
+
+        pane.release_scrollback();
+
+        assert!(pane.screen.raw_bytes().is_empty());
+        assert!(!pane.has_pending_flush());
+    }
+
+    #[test]
+    fn release_scrollback_is_idempotent() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"data");
+        pane.release_scrollback();
+        pane.release_scrollback();
+        assert!(pane.screen.raw_bytes().is_empty());
     }
 }

@@ -90,6 +90,11 @@ impl PaneScreen {
         &self.performer.raw_bytes
     }
 
+    /// Release the in-memory scrollback buffer, freeing its allocation.
+    pub fn clear_scrollback(&mut self) {
+        self.performer.raw_bytes = Vec::new();
+    }
+
     /// Return a tail slice of raw bytes suitable for client snapshot replay.
     ///
     /// Caps the returned data to `max_bytes` and finds a clean newline
@@ -414,6 +419,18 @@ mod tests {
         let mut screen = PaneScreen::new(1024);
         screen.feed(b"test data");
         assert_eq!(screen.raw_bytes(), b"test data");
+    }
+
+    #[test]
+    fn clear_scrollback_releases_buffer() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"hello world");
+        assert!(!screen.raw_bytes().is_empty());
+
+        screen.clear_scrollback();
+        assert!(screen.raw_bytes().is_empty());
+        // Capacity should be released, not just length zeroed.
+        assert_eq!(screen.raw_bytes().len(), 0);
     }
 
     #[test]

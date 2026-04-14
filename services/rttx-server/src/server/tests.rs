@@ -1240,3 +1240,32 @@ async fn client_senders_use_bounded_channel() {
     const { assert!(PUSH_CHANNEL_BOUND > 0) };
     const { assert!(PUSH_CHANNEL_BOUND <= 8192) };
 }
+
+// ── Exited pane scrollback release ──────────────────────────────
+
+#[tokio::test]
+async fn exited_pane_scrollback_is_released() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+
+    let mut s = server.lock().await;
+    let session = s.sessions.get_mut(&session_id).unwrap();
+
+    // Feed output to build up scrollback.
+    let pane = session.panes.get_mut(&pane_id).unwrap();
+    pane.feed_output(&vec![b'A'; 1024]);
+    assert!(!pane.screen.raw_bytes().is_empty());
+    assert!(pane.has_pending_flush());
+
+    // Simulate PTY exit: set exit status and release scrollback.
+    session.set_pane_exit_status(pane_id, Some(0));
+    let pane = session.panes.get_mut(&pane_id).unwrap();
+    pane.release_scrollback();
+
+    // Verify scrollback is released but pane still exists.
+    assert!(pane.is_exited());
+    assert!(pane.screen.raw_bytes().is_empty());
+    assert!(!pane.has_pending_flush());
+    drop(s);
+}
