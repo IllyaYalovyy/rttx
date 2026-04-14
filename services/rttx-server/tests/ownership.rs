@@ -221,3 +221,75 @@ async fn terminate_runtime_notifies_other_attached_clients_and_removes_state() {
     let sessions = list_sessions(&mut third).await;
     assert!(sessions.is_empty());
 }
+
+#[tokio::test]
+async fn read_only_client_cannot_rename_session() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut writer = TestClient::connect(&sock).await;
+    writer.handshake().await;
+
+    let session_id =
+        common::create_session(&mut writer, "rename-denied", proto::RuntimePolicy::Persistent)
+            .await;
+    common::attach_rw(&mut writer, &session_id).await;
+
+    let mut reader = TestClient::connect(&sock).await;
+    reader.handshake().await;
+    common::attach_ro(&mut reader, &session_id).await;
+
+    reader
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
+                session_id: session_id.clone(),
+                name: "hijacked".into(),
+            })),
+        })
+        .await;
+    match reader.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, 9); // ERR_OWNERSHIP_CONFLICT
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    // Verify name unchanged.
+    let sessions = list_sessions(&mut writer).await;
+    assert_eq!(sessions[0].name, "rename-denied");
+}
+
+#[tokio::test]
+async fn read_only_client_cannot_set_pane_title() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut writer = TestClient::connect(&sock).await;
+    writer.handshake().await;
+
+    let session_id =
+        common::create_session(&mut writer, "title-denied", proto::RuntimePolicy::Persistent)
+            .await;
+    common::attach_rw(&mut writer, &session_id).await;
+    let pane_id = common::create_pane(&mut writer, &session_id).await;
+
+    let mut reader = TestClient::connect(&sock).await;
+    reader.handshake().await;
+    common::attach_ro(&mut reader, &session_id).await;
+
+    reader
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+                session_id: session_id.clone(),
+                pane_id,
+                title: "hijacked".into(),
+            })),
+        })
+        .await;
+    match reader.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::Error(e)) => {
+            assert_eq!(e.code, 9); // ERR_OWNERSHIP_CONFLICT
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
