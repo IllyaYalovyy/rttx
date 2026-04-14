@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{TestClient, attach_rw, create_session, start_test_server};
+use common::TestClient;
+use common::{attach_rw, create_session, start_test_server};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -65,6 +66,7 @@ async fn slow_client_does_not_block_server() {
 
     // Fast client should receive Delta output within a reasonable time.
     let msgs = fast.drain(Duration::from_secs(5)).await;
-    let has_delta = msgs.iter().any(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_))));
+    let has_delta =
+        msgs.iter().any(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_))));
     assert!(has_delta, "fast client should receive Deltas even with a slow client attached");
 }
