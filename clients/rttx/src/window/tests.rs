@@ -4733,9 +4733,8 @@ fn close_others_removes_all_except_kept_session() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.close-others-test")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.close-others-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -4775,9 +4774,8 @@ fn close_others_noop_with_single_session() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.close-others-noop-test")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.close-others-noop-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
