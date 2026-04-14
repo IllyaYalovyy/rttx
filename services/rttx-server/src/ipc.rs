@@ -130,13 +130,8 @@ where
     {
         let (read_half, write_half) = tokio::io::split(self.stream);
         (
-            ClientConnectionReader {
-                stream: Box::new(read_half),
-                read_buf: self.read_buf,
-            },
-            ClientConnectionWriter {
-                stream: Box::new(write_half),
-            },
+            ClientConnectionReader { stream: Box::new(read_half), read_buf: self.read_buf },
+            ClientConnectionWriter { stream: Box::new(write_half) },
         )
     }
 }

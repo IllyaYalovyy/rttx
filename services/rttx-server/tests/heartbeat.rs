@@ -50,3 +50,82 @@ fn ping_roundtrip_still_works_for_attached_clients() {
         }
     });
 }
+
+#[test]
+fn ping_answered_during_pty_output() {
+    // Regression test for #532: the server must answer pings even when
+    // push messages (PTY deltas) are being sent concurrently. The old
+    // single-loop design could deadlock when the write path blocked the
+    // read path.
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (sock, _handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        let session_id =
+            create_session(&mut client, "ping-during-output", proto::RuntimePolicy::Persistent)
+                .await;
+        let _snapshot = attach_rw(&mut client, &session_id).await;
+
+        // Create a pane that will produce output.
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                    session_id: session_id.clone(),
+                    cwd: None,
+                    dark_background: Some(true),
+                })),
+            })
+            .await;
+
+        // Read PaneCreated response.
+        let pane_id = loop {
+            let msg = client.recv_or_timeout().await;
+            if let Some(proto::server_message::Msg::PaneCreated(created)) = msg.msg {
+                break created.pane_id;
+            }
+        };
+
+        // Send some input to generate PTY output.
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Input(proto::Input {
+                    session_id: session_id.clone(),
+                    pane_id,
+                    data: b"echo hello\n".to_vec(),
+                })),
+            })
+            .await;
+
+        // Wait briefly for output to start flowing.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Send a ping while output may be in flight.
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 99 })),
+            })
+            .await;
+
+        // Drain messages until we see the pong. With the concurrent
+        // reader/writer design, the pong should arrive promptly even
+        // if deltas are being sent.
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut got_pong = false;
+        while tokio::time::Instant::now() < deadline {
+            match client.try_recv(std::time::Duration::from_secs(2)).await {
+                Some(msg) => {
+                    if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                        assert_eq!(pong.nonce, 99);
+                        got_pong = true;
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        assert!(got_pong, "pong should arrive even during PTY output");
+    });
+}
