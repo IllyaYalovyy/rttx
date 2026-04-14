@@ -27,6 +27,12 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Capacity for the event channel (`EndpointEvent` → GTK main loop).
+const EVENT_CHANNEL_BOUND: usize = 4096;
+
+/// Capacity for the command channel (`EndpointCommand` → actor).
+const CMD_CHANNEL_BOUND: usize = 4096;
+
 /// Operation type for manager error reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagerOperation {
@@ -148,7 +154,7 @@ enum EndpointCommand {
 
 #[derive(Debug)]
 struct EndpointHandle {
-    cmd_tx: mpsc::UnboundedSender<EndpointCommand>,
+    cmd_tx: mpsc::Sender<EndpointCommand>,
 }
 
 /// Public manager used by the GTK window.
@@ -156,7 +162,7 @@ struct EndpointHandle {
 pub struct EndpointConnectionManager {
     rt: tokio::runtime::Runtime,
     endpoints: RefCell<HashMap<String, EndpointHandle>>,
-    event_tx: mpsc::UnboundedSender<EndpointEvent>,
+    event_tx: mpsc::Sender<EndpointEvent>,
     auto_start_daemon: bool,
     reconnect_delay_secs: u32,
 }
@@ -166,13 +172,13 @@ impl EndpointConnectionManager {
     pub fn new(
         auto_start_daemon: bool,
         reconnect_delay_secs: u32,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<EndpointEvent>), DaemonError> {
+    ) -> Result<(Self, mpsc::Receiver<EndpointEvent>), DaemonError> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
             .build()
             .map_err(DaemonError::Io)?;
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         Ok((
             Self {
                 rt,
@@ -185,16 +191,13 @@ impl EndpointConnectionManager {
         ))
     }
 
-    fn endpoint_handle(
-        &self,
-        endpoint: &RuntimeEndpoint,
-    ) -> mpsc::UnboundedSender<EndpointCommand> {
+    fn endpoint_handle(&self, endpoint: &RuntimeEndpoint) -> mpsc::Sender<EndpointCommand> {
         let key = endpoint.key();
         if let Some(handle) = self.endpoints.borrow().get(&key) {
             return handle.cmd_tx.clone();
         }
 
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let actor = EndpointActor::new(
             endpoint.clone(),
             self.event_tx.clone(),
@@ -213,7 +216,7 @@ impl EndpointConnectionManager {
     pub fn reset_endpoint(&self, endpoint: &RuntimeEndpoint) {
         let key = endpoint.key();
         if let Some(handle) = self.endpoints.borrow_mut().remove(&key) {
-            let _ = handle.cmd_tx.send(EndpointCommand::Shutdown);
+            let _ = handle.cmd_tx.try_send(EndpointCommand::Shutdown);
         }
     }
 
@@ -227,7 +230,7 @@ impl EndpointConnectionManager {
         runtime_id: Option<&str>,
         placeholder_terminal_uuid: Option<&str>,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::OpenWorkspace {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::OpenWorkspace {
             workspace_id: workspace_id.to_string(),
             name: name.to_string(),
             policy,
@@ -238,7 +241,7 @@ impl EndpointConnectionManager {
 
     /// Request runtime inventory for an endpoint.
     pub fn refresh_inventory(&self, endpoint: &RuntimeEndpoint) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::RefreshInventory);
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::RefreshInventory);
     }
 
     /// Request a new pane inside an attached runtime.
@@ -251,7 +254,7 @@ impl EndpointConnectionManager {
         cwd: Option<String>,
         dark_background: bool,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::CreatePane {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::CreatePane {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             layout_terminal_uuid: layout_terminal_uuid.to_string(),
@@ -269,7 +272,7 @@ impl EndpointConnectionManager {
         layout_terminal_uuid: &str,
         runtime_pane_id: &str,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::ClosePane {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::ClosePane {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             layout_terminal_uuid: layout_terminal_uuid.to_string(),
@@ -279,7 +282,7 @@ impl EndpointConnectionManager {
 
     /// Gracefully detach a workspace from its runtime.
     pub fn detach_runtime(&self, workspace_id: &str, endpoint: &RuntimeEndpoint, runtime_id: &str) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::DetachRuntime {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::DetachRuntime {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
         });
@@ -292,7 +295,7 @@ impl EndpointConnectionManager {
         endpoint: &RuntimeEndpoint,
         runtime_id: &str,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::TerminateRuntime {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::TerminateRuntime {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
         });
@@ -307,7 +310,7 @@ impl EndpointConnectionManager {
         runtime_pane_id: &str,
         data: Vec<u8>,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::SendInput {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::SendInput {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             runtime_pane_id: runtime_pane_id.to_string(),
@@ -325,7 +328,7 @@ impl EndpointConnectionManager {
         cols: u16,
         rows: u16,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::ResizePane {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::ResizePane {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             runtime_pane_id: runtime_pane_id.to_string(),
@@ -338,7 +341,7 @@ impl EndpointConnectionManager {
     pub fn forget_workspace(&self, endpoint: &RuntimeEndpoint, workspace_id: &str) {
         let _ = self
             .endpoint_handle(endpoint)
-            .send(EndpointCommand::ForgetWorkspace { workspace_id: workspace_id.to_string() });
+            .try_send(EndpointCommand::ForgetWorkspace { workspace_id: workspace_id.to_string() });
     }
 
     /// Rename a runtime on the daemon.
@@ -349,7 +352,7 @@ impl EndpointConnectionManager {
         runtime_id: &str,
         name: &str,
     ) {
-        let _ = self.endpoint_handle(endpoint).send(EndpointCommand::RenameRuntime {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::RenameRuntime {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             name: name.to_string(),
@@ -360,9 +363,9 @@ impl EndpointConnectionManager {
 #[derive(Debug)]
 struct EndpointActor {
     endpoint: RuntimeEndpoint,
-    event_tx: mpsc::UnboundedSender<EndpointEvent>,
-    self_tx: mpsc::UnboundedSender<EndpointCommand>,
-    cmd_rx: mpsc::UnboundedReceiver<EndpointCommand>,
+    event_tx: mpsc::Sender<EndpointEvent>,
+    self_tx: mpsc::Sender<EndpointCommand>,
+    cmd_rx: mpsc::Receiver<EndpointCommand>,
     connection: Option<DaemonConnection>,
     reader: Option<DaemonReader>,
     writer: Option<DaemonWriter>,
@@ -442,9 +445,9 @@ fn new_heartbeat_deadline() -> Instant {
 impl EndpointActor {
     fn new(
         endpoint: RuntimeEndpoint,
-        event_tx: mpsc::UnboundedSender<EndpointEvent>,
-        self_tx: mpsc::UnboundedSender<EndpointCommand>,
-        cmd_rx: mpsc::UnboundedReceiver<EndpointCommand>,
+        event_tx: mpsc::Sender<EndpointEvent>,
+        self_tx: mpsc::Sender<EndpointCommand>,
+        cmd_rx: mpsc::Receiver<EndpointCommand>,
         auto_start_daemon: bool,
         reconnect_delay_secs: u32,
     ) -> Self {
@@ -599,7 +602,7 @@ impl EndpointActor {
 
                 self.split_connection();
                 self.tracked_workspaces.insert(workspace_id.clone(), runtime_id.clone());
-                let _ = self.event_tx.send(EndpointEvent::WorkspaceOpened {
+                let _ = self.event_tx.try_send(EndpointEvent::WorkspaceOpened {
                     workspace_id: workspace_id.clone(),
                     runtime_id: runtime_id.clone(),
                     snapshot: snapshot.clone(),
@@ -607,7 +610,7 @@ impl EndpointActor {
 
                 if snapshot.panes.is_empty() {
                     if let Some(layout_terminal_uuid) = placeholder_terminal_uuid {
-                        let _ = self.self_tx.send(EndpointCommand::CreatePane {
+                        let _ = self.self_tx.try_send(EndpointCommand::CreatePane {
                             workspace_id,
                             runtime_id,
                             layout_terminal_uuid,
@@ -661,7 +664,7 @@ impl EndpointActor {
                     Ok(response) => match response.msg {
                         Some(proto::server_message::Msg::PaneCreated(created)) => {
                             if let Ok(pane_id) = rttx_proto::bytes_to_uuid(&created.pane_id) {
-                                let _ = self.event_tx.send(EndpointEvent::PaneCreated {
+                                let _ = self.event_tx.try_send(EndpointEvent::PaneCreated {
                                     workspace_id: workspace_id.clone(),
                                     layout_terminal_uuid,
                                     runtime_id,
@@ -739,7 +742,7 @@ impl EndpointActor {
                 match self.read_response(false).await {
                     Ok(response) => match response.msg {
                         Some(proto::server_message::Msg::PaneClosed(_)) => {
-                            let _ = self.event_tx.send(EndpointEvent::PaneClosed {
+                            let _ = self.event_tx.try_send(EndpointEvent::PaneClosed {
                                 workspace_id,
                                 layout_terminal_uuid,
                                 runtime_id,
@@ -753,7 +756,7 @@ impl EndpointActor {
                                 "ClosePane for {workspace_id}: pane already removed on daemon, \
                                  treating as closed"
                             );
-                            let _ = self.event_tx.send(EndpointEvent::PaneClosed {
+                            let _ = self.event_tx.try_send(EndpointEvent::PaneClosed {
                                 workspace_id,
                                 layout_terminal_uuid,
                                 runtime_id,
@@ -820,14 +823,14 @@ impl EndpointActor {
                     Ok(response) => match response.msg {
                         Some(proto::server_message::Msg::SessionDetached(_)) => {
                             self.tracked_workspaces.remove(&workspace_id);
-                            let _ = self.event_tx.send(EndpointEvent::WorkspaceDetached {
+                            let _ = self.event_tx.try_send(EndpointEvent::WorkspaceDetached {
                                 workspace_id,
                                 runtime_id,
                             });
                         }
                         Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
-                            let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
+                            let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
                                 runtime_id,
                                 reason: proto::RuntimeTerminationReason::try_from(
@@ -898,7 +901,7 @@ impl EndpointActor {
                     Ok(response) => match response.msg {
                         Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
-                            let _ = self.event_tx.send(EndpointEvent::RuntimeTerminated {
+                            let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
                                 runtime_id,
                                 reason: proto::RuntimeTerminationReason::try_from(
@@ -1023,7 +1026,7 @@ impl EndpointActor {
                 };
                 match list_result {
                     Ok(sessions) => {
-                        let _ = self.event_tx.send(EndpointEvent::InventoryLoaded {
+                        let _ = self.event_tx.try_send(EndpointEvent::InventoryLoaded {
                             endpoint: self.endpoint.clone(),
                             sessions,
                         });
@@ -1071,7 +1074,7 @@ impl EndpointActor {
                     };
                     match self.attach_runtime_via_active_channel(runtime_uuid).await {
                         Ok(snapshot) => {
-                            let _ = self.event_tx.send(EndpointEvent::WorkspaceOpened {
+                            let _ = self.event_tx.try_send(EndpointEvent::WorkspaceOpened {
                                 workspace_id: workspace_id.clone(),
                                 runtime_id: runtime_id.clone(),
                                 snapshot,
@@ -1417,7 +1420,7 @@ impl EndpointActor {
     fn forward_push(&self, message: proto::ServerMessage) {
         let _ = self
             .event_tx
-            .send(EndpointEvent::RuntimeMessage { endpoint: self.endpoint.clone(), message });
+            .try_send(EndpointEvent::RuntimeMessage { endpoint: self.endpoint.clone(), message });
     }
 
     fn observe_inbound_message(&mut self, message: &proto::ServerMessage) -> bool {
@@ -1489,7 +1492,7 @@ impl EndpointActor {
         let delay = Duration::from_secs(u64::from(delay_secs));
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            let _ = self_tx.send(EndpointCommand::Reconnect);
+            let _ = self_tx.try_send(EndpointCommand::Reconnect);
         });
     }
 
@@ -1506,7 +1509,7 @@ impl EndpointActor {
     }
 
     fn emit_status(&self, workspace_id: &str, status: ConnectionStatus) {
-        let _ = self.event_tx.send(EndpointEvent::WorkspaceConnectionChanged {
+        let _ = self.event_tx.try_send(EndpointEvent::WorkspaceConnectionChanged {
             workspace_id: workspace_id.to_string(),
             status,
         });
@@ -1519,7 +1522,7 @@ impl EndpointActor {
         problem: ConnectionProblem,
         detail: String,
     ) {
-        let _ = self.event_tx.send(EndpointEvent::WorkspaceError {
+        let _ = self.event_tx.try_send(EndpointEvent::WorkspaceError {
             workspace_id: workspace_id.to_string(),
             operation,
             problem: problem.clone(),
@@ -1550,12 +1553,12 @@ fn parse_uuid(
     workspace_id: &str,
     operation: ManagerOperation,
     value: &str,
-    event_tx: &mpsc::UnboundedSender<EndpointEvent>,
+    event_tx: &mpsc::Sender<EndpointEvent>,
 ) -> Option<Uuid> {
     match Uuid::parse_str(value) {
         Ok(uuid) => Some(uuid),
         Err(error) => {
-            let _ = event_tx.send(EndpointEvent::WorkspaceError {
+            let _ = event_tx.try_send(EndpointEvent::WorkspaceError {
                 workspace_id: workspace_id.to_string(),
                 operation,
                 problem: ConnectionProblem::Protocol("Invalid runtime UUID".into()),
@@ -1619,8 +1622,8 @@ mod tests {
     }
 
     fn make_actor(reader: DaemonReader, writer: DaemonWriter) -> EndpointActor {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         EndpointActor {
             endpoint: RuntimeEndpoint::Local,
             event_tx,
@@ -1717,9 +1720,9 @@ mod tests {
     fn make_actor_with_events(
         reader: DaemonReader,
         writer: DaemonWriter,
-    ) -> (EndpointActor, mpsc::UnboundedReceiver<EndpointEvent>) {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+    ) -> (EndpointActor, mpsc::Receiver<EndpointEvent>) {
+        let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let actor = EndpointActor {
             endpoint: RuntimeEndpoint::Local,
             event_tx,
@@ -1742,8 +1745,8 @@ mod tests {
 
     #[test]
     fn endpoint_actor_construction_does_not_require_tokio_runtime() {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
         assert!(actor.reader.is_none());
         assert!(actor.writer.is_none());
@@ -1952,8 +1955,8 @@ mod tests {
 
     #[test]
     fn daemon_start_attempted_flag_defaults_to_false() {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
         assert!(
             !actor.daemon_start_attempted,
@@ -1963,8 +1966,8 @@ mod tests {
 
     #[test]
     fn auto_start_daemon_flag_is_stored() {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
         assert!(!actor.auto_start_daemon);
@@ -1972,8 +1975,8 @@ mod tests {
 
     #[test]
     fn reconnect_delay_caps_at_configured_value() {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
 
@@ -1990,8 +1993,8 @@ mod tests {
 
     #[test]
     fn reconnect_delay_respects_custom_cap() {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 3);
 
@@ -2004,8 +2007,8 @@ mod tests {
 
     #[tokio::test]
     async fn handle_disconnect_schedules_reconnect_for_tracked_workspaces() {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
         actor.tracked_workspaces.insert("ws-1".into(), "rt-1".into());
@@ -2035,8 +2038,8 @@ mod tests {
 
     #[test]
     fn handle_disconnect_without_tracked_workspaces_does_not_schedule() {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
 
@@ -2049,8 +2052,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_and_attach_reports_session_missing_on_stale_id() {
         let ((reader, writer), mut server_stream) = split_duplex_connection();
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor = EndpointActor {
             endpoint: RuntimeEndpoint::Local,
             event_tx,
@@ -2125,8 +2128,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_and_attach_reports_ownership_conflict() {
         let ((reader, writer), mut server_stream) = split_duplex_connection();
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor = EndpointActor {
             endpoint: RuntimeEndpoint::Local,
             event_tx,
@@ -2206,9 +2209,9 @@ mod tests {
     /// schedules another attempt instead of silently killing the loop.
     #[tokio::test]
     async fn schedule_reconnect_for_non_transient_uses_max_delay() {
-        let (event_tx, _) = mpsc::unbounded_channel();
-        let (self_tx, mut self_rx) = mpsc::unbounded_channel();
-        let (_, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
 
@@ -2229,9 +2232,9 @@ mod tests {
 
     #[tokio::test]
     async fn schedule_reconnect_for_transient_uses_progressive_delay() {
-        let (event_tx, _) = mpsc::unbounded_channel();
-        let (self_tx, mut self_rx) = mpsc::unbounded_channel();
-        let (_, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor =
             EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
 
@@ -2254,7 +2257,7 @@ mod tests {
 
         // Send Shutdown via the actor's own channel.
         let tx = actor.self_tx.clone();
-        tx.send(EndpointCommand::Shutdown).unwrap();
+        tx.send(EndpointCommand::Shutdown).await.unwrap();
 
         // The actor should exit promptly.
         tokio::time::timeout(Duration::from_secs(2), actor.run())
@@ -2264,8 +2267,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_command_stops_actor_without_connection() {
-        let (event_tx, _) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let actor = EndpointActor::new(
             RuntimeEndpoint::Local,
             event_tx,
@@ -2275,7 +2278,7 @@ mod tests {
             10,
         );
 
-        self_tx.send(EndpointCommand::Shutdown).unwrap();
+        self_tx.send(EndpointCommand::Shutdown).await.unwrap();
 
         tokio::time::timeout(Duration::from_secs(2), actor.run())
             .await
@@ -2285,7 +2288,7 @@ mod tests {
     #[test]
     fn reset_endpoint_removes_handle_and_sends_shutdown() {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let manager = EndpointConnectionManager {
             rt,
             endpoints: RefCell::new(HashMap::new()),
@@ -2313,8 +2316,8 @@ mod tests {
         // The new handle should be a different channel than the old one.
         // Send on old channel — it should still work (actor hasn't consumed it yet)
         // but the manager no longer references it.
-        assert!(tx.send(EndpointCommand::RefreshInventory).is_ok());
-        assert!(tx2.send(EndpointCommand::RefreshInventory).is_ok());
+        assert!(tx.try_send(EndpointCommand::RefreshInventory).is_ok());
+        assert!(tx2.try_send(EndpointCommand::RefreshInventory).is_ok());
     }
 
     /// When a reconnect reattach fails with a transient I/O error, only one
@@ -2322,8 +2325,8 @@ mod tests {
     /// Regression test for the connect/disconnect loop (#417).
     #[tokio::test]
     async fn reconnect_transient_failure_schedules_single_reconnect() {
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let (self_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let ws1_runtime = Uuid::new_v4();
         let ws2_runtime = Uuid::new_v4();
 

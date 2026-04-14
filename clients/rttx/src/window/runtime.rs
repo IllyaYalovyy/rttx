@@ -489,7 +489,7 @@ impl Window {
 
     pub(super) fn start_endpoint_event_poller(
         &self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::daemon_bridge::EndpointEvent>,
+        mut rx: tokio::sync::mpsc::Receiver<crate::daemon_bridge::EndpointEvent>,
     ) {
         let win = self.downgrade();
         let source = glib::timeout_add_local(std::time::Duration::from_millis(8), move || {

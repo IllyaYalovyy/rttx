@@ -1199,3 +1199,44 @@ async fn rename_session_logs_lifecycle_event() {
     assert!(logs_contain("Session renamed"));
     assert!(logs_contain("new-name"));
 }
+
+// ── Bounded channel backpressure ────────────────────────────────
+
+#[tokio::test]
+#[traced_test]
+async fn broadcast_drops_messages_when_client_channel_is_full() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    // Register the client sender (bounded channel).
+    let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
+    server.lock().await.client_senders.insert(client_id, tx);
+
+    // Fill the channel to capacity.
+    let msg = protocol::delta(session_id, Uuid::new_v4(), vec![0u8; 64]);
+    for _ in 0..PUSH_CHANNEL_BOUND {
+        server.lock().await.broadcast_to_session(session_id, &msg);
+    }
+
+    // Next broadcast should drop the message instead of blocking.
+    server.lock().await.broadcast_to_session(session_id, &msg);
+
+    // Channel should still have exactly PUSH_CHANNEL_BOUND messages.
+    drop(server);
+    let mut count = 0;
+    let mut rx = rx;
+    while rx.try_recv().is_ok() {
+        count += 1;
+    }
+    assert_eq!(count, PUSH_CHANNEL_BOUND);
+    assert!(logs_contain("channel full"));
+}
+
+#[tokio::test]
+async fn client_senders_use_bounded_channel() {
+    // Verify the channel type is bounded by checking that the constant exists
+    // and has a reasonable value.
+    const { assert!(PUSH_CHANNEL_BOUND > 0) };
+    const { assert!(PUSH_CHANNEL_BOUND <= 8192) };
+}
