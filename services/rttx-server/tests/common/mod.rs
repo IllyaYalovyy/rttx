@@ -334,7 +334,7 @@ pub async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: session_id.to_vec(),
                 pane_id: pane_id.to_vec(),
-                data: data.to_vec(),
+                data: bytes::Bytes::copy_from_slice(data),
             })),
         })
         .await;

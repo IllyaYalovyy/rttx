@@ -25,7 +25,7 @@ fn pane_snapshot(pane_id: &str, title: &str, cwd: &str) -> rttx_proto::proto::Pa
         cwd: cwd.to_string(),
         cols: 120,
         rows: 40,
-        scrollback: Vec::new(),
+        scrollback: bytes::Bytes::new(),
         exit_status: None,
         bracketed_paste_mode: false,
         application_cursor_keys: false,

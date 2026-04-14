@@ -71,7 +71,7 @@ async fn input_to_missing_session_returns_none() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: uuid_to_bytes(Uuid::new_v4()),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
-            data: b"hello".to_vec(),
+            data: bytes::Bytes::from_static(b"hello"),
         })),
     };
     assert!(Server::handle_message(&server, client_id, msg).await.is_none());
@@ -587,7 +587,7 @@ async fn input_to_existing_pane_without_write_access_returns_ownership_error() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: uuid_to_bytes(session_id),
             pane_id: uuid_to_bytes(pane_id),
-            data: b"hello".to_vec(),
+            data: bytes::Bytes::from_static(b"hello"),
         })),
     };
     let resp = Server::handle_message(&server, reader, msg).await.unwrap();
@@ -663,7 +663,7 @@ async fn input_to_nonexistent_pane_in_existing_session_returns_none() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: uuid_to_bytes(session_id),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
-            data: b"hello".to_vec(),
+            data: bytes::Bytes::from_static(b"hello"),
         })),
     };
     assert!(Server::handle_message(&server, client_id, msg).await.is_none());
@@ -1214,7 +1214,7 @@ async fn broadcast_drops_messages_when_client_channel_is_full() {
     server.lock().await.client_senders.insert(client_id, tx);
 
     // Fill the channel to capacity.
-    let msg = protocol::delta(session_id, Uuid::new_v4(), vec![0u8; 64]);
+    let msg = protocol::delta(session_id, Uuid::new_v4(), bytes::Bytes::from(vec![0u8; 64]));
     for _ in 0..PUSH_CHANNEL_BOUND {
         server.lock().await.broadcast_to_session(session_id, &msg);
     }
@@ -1239,6 +1239,53 @@ async fn client_senders_use_bounded_channel() {
     // and has a reasonable value.
     const { assert!(PUSH_CHANNEL_BOUND > 0) };
     const { assert!(PUSH_CHANNEL_BOUND <= 8192) };
+}
+
+// ── Delta Bytes sharing ─────────────────────────────────────────
+
+#[tokio::test]
+async fn delta_broadcast_shares_bytes_across_clients() {
+    let server = new_server();
+    let client_id_a = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id_a).await;
+
+    let client_id_b = Uuid::new_v4();
+    {
+        let mut s = server.lock().await;
+        s.sessions
+            .get_mut(&session_id)
+            .unwrap()
+            .attached_clients
+            .insert(client_id_b, crate::session::ClientRole::Writer);
+    }
+
+    let (tx_a, mut rx_a) = mpsc::channel(16);
+    let (tx_b, mut rx_b) = mpsc::channel(16);
+    {
+        let mut s = server.lock().await;
+        s.client_senders.insert(client_id_a, tx_a);
+        s.client_senders.insert(client_id_b, tx_b);
+    }
+
+    let data = bytes::Bytes::from(vec![b'X'; 4096]);
+    let msg = protocol::delta(session_id, Uuid::new_v4(), data.clone());
+    server.lock().await.broadcast_to_session(session_id, &msg);
+
+    let msg_a = rx_a.try_recv().unwrap();
+    let msg_b = rx_b.try_recv().unwrap();
+
+    let data_a = match msg_a.msg {
+        Some(proto::server_message::Msg::Delta(d)) => d.data,
+        other => panic!("expected Delta, got {other:?}"),
+    };
+    let data_b = match msg_b.msg {
+        Some(proto::server_message::Msg::Delta(d)) => d.data,
+        other => panic!("expected Delta, got {other:?}"),
+    };
+
+    // Both clones share the same backing allocation.
+    assert_eq!(data_a.as_ptr(), data_b.as_ptr());
+    assert_eq!(data_a.len(), 4096);
 }
 
 // ── Exited pane scrollback release ──────────────────────────────

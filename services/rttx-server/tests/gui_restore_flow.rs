@@ -76,7 +76,7 @@ async fn gui_restore_flow_no_duplicates() {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: sid.clone(),
                     pane_id: pid,
-                    data: format!("echo MARKER_{i}\n").into_bytes(),
+                    data: bytes::Bytes::from(format!("echo MARKER_{i}\n").into_bytes()),
                 })),
             })
             .await;

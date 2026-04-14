@@ -318,7 +318,7 @@ async fn input_to_nonexistent_pane_is_silently_dropped() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id,
             pane_id: bogus_uuid(),
-            data: b"hello".to_vec(),
+            data: bytes::Bytes::from_static(b"hello"),
         })),
     };
     client.send(&msg).await;
@@ -361,7 +361,7 @@ async fn fire_and_forget_to_nonexistent_session_produces_no_response() {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
                 session_id: fake_session.clone(),
                 pane_id: fake_pane.clone(),
-                data: b"hello".to_vec(),
+                data: bytes::Bytes::from_static(b"hello"),
             })),
         })
         .await;

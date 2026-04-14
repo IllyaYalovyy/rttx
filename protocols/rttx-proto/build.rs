@@ -1,4 +1,6 @@
 fn main() -> std::io::Result<()> {
-    prost_build::compile_protos(&["proto/rttx.proto"], &["proto/"])?;
+    let mut config = prost_build::Config::new();
+    config.bytes(["Delta.data", "Input.data", "PaneSnapshot.scrollback"]);
+    config.compile_protos(&["proto/rttx.proto"], &["proto/"])?;
     Ok(())
 }

@@ -71,7 +71,7 @@ async fn dsr_cursor_position_request_gets_cpr_response() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: format!("{script}\n").into_bytes(),
+            data: bytes::Bytes::from(format!("{script}\n").into_bytes()),
         })),
     };
     client.send(&input).await;

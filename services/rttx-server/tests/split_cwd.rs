@@ -54,7 +54,7 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: b"pwd\n".to_vec(),
+            data: bytes::Bytes::from_static(b"pwd\n"),
         })),
     };
     client.send(&input).await;

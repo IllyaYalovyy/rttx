@@ -130,7 +130,7 @@ enum EndpointCommand {
         workspace_id: String,
         runtime_id: String,
         runtime_pane_id: String,
-        data: Vec<u8>,
+        data: bytes::Bytes,
     },
     ResizePane {
         workspace_id: String,
@@ -308,7 +308,7 @@ impl EndpointConnectionManager {
         endpoint: &RuntimeEndpoint,
         runtime_id: &str,
         runtime_pane_id: &str,
-        data: Vec<u8>,
+        data: bytes::Bytes,
     ) {
         let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::SendInput {
             workspace_id: workspace_id.to_string(),
@@ -1772,7 +1772,7 @@ mod tests {
                 msg: Some(proto::server_message::Msg::Delta(proto::Delta {
                     session_id: vec![],
                     pane_id: vec![],
-                    data: b"output".to_vec(),
+                    data: bytes::Bytes::from_static(b"output"),
                 })),
             }),
             "non-heartbeat traffic should not be swallowed"
@@ -2415,7 +2415,7 @@ mod tests {
                     msg: Some(proto::server_message::Msg::Delta(proto::Delta {
                         session_id: rttx_proto::uuid_to_bytes(runtime_id),
                         pane_id: vec![0; 16],
-                        data: b"interleaved output".to_vec(),
+                        data: bytes::Bytes::from_static(b"interleaved output"),
                     })),
                 },
             )
