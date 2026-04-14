@@ -108,6 +108,7 @@ mod imp {
             self.title_label.set_hexpand(true);
             self.title_label.set_xalign(0.0);
             self.title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            self.title_label.set_width_chars(0);
             self.title_label.set_label("Terminal (persistent)");
 
             self.status_label.set_xalign(1.0);
