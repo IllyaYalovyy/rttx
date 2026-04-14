@@ -387,16 +387,27 @@ enum HeartbeatAction {
 struct HeartbeatMonitor {
     pending_nonce: Option<u64>,
     next_nonce: u64,
+    missed_ticks: u8,
 }
+
+/// Number of consecutive heartbeat ticks with an outstanding ping before
+/// the connection is declared lost. With a 2-second interval this gives
+/// the server 6 seconds to respond.
+const HEARTBEAT_MISS_LIMIT: u8 = 3;
 
 impl HeartbeatMonitor {
     const fn on_tick(&mut self) -> HeartbeatAction {
-        if self.pending_nonce.is_some() {
-            return HeartbeatAction::DeclareLost;
+        if let Some(nonce) = self.pending_nonce {
+            self.missed_ticks = self.missed_ticks.saturating_add(1);
+            if self.missed_ticks >= HEARTBEAT_MISS_LIMIT {
+                return HeartbeatAction::DeclareLost;
+            }
+            return HeartbeatAction::SendPing { nonce };
         }
         let nonce = self.next_nonce;
         self.next_nonce = self.next_nonce.saturating_add(1);
         self.pending_nonce = Some(nonce);
+        self.missed_ticks = 0;
         HeartbeatAction::SendPing { nonce }
     }
 
@@ -405,11 +416,13 @@ impl HeartbeatMonitor {
             Some(proto::server_message::Msg::Pong(pong)) => {
                 if self.pending_nonce == Some(pong.nonce) {
                     self.pending_nonce = None;
+                    self.missed_ticks = 0;
                 }
                 true
             }
             Some(_) => {
                 self.pending_nonce = None;
+                self.missed_ticks = 0;
                 false
             }
             None => false,
@@ -418,6 +431,7 @@ impl HeartbeatMonitor {
 
     const fn reset(&mut self) {
         self.pending_nonce = None;
+        self.missed_ticks = 0;
     }
 }
 
@@ -1040,6 +1054,11 @@ impl EndpointActor {
                     return;
                 }
 
+                // Split before reattaching so that `read_response` is used
+                // for each attach. The unsplit path cannot handle interleaved
+                // push messages from previously attached sessions.
+                self.split_connection();
+
                 log::info!(
                     "Reconnected to {}, reattaching {} workspace(s)",
                     self.endpoint.key(),
@@ -1082,8 +1101,6 @@ impl EndpointActor {
 
                 if any_transient_failure {
                     self.handle_disconnect();
-                } else {
-                    self.split_connection();
                 }
             }
             EndpointCommand::RenameRuntime { workspace_id, runtime_id, name } => {
@@ -1566,14 +1583,28 @@ mod tests {
         stream: &mut tokio::io::DuplexStream,
         read_buf: &mut BytesMut,
     ) -> proto::ClientMessage {
+        recv_client_message_opt(stream, read_buf)
+            .await
+            .expect("read from duplex transport")
+            .expect("unexpected EOF while waiting for client message")
+    }
+
+    async fn recv_client_message_opt(
+        stream: &mut tokio::io::DuplexStream,
+        read_buf: &mut BytesMut,
+    ) -> std::io::Result<Option<proto::ClientMessage>> {
         loop {
             match rttx_proto::decode_frame::<proto::ClientMessage>(read_buf) {
-                Ok(message) => return message,
+                Ok(message) => return Ok(Some(message)),
                 Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(error) => panic!("failed to decode client message: {error}"),
+                Err(error) => {
+                    return Err(std::io::Error::other(error.to_string()));
+                }
             }
-            let n = stream.read_buf(read_buf).await.expect("read from duplex transport");
-            assert!(n > 0, "unexpected EOF while waiting for client message");
+            let n = stream.read_buf(read_buf).await?;
+            if n == 0 {
+                return Ok(None);
+            }
         }
     }
 
@@ -1722,6 +1753,10 @@ mod tests {
     fn heartbeat_monitor_declares_loss_after_missed_pong() {
         let mut heartbeat = HeartbeatMonitor::default();
         assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        // Ticks 2..HEARTBEAT_MISS_LIMIT re-send the same nonce.
+        for _ in 1..HEARTBEAT_MISS_LIMIT {
+            assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        }
         assert_eq!(heartbeat.on_tick(), HeartbeatAction::DeclareLost);
     }
 
@@ -1820,17 +1855,27 @@ mod tests {
         let actor_task = tokio::spawn(async move { actor.run().await });
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
-            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
-            match request.msg {
-                Some(proto::client_message::Msg::Ping(ping)) => assert_eq!(ping.nonce, 0),
-                other => panic!("expected Ping request, got {other:?}"),
+            // Read pings without responding — the actor should eventually
+            // declare the connection lost after HEARTBEAT_MISS_LIMIT ticks.
+            loop {
+                let Ok(Some(request)) =
+                    recv_client_message_opt(&mut server_stream, &mut read_buf).await
+                else {
+                    break;
+                };
+                match request.msg {
+                    Some(proto::client_message::Msg::Ping(_)) => {}
+                    other => panic!("expected Ping request, got {other:?}"),
+                }
             }
         });
 
         let mut saw_disconnected = false;
         let mut saw_reconnecting = false;
         let deadline = tokio::time::Instant::now()
-            + Duration::from_millis(HEARTBEAT_INTERVAL.as_millis() as u64 * 8);
+            + Duration::from_millis(
+                HEARTBEAT_INTERVAL.as_millis() as u64 * (HEARTBEAT_MISS_LIMIT as u64 + 4),
+            );
         while tokio::time::Instant::now() < deadline && !(saw_disconnected && saw_reconnecting) {
             if let Ok(Some(EndpointEvent::WorkspaceConnectionChanged { workspace_id, status })) =
                 tokio::time::timeout(Duration::from_millis(25), event_rx.recv()).await
@@ -2331,5 +2376,78 @@ mod tests {
         // The fix: only one handle_disconnect call.
         actor.handle_disconnect();
         assert_eq!(actor.reconnect_attempt, 1, "exactly one reconnect should be scheduled");
+    }
+
+    #[tokio::test]
+    async fn reconnect_splits_before_reattach_to_handle_push_messages() {
+        // Regression test: during reconnect the actor must split the
+        // connection before reattaching workspaces so that `read_response`
+        // (which drains interleaved push messages) is used instead of the
+        // raw `DaemonConnection::attach_session` path.
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+
+        let runtime_id = Uuid::new_v4();
+        actor.tracked_workspaces.insert("ws-1".into(), runtime_id.to_string());
+
+        // The actor starts with a split connection (reader + writer).
+        // Verify the split path handles interleaved push messages.
+        assert!(actor.writer.is_some());
+        assert!(actor.reader.is_some());
+
+        // Server sends a push message (delta) before the snapshot response.
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
+            match request.msg {
+                Some(proto::client_message::Msg::AttachSession(_)) => {}
+                other => panic!("expected AttachSession, got {other:?}"),
+            }
+
+            // Send a delta push message first (simulating PTY output from
+            // a previously attached session).
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        pane_id: vec![0; 16],
+                        data: b"interleaved output".to_vec(),
+                    })),
+                },
+            )
+            .await;
+
+            // Then send the actual snapshot response.
+            send_server_message(
+                &mut server_stream,
+                &proto::ServerMessage {
+                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
+                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        panes: vec![],
+                        revision: 1,
+                        current_client_role: proto::RuntimeClientRole::Writer as i32,
+                    })),
+                },
+            )
+            .await;
+        });
+
+        // The split path uses read_response which skips push messages.
+        let result = actor.attach_runtime_via_active_channel(runtime_id).await;
+        assert!(result.is_ok(), "attach should succeed despite interleaved push message");
+
+        server.await.expect("server task should complete");
+
+        // The delta should have been forwarded as a push event.
+        let mut saw_delta = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::RuntimeMessage { message, .. } = event
+                && matches!(message.msg, Some(proto::server_message::Msg::Delta(_)))
+            {
+                saw_delta = true;
+            }
+        }
+        assert!(saw_delta, "interleaved delta should be dispatched as a push event");
     }
 }
