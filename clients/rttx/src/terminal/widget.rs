@@ -230,7 +230,6 @@ mod imp {
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
             session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
-            session_section.append(Some("Bookmark Session"), Some("win.bookmark-session"));
             session_section.append(Some("Add to Places"), Some("win.add-current-place"));
             session_section.append(Some("Add Host"), Some("win.add-current-host"));
             session_section.append(Some("Preferences"), Some("win.preferences"));
