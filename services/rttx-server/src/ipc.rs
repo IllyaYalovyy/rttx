@@ -122,6 +122,62 @@ where
         self.stream.flush().await?;
         Ok(())
     }
+
+    /// Split into independent reader and writer halves.
+    pub fn into_split(self) -> (ClientConnectionReader, ClientConnectionWriter)
+    where
+        S: Send + 'static,
+    {
+        let (read_half, write_half) = tokio::io::split(self.stream);
+        (
+            ClientConnectionReader {
+                stream: Box::new(read_half),
+                read_buf: self.read_buf,
+            },
+            ClientConnectionWriter {
+                stream: Box::new(write_half),
+            },
+        )
+    }
+}
+
+/// Read half of a split client connection.
+pub struct ClientConnectionReader {
+    stream: Box<dyn AsyncRead + Unpin + Send>,
+    read_buf: BytesMut,
+}
+
+impl ClientConnectionReader {
+    /// Read the next client message. Returns `None` on clean disconnect.
+    pub async fn read_message(&mut self) -> Result<Option<proto::ClientMessage>, IpcError> {
+        loop {
+            match decode_frame::<proto::ClientMessage>(&mut self.read_buf) {
+                Ok(msg) => return Ok(Some(msg)),
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => return Err(IpcError::Frame(e)),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+/// Write half of a split client connection.
+pub struct ClientConnectionWriter {
+    stream: Box<dyn AsyncWrite + Unpin + Send>,
+}
+
+impl ClientConnectionWriter {
+    /// Send a server message to this client.
+    pub async fn send_message(&mut self, msg: &proto::ServerMessage) -> Result<(), IpcError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
 }
 
 /// Convenience alias for Unix socket connections.

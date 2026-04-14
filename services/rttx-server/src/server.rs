@@ -6,7 +6,7 @@
 use crate::engine::Engine;
 use crate::engine::PaneSpawnConfig;
 use crate::engine::native::NativeEngine;
-use crate::ipc::{ClientConnection, Listener};
+use crate::ipc::{ClientConnection, ClientConnectionReader, ClientConnectionWriter, Listener};
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
@@ -1013,49 +1013,31 @@ pub async fn handle_stdio_client(server: Arc<Mutex<Server>>) -> anyhow::Result<(
 #[allow(clippy::significant_drop_tightening)]
 async fn handle_client<S>(
     server: Arc<Mutex<Server>>,
-    mut conn: ClientConnection<S>,
+    conn: ClientConnection<S>,
 ) -> anyhow::Result<()>
 where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let client_id = Uuid::new_v4();
     let client_short = short_id(client_id);
     tracing::info!("Client {client_short} connected");
 
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::unbounded_channel();
+    // Channel for responses that the reader task needs to send back to the
+    // client (e.g. pong replies, session snapshots). The writer task drains
+    // this alongside the push channel so writes never block reads.
+    let (resp_tx, resp_rx) = mpsc::unbounded_channel::<proto::ServerMessage>();
     {
         let mut s = server.lock().await;
         s.client_senders.insert(client_id, tx);
     }
 
-    let result: anyhow::Result<()> = async {
-        loop {
-            tokio::select! {
-                msg_result = conn.read_message() => {
-                    let Some(msg) = msg_result? else {
-                        tracing::info!("Client {client_short} disconnected");
-                        break;
-                    };
+    let (reader, writer) = conn.into_split();
 
-                    if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
-                        tracing::info!("Shutdown requested by client {client_short}");
-                        let s = server.lock().await;
-                        s.request_shutdown();
-                        break;
-                    }
+    let write_short = client_short.clone();
+    let writer_task = tokio::spawn(client_writer(writer, rx, resp_rx, write_short));
 
-                    if let Some(response) = Server::handle_message(&server, client_id, msg).await {
-                        conn.send_message(&response).await?;
-                    }
-                }
-                Some(push_msg) = rx.recv() => {
-                    conn.send_message(&push_msg).await?;
-                }
-            }
-        }
-        Ok(())
-    }
-    .await;
+    let result = client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await;
 
     // Cleanup: remove sender and detach from all sessions.
     {
@@ -1066,11 +1048,66 @@ where
         }
     }
 
+    // Writer task will stop when both senders are dropped.
+    writer_task.abort();
+
     if let Err(ref e) = result {
         tracing::error!("Client {client_short} error: {e}");
     }
 
     result
+}
+
+/// Read client messages and dispatch responses via `resp_tx`.
+///
+/// Runs until the client disconnects or an error occurs.
+async fn client_reader(
+    server: Arc<Mutex<Server>>,
+    client_id: Uuid,
+    client_short: &str,
+    mut reader: ClientConnectionReader,
+    resp_tx: mpsc::UnboundedSender<proto::ServerMessage>,
+) -> anyhow::Result<()> {
+    loop {
+        let Some(msg) = reader.read_message().await? else {
+            tracing::info!("Client {client_short} disconnected");
+            return Ok(());
+        };
+
+        if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
+            tracing::info!("Shutdown requested by client {client_short}");
+            server.lock().await.request_shutdown();
+            return Ok(());
+        }
+
+        if let Some(response) = Server::handle_message(&server, client_id, msg).await
+            && resp_tx.send(response).is_err()
+        {
+            return Ok(());
+        }
+    }
+}
+
+/// Drain both the push channel and the response channel, writing each
+/// message to the client socket. Exits when both senders are dropped or
+/// a write error occurs.
+async fn client_writer(
+    mut writer: ClientConnectionWriter,
+    mut push_rx: mpsc::UnboundedReceiver<proto::ServerMessage>,
+    mut resp_rx: mpsc::UnboundedReceiver<proto::ServerMessage>,
+    client_short: String,
+) {
+    loop {
+        let msg = tokio::select! {
+            msg = resp_rx.recv() => msg,
+            msg = push_rx.recv() => msg,
+        };
+        let Some(msg) = msg else { break };
+        if let Err(e) = writer.send_message(&msg).await {
+            tracing::error!("Client {client_short} write error: {e}");
+            break;
+        }
+    }
 }
 
 #[cfg(test)]
