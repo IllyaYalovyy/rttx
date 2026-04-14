@@ -1227,3 +1227,35 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     assert!(restored.sessions[0].input_sync);
     assert_eq!(restored.input_sync_targets("pane-1").len(), 2);
 }
+
+/// Legacy persisted `WindowState` with bookmark-sourced panes must load
+/// without error after the Bookmark variant was removed from `PaneSource`.
+#[test]
+fn legacy_bookmark_sourced_pane_loads_after_removal() {
+    use rttx::session::PaneSource;
+    use rttx::session::state::WindowState;
+
+    let json = r#"{
+        "active_session_index": 0,
+        "width": 800,
+        "height": 600,
+        "is_maximized": false,
+        "sessions": [{
+            "uuid": "s1",
+            "name": "Legacy",
+            "layout": {"Terminal": {"uuid": "t1"}},
+            "terminal_recovery": {
+                "t1": {
+                    "source": {"bookmark": {"name": "Prod"}},
+                    "target": null,
+                    "startup": []
+                }
+            }
+        }]
+    }"#;
+
+    let state: WindowState = serde_json::from_str(json).unwrap();
+    assert_eq!(state.sessions.len(), 1);
+    let recovery = &state.sessions[0].terminal_recovery["t1"];
+    assert_eq!(recovery.source, PaneSource::Manual);
+}

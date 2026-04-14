@@ -974,4 +974,13 @@ mod search_tests {
         assert!(prefs.paste_guard);
         assert_eq!(prefs.paste_guard_threshold, 1024);
     }
+
+    /// Legacy persisted state with bookmark source must deserialize without
+    /// error after the Bookmark variant was removed from `PaneSource`.
+    #[test]
+    fn legacy_bookmark_pane_source_deserializes_after_removal() {
+        let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":null,"startup":[]}"#;
+        let recovery: crate::session::PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.source, crate::session::PaneSource::Manual);
+    }
 }
