@@ -20,10 +20,7 @@ fn new_server() -> Arc<Mutex<Server>> {
 }
 
 /// Insert a session with a pane and attach a client as writer.
-async fn setup_session_with_pane(
-    server: &Arc<Mutex<Server>>,
-    client_id: Uuid,
-) -> (Uuid, Uuid) {
+async fn setup_session_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -> (Uuid, Uuid) {
     let mut session = Session::new("test".into());
     let session_id = session.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
