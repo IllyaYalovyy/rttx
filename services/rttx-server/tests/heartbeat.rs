@@ -111,8 +111,7 @@ fn ping_answered_during_pty_output() {
         // Drain messages until we see the pong. With the concurrent
         // reader/writer design, the pong should arrive promptly even
         // if deltas are being sent.
-        let deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut got_pong = false;
         while tokio::time::Instant::now() < deadline {
             match client.try_recv(std::time::Duration::from_secs(2)).await {
