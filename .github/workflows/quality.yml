@@ -139,6 +139,51 @@ jobs:
         run: |
           dbus-run-session -- ./run_ui_tests.sh
 
+  coverage:
+    name: Test coverage
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install toolchain and dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkg-config rustup \
+            protobuf-compiler protobuf-devel \
+            gtk4-devel libadwaita-devel vte291-gtk4-devel
+
+      - uses: actions/checkout@v5
+
+      - name: Setup Rust
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: |
+          rustup-init -y --default-toolchain stable
+          echo "/usr/local/cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install cargo-llvm-cov
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+
+      - name: Generate coverage
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: bash .github/scripts/run-coverage.sh
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage/lcov.info
+            coverage/summary.txt
+
   manifest:
     name: Flatpak manifest
     runs-on: ubuntu-latest
