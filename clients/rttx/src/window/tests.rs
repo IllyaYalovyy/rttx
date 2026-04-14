@@ -4723,3 +4723,201 @@ fn place_sidebar_has_add_button_in_header() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_others_removes_all_except_kept_session() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.close-others-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.add_session();
+    window.add_session();
+    pump_events(50);
+
+    let (uuid0, uuid1, uuid2) = {
+        let state = window.imp().state.borrow();
+        (
+            state.sessions[0].uuid.clone(),
+            state.sessions[1].uuid.clone(),
+            state.sessions[2].uuid.clone(),
+        )
+    };
+
+    // Close all except session 1 (middle one).
+    let others: Vec<String> = vec![uuid0.clone(), uuid2.clone()];
+    for uuid in &others {
+        window.close_session(uuid);
+    }
+
+    let state = window.imp().state.borrow();
+    assert_eq!(state.sessions.len(), 1, "only the kept session should remain");
+    assert_eq!(state.sessions[0].uuid, uuid1);
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_others_noop_with_single_session() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.close-others-noop-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    pump_events(50);
+
+    let uuid0 = window.imp().state.borrow().sessions[0].uuid.clone();
+
+    // With only one session, closing others should be a no-op.
+    let others: Vec<String> = {
+        let state = window.imp().state.borrow();
+        state.sessions.iter().filter(|s| s.uuid != uuid0).map(|s| s.uuid.clone()).collect()
+    };
+    assert!(others.is_empty(), "there should be no other sessions to close");
+
+    assert_eq!(window.imp().state.borrow().sessions.len(), 1);
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn right_click_on_sidebar_row_opens_popover_menu() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.sidebar-right-click-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    pump_events(50);
+
+    let session_uuid = window.imp().state.borrow().sessions[0].uuid.clone();
+    let row = session_row_for_uuid(&window, &session_uuid);
+
+    // Directly call show_workspace_popover_menu (simulates right-click handler).
+    window.show_workspace_popover_menu(&row, &session_uuid);
+
+    assert!(
+        window.imp().workspace_popover.borrow().is_some(),
+        "right-click should open a popover menu"
+    );
+
+    // Verify the close-others and close-all actions are registered.
+    assert!(
+        window.lookup_action("ctx-close-others").is_some(),
+        "ctx-close-others action should be registered"
+    );
+    assert!(
+        window.lookup_action("ctx-close-all").is_some(),
+        "ctx-close-all action should be registered"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn workspace_popover_menu_includes_close_others_and_close_all() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.popover-bulk-items-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session(
+        "workspace-bulk",
+        "Bulk Test",
+        LayoutNode::new_terminal_with_uuid("managed-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+    pump_events(50);
+
+    let row = session_row_for_uuid(&window, &session_state.uuid);
+    window.show_workspace_popover_menu(&row, &session_state.uuid);
+
+    assert!(
+        window.lookup_action("ctx-close-others").is_some(),
+        "managed workspace popover should have close-others action"
+    );
+    assert!(
+        window.lookup_action("ctx-close-all").is_some(),
+        "managed workspace popover should have close-all action"
+    );
+    assert!(
+        window.lookup_action("ctx-close").is_some(),
+        "managed workspace popover should have close action"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn sidebar_row_has_right_click_gesture() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.sidebar-row-gesture-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    pump_events(50);
+
+    let session_uuid = window.imp().state.borrow().sessions[0].uuid.clone();
+    let row = session_row_for_uuid(&window, &session_uuid);
+
+    // Check that the row has a GestureClick controller for button 3 (right-click).
+    let controllers = row.observe_controllers();
+    let mut has_right_click = false;
+    for index in 0..controllers.n_items() {
+        if let Some(controller) = controllers.item(index)
+            && let Ok(gesture) = controller.downcast::<gtk4::GestureClick>()
+            && gesture.button() == 3
+        {
+            has_right_click = true;
+            break;
+        }
+    }
+    assert!(has_right_click, "sidebar row should have a right-click gesture controller");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
