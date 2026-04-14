@@ -2194,10 +2194,7 @@ fn persistent_pane_connect_input_is_idempotent() {
         1,
         "commit must fire the first callback exactly once, not stack duplicates"
     );
-    assert!(
-        !*second_called.borrow(),
-        "second connect_input call must be ignored"
-    );
+    assert!(!*second_called.borrow(), "second connect_input call must be ignored");
 
     window.close();
 }
@@ -2237,10 +2234,7 @@ fn persistent_pane_connect_resize_is_idempotent() {
     // Pump a few frames so the tick callback fires.
     pump_events(100);
 
-    assert!(
-        !*second_called.borrow(),
-        "second connect_resize call must be ignored"
-    );
+    assert!(!*second_called.borrow(), "second connect_resize call must be ignored");
 
     window.close();
 }
@@ -2253,10 +2247,7 @@ fn persistent_pane_resize_uses_tick_callback() {
     require_display!();
 
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("tick-rs", "runtime-1");
-    assert!(
-        !pane.has_resize_tick_for_test(),
-        "no tick callback before connect_resize"
-    );
+    assert!(!pane.has_resize_tick_for_test(), "no tick callback before connect_resize");
 
     pane.connect_resize(|_, _| {});
     assert!(
