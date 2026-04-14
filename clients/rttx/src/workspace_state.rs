@@ -36,6 +36,7 @@ pub struct ManagedWorkspaceOpenResult {
     pub panes_to_create: Vec<String>,
     pub snapshot_restores: Vec<WorkspacePaneRestore>,
     pub skipped_runtime_panes: Vec<String>,
+    pub previous_layout_terminals: Vec<String>,
 }
 
 /// Pure connection-status update derived from an endpoint event.
@@ -115,7 +116,16 @@ impl WindowState {
                     panes_to_create,
                     snapshot_restores,
                     skipped_runtime_panes,
+                    previous_layout_terminals,
                 } = opened;
+
+                let new_terminal_set: BTreeSet<_> =
+                    session_state.layout.terminal_uuids().into_iter().collect();
+                for old_uuid in &previous_layout_terminals {
+                    if !new_terminal_set.contains(old_uuid) {
+                        transition.removed_layout_terminals.push(old_uuid.clone());
+                    }
+                }
 
                 transition.rebuilt_workspaces.push(ManagedWorkspaceRebuild {
                     workspace_id: workspace_id.clone(),
@@ -509,6 +519,7 @@ impl WindowState {
             panes_to_create,
             snapshot_restores,
             skipped_runtime_panes,
+            previous_layout_terminals: layout_terminal_uuids,
         })
     }
 }
@@ -1787,6 +1798,84 @@ mod tests {
                 workspace_id: "workspace-1".into(),
                 status: ConnectionStatus::SessionMissing,
             }],
+        );
+    }
+
+    #[test]
+    fn workspace_opened_returns_previous_layout_terminals() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let first_runtime_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let mut session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        session.runtime.bind_runtime_pane("left", first_runtime_pane);
+        let mut state = window_state(vec![session]);
+
+        let opened = state
+            .apply_managed_workspace_opened(
+                "workspace-1",
+                runtime_id,
+                &snapshot(
+                    runtime_id,
+                    vec![pane_snapshot(first_runtime_pane, "Shell", "/srv", b"")],
+                ),
+            )
+            .expect("should reconcile");
+
+        assert_eq!(
+            opened.previous_layout_terminals,
+            vec!["left".to_string(), "right".to_string()],
+            "previous_layout_terminals should capture the pre-reconciliation UUIDs",
+        );
+    }
+
+    #[test]
+    fn reconcile_workspace_opened_emits_removed_for_stale_terminals() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let runtime_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let mut session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        session.runtime.bind_runtime_pane("left", runtime_pane);
+        let mut state = window_state(vec![session]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "workspace-1".into(),
+            runtime_id: runtime_id.into(),
+            snapshot: snapshot(runtime_id, vec![pane_snapshot(runtime_pane, "Shell", "/srv", b"")]),
+        });
+
+        // Both "left" and "right" were in the previous layout. After
+        // reconciliation, "left" is matched to runtime_pane and "right"
+        // stays disconnected but remains in the layout (it gets a
+        // pane_create_request). So no terminals are removed.
+        assert!(
+            !transition.removed_layout_terminals.contains(&"left".to_string()),
+            "matched terminal should not be marked as removed",
+        );
+        assert!(
+            !transition.removed_layout_terminals.contains(&"right".to_string()),
+            "disconnected terminal stays in layout and should not be removed",
+        );
+        assert_eq!(
+            transition.rebuilt_workspaces.len(),
+            1,
+            "workspace should be rebuilt after reconciliation",
+        );
+        assert_eq!(
+            transition.rebuilt_workspaces[0].session_state.layout.terminal_uuids(),
+            vec!["left".to_string(), "right".to_string()],
+            "both terminals should remain in the reconciled layout",
         );
     }
 }

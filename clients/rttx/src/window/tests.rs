@@ -4996,3 +4996,113 @@ fn managed_pane_closures_use_weak_window_refs() {
 
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn rebuild_session_content_removes_stale_persistent_terminal_entries() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.stale-hashmap-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session(
+        "workspace-stale",
+        "Stale Test",
+        crate::test_helpers::hsplit(
+            LayoutNode::new_terminal_with_uuid("pane-a"),
+            LayoutNode::new_terminal_with_uuid("pane-b"),
+        ),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    assert_eq!(
+        window.imp().persistent_terminals.borrow().len(),
+        2,
+        "both panes should be materialized"
+    );
+
+    // Simulate reconciliation that removes pane-b from the layout.
+    let reduced_state = {
+        let mut state = window.imp().state.borrow_mut();
+        let session = state.sessions.iter_mut().find(|s| s.uuid == "workspace-stale").unwrap();
+        session.layout = LayoutNode::new_terminal_with_uuid("pane-a");
+        session.clone()
+    };
+
+    window.rebuild_session_content("workspace-stale", &reduced_state);
+
+    assert_eq!(
+        window.imp().persistent_terminals.borrow().len(),
+        1,
+        "stale pane-b entry should be removed after rebuild"
+    );
+    assert!(
+        window.imp().persistent_terminals.borrow().contains_key("pane-a"),
+        "surviving pane-a should remain in the map"
+    );
+    assert!(
+        !window.imp().persistent_terminals.borrow().contains_key("pane-b"),
+        "removed pane-b should not remain in the map"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn rebuild_session_content_preserves_terminals_from_other_workspaces() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.stale-cross-workspace-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let session_a = crate::test_helpers::managed_session(
+        "workspace-a",
+        "Workspace A",
+        LayoutNode::new_terminal_with_uuid("pane-a1"),
+    );
+    let session_b = crate::test_helpers::managed_session(
+        "workspace-b",
+        "Workspace B",
+        LayoutNode::new_terminal_with_uuid("pane-b1"),
+    );
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions.push(session_a.clone());
+        state.sessions.push(session_b.clone());
+    }
+    window.build_session(&session_a, false);
+    window.build_session(&session_b, false);
+
+    assert_eq!(window.imp().persistent_terminals.borrow().len(), 2);
+
+    // Rebuild workspace-a — workspace-b's pane must survive.
+    window.rebuild_session_content("workspace-a", &session_a);
+
+    assert_eq!(
+        window.imp().persistent_terminals.borrow().len(),
+        2,
+        "terminals from other workspaces must not be removed"
+    );
+    assert!(window.imp().persistent_terminals.borrow().contains_key("pane-a1"));
+    assert!(window.imp().persistent_terminals.borrow().contains_key("pane-b1"));
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
