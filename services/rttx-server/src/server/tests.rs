@@ -3,6 +3,7 @@ use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
 use std::path::PathBuf;
+use tracing_test::traced_test;
 
 #[derive(Debug)]
 struct StubOs;
@@ -1077,4 +1078,124 @@ async fn terminate_session_cleans_up_pty_writers() {
     assert!(!s.sessions.contains_key(&session_id));
     assert!(!s.pty_kill_senders.contains_key(&pane_id));
     drop(s);
+}
+
+// ── Lifecycle logging ───────────────────────────────────────────
+
+#[tokio::test]
+#[traced_test]
+async fn create_session_logs_lifecycle_event() {
+    let server = new_server();
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            name: "log-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+
+    assert!(logs_contain("Session created"));
+    assert!(logs_contain("log-test"));
+    assert!(logs_contain("persistent"));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn attach_session_logs_lifecycle_event() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    // Detach first so we can re-attach.
+    server
+        .lock()
+        .await
+        .sessions
+        .get_mut(&session_id)
+        .unwrap()
+        .detach_client(client_id, DetachReason::ExplicitRequest);
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: uuid_to_bytes(session_id),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    Server::handle_message(&server, client_id, msg).await.unwrap();
+
+    assert!(logs_contain("Client"));
+    assert!(logs_contain("attached to session"));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn detach_session_logs_lifecycle_event() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
+            session_id: uuid_to_bytes(session_id),
+        })),
+    };
+    Server::handle_message(&server, client_id, msg).await.unwrap();
+
+    assert!(logs_contain("Client"));
+    assert!(logs_contain("detached from session"));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn terminate_session_logs_lifecycle_event() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
+            session_id: uuid_to_bytes(session_id),
+        })),
+    };
+    Server::handle_message(&server, client_id, msg).await.unwrap();
+
+    assert!(logs_contain("Session terminated"));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn close_pane_logs_lifecycle_event() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+            session_id: uuid_to_bytes(session_id),
+            pane_id: uuid_to_bytes(pane_id),
+        })),
+    };
+    Server::handle_message(&server, client_id, msg).await.unwrap();
+
+    assert!(logs_contain("Pane"));
+    assert!(logs_contain("closed in session"));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn rename_session_logs_lifecycle_event() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
+            session_id: uuid_to_bytes(session_id),
+            name: "new-name".into(),
+        })),
+    };
+    Server::handle_message(&server, client_id, msg).await.unwrap();
+
+    assert!(logs_contain("Session renamed"));
+    assert!(logs_contain("new-name"));
 }
