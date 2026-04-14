@@ -737,8 +737,7 @@ mod tests {
         }
         assert_eq!(session.command_history.len(), MAX_COMMAND_HISTORY);
         assert_eq!(
-            session.command_history[0].command,
-            "cmd-50",
+            session.command_history[0].command, "cmd-50",
             "oldest entries should be evicted"
         );
     }
@@ -746,15 +745,12 @@ mod tests {
     #[test]
     fn from_persisted_truncates_oversized_history() {
         let mut session = Session::new("test".into());
-        session.command_history = (0..MAX_COMMAND_HISTORY + 200)
-            .map(make_history_entry)
-            .collect();
+        session.command_history = (0..MAX_COMMAND_HISTORY + 200).map(make_history_entry).collect();
         let persisted = session.to_persisted();
         let restored = Session::from_persisted(&persisted);
         assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
         assert_eq!(
-            restored.command_history[0].command,
-            "cmd-200",
+            restored.command_history[0].command, "cmd-200",
             "oldest entries should be dropped on load"
         );
     }
