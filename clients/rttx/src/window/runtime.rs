@@ -9,7 +9,7 @@ impl Window {
         self.add_managed_session(WorkspacePolicy::Ephemeral);
     }
 
-    pub(super) fn add_direct_session(&self) {
+    pub(crate) fn add_direct_session(&self) {
         let imp = self.imp();
         let count = imp.state.borrow().sessions.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();

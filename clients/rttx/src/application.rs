@@ -191,5 +191,30 @@ pub fn run() -> glib::ExitCode {
     });
     app.add_action(&create_managed_action);
 
+    // Create a direct workspace without showing the new-workspace dialog (used by UI tests).
+    let create_direct_action = gtk4::gio::SimpleAction::new("create-direct", None);
+    let app_ref = app.clone();
+    create_direct_action.connect_activate(move |_, _| {
+        if let Some(win) = app_ref.active_window()
+            && let Ok(win) = win.downcast::<Window>()
+        {
+            win.add_direct_session();
+        }
+    });
+    app.add_action(&create_direct_action);
+
+    // Close the currently visible workspace (used by UI tests).
+    let close_workspace_action = gtk4::gio::SimpleAction::new("close-current-workspace", None);
+    let app_ref = app.clone();
+    close_workspace_action.connect_activate(move |_, _| {
+        if let Some(win) = app_ref.active_window()
+            && let Ok(win) = win.downcast::<Window>()
+            && let Some(uuid) = win.visible_session_uuid()
+        {
+            win.close_session(&uuid);
+        }
+    });
+    app.add_action(&close_workspace_action);
+
     app.run()
 }

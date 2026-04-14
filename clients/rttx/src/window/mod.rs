@@ -815,6 +815,10 @@ impl Window {
         SessionColor::ALL[count % SessionColor::ALL.len()]
     }
 
+    pub(crate) fn visible_session_uuid(&self) -> Option<String> {
+        self.imp().session_stack.visible_child_name().map(|n| n.to_string())
+    }
+
     /// Host key for the currently visible workspace session.
     pub(crate) fn visible_session_host_key(&self) -> String {
         let state = self.imp().state.borrow();
@@ -1000,7 +1004,7 @@ impl Window {
         self.renumber_session_rows();
     }
 
-    pub(super) fn close_session(&self, session_uuid: &str) {
+    pub(crate) fn close_session(&self, session_uuid: &str) {
         let imp = self.imp();
 
         let (terminal_uuids, new_index, managed_runtime) = {
