@@ -1,33 +1,44 @@
-# RFC-000: [Short Title]
+# RFC-NNN: [Short Title]
 
-| Field         | Value                                                       |
-|---------------|-------------------------------------------------------------|
-| Status        | Draft / Review / Accepted / Implemented / Superseded        |
-| Author(s)     | [Name]                                                      |
-| Supersedes    | —                                                           |
-| Superseded by | —                                                           |
+<!--
+  Copy this file as RFC-NNN-<slug>.md, where NNN is the next number after the
+  last existing RFC.  Fill in every section; delete only the HTML comments.
+  See CONTRIBUTING.md § "Design process (RFCs)" for when an RFC is required.
+
+  Status lifecycle:  Draft → Review → Accepted → Implemented  (or Superseded)
+  Do not begin implementation until the RFC reaches Accepted.
+-->
+
+| Field         | Value         |
+|---------------|---------------|
+| Status        | Draft         |
+| Author(s)     | [Name]        |
+| Supersedes    | —             |
+| Superseded by | —             |
 
 ---
 
 ## Summary
 
-One paragraph. What is this change, and why does it matter right now?
+One paragraph: what is this change, and why does it matter right now?
 
 ---
 
 ## Goals
 
-- **G1** —
+- **G1** — …
+- **G2** — …
 
 ## Non-Goals
 
-- **NG1** —
+- **NG1** — …
 
 ---
 
 ## Background & Motivation
 
-Context a new contributor needs to understand the problem.
+Context a new contributor needs to understand the problem.  Reference existing
+code paths, issues, or user-visible symptoms that motivate the change.
 
 ---
 
@@ -65,7 +76,8 @@ Rationale: …
 
 ## Design
 
-Technical detail of the chosen approach.
+Technical detail of the chosen approach.  Use subsections, code blocks, and
+tables as needed.
 
 ---
 
@@ -74,22 +86,28 @@ Technical detail of the chosen approach.
 | Goal | How addressed |
 |------|---------------|
 | G1   |               |
+| G2   |               |
 
 ---
 
 ## Development Plan
 
-- [ ] **Step 1** — *(prerequisite: —)*
-- [ ] **Step 2** — *(prerequisite: Step 1)*
+- [ ] **Step 1** — … *(prerequisite: —)*
+- [ ] **Step 2** — … *(prerequisite: Step 1)*
+
+Mark steps `[x]` as they are completed.
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** —
+- [ ] **Q1** — …
+
+Mark questions `[x]` once resolved and record the answer inline.
 
 ---
 
 ## References
 
-- [Link text](url)
+- [Tracking issue](https://github.com/IllyaYalovyy/rttx/issues/NNN)
+- [Related RFC](./RFC-NNN-slug.md)
