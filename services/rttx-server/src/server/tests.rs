@@ -1430,10 +1430,7 @@ async fn collect_session_senders_returns_attached_client_senders() {
 #[tokio::test]
 async fn collect_session_senders_returns_empty_for_unknown_session() {
     let server = new_server();
-    let senders = server
-        .lock()
-        .await
-        .collect_session_senders(Uuid::new_v4());
+    let senders = server.lock().await.collect_session_senders(Uuid::new_v4());
     assert!(senders.is_empty());
 }
 
@@ -1447,10 +1444,7 @@ async fn send_to_collected_delivers_messages() {
     send_to_collected(&senders, &msg);
 
     let received = rx.try_recv().unwrap();
-    assert!(matches!(
-        received.msg,
-        Some(proto::server_message::Msg::Delta(_))
-    ));
+    assert!(matches!(received.msg, Some(proto::server_message::Msg::Delta(_))));
 }
 
 #[tokio::test]

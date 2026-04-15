@@ -50,10 +50,7 @@ fn send_to_collected(
 ) {
     for (client_id, sender) in senders {
         if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(msg.clone()) {
-            tracing::warn!(
-                "Client {} push channel full — dropping message",
-                short_id(*client_id),
-            );
+            tracing::warn!("Client {} push channel full — dropping message", short_id(*client_id),);
         }
     }
 }
@@ -318,9 +315,7 @@ impl Server {
         session
             .attached_clients
             .keys()
-            .filter_map(|&cid| {
-                self.client_senders.get(&cid).map(|s| (cid, s.clone()))
-            })
+            .filter_map(|&cid| self.client_senders.get(&cid).map(|s| (cid, s.clone())))
             .collect()
     }
 
