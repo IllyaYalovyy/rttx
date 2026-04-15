@@ -16,17 +16,26 @@ request, and a **release pipeline** that builds all distribution artifacts on a 
 Both pipelines are entirely free (GitHub Actions is free for public repositories; COPR and
 Flathub are free services). No paid CI infrastructure is required.
 
-## Current implementation snapshot (2026-03)
+## Current implementation snapshot (2026-04)
 
 - `mainline` is protected by required checks from `.github/workflows/quality.yml`:
-  `Format`, `Clippy`, `Test`, and `Flatpak manifest`
-- the quality workflow now runs `Clippy` and `Test` inside Fedora containers and delegates the
+  `Runtime behavior gate`, `Format`, `Clippy`, `Test`, `UI behavioral tests`, `Test coverage`,
+  `Memory profiling gate`, and `Flatpak manifest`
+- the quality workflow runs `Clippy` and `Test` inside Fedora containers and delegates the
   detailed commands to repo-local scripts:
   - `.github/scripts/run-clippy.sh`
   - `.github/scripts/run-quality-tests.sh`
+  - `.github/scripts/run-coverage.sh`
+  - `.github/scripts/run-memory-gate.sh`
+  - `.github/scripts/check-version-consistency.sh`
+  - `.github/scripts/ensure-workspace-layout.sh`
+  - `.github/scripts/check_runtime_behavior_policy.py`
+- the quality workflow is reusable via `workflow_call` so the release pipeline can invoke it
+  as a precondition
+- AT-SPI behavioral UI tests run on every push and PR as the `ui-test` job in `quality.yml`,
+  using a Fedora container with Weston and D-Bus
 - the release workflow exists in `.github/workflows/release.yml` and builds Flatpak, DEB, and RPM
   artifacts plus GitHub Release publication and COPR submission
-- nightly AT-SPI coverage remains a follow-up item, not part of the live workflow set
 - AppImage is not part of the current release workflow
 
 ---
@@ -40,14 +49,14 @@ Flathub are free services). No paid CI infrastructure is required.
 - **G3** — GTK widget tests run in CI (not just unit tests); the Broadway headless backend is used
   so no display server is needed on the CI runner
 - **G4** — The entire pipeline uses only free-tier services
+- **G5** — Runtime-affecting changes require both pure-state and behavioral test evidence
+- **G6** — Memory cleanup and resource leak regressions are caught before merge
 
 ## Non-Goals
 
 - **NG1** — Flathub submission is not automated; the bundle is published to GitHub Releases and
   the Flathub PR is a separate manual step
-- **NG2** — End-to-end AT-SPI2 UI tests are not in the initial CI pipeline; they are tracked as a
-  future job (see Development Plan)
-- **NG3** — No Windows or macOS builds; rttx is Linux/GNOME-only
+- **NG2** — No Windows or macOS builds; rttx is Linux/GNOME-only
 
 ---
 
@@ -80,36 +89,50 @@ This RFC fills the gap and provides the complete design and the actual workflow 
 ```
 Push / PR to mainline
 └── quality.yml
-    ├── fmt          cargo fmt --check
-    ├── clippy       cargo clippy -- -D warnings
-    └── test         broadwayd + cargo test (GTK widget tests run)
+    ├── runtime-behavior-gate   policy check for runtime-affecting PRs
+    ├── fmt                     cargo fmt --check + version consistency
+    ├── clippy                  run-clippy.sh (Fedora container)
+    ├── test                    run-quality-tests.sh (Fedora container)
+    ├── ui-test                 AT-SPI2 behavioral tests (Fedora container + Weston)
+    ├── coverage                cargo-llvm-cov (Fedora container)
+    ├── memory-gate             memory cleanup + diagnostics tests (Fedora container)
+    └── manifest                Flatpak manifest JSON validation
 
 Version tag v*
 └── release.yml
-    ├── needs: quality jobs
+    ├── quality         reuses quality.yml via workflow_call
     ├── build-flatpak   flatpak-builder → bundle
     ├── build-deb       cargo-deb → .deb
     ├── build-rpm       cargo-generate-rpm → .rpm
     ├── github-release  upload all artifacts
-    └── copr-submit     submit .src.rpm to COPR
+    └── copr-submit     submit RPM to COPR
 ```
 
 ---
 
 ### Quality pipeline (`quality.yml`)
 
-**Trigger**: `push` to `mainline`; `pull_request` targeting `mainline`.
+**Trigger**: `push` to `mainline`; `pull_request` targeting `mainline`; `workflow_call` (reused
+by the release pipeline).
 
 **Current implementation**:
 
 - `Format` runs on `ubuntu-latest`
-- `Clippy` and `Test` run on `ubuntu-latest` with `fedora:latest` containers
+- `Clippy`, `Test`, `UI behavioral tests`, `Test coverage`, and `Memory profiling gate` run on
+  `ubuntu-latest` with `fedora:latest` containers
+- `Runtime behavior gate` runs on `ubuntu-latest` (Python only, no Fedora container needed)
 - the manifest job validates `packaging/rttx/io.github.IllyaYalovyy.rttx.json`
 
 **System dependencies** for the Fedora container jobs:
 
 ```
 gtk4-devel libadwaita-devel vte291-gtk4-devel protobuf-compiler protobuf-devel
+```
+
+Additional dependencies for the `ui-test` job:
+
+```
+weston python3-gobject at-spi2-core at-spi2-atk dbus-daemon
 ```
 
 The Broadway and targeted test orchestration now lives in `.github/scripts/run-quality-tests.sh`
@@ -119,13 +142,70 @@ rather than being spelled out inline in the workflow YAML.
 
 | Job | Command | Blocks merge if fails |
 | --- | --- | --- |
-| `fmt` | `cargo fmt --check` | Yes |
+| `runtime-behavior-gate` | `python3 .github/scripts/check_runtime_behavior_policy.py` | Yes (PRs only) |
+| `fmt` | `cargo fmt --check` + `bash .github/scripts/check-version-consistency.sh` | Yes |
 | `clippy` | `bash .github/scripts/run-clippy.sh` | Yes |
 | `test` | `bash .github/scripts/run-quality-tests.sh` | Yes |
+| `ui-test` | `dbus-run-session -- ./run_ui_tests.sh` | Yes |
+| `coverage` | `bash .github/scripts/run-coverage.sh` | Yes |
+| `memory-gate` | `bash .github/scripts/run-memory-gate.sh` | Yes |
 | `manifest` | `python3 -m json.tool packaging/rttx/io.github.IllyaYalovyy.rttx.json > /dev/null` | Yes |
 
 The manifest validation job is a cheap JSON parse of the Flatpak manifest. It does not require
 `flatpak-builder` and catches the most common breakage (malformed JSON from manual edits).
+
+#### Runtime behavior gate
+
+The runtime behavior gate (`check_runtime_behavior_policy.py`) enforces that pull requests
+touching runtime-affecting source paths include both:
+
+1. At least one new pure-state regression test (unit-style, in a source test host)
+2. At least one new integration, GTK boundary/widget, or AT-SPI behavioral regression test
+
+The gate runs its own unit tests (`python3 -m unittest discover`) on every invocation and only
+evaluates the policy diff on pull request events.
+
+#### Version consistency check
+
+The `check-version-consistency.sh` script verifies that the version in the workspace
+`Cargo.toml` matches the version in `meson.build`, preventing accidental version drift between
+the Cargo and Meson build systems.
+
+#### Test coverage
+
+The `coverage` job runs `cargo-llvm-cov` against `rttx-server` and `rttx-proto` (non-GTK
+packages). The GTK client is excluded because its tests require a display server and GTK global
+state isolation that conflict with coverage instrumentation. The job uploads an LCOV report as a
+workflow artifact.
+
+#### Memory profiling gate
+
+The `memory-gate` job runs the daemon's memory cleanup, diagnostics, lifecycle leak, and bounded
+channel integration tests. It verifies that no sessions or panes leak after lifecycle scenarios
+complete.
+
+#### AT-SPI2 UI tests
+
+The `ui-test` job runs the full AT-SPI2 behavioral test suite on every push and PR. It uses a
+Fedora container with Weston (headless Wayland compositor), D-Bus, and AT-SPI2 bindings. The
+tests launch a private `RTTX_DEV_MODE=1` instance and observe the live widget tree through the
+accessibility API.
+
+---
+
+### CI scripts
+
+| Script | Purpose |
+| --- | --- |
+| `run-clippy.sh` | Runs Clippy on all three workspace packages with correct VTE feature flags |
+| `run-quality-tests.sh` | Starts Broadway, runs all test suites (library, binary, integration, GTK ignored, doc, protocol, daemon) |
+| `run-coverage.sh` | Generates LCOV coverage for `rttx-server` and `rttx-proto` |
+| `run-memory-gate.sh` | Runs memory cleanup, diagnostics, lifecycle leak, and bounded channel tests |
+| `check-version-consistency.sh` | Verifies Cargo.toml and meson.build versions match |
+| `ensure-workspace-layout.sh` | Validates that all required workspace manifests exist |
+| `check_runtime_behavior_policy.py` | Enforces dual-layer test coverage for runtime-affecting PRs |
+
+All scripts use `ensure-workspace-layout.sh` as a prerequisite check where applicable.
 
 ---
 
@@ -133,7 +213,8 @@ The manifest validation job is a cheap JSON parse of the Flatpak manifest. It do
 
 **Trigger**: `push` of a tag matching `v[0-9]*.*`.
 
-**Precondition**: `needs: [quality]` — release jobs only start after all quality jobs pass.
+**Precondition**: `needs: [quality]` — release jobs only start after all quality jobs pass. The
+quality gate is invoked via `workflow_call` reuse of `quality.yml`.
 
 **Artifact jobs** (run in parallel after quality):
 
@@ -170,7 +251,7 @@ Command: `cargo deb`
 
 Output artifact: `target/debian/rttx_*.deb`
 
-Requires `[package.metadata.deb]` in `Cargo.toml` (see Development Plan).
+Requires `[package.metadata.deb]` in `clients/rttx/Cargo.toml` (see Development Plan).
 
 #### `build-rpm`
 
@@ -182,14 +263,14 @@ Command: `cargo build --release && cargo generate-rpm`
 
 Output artifact: `target/generate-rpm/rttx-*.rpm`
 
-Requires `[package.metadata.generate-rpm]` in `clients/rttx/Cargo.toml` (still tracked separately).
+Requires `[package.metadata.generate-rpm]` in `clients/rttx/Cargo.toml` (see Development Plan).
 
 #### `github-release`
 
 Runner: `ubuntu-latest`.
 
 Uses `softprops/action-gh-release@v2` to create a GitHub Release (or update the draft) and
-upload all three artifacts. The release body is populated from the tag annotation message.
+upload all three artifacts. Release notes are auto-generated by GitHub.
 
 #### `copr-submit`
 
@@ -197,13 +278,12 @@ Runner: `ubuntu-latest`.
 
 Needs: `build-rpm`
 
-Uses `copr-cli` with a token stored in `secrets.COPR_API_TOKEN`:
-```bash
-copr-cli build --nowait illya/rttx target/generate-rpm/rttx-*.src.rpm
-```
+Uses `copr-cli` with credentials stored in three repository secrets:
+- `secrets.COPR_LOGIN`
+- `secrets.COPR_USERNAME`
+- `secrets.COPR_TOKEN`
 
-The COPR token is a repository secret set by the maintainer. It is the only secret the
-pipeline requires. All other steps need no secrets beyond the default `GITHUB_TOKEN`.
+These are written to `~/.config/copr` at runtime and used by `copr-cli build`.
 
 ---
 
@@ -217,60 +297,31 @@ cache). All steps are within the free tier.
 
 ---
 
-## AT-SPI2 UI tests (deferred)
-
-The AT-SPI2 test suite (`clients/rttx/tests/ui/`, `run_ui_tests.sh`) requires the following on the runner:
-
-**Packages:**
-```
-weston python3-atspi python3-gi gir1.2-atspi-2.0 dbus-x11
-```
-
-**Runtime setup:**
-```bash
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-weston --backend=headless --socket=rttx-test &
-```
-
-**Environment for the app under test:**
-```
-WAYLAND_DISPLAY=rttx-test
-GDK_BACKEND=wayland
-RTTX_DEV_MODE=1
-RTTX_DISABLE_SHELL_SPAWN=1
-XDG_CONFIG_HOME=<tmpdir>
-NO_AT_BRIDGE=0
-# Unset: GTK_A11Y (must not disable a11y), DISPLAY (prevent X11 fallback)
-```
-
-Running Weston on a GitHub Actions `ubuntu-latest` runner requires `XDG_RUNTIME_DIR` to exist
-and appropriate permissions. This is doable but adds ~60 lines of setup compared to the quality
-pipeline. Kept in a separate file to not slow down the main gate.
-
-The AT-SPI2 suite is deferred to a separate follow-on job (`ui-tests.yml`) to keep the initial
-quality pipeline simple and fast. It will run on a schedule (nightly) rather than on every push.
-
----
-
 ## Goals Alignment
 
 | Goal | How addressed |
 | --- | --- |
-| G1 — quality gate on every push/PR | `quality.yml`: fmt + clippy + test + manifest validation |
+| G1 — quality gate on every push/PR | `quality.yml`: runtime-behavior-gate + fmt + clippy + test + ui-test + coverage + memory-gate + manifest |
 | G2 — automated release artifacts | `release.yml`: Flatpak + DEB + RPM + GitHub Release upload |
-| G3 — widget tests run in CI | Broadway daemon started before `cargo test` |
-| G4 — 100% free | GitHub Actions (public repo) + COPR (free) + Flathub (free); only secret is COPR token |
+| G3 — widget tests run in CI | Broadway daemon started before `cargo test`; AT-SPI2 UI tests via Weston |
+| G4 — 100% free | GitHub Actions (public repo) + COPR (free) + Flathub (free); secrets are COPR credentials only |
+| G5 — runtime behavior coverage | `runtime-behavior-gate` enforces dual-layer test evidence on PRs |
+| G6 — memory leak prevention | `memory-gate` runs cleanup and diagnostics tests on every push/PR |
 
 ---
 
 ## Development Plan
 
-- [ ] **W1** — Add `[package.metadata.deb]` to `Cargo.toml` for `cargo-deb`
-- [ ] **W2** — Add `[package.metadata.generate-rpm]` to `Cargo.toml` for `cargo-generate-rpm`
+- [ ] **W1** — Add `[package.metadata.deb]` to `clients/rttx/Cargo.toml` for `cargo-deb`
+- [ ] **W2** — Add `[package.metadata.generate-rpm]` to `clients/rttx/Cargo.toml` for `cargo-generate-rpm`
 - [x] **W3** — Create `.github/workflows/quality.yml` — fmt, clippy, test, manifest validation
 - [x] **W4** — Create `.github/workflows/release.yml` — scaffold with build-flatpak, build-deb, build-rpm, github-release, copr-submit jobs
-- [x] **W5** — Set `COPR_API_TOKEN` as a repository secret
+- [x] **W5** — Set COPR credentials as repository secrets
 - [x] **W6** — Validate Flatpak runtime caching on first release run; tune cache key
 - [x] **W7** — AT-SPI behavioral UI tests running in CI on every PR via Weston headless compositor
+- [x] **W8** — Runtime behavior gate enforcing dual-layer test coverage for runtime-affecting PRs
+- [x] **W9** — Test coverage reporting via `cargo-llvm-cov`
+- [x] **W10** — Memory profiling gate for daemon resource leak detection
+- [x] **W11** — Version consistency check between Cargo.toml and meson.build
 
 ---
