@@ -9,17 +9,21 @@
 
 ---
 
-> Historical note (2026-03): RFC-013 is now the authoritative architecture RFC for daemon-backed
-> execution. This RFC still defines recipe-based recovery metadata and retry UX. Older uses of
-> `session` in this document map to the current product term `workspace` unless the text is
-> explicitly referring to current code types such as `SessionState`.
+> Historical note (2026-04): RFC-013 is now the authoritative architecture RFC for daemon-backed
+> execution. RFC-016 removed tmux integration and replaced bookmarks with Places. This RFC still
+> defines recipe-based recovery metadata and the retry UX contract. The data model section below
+> reflects the current implementation; removed variants (`Bookmark`, `SessionTemplate`,
+> `LocalTmux`, `RemoteTmux`) exist only in backward-compatible deserialization code.
+>
+> Older uses of `session` in this document map to the current product term `workspace` unless the
+> text is explicitly referring to current code types such as `SessionState`.
 
 ## Summary
 
 rttx persists more than layout geometry. Each pane carries a recovery recipe — a structured
 description of how the pane was created and what it was for. On restart, rttx replays these
-recipes to reconstruct working context: local folders, SSH connections, tmux sessions, or any
-combination. The goal is honest recovery, not fake state serialization.
+recipes to reconstruct working context: local folders and SSH connections. The goal is honest
+recovery, not fake state serialization.
 
 The workspace is the user-facing recovery unit: users restore, retry, and manage whole
 workspaces. The pane is the execution unit: each pane has its own recoverable target and may
@@ -30,27 +34,26 @@ succeed or fail independently.
 ## Goals
 
 - **G1** — Restarting the app restores the split layout, active workspace, and active pane
-- **G2** — Each pane replays its startup recipe or reconnect target (local folder, SSH, tmux attach) on restore
-- **G3** — Pane origin is tracked (empty shell, bookmark, command) and survives restart
+- **G2** — Each pane replays its startup recipe or reconnect target (local folder, SSH) on restore
+- **G3** — Pane origin is tracked (empty shell, command, manual) and survives restart
 - **G4** — Recovery is honest: rttx only promises what it can actually deliver
-- **G5** — Recovery failure is non-destructive: the pane stays alive and offers one-click retry
+- **G5** — Recovery failure is non-destructive: the pane stays alive and offers retry
 
 ## Non-Goals
 
 - **NG1** — In-memory shell state (variables, partially typed commands, foreground TUI state) is not preserved
-- **NG2** — PTY processes are not kept alive between rttx restarts (that is tmux's job)
-- **NG3** — CRIU / process snapshotting is not used; it is fragile and incompatible with networked processes
-- **NG4** — Shell integration (OSC-based cwd reporting, prompt boundaries) is a later phase
-- **NG5** — rttx does not silently create a fresh tmux session when recovery expected to attach to an existing one
+- **NG2** — CRIU / process snapshotting is not used; it is fragile and incompatible with networked processes
+- **NG3** — Shell integration (OSC-based cwd reporting, prompt boundaries) is a later phase
+- **NG4** — rttx does not silently create new remote sessions when recovery expected to attach to an existing one
 
 ---
 
 ## Background & Motivation
 
 Most terminal emulators treat session restore as a UI concept: same number of splits, same
-geometry, fresh shells. For a developer who was connected to a production server via SSH inside
-a tmux session, a fresh shell is not a restore — it is an empty starting point that requires
-minutes of manual reconnection.
+geometry, fresh shells. For a developer who was connected to a production server via SSH,
+a fresh shell is not a restore — it is an empty starting point that requires minutes of manual
+reconnection.
 
 rttx can do better without becoming a process supervisor. The key insight is that what matters
 is not the exact in-memory state of the shell, but the path the user took to get there. That
@@ -62,8 +65,8 @@ path — the startup recipe — is small, serializable, and replayable.
 
 | Audience | Impact |
 | --- | --- |
-| End users | Restarting rttx restores working context; SSH/tmux panes reconnect automatically (roadmap) |
-| Contributors | Recovery data is part of `LayoutNode::Terminal`; recipe types in `session/layout.rs` |
+| End users | Restarting rttx restores working context; SSH panes reconnect automatically (roadmap) |
+| Contributors | Recovery data is part of `session/recovery.rs`; stored in `SessionState.terminal_recovery` |
 | Packagers | No change; recovery state is stored in the existing `sessions.json` |
 
 ---
@@ -76,27 +79,31 @@ Use OSC escape sequences from the shell to report cwd, prompt boundaries, and co
 boundaries. Store these in the session state.
 
 **Pros**: Non-invasive; improves cwd accuracy; enables semantic scrollback.
-**Cons**: Does not recover SSH connections or tmux sessions. Requires shell configuration by
-the user. Provides metadata, not recovery.
+**Cons**: Does not recover SSH connections. Requires shell configuration by the user. Provides
+metadata, not recovery.
 
 ### Option B — Per-pane recovery recipes
 
-Store a structured `startup_chain: Vec<StartupStep>` in each pane's `LayoutNode::Terminal`
-data. On restore, replay the chain: `cd`, `ssh`, `tmux attach`, `SendCommand`.
+Store a structured `startup: Vec<StartupStep>` in each pane's `PaneRecovery` data. On restore,
+replay the chain: `cd`, `ssh`. Structured `PaneTarget` values cover the high-value recovery
+paths.
 
 **Pros**: Works without shell integration. Covers the most valuable recovery paths (local cd,
-SSH, tmux). Honest: the recipe describes exactly what will be replayed, no magic.
+SSH). Honest: the recipe describes exactly what will be replayed, no magic.
 **Cons**: Cannot recover arbitrary shell state. Recipe must be written at pane creation time,
 not after the fact.
 
-### Option C — PTY daemon / client-server architecture *(reconstructed)*
+### Option C — PTY daemon / client-server architecture
 
 A persistent background process owns the PTYs. The GTK UI connects and disconnects without
 killing the shells.
 
 **Pros**: True process persistence; closest to "as if you never closed the terminal."
-**Cons**: Major architectural change. Significant complexity. Out of scope until recipe-based
-recovery proves its value.
+**Cons**: Major architectural change. Significant complexity.
+
+**Current status**: This is now the live architecture. RFC-013 defines the daemon-backed runtime
+model implemented in `rttx-server`. Recipe recovery (Option B) augments it with workspace-owned
+recovery metadata.
 
 ### Option D — CRIU process snapshotting *(reconstructed)*
 
@@ -110,12 +117,16 @@ applications. Incompatible with the rock-solid stability goal.
 
 ## Decision
 
-Chosen option: B, with A as a later enhancement and C as a possible endgame
+Chosen option: B for workspace-owned recovery metadata, with C as the runtime architecture
 
-Recovery recipes are the right v1 abstraction. They are serializable, testable, and honest about
-what they can and cannot restore. Shell integration (Option A) adds accuracy on top of recipes
-and is planned for a later phase. The PTY daemon (Option C) is only worth building after recipe
-recovery proves its value to users.
+Recovery recipes are the right abstraction for workspace-owned metadata. They are serializable,
+testable, and honest about what they can and cannot restore. Shell integration (Option A) adds
+accuracy on top of recipes and is planned for a later phase.
+
+The PTY daemon (Option C) is now the live runtime architecture per RFC-013. The daemon owns PTYs,
+scrollback, and process lifetime. Recipe recovery augments the daemon model with replayable
+context that the daemon does not own: which bookmark or command created the pane, and what SSH
+target to reconnect to.
 
 ---
 
@@ -123,38 +134,28 @@ recovery proves its value to users.
 
 ### Data model
 
-```rust
-pub struct PaneRecovery {
-    pub source: PaneSource,
-    pub target: Option<PaneTarget>,
-    pub startup_chain: Vec<StartupStep>,
-}
+The following types live in `clients/rttx/src/session/recovery.rs`:
 
+```rust
 pub enum PaneSource {
     EmptyShell,
-    Bookmark(String),   // bookmark UUID
-    Command(String),    // saved command UUID
-    SessionTemplate(String),
+    Command { title: String },
     Manual,
-}
-
-pub enum PaneTarget {
-    LocalFolder { path: String },
-    LocalTmux { session: String },
-    RemoteShell { ssh_target: String, remote_folder: Option<String> },
-    RemoteTmux { ssh_target: String, tmux_session: String },
-}
-
-pub enum RecoveryState {
-    Idle,
-    Connecting,
-    Ready,
-    Failed { message: String },
 }
 
 pub enum StartupStep {
     SendText { text: String, execute: bool },
-    // Roadmap sugar: LocalCd { path }, Ssh { target }, TmuxAttach { session }
+}
+
+pub enum PaneTarget {
+    LocalFolder { path: String },
+    RemoteShell { ssh_target: String, remote_folder: Option<String> },
+}
+
+pub struct PaneRecovery {
+    pub source: PaneSource,
+    pub target: Option<PaneTarget>,
+    pub startup: Vec<StartupStep>,
 }
 ```
 
@@ -163,16 +164,17 @@ keyed by terminal UUID. It is separate from `LayoutNode::Terminal` to allow the 
 remain a pure geometry structure. Both structures serialize with `#[serde(default)]` so old
 `sessions.json` files without recovery data continue to work.
 
-Structured `PaneTarget` values are the high-value recovery path. They cover the workflows that
-matter most and support reliable retry UX:
+Removed variants (`Bookmark`, `SessionTemplate` in `PaneSource`; `LocalTmux`, `RemoteTmux` in
+`PaneTarget`) are handled by custom `Deserialize` implementations that map them to `Manual` or
+`None` respectively, preserving backward compatibility with older persisted state.
 
-- `LocalFolder`
-- `LocalTmux`
-- `RemoteShell`
-- `RemoteTmux`
+Structured `PaneTarget` values are the high-value recovery path:
 
-`startup_chain` remains available as a flexible escape hatch and compatibility layer, but the
-long-term design prefers structured targets over raw shell text for SSH/tmux flows.
+- `LocalFolder` — start shell in a saved directory
+- `RemoteShell` — reconnect SSH, optionally cd to a remote folder
+
+`startup` remains available as a flexible escape hatch and compatibility layer, but the
+long-term design prefers structured targets over raw shell text for SSH flows.
 
 ### Recovery levels
 
@@ -180,8 +182,13 @@ long-term design prefers structured targets over raw shell text for SSH/tmux flo
 | --- | --- | --- |
 | L1 — UI | Layout, splits, active workspace, active pane | Implemented |
 | L2 — Context | CWD, custom title, pane origin, startup recipe replay | Implemented |
-| L3 — Reconnect | SSH reconnect, tmux reattach, `ssh → tmux` chains, retry UX | Roadmap |
-| L4 — True persistence | PTY processes kept alive; UI reconnects to live shells | Future |
+| L3 — Reconnect | SSH reconnect, retry UX | Superseded by RFC-013 daemon model |
+| L4 — True persistence | PTY processes kept alive; UI reconnects to live shells | Superseded by RFC-013 daemon model |
+
+L3 and L4 are now handled by the daemon-backed runtime architecture defined in RFC-013. The
+daemon owns PTYs, scrollback, and process lifetime. The GUI reconnects to the daemon rather
+than replaying recipes for process persistence. Recipe recovery still provides the workspace-owned
+metadata (which bookmark created the pane, what SSH target to use) that the daemon does not own.
 
 ### Replay on restore
 
@@ -196,22 +203,14 @@ Target-specific behavior:
 
 - `LocalFolder { path }`
   Start shell in that directory when possible; otherwise fall back to `cd`
-- `LocalTmux { session }`
-  Attempt `tmux attach -t <session>`
 - `RemoteShell { ssh_target, remote_folder }`
   Attempt SSH connection, then optional remote `cd`
-- `RemoteTmux { ssh_target, tmux_session }`
-  Attempt SSH connection, then `tmux attach -t <session>`
 
 For `SendText { text, execute: true }`: send `text\n` to the VTE PTY
 For `SendText { text, execute: false }`: send `text` without newline (user presses Enter)
 
-For tmux-backed recovery, rttx always uses attach-only semantics. If the expected tmux session
-does not exist, the pane must fail visibly. Creating a new empty tmux session automatically would
-look like success while actually losing context.
-
 The same recovery mechanism is used after restart and for later manual retry. A temporary network
-failure should not kill the pane or the session.
+failure should not kill the pane or the workspace.
 
 ### Workspace vs pane responsibilities
 
@@ -232,14 +231,18 @@ If a pane fails to recover:
 - the workspace may also surface degraded state in the workspace row, but the primary control lives in
   the pane itself
 
+Connection state for daemon-backed workspaces is managed by the workspace-level state machine
+defined in RFC-018. Workspace-level reconnect and remediation actions render once per workspace
+in the sidebar row, not once per pane (per RFC-013).
+
 ### Honest promise
 
 rttx makes explicit guarantees by recovery level:
 
 - **Local shell pane**: layout + cwd + best-effort recipe replay. Shell state is not preserved.
 - **SSH pane**: reconnect to the same host; replay post-connect steps. Depends on auth setup.
-- **Local tmux pane**: reattach to the named tmux session. Tmux is the real state carrier.
-- **SSH + tmux pane**: reconnect SSH then reattach tmux. Best practical recovery path.
+- **Daemon-backed pane**: PTY and scrollback survive GUI detach and daemon restart. The daemon
+  reconstructs from persisted state (per RFC-013 and RFC-022).
 
 ---
 
@@ -248,34 +251,44 @@ rttx makes explicit guarantees by recovery level:
 | Goal | How addressed |
 | --- | --- |
 | G1 — Layout + active pane restored | `WindowState` persists session list, active index, active pane UUID |
-| G2 — Startup recipe / reconnect replay | `PaneTarget` + `startup_chain` replayed during pane recovery |
+| G2 — Startup recipe / reconnect replay | `PaneTarget` + `startup` replayed during pane recovery |
 | G3 — Pane origin tracked | `PaneSource` enum stored in `PaneRecovery` |
-| G4 — Honest recovery | L1/L2 implemented; L3/L4 scope explicitly bounded |
+| G4 — Honest recovery | L1/L2 implemented; L3/L4 delegated to daemon (RFC-013) |
 | G5 — Failure is non-destructive | pane-level failure state with manual retry, no modal dialog |
 
 ---
 
 ## Development Plan
 
-- [x] Layout, CWD, active session, active pane persistence (L1)
+- [x] Layout, CWD, active workspace, active pane persistence (L1)
 - [x] `PaneSource` and `StartupStep` data model
 - [x] Recipe serialization and restore replay (L2)
-- [x] New session from bookmark (replays bookmark startup chain)
-- [ ] **PaneTarget model** — add structured `LocalFolder`, `LocalTmux`, `RemoteShell`, `RemoteTmux`
-- [ ] **Automatic startup attempt** — try recovery once on launch for eligible panes
+- [x] New workspace from bookmark/place (replays startup chain)
+- [x] `PaneTarget` model — `LocalFolder` and `RemoteShell` implemented
+- [x] Automatic startup attempt — recovery on launch for eligible panes
 - [ ] **Manual retry UX** — in-pane retry strip, no modal dialog
-- [ ] **SSH auto-reconnect** — reconnect failed/restored `RemoteShell` and `RemoteTmux` panes
-- [ ] **Tmux auto-reattach** — attach-only semantics; visible failure if session is missing
-- [ ] **`ssh → tmux` chains** — first-class high-value recovery path
-- [ ] **Remote folder replay** — only for non-tmux remote shell panes
+- [ ] **SSH auto-reconnect** — reconnect failed/restored `RemoteShell` panes
 - [ ] **Shell integration** — OSC-based cwd + prompt boundaries for better capture and replay timing
-- [ ] **PTY daemon** — background session persistence after recipe-based recovery proves value — *tracked in todo.md — Session Management*
+
+Items previously listed here for tmux integration, remote tmux chains, and PTY daemon are now
+tracked elsewhere:
+- Tmux integration was removed per RFC-016
+- PTY daemon is the live architecture per RFC-013
+- Daemon state persistence is defined in RFC-022
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** — Replay timing: fixed settle delay is simple but fragile on slow SSH connections; shell integration markers are accurate but require shell configuration. What is the right default before shell integration exists?
-- [ ] **Q2** — Capture ergonomics: how much of a manually established SSH/tmux flow can be captured reliably into a bookmark or session target without shell integration?
+- [x] **Q1** — Replay timing: fixed settle delay is simple but fragile on slow SSH connections;
+  shell integration markers are accurate but require shell configuration. What is the right
+  default before shell integration exists?
+  *Resolved*: The daemon model (RFC-013) handles process persistence directly. Recipe replay
+  timing matters only for the initial SSH connection command, where a fixed delay is acceptable
+  as a pragmatic default.
+- [x] **Q2** — Capture ergonomics: how much of a manually established SSH flow can be captured
+  reliably into a place or session target without shell integration?
+  *Resolved*: RFC-016 replaced bookmarks with Places. SSH targets are captured at workspace
+  creation time through the explicit host selection UI. Manual flows are not auto-captured.
 
 ---
