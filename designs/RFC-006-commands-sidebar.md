@@ -1,8 +1,8 @@
-# RFC-006: Commands & Bookmarks Right Sidebar
+# RFC-006: Places & Commands Right Sidebar
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted                |
+| Status        | Implemented             |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -11,26 +11,26 @@
 
 ## Summary
 
-A dedicated right-hand utility sidebar provides searchable access to bookmarks and saved commands.
-Bookmarks set context (SSH, tmux, folder); commands execute work (run or insert literal shell
-text). Both live globally — not bound to a specific session or pane — and are accessed from the
-same sidebar panel. The left sidebar remains session-only navigation.
+A dedicated right-hand utility sidebar provides searchable access to places and saved commands,
+scoped by host. Places set context (directory on a local or remote host); commands execute work
+(run or insert literal shell text). Both support host tags for scoping — global when untagged,
+host-specific when tagged. The left sidebar remains workspace-only navigation.
 
 ---
 
 ## Goals
 
-- **G1** — Bookmarks (SSH, tmux, folder, combinations) are searchable and runnable from one sidebar
+- **G1** — Places (directory paths on local or remote hosts) are searchable and runnable from one sidebar
 - **G2** — Saved commands (single-line and multiline) support Run and Insert actions
-- **G3** — Left sidebar is unaffected; only session navigation lives there
-- **G4** — Commands and bookmarks are globally stored, not per-session
+- **G3** — Left sidebar is unaffected; only workspace navigation lives there
+- **G4** — Commands and places are globally stored, not per-workspace, with optional host scoping
 
 ## Non-Goals
 
 - **NG1** — No custom placeholder or template DSL in the command body; literal shell text only
 - **NG2** — No shell history import or automatic command capture
-- **NG3** — No scripting engine, result capture, or command chaining in v1
-- **NG4** — Session templates (composition of bookmarks + commands) are a later feature
+- **NG3** — No scripting engine, result capture, or command chaining
+- **NG4** — Session templates were considered and explicitly dropped (see RFC-016)
 
 ---
 
@@ -40,9 +40,13 @@ Before the right sidebar, bookmarks were accessible only through a modal dialog 
 flow. There was no persistent home for reusable commands. Users had to keep common commands in
 shell aliases or in external notes — outside the terminal where they are actually used.
 
-The session list is the wrong place to add these tools. Mixing navigation objects (sessions) with
-action objects (commands, bookmarks) creates a cluttered, ambiguous sidebar. The mental model
+The workspace list is the wrong place to add these tools. Mixing navigation objects (workspaces)
+with action objects (commands, places) creates a cluttered, ambiguous sidebar. The mental model
 breaks down: the left side shows where you are; the right side shows what you can do.
+
+The original design used "bookmarks" that combined SSH targets, tmux sessions, and directories
+into a single object. This was replaced by a simpler model: places are directory paths, hosts
+are managed separately, and the host system (RFC-013) handles SSH connectivity at a higher level.
 
 ---
 
@@ -50,33 +54,31 @@ breaks down: the left side shows where you are; the right side shows what you ca
 
 | Audience | Impact |
 | --- | --- |
-| End users | One-click access to SSH/tmux/folder bookmarks and saved commands from a searchable panel |
-| Contributors | Commands and bookmarks are separate persistent JSON files; independently testable |
+| End users | One-click access to directory places and saved commands from a searchable, host-scoped panel |
+| Contributors | Places, commands, and hosts are separate persistent JSON files; independently testable |
 | Packagers | None |
 
 ---
 
 ## Considered Options
 
-### Option A — Add commands/bookmarks as tabs within the left session sidebar *(reconstructed)*
+### Option A — Add commands/bookmarks as tabs within the left workspace sidebar *(rejected)*
 
 **Pros**: One sidebar to learn; no layout change.
-**Cons**: Conflates navigation (sessions) with action objects (commands, bookmarks). The session
-list becomes a mode-switched panel with unclear state. Tab width would have to accommodate all
-three concepts.
+**Cons**: Conflates navigation (workspaces) with action objects (commands, places). The workspace
+list becomes a mode-switched panel with unclear state.
 
-### Option B — Modal dialog launcher (keyboard shortcut → search → run) *(reconstructed)*
+### Option B — Modal dialog launcher (keyboard shortcut → search → run) *(rejected)*
 
 **Pros**: Takes no persistent screen space; keyboard-first.
-**Cons**: Loses the browsability of a persistent panel. Users cannot glance at recent bookmarks or
-pinned commands. A modal dialog also conflicts with the goal of keyboard-first session switching
-(a modal dialog steals focus from the terminal).
+**Cons**: Loses the browsability of a persistent panel. Users cannot glance at recent places or
+pinned commands. A modal dialog also steals focus from the terminal.
 
-### Option C — Dedicated right utility sidebar
+### Option C — Dedicated right utility sidebar *(chosen)*
 
 **Pros**: Clear mental model (left = where I am, right = what I can do). Independently hideable.
-Can house bookmarks, commands, and eventually templates without cramming them into the session
-list. Already aligns with `adw::OverlaySplitView` which supports a second sidebar.
+Can house places, commands, and host-scoped content without cramming them into the workspace
+list.
 **Cons**: More screen real estate; second sidebar toggle needed.
 
 ---
@@ -85,72 +87,102 @@ list. Already aligns with `adw::OverlaySplitView` which supports a second sideba
 
 Chosen option: C
 
-The dual-sidebar model provides the clearest mental model and the most room to grow. The
-`adw::OverlaySplitView` already handles the overlay behavior on narrow screens. The left sidebar
-remains sacred — session-only — and the right sidebar houses all reusable workflow tools.
+The dual-sidebar model provides the clearest mental model and the most room to grow. The left
+sidebar remains sacred — workspace-only — and the right sidebar houses all reusable workflow tools.
 
 ---
 
 ## Design
 
-### Sidebar sections
+### Sidebar layout
 
 ```text
-Right Utility Sidebar
-├── Search entry (searches all sections)
-├── Bookmarks
-│     ├── [search results or grouped list]
-│     └── Each row: type icon + label + action button
-└── Commands
-      ├── [search results or pinned + all]
-      └── Each row: title + preview + Run / Insert buttons
+Right Utility Sidebar (width_request=320)
+├── Host selector dropdown + Add/Delete host buttons
+├── Search entry (filters both tabs)
+├── StackSwitcher with two tabs:
+│   ├── "Places" tab
+│   │   ├── Section headers (host name or "Global") in All Hosts view
+│   │   ├── Built-in places: Home (~), Root (/)
+│   │   └── User places: ActionRow with name + path subtitle
+│   └── "Commands" tab
+│       ├── Section headers (host name or "Global") in All Hosts view
+│       └── Command rows: ActionRow with title + preview subtitle
 ```
 
-### Bookmark data model
+The host selector at the top filters both tabs. Selecting a specific host shows only items
+tagged for that host plus global (untagged) items. The "All Hosts" view groups items by host
+with section headers.
+
+### Host data model
 
 ```rust
-struct Bookmark {
-    uuid: String,
-    name: String,
-    ssh_target: Option<String>,    // SSH target (user@host)
-    tmux_session: Option<String>,  // tmux attach target
-    directory: Option<String>,     // local or remote folder
+pub const LOCAL_KEY: &str = "local";
+
+pub enum HostKind { Local, Remote }
+
+pub struct Host {
+    pub key: String,
+    pub name: String,
+    pub kind: HostKind,
+    pub ssh_target: Option<String>,
 }
 ```
 
-A bookmark may combine any subset of `host`, `tmux_session`, and `folder`. Execution replays
-the appropriate `StartupStep` chain (see RFC-007).
+Hosts are managed separately from places and commands. The built-in local host is not persisted.
+Remote hosts are identified by a normalized SSH key (hostname, lowercased, without user prefix).
+Host deletion cascades to associated places and commands via a confirmation dialog.
+
+### Place data model
+
+```rust
+pub struct Place {
+    pub uuid: String,
+    pub name: String,
+    pub path: String,
+    pub host_tags: Vec<String>,  // empty = global
+}
+```
+
+A place is a directory path. Built-in places (`Home` and `Root`) have stable UUIDs
+(`builtin:home`, `builtin:root`) and are not persisted. Host tags scope a place to specific
+hosts; an empty tag list means the place is global.
 
 ### Command data model
 
 ```rust
-struct SavedCommand {
-    uuid: String,
-    title: String,
-    body: String,                        // literal shell text, multiline supported
-    default_run_mode: CommandRunMode,    // Run (body + \n) or InsertOnly (body, no \n)
+pub enum CommandRunMode { Run, Insert }
+
+pub struct SavedCommand {
+    pub uuid: String,
+    pub title: String,
+    pub body: String,
+    pub default_run_mode: CommandRunMode,
+    pub host_tags: Vec<String>,  // empty = global
 }
 ```
 
 ### Execution semantics
 
-- **Run**: send `body + "\n"` to the active terminal's VTE PTY
+- **Run**: send `body + "\n"` to the active terminal's PTY
 - **Insert**: send `body` without newline; user presses Enter when ready
-- Default for multiline commands: `InsertOnly` (avoids accidental multi-step execution)
+- Default run mode for new commands: `Run`
+- **Place click**: send `cd <path>\n` to the active pane
 
-### Search ranking
+### Search
 
-1. Exact title match
-2. Title prefix match
-3. Tag match
-4. Body text match
-5. Pinned items float to top regardless of rank
+A single shared search entry filters both the Places and Commands tabs simultaneously.
+Matching is case-insensitive substring search across title, body/path, and host tags.
+Empty or whitespace-only queries match everything.
 
 ### Persistence
 
-- `bookmarks.json` in XDG config directory (separate from `sessions.json`)
+- `places.json` in XDG config directory
 - `commands.json` in XDG config directory
-- Both use `#[serde(default)]` on all optional fields for forward/backward compatibility
+- `hosts.json` in XDG config directory
+- All use `#[serde(default)]` on newer fields for forward/backward compatibility
+- Pretty-printed JSON arrays
+- Missing file on load returns empty list (graceful degradation)
 
 ---
 
@@ -158,29 +190,34 @@ struct SavedCommand {
 
 | Goal | How addressed |
 | --- | --- |
-| G1 — Bookmarks searchable and runnable | Bookmark section in right sidebar; runs `StartupStep` chain in active pane |
+| G1 — Places searchable and runnable | Places tab in right sidebar; click sends `cd` to active pane |
 | G2 — Commands with Run/Insert | `CommandRunMode` enum; explicit action buttons per row |
-| G3 — Left sidebar unaffected | Right sidebar is a separate `adw::OverlaySplitView` end widget |
-| G4 — Global storage | `bookmarks.json` and `commands.json` independent of session state |
+| G3 — Left sidebar unaffected | Right sidebar is a separate panel with its own toggle |
+| G4 — Global storage with host scoping | `places.json`, `commands.json`, and `hosts.json` independent of workspace state; host tags for scoping |
 
 ---
 
 ## Development Plan
 
-- [x] Bookmark data model and persistence
-- [x] Right utility sidebar panel
-- [x] Bookmarks section with search
-- [x] Commands data model and persistence
-- [x] Commands section with Run and Insert actions
+- [x] Place data model and persistence (`places.json`)
+- [x] Host data model and persistence (`hosts.json`)
+- [x] Right utility sidebar panel with tab layout
+- [x] Places tab with search and host filtering
+- [x] Commands data model and persistence (`commands.json`)
+- [x] Commands tab with Run and Insert actions
 - [x] Multiline command support
-- [ ] **Pin / recent commands** — *tracked in todo.md — Commands / Templates*
-- [ ] **Context menu integration** — run/insert from terminal right-click — *tracked in todo.md — Context Menu*
-- [ ] **Session templates** — composition layer over bookmarks and commands — *tracked in todo.md — Commands / Templates*
+- [x] Host selector dropdown with add/delete
+- [x] Host tag scoping for places and commands
+- [x] Drag-and-drop command reorder
+- [x] Host deletion with cascading cleanup dialog
+- [x] Unified search across both tabs
+- [ ] **Pin / recent commands** — tracked in [#44](https://github.com/IllyaYalovyy/rttx/issues/44)
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-- [ ] **Q1** — Should bookmarks and commands share one search entry or have separate search entries per section? Shared search reduces UI complexity; separate entries allow section-specific filtering.
+- **Q1** — Bookmarks and commands (now places and commands) share one search entry. Shared search
+  reduces UI complexity and was chosen over separate per-section entries.
 
 ---
