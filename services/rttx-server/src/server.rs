@@ -1167,10 +1167,22 @@ async fn client_writer(
 ) {
     loop {
         let msg = tokio::select! {
-            msg = resp_rx.recv() => msg,
-            msg = push_rx.recv() => msg,
+            biased;
+            msg = resp_rx.recv() => match msg {
+                Some(m) => m,
+                None => match push_rx.recv().await {
+                    Some(m) => m,
+                    None => break,
+                },
+            },
+            msg = push_rx.recv() => match msg {
+                Some(m) => m,
+                None => match resp_rx.recv().await {
+                    Some(m) => m,
+                    None => break,
+                },
+            },
         };
-        let Some(msg) = msg else { break };
         if let Err(e) = writer.send_message(&msg).await {
             tracing::error!("Client {client_short} write error: {e}");
             break;

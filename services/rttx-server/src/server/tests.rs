@@ -1334,3 +1334,61 @@ async fn exited_pane_scrollback_is_released() {
     assert!(!pane.has_pending_flush());
     drop(s);
 }
+
+// ── client_writer priority ──────────────────────────────────────
+
+#[tokio::test]
+async fn client_writer_prioritizes_resp_over_push() {
+    // Regression: #557 — resp_rx (Pong, Snapshot) must be drained before
+    // push_rx (Delta) so heartbeat replies are never starved by burst data.
+    let push_count = 64;
+    let (push_tx, push_rx) = mpsc::channel::<proto::ServerMessage>(push_count);
+    let (resp_tx, resp_rx) = mpsc::channel::<proto::ServerMessage>(16);
+
+    // Pre-fill push channel with many Deltas.
+    let delta = protocol::delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"x"));
+    for _ in 0..push_count {
+        push_tx.send(delta.clone()).await.unwrap();
+    }
+
+    // Then add a single Pong to the response channel.
+    resp_tx.send(protocol::pong(42)).await.unwrap();
+
+    // Drop senders so the writer will exit after draining.
+    drop(push_tx);
+    drop(resp_tx);
+
+    let (client_half, mut read_half) = tokio::io::duplex(256 * 1024);
+    let conn = crate::ipc::ClientConnection::new(client_half);
+    let (_, writer) = conn.into_split();
+
+    let handle = tokio::spawn(client_writer(writer, push_rx, resp_rx, "test".into()));
+    handle.await.unwrap();
+
+    // Read all bytes written by client_writer.
+    let mut buf = bytes::BytesMut::new();
+    loop {
+        let n = tokio::io::AsyncReadExt::read_buf(&mut read_half, &mut buf).await.unwrap();
+        if n == 0 {
+            break;
+        }
+    }
+
+    let mut messages = Vec::new();
+    loop {
+        match rttx_proto::decode_frame::<proto::ServerMessage>(&mut buf) {
+            Ok(msg) => messages.push(msg),
+            Err(rttx_proto::FrameError::Incomplete) => break,
+            Err(e) => panic!("unexpected decode error: {e:?}"),
+        }
+    }
+
+    assert_eq!(messages.len(), push_count + 1);
+
+    // With biased select, the Pong must be the very first message written.
+    assert!(
+        matches!(messages[0].msg, Some(proto::server_message::Msg::Pong(ref p)) if p.nonce == 42),
+        "first message should be Pong(42), got {:?}",
+        messages[0].msg
+    );
+}
