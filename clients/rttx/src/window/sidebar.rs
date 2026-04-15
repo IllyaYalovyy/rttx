@@ -215,15 +215,7 @@ impl Window {
             imp.command_list.remove(&row);
         }
 
-        let query = imp.command_search_entry.text();
-        let sidebar_query = imp.sidebar_search_entry.text();
-        let combined_query = if sidebar_query.is_empty() {
-            query.to_string()
-        } else if query.is_empty() {
-            sidebar_query.to_string()
-        } else {
-            format!("{sidebar_query} {query}")
-        };
+        let query = imp.sidebar_search_entry.text();
 
         let all_commands = commands::load();
         let selected_key = self.selected_host_key();
@@ -233,7 +225,7 @@ impl Window {
             None => all_commands,
         }
         .into_iter()
-        .filter(|command| commands::matches_query(command, &combined_query))
+        .filter(|command| commands::matches_query(command, &query))
         .collect();
 
         for command in &filtered {
