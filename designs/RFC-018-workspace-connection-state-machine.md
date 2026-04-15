@@ -2,7 +2,7 @@
 
 | Field         | Value                                                       |
 |---------------|-------------------------------------------------------------|
-| Status        | Accepted                                                    |
+| Status        | Implemented                                                 |
 | Author(s)     | jd2023                                                      |
 | Supersedes    | —                                                           |
 | Superseded by | —                                                           |
@@ -11,9 +11,28 @@
 
 ## Summary
 
-Managed workspaces should use a small durable connection state machine whose states describe what
-is true right now. Recovery from a lost daemon connection is an event, not a long-lived status:
-after reconnect and reattach succeed, the workspace is simply `Connected` again.
+Managed workspaces use a durable connection state machine whose states describe what is true right
+now. The state machine is implemented as a pure function (`advance_connection_status`) that maps
+events to states without GTK or daemon I/O dependencies.
+
+## Current implementation snapshot (2026-04)
+
+- Durable states live in `ConnectionStatus` (not `ConnectionState` as originally proposed) in
+  `clients/rttx/src/runtime.rs`
+- Events live in `ConnectionEvent` in the same module
+- `advance_connection_status` is a pure event-to-state mapping — the current state parameter is
+  accepted for signature symmetry but not consulted; callers are responsible for sending
+  semantically valid event sequences
+- `ConnectionProblem` classifies daemon/protocol errors into 7 variants; only
+  `DaemonUnavailable` is transient (auto-retryable)
+- `SessionMissing` was added as a durable state by RFC-019 for workspaces whose daemon-side
+  runtime has disappeared
+- `Recovered` remains as a durable state — the RFC's original goal of making recovery purely
+  transient has not been completed (see [Development Plan](#development-plan))
+- Presentation mapping (`connection_icon`, `present_connection_status`) and input gating
+  (`accepts_input`) are implemented as pure functions in `runtime.rs`
+- The reconnect loop lives in `daemon_bridge.rs` (`EndpointActor`) with linear backoff
+  (`delay = min(attempt, max_delay)`) and backoff preservation across reattach failures
 
 ---
 
@@ -27,7 +46,8 @@ after reconnect and reattach succeed, the workspace is simply `Connected` again.
 
 ## Non-Goals
 
-- **NG1** — Implement the state-machine refactor in this RFC PR
+- **NG1** — ~~Implement the state-machine refactor in this RFC PR~~ (no longer applicable — the
+  core state machine is implemented)
 - **NG2** — Change the daemon protocol or heartbeat protocol
 - **NG3** — Expand investment in direct terminals beyond keeping them as a fallback path
 - **NG4** — Change workspace, split, or bookmark UX from RFC-016
@@ -36,11 +56,11 @@ after reconnect and reattach succeed, the workspace is simply `Connected` again.
 
 ## Background & Motivation
 
-The current client model includes `ConnectionStatus::Recovered` as a durable status. In practice,
+The original client model included `ConnectionStatus::Recovered` as a durable status. In practice,
 most of the UI treats it as `Connected`:
 
 - input is enabled for both `Connected` and `Recovered`
-- the pane header renders both as `Connected`
+- the pane header renders both as `Connected` (via `short_label()`)
 - the sidebar connection icon uses the same `accent` color for both
 
 That makes `Recovered` a weak state. It represents something that happened in the past, not the
@@ -49,7 +69,8 @@ test, or state transition must remember to treat `Recovered` like `Connected`.
 
 The revised model keeps recovery visible where it is useful, but only as a transient event: a log
 entry, toast, one-shot pulse, or activity marker. The stable state after successful recovery is
-`Connected`.
+`Connected`. This goal is partially achieved — the state machine and presentation layer are
+implemented, but the `Recovered` variant has not yet been collapsed into `Connected`.
 
 ---
 
@@ -116,12 +137,12 @@ machine. Direct terminal process lifecycle should remain a separate terminal con
 
 ### Durable States
 
+The `ConnectionStatus` enum in `clients/rttx/src/runtime.rs` defines the following variants:
+
 `Starting`
 
-The client is starting or locating the endpoint daemon. This state is only meaningful when the
-client must auto-start a local daemon before connecting. Remote endpoints skip this state and begin
-at `Connecting`. Implementations may omit `Starting` if daemon startup is fast enough to be
-invisible — the key invariant is that no input is accepted until `Connected`.
+The client is starting or locating the endpoint daemon. Emitted for local endpoints where the
+daemon may need to be auto-started. Remote endpoints skip this state and begin at `Connecting`.
 
 `Connecting`
 
@@ -131,99 +152,103 @@ runtime panes with the workspace layout.
 `Connected`
 
 The workspace is attached to a live runtime and terminal input can be delivered to its panes. This
-is also the state after a successful reconnect and reattach.
+is the target state after both initial connection and reconnection (once `Recovered` is removed).
 
 `Reconnecting { attempt, retry_in_secs }`
 
 The connection was lost or a transient connection attempt failed, and automatic reconnect is
-scheduled. Input is disabled while the workspace waits for the next attempt.
-
-`Disconnected`
-
-The workspace is not connected and no automatic reconnect is currently active. This covers explicit
-user disconnect, user-stopped daemons, retry exhaustion if we add a retry limit, or any future
-paused reconnect state. The cause is not encoded in the durable state — if the UI needs to
-distinguish "user chose to disconnect" from "retries exhausted," it should check the most recent
-transient event (`ReconnectAbandoned` vs user-initiated detach).
+scheduled. Input is disabled while the workspace waits for the next attempt. The `attempt` counter
+drives linear backoff: `delay = min(attempt, max_delay)` where `max_delay` defaults to 10 seconds.
 
 `Blocked(ConnectionProblem)`
 
-The connection cannot continue without user action or a non-transient fix. Examples include
-permission problems, protocol mismatch, runtime ownership conflict, or an unrecoverable protocol
-error.
+The connection cannot continue without user action or a non-transient fix. Blocked states never
+auto-resolve — the user must act (e.g., via "Retry Connection" in the workspace context menu).
 
-### Transient Events
+`Disconnected`
 
-Transient events describe something that happened. They are not durable workspace statuses.
+The workspace is not connected and no automatic reconnect is currently active. Currently reachable
+only as a transient intermediate state during the `Disconnected` → `Reconnecting` emission
+sequence in `handle_disconnect`. The cause is not encoded in the durable state.
 
-`Started`
+`Recovered` *(to be removed — see Development Plan)*
 
-Endpoint startup began.
+Emitted after successful reattach during reconnection. Functionally identical to `Connected`:
+`accepts_input()` returns true, `short_label()` returns "Connected", and `connection_icon` uses
+the `accent` CSS class. Exists only in the reconnect handler in `daemon_bridge.rs`. The original
+RFC design calls for replacing this with a `Connected` emission plus a transient
+`ReconnectSucceeded` event.
 
-`ConnectAttemptStarted`
+`SessionMissing` *(added by RFC-019)*
 
-Transport, handshake, attach, or create work began.
+The daemon has no record of this workspace's runtime. Emitted when an attach or command fails with
+server error code 4 (session not found). Does not trigger auto-reconnect. The user can close the
+orphaned workspace or retry. See RFC-019 for the full design.
 
-`Connected`
+### Events
 
-Initial connection succeeded.
+The `ConnectionEvent` enum drives state transitions via `advance_connection_status`. The function
+maps each event directly to a state without consulting the current state:
 
-`ConnectionLost`
+| Event | Resulting State |
+|---|---|
+| `Started` | `Starting` |
+| `Connected` | `Connected` |
+| `Lost` | `Disconnected` |
+| `RetryScheduled { attempt, retry_in_secs }` | `Reconnecting { attempt, retry_in_secs }` |
+| `Failed(ConnectionProblem)` | `Blocked(ConnectionProblem)` |
+| `Recovered` | `Recovered` |
+| `SessionMissing` | `SessionMissing` |
 
-The heartbeat, transport, or daemon event stream detected that the connection is no longer usable.
-
-`RetryScheduled { attempt, retry_in_secs }`
-
-A transient failure will be retried automatically.
-
-`ReconnectSucceeded`
-
-Reconnect and runtime reattach succeeded after a previous loss. This may show a toast, write a log
-entry, or briefly pulse the row, but the durable state becomes `Connected`.
-
-`ConnectFailed(ConnectionProblem)`
-
-A connect, attach, or protocol operation failed and has been classified.
-
-`ReconnectAbandoned`
-
-Automatic reconnect stopped or was explicitly paused. The durable state becomes `Disconnected`.
+The original RFC proposed separate "transient event" names (`ConnectAttemptStarted`,
+`ConnectionLost`, `ReconnectSucceeded`, `ConnectFailed`, `ReconnectAbandoned`). The implementation
+uses shorter names and does not distinguish transient events from state-producing events — every
+`ConnectionEvent` variant produces a `ConnectionStatus`. The `ReconnectAbandoned` event was not
+implemented because reconnect is unbounded (see Q2).
 
 ### Transition Rules
 
-- New managed workspace starts in `Starting` when local daemon startup is needed.
-- New managed workspace starts in `Connecting` when the endpoint is already expected to exist.
-- `Starting` moves to `Connecting` once endpoint startup succeeds.
-- `Starting` or `Connecting` moves to `Connected` after handshake and runtime attach/create succeed.
-- `Starting` or `Connecting` moves to `Reconnecting` after a transient failure with a scheduled retry.
-- `Starting` or `Connecting` moves to `Blocked` after a non-transient failure.
-- `Connected` moves to `Reconnecting` when the connection is lost and automatic reconnect is active.
-- `Connected` moves to `Disconnected` when the user explicitly disconnects or automatic reconnect is not active.
-- `Connected` moves to `Blocked` when a non-transient error arrives on a live connection (e.g., ownership conflict from another client attaching).
-- `Reconnecting` moves to `Connecting` when the retry timer fires.
-- `Reconnecting` moves to `Connected` when reconnect and reattach succeed.
-- `Reconnecting` moves to `Blocked` when a retry hits a non-transient failure.
-- `Reconnecting` moves to `Disconnected` when retry is abandoned or paused.
-- `Disconnected` moves to `Starting` or `Connecting` when the user requests reconnect.
-- `Blocked` moves to `Starting` or `Connecting` only after user action or an explicit reconnect request. Blocked states never auto-resolve — the user must act.
+The `advance_connection_status` function accepts a `_current` state parameter but does not use it.
+All transitions are event-driven with no guard conditions. The caller (`EndpointActor` in
+`daemon_bridge.rs`) is responsible for emitting semantically valid event sequences.
 
-No transition should produce a durable `Recovered` status. Recovery is represented by the
-`ReconnectSucceeded` event and a resulting durable `Connected` status.
+Observed transition sequences in the implementation:
+
+**Initial connection (local endpoint):**
+`Starting` → `Connecting` → `Connected`
+
+**Initial connection (remote endpoint):**
+`Connecting` → `Connected`
+
+**Connection lost with auto-reconnect:**
+`Connected` → `Disconnected` → `Reconnecting` → `Connecting` → `Recovered`
+
+**Transient failure during initial connect:**
+`Starting`/`Connecting` → `Disconnected` → `Reconnecting`
+
+**Non-transient failure:**
+`Starting`/`Connecting` → `Blocked(problem)`
+
+**Session missing during reconnect:**
+`Reconnecting` → `SessionMissing`
+
+**Session missing during command:**
+any → `SessionMissing`
+
+**Reconnect backoff preservation:** When `ensure_connected` succeeds (resetting the attempt
+counter to 0) but the subsequent reattach fails with a transient error, the saved attempt counter
+is restored before scheduling the next retry. This prevents backoff from resetting to 1 second
+after a partial reconnect success.
+
+**Non-transient retry:** Non-transient failures during reconnect still schedule a retry using
+`max_delay` directly, because the underlying problem may resolve (e.g., daemon restarts with a
+compatible version).
 
 ### Presentation Mapping
 
-The tab/sidebar indicator must keep one color mapping for every managed endpoint type:
+Implemented in `connection_icon` and `present_connection_status` in `runtime.rs`.
 
-| Durable state | Icon color class | Meaning |
-|---|---|---|
-| `Starting` | `dim-label` | Work is in progress |
-| `Connecting` | `dim-label` | Work is in progress |
-| `Connected` | `accent` | Input can be delivered |
-| `Reconnecting` | `dim-label` | Automatic recovery is pending |
-| `Disconnected` | `warning` | Not connected and no retry is active |
-| `Blocked` | `error` | User action or non-transient fix required |
-
-Endpoint type controls icon shape only:
+Icon shape encodes workspace type (constant for the lifetime of the row):
 
 | Endpoint | Icon |
 |---|---|
@@ -231,24 +256,46 @@ Endpoint type controls icon shape only:
 | Remote managed | `network-server-symbolic` |
 | Direct terminal | `utilities-terminal-symbolic` |
 
+Icon color encodes connection state (changes dynamically):
+
+| Durable state | Icon color class | Tooltip | Input enabled |
+|---|---|---|---|
+| `Starting` | `dim-label` | "Connecting…" | No |
+| `Connecting` | `dim-label` | "Connecting…" | No |
+| `Connected` | `accent` | "Connected to local/remote runtime" | Yes |
+| `Recovered` | `accent` | "Connected to local/remote runtime" | Yes |
+| `Reconnecting` | `dim-label` | "Connecting…" | No |
+| `Disconnected` | `warning` | "Disconnected from runtime" | No |
+| `SessionMissing` | `warning` | "Session no longer exists on daemon" | No |
+| `Blocked` | `error` | "Connection blocked" | No |
+
 Direct terminals may continue to show the terminal icon with the connected presentation while the
 child process is active, but direct terminal process state must not be mixed into the daemon
 connection state machine.
 
 ### Connection Problems
 
-`ConnectionProblem` remains the classification layer between daemon/protocol errors and UI policy.
+`ConnectionProblem` classifies daemon/protocol errors into reconnectable vs blocked UI policy.
+Implemented in `runtime.rs` with mapping logic in `classify_connection_problem`.
 
-Transient problems may schedule automatic reconnect. Non-transient problems produce `Blocked`.
-The first known transient class is daemon or transport unavailability. Protocol mismatch,
-permission denied, runtime ownership conflict, and user-action-required server errors are blocked.
+| Variant | Transient | Description |
+|---|---|---|
+| `DaemonUnavailable` | Yes | I/O error or daemon disconnected; triggers auto-reconnect |
+| `VersionMismatch` | No | Protocol version incompatibility during handshake |
+| `OwnershipConflict` | No | Runtime already owned by another client (server error 9 or `AttachBlocked`) |
+| `PermissionDenied` | No | Access denied |
+| `SessionMissing` | No | Daemon has no record of the requested session (server error 4) |
+| `Protocol(String)` | No | Frame-level or unexpected message error |
+| `UserActionRequired(String)` | No | Server error requiring user intervention (error 8 or catch-all) |
+
+Only `DaemonUnavailable` is transient. All other problems produce `Blocked` status.
 
 ### Compatibility
 
-The connection status is currently runtime UI state held in a `HashMap` on the window object — it
-is not persisted to disk. No migration is needed. If a future change persists connection status and
-encounters a serialized `Recovered` variant, loading must map it to `Connected` using
-`#[serde(default)]` or an equivalent backward-compatible loader pattern.
+The connection status is runtime UI state held in a `HashMap<String, ConnectionStatus>` on the
+window object — it is not persisted to disk. No migration is needed. If a future change persists
+connection status and encounters a serialized `Recovered` variant, loading must map it to
+`Connected` using `#[serde(default)]` or an equivalent backward-compatible loader pattern.
 
 ---
 
@@ -256,39 +303,64 @@ encounters a serialized `Recovered` variant, loading must map it to `Connected` 
 
 | Goal | How addressed |
 |------|---------------|
-| G1 | Removes the durable `Recovered` alias and keeps state meanings distinct |
+| G1 | State machine is a pure function testable without GTK; `Recovered` alias remains as tech debt |
 | G2 | Local and remote managed workspaces share the same durable states and color mapping |
 | G3 | Direct terminals are explicitly outside the daemon lifecycle model |
-| G4 | Recovery is expressed as `ReconnectSucceeded`, not as a durable status |
-| G5 | Transition rules can be covered by pure unit tests before GTK or daemon integration tests |
+| G4 | Partially achieved — `Recovered` is still durable; collapsing it to `Connected` + transient event is pending |
+| G5 | `advance_connection_status` and presentation functions are covered by pure unit tests |
 
 ---
 
 ## Development Plan
 
-- [ ] **Step 1** — Replace durable `Recovered` with `Connected` in the pure transition model
-- [ ] **Step 2** — Add a transient reconnect-success event for logs, toasts, or row pulse feedback
-- [ ] **Step 3** — Update pane header and sidebar presentation tests to assert no durable recovered state leaks into UI
-- [ ] **Step 4** — Update daemon reconnect flow so successful reattach emits `Connected` plus the transient event
-- [ ] **Step 5** — Add integration coverage for heartbeat loss, reconnect scheduling, successful reattach, and blocked failures
-- [ ] **Step 6** — Verify direct terminal presentation does not reference `ConnectionStatus` or the managed state machine; add a compile-time or test assertion if any coupling exists
+- [x] **Step 1** — Implement the pure connection state machine (`ConnectionStatus`,
+  `ConnectionEvent`, `advance_connection_status`) — *done: `runtime.rs`*
+- [x] **Step 2** — Implement presentation mapping (`connection_icon`, `present_connection_status`,
+  `ConnectionPresentation`) — *done: `runtime.rs`*
+- [x] **Step 3** — Implement connection problem classification (`ConnectionProblem`,
+  `classify_connection_problem`) — *done: `runtime.rs`*
+- [x] **Step 4** — Integrate state machine into daemon reconnect flow (`EndpointActor` in
+  `daemon_bridge.rs`) with linear backoff and backoff preservation — *done*
+- [x] **Step 5** — Add unit and integration test coverage for state transitions, reconnect
+  scheduling, backoff preservation, and problem classification — *done:
+  `tests/session_lifecycle.rs`, `tests/reconnect_scheduling.rs`, `tests/gtk_boundary_contracts.rs`*
+- [x] **Step 6** — Add `SessionMissing` state for orphaned workspaces per RFC-019 — *done*
+- [ ] **Step 7** — Replace durable `Recovered` with `Connected` and add a transient
+  `ReconnectSucceeded` event for logs, toasts, or row pulse feedback
+- [ ] **Step 8** — Update pane header and sidebar presentation tests to assert no durable
+  recovered state leaks into UI
+- [ ] **Step 9** — Verify direct terminal presentation does not reference `ConnectionStatus` or
+  the managed state machine; add a compile-time or test assertion if any coupling exists
 
-Steps 1–3 can land as a single PR. Steps 4–5 are the core behavioral work. Step 6 is a quick audit.
+Steps 7–8 collapse the `Recovered` variant. Step 9 is a quick audit.
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** — Should `ReconnectSucceeded` show a toast, a one-shot sidebar pulse, both, or only log output?
-- [x] **Q2** — Should rttx eventually add retry exhaustion, or should transient reconnect remain unbounded until the user closes or disconnects the workspace? **Decision**: Reconnect remains unbounded for now. The `Disconnected` state is reachable only via explicit user action (detach/close) or future explicit "stop retrying" UI. If retry exhaustion is added later, it will be a separate RFC with UX design for the exhaustion notification.
+- [ ] **Q1** — Should `ReconnectSucceeded` show a toast, a one-shot sidebar pulse, both, or only
+  log output? The current implementation uses a durable `Recovered` status as the feedback
+  mechanism. Once `Recovered` is removed (Step 7), this question must be answered to decide the
+  replacement feedback channel.
+- [x] **Q2** — Should rttx eventually add retry exhaustion, or should transient reconnect remain
+  unbounded until the user closes or disconnects the workspace? **Decision**: Reconnect remains
+  unbounded for now. The `Disconnected` state is reachable only via explicit user action
+  (detach/close) or future explicit "stop retrying" UI. If retry exhaustion is added later, it
+  will be a separate RFC with UX design for the exhaustion notification.
 
 ---
 
 ## Implementation Notes
 
-- **Naming convention**: In code, durable states should use the `ConnectionState` type and events
-  should use a separate `ConnectionEvent` enum. This avoids confusion between identically-named
-  states and events (e.g., `ConnectionState::Connected` vs `ConnectionEvent::Connected`).
+- **Naming convention**: The RFC originally proposed `ConnectionState` for durable states. The
+  implementation uses `ConnectionStatus` instead. Events use `ConnectionEvent`. This naming is
+  established and should not be changed without a codebase-wide rename.
+- **Event-only mapping**: `advance_connection_status` ignores the current state parameter. This
+  simplifies the function but places the burden of valid sequencing on callers. The underscore
+  prefix (`_current`) documents this intentionally.
+- **Backoff model**: Linear ramp `delay = min(attempt, max_delay)` with `max_delay = 10s`.
+  Non-transient errors during reconnect still retry using `max_delay` directly because the
+  underlying problem may resolve independently (e.g., daemon restart).
 
 ---
 
@@ -297,3 +369,4 @@ Steps 1–3 can land as a single PR. Steps 4–5 are the core behavioral work. S
 - [#421 — RFC: revise workspace connection state machine](https://github.com/IllyaYalovyy/rttx/issues/421)
 - [RFC-013: Persistent Host Sessions](RFC-013-persistent-host-sessions.md)
 - [RFC-016: Workspace Management v2](RFC-016-workspace-management-v2.md)
+- [RFC-019: Missing Daemon Session Handling](RFC-019-missing-session-handling.md)
