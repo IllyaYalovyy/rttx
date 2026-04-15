@@ -1462,3 +1462,30 @@ async fn send_to_collected_drops_when_channel_full() {
     assert!(logs_contain("channel full"));
     drop(rx);
 }
+
+// ── PTY read coalescing ─────────────────────────────────────────
+
+#[test]
+fn coalesce_constants_are_within_protocol_limits() {
+    let max_bytes: usize = COALESCE_MAX_BYTES;
+    let window_ms: u128 = COALESCE_WINDOW.as_millis();
+    // The 16MB protocol frame limit must not be exceeded by a single batch.
+    assert!(max_bytes <= 16 * 1024 * 1024);
+    // The coalescing window must be short enough to be imperceptible
+    // (terminal rendering is typically 16ms frames).
+    assert!(window_ms <= 5);
+}
+
+#[test]
+fn bytes_mut_split_reuses_allocation_for_batching() {
+    // Validates the BytesMut::split().freeze() pattern used in the read loop:
+    // after split, the original buffer retains its capacity for the next batch.
+    let mut batch = bytes::BytesMut::with_capacity(COALESCE_MAX_BYTES);
+    batch.extend_from_slice(&[b'A'; 4096]);
+    batch.extend_from_slice(&[b'B'; 4096]);
+
+    let frozen = batch.split().freeze();
+    assert_eq!(frozen.len(), 8192);
+    assert!(batch.is_empty(), "split must drain the buffer");
+    assert!(batch.capacity() > 0, "split must preserve allocation for reuse");
+}
