@@ -302,6 +302,55 @@ pub const fn error(code: u32, message: String) -> proto::ServerMessage {
     }
 }
 
+/// Build a `DiagnosticsReport` response from the current server state.
+#[must_use]
+pub fn diagnostics_report(server: &crate::server::Server) -> proto::ServerMessage {
+    let report = server.diagnostics();
+    let sessions = report
+        .sessions
+        .iter()
+        .map(|s| {
+            let panes = s
+                .panes
+                .iter()
+                .map(|p| {
+                    let id = uuid::Uuid::parse_str(&p.id).map(uuid_to_bytes).unwrap_or_default();
+                    proto::PaneDiagnosticsInfo {
+                        id,
+                        raw_bytes_len: p.raw_bytes_len as u64,
+                        pending_flush_len: p.pending_flush_len as u64,
+                        is_exited: p.is_exited,
+                    }
+                })
+                .collect();
+            let id = uuid::Uuid::parse_str(&s.id).map(uuid_to_bytes).unwrap_or_default();
+            proto::SessionDiagnosticsInfo {
+                id,
+                name: s.name.clone(),
+                active_pane_count: s.active_pane_count as u32,
+                exited_pane_count: s.exited_pane_count as u32,
+                command_history_len: s.command_history_len as u32,
+                attached_client_count: s.attached_client_count as u32,
+                panes,
+            }
+        })
+        .collect();
+    proto::ServerMessage {
+        msg: Some(proto::server_message::Msg::DiagnosticsReport(proto::DiagnosticsReport {
+            session_count: report.session_count as u32,
+            total_pane_count: report.total_pane_count as u32,
+            total_active_panes: report.total_active_panes as u32,
+            total_exited_panes: report.total_exited_panes as u32,
+            client_count: report.client_count as u32,
+            pty_writer_count: report.pty_writer_count as u32,
+            total_raw_bytes: report.total_raw_bytes as u64,
+            total_pending_flush: report.total_pending_flush as u64,
+            total_command_history: report.total_command_history as u32,
+            sessions,
+        })),
+    }
+}
+
 /// Build a `SessionRenamed` response.
 #[must_use]
 pub fn session_renamed(session_id: Uuid, name: String, revision: u64) -> proto::ServerMessage {

@@ -38,6 +38,8 @@ enum Command {
     AttachStdio,
     /// Show the path to the daemon log file
     Logs,
+    /// Show runtime memory diagnostics
+    Diagnostics,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -53,6 +55,7 @@ fn main() -> anyhow::Result<()> {
             logs();
             Ok(())
         }
+        Command::Diagnostics => diagnostics(),
     }
 }
 
@@ -144,6 +147,111 @@ fn logs() {
     let os = UnixOs;
     let log_dir = os.cache_dir();
     println!("{}", log_dir.display());
+}
+
+fn diagnostics() -> anyhow::Result<()> {
+    use bytes::BytesMut;
+    use rttx_proto::{decode_frame, encode_frame};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let os = UnixOs;
+    let socket_path = os.runtime_dir().join("rttx-server.sock");
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        if !ipc::is_server_running(&socket_path).await {
+            println!("Daemon is not running");
+            return Ok(());
+        }
+
+        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
+        let mut buf = BytesMut::new();
+        let mut read_buf = BytesMut::with_capacity(8192);
+
+        // Hello.
+        let hello = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+                protocol_version: rttx_proto::PROTOCOL_VERSION,
+                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+            })),
+        };
+        encode_frame(&hello, &mut buf)?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        // Read HelloAck.
+        loop {
+            stream.read_buf(&mut read_buf).await?;
+            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
+                break;
+            }
+        }
+
+        // GetDiagnostics.
+        buf.clear();
+        encode_frame(
+            &proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+            },
+            &mut buf,
+        )?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        // Read DiagnosticsReport.
+        let resp: proto::ServerMessage = loop {
+            stream.read_buf(&mut read_buf).await?;
+            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
+                Ok(msg) => break msg,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => anyhow::bail!("decode error: {e}"),
+            }
+        };
+
+        if let Some(proto::server_message::Msg::DiagnosticsReport(report)) = resp.msg {
+            println!("Sessions: {}", report.session_count);
+            println!(
+                "Panes: {} ({} active, {} exited)",
+                report.total_pane_count, report.total_active_panes, report.total_exited_panes
+            );
+            println!("Connected clients: {}", report.client_count);
+            println!("PTY writers: {}", report.pty_writer_count);
+            println!("Total raw_bytes: {} bytes", report.total_raw_bytes);
+            println!("Total pending_flush: {} bytes", report.total_pending_flush);
+            println!("Total command_history entries: {}", report.total_command_history);
+
+            if !report.sessions.is_empty() {
+                println!();
+                for session in &report.sessions {
+                    let id = rttx_proto::bytes_to_uuid(&session.id)
+                        .map_or_else(|_| "?".into(), |u| u.to_string());
+                    println!("  Session \"{}\" ({}):", session.name, &id[..8.min(id.len())]);
+                    println!(
+                        "    Panes: {} active, {} exited",
+                        session.active_pane_count, session.exited_pane_count
+                    );
+                    println!("    Command history: {} entries", session.command_history_len);
+                    println!("    Attached clients: {}", session.attached_client_count);
+                    for pane in &session.panes {
+                        let pid = rttx_proto::bytes_to_uuid(&pane.id)
+                            .map_or_else(|_| "?".into(), |u| u.to_string());
+                        let status = if pane.is_exited { "exited" } else { "active" };
+                        println!(
+                            "    Pane {} ({}): raw_bytes={}, pending_flush={}",
+                            &pid[..8.min(pid.len())],
+                            status,
+                            pane.raw_bytes_len,
+                            pane.pending_flush_len,
+                        );
+                    }
+                }
+            }
+        } else {
+            anyhow::bail!("unexpected response from daemon");
+        }
+
+        Ok(())
+    })
 }
 
 /// SSH connection drops, so PTYs and runtimes survive GUI restarts.
@@ -437,5 +545,11 @@ mod tests {
     fn cli_parses_clean_command() {
         let cli = Cli::try_parse_from(["rttx-server", "clean"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Clean)));
+    }
+
+    #[test]
+    fn cli_parses_diagnostics_command() {
+        let cli = Cli::try_parse_from(["rttx-server", "diagnostics"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Diagnostics)));
     }
 }
