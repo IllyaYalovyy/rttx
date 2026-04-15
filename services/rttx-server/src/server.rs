@@ -1139,6 +1139,15 @@ async fn client_reader(
             return Ok(());
         }
 
+        // Fast-path: respond to Ping without acquiring the server mutex.
+        // The heartbeat must never stall behind PTY I/O or session work.
+        if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
+            if resp_tx.send(protocol::pong(ping.nonce)).await.is_err() {
+                return Ok(());
+            }
+            continue;
+        }
+
         if let Some(response) = Server::handle_message(&server, client_id, msg).await
             && resp_tx.send(response).await.is_err()
         {

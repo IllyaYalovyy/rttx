@@ -52,6 +52,63 @@ fn ping_roundtrip_still_works_for_attached_clients() {
 }
 
 #[test]
+fn ping_answered_while_mutex_held() {
+    // Regression test for #556: the client_reader fast-path must respond
+    // to Ping without acquiring the server mutex. If the mutex is held
+    // (e.g. by a long-running PTY read loop), Pong must still arrive
+    // promptly so the client heartbeat does not time out.
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (sock, _handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        let session_id =
+            create_session(&mut client, "mutex-held", proto::RuntimePolicy::Persistent).await;
+        let _snapshot = attach_rw(&mut client, &session_id).await;
+
+        // Create a pane and trigger continuous output to keep the mutex busy.
+        let pane_id = common::create_pane(&mut client, &session_id).await;
+
+        // Generate a burst of PTY output that keeps the server busy.
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Input(proto::Input {
+                    session_id: session_id.clone(),
+                    pane_id,
+                    data: bytes::Bytes::from_static(b"for i in $(seq 1 500); do echo line$i; done\n"),
+                })),
+            })
+            .await;
+
+        // Immediately send multiple pings — they must all be answered
+        // promptly even while PTY output is being processed.
+        for nonce in [100, 200, 300] {
+            client
+                .send(&proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce })),
+                })
+                .await;
+        }
+
+        // Collect all three pongs within a tight deadline.
+        let mut pong_nonces = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pong_nonces.len() < 3 && tokio::time::Instant::now() < deadline {
+            match client.try_recv(std::time::Duration::from_secs(2)).await {
+                Some(msg) => {
+                    if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                        pong_nonces.push(pong.nonce);
+                    }
+                }
+                None => break,
+            }
+        }
+        assert_eq!(pong_nonces, vec![100, 200, 300], "all pongs should arrive promptly");
+    });
+}
+
+#[test]
 fn ping_answered_during_pty_output() {
     // Regression test for #532: the server must answer pings even when
     // push messages (PTY deltas) are being sent concurrently. The old
