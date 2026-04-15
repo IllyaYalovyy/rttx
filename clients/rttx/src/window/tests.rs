@@ -3832,9 +3832,126 @@ fn command_sidebar_filters_by_selected_host() {
     window.present();
     pump_events(50);
 
-    // Default is local host — should show local + global commands
+    // Default is local host — should show local + global commands with section headers
+    // 2 sections (Local header + cmd, Global header + cmd) = 4 rows
     let count = window.imp().command_list.observe_children().n_items();
-    assert_eq!(count, 2, "local host should show local + global commands, got {count}");
+    assert_eq!(count, 4, "local host should show 2 section headers + 2 commands, got {count}");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_groups_by_host_in_all_hosts_view() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let config_dir = tmp.path().join("rttx-devel");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let hosts = vec![crate::host::Host::remote("deploy@example.com")];
+    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+
+    let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
+    local_cmd.host_tags = vec!["local".into()];
+    let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
+    remote_cmd.host_tags = vec!["example.com".into()];
+    let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
+    crate::commands::save(&[local_cmd, remote_cmd, global_cmd]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-all-hosts-sections-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Select "All Hosts" (last entry in the dropdown)
+    let dd = &window.imp().host_selector;
+    let all_hosts_idx = dd.model().unwrap().n_items() - 1;
+    dd.set_selected(all_hosts_idx);
+    pump_events(50);
+
+    // All Hosts view: 3 sections (Local header + cmd, example header + cmd, Global header + cmd)
+    let count = window.imp().command_list.observe_children().n_items();
+    assert_eq!(count, 6, "All Hosts should show 3 section headers + 3 commands, got {count}");
+
+    // Verify section headers are present by checking first row is non-activatable (header)
+    let first_row = window.imp().command_list.row_at_index(0).unwrap();
+    assert!(!first_row.is_activatable(), "first row should be a non-activatable section header");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_shows_sections_for_specific_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
+    local_cmd.host_tags = vec!["local".into()];
+    let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
+    crate::commands::save(&[local_cmd, global_cmd]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-host-sections-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Default is local host — should show "Local" section + "Global" section
+    // Local header + local_cmd + Global header + global_cmd = 4
+    let count = window.imp().command_list.observe_children().n_items();
+    assert_eq!(
+        count, 4,
+        "specific host should show host section + global section with headers, got {count}"
+    );
+
+    // First row should be a section header (non-activatable)
+    let first_row = window.imp().command_list.row_at_index(0).unwrap();
+    assert!(!first_row.is_activatable(), "first row should be a section header");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_only_global_section_when_no_host_commands() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
+    crate::commands::save(&[global_cmd]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-global-only-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    // Only global commands — should show just Global section header + command
+    let count = window.imp().command_list.observe_children().n_items();
+    assert_eq!(count, 2, "should show Global header + 1 command, got {count}");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

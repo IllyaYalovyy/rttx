@@ -216,17 +216,81 @@ impl Window {
         }
 
         let query = imp.sidebar_search_entry.text();
-
         let all_commands = commands::load();
+        let saved_hosts = host::load();
         let selected_key = self.selected_host_key();
 
-        let filtered: Vec<_> = match &selected_key {
-            Some(key) => commands::visible_for_host(&all_commands, key),
-            None => all_commands,
+        let any_shown = selected_key.as_ref().map_or_else(
+            || {
+                // All Hosts view: group by host key
+                let mut shown = false;
+                let all_keys = self.collect_all_host_keys(&saved_hosts);
+                for key in &all_keys {
+                    let resolved = host::resolve(key, &saved_hosts);
+                    let visible: Vec<_> = all_commands
+                        .iter()
+                        .filter(|c| c.host_tags.iter().any(|t| t == key))
+                        .cloned()
+                        .collect();
+                    if !visible.is_empty() {
+                        let is_orphaned = !self.is_known_host_key(key, &saved_hosts);
+                        let label = if is_orphaned {
+                            format!("{} (orphaned)", resolved.name)
+                        } else {
+                            resolved.name.clone()
+                        };
+                        shown |= self.append_command_section(&label, &visible, query.as_str());
+                    }
+                }
+                let global: Vec<_> =
+                    all_commands.iter().filter(|c| c.host_tags.is_empty()).cloned().collect();
+                shown |= self.append_command_section("Global", &global, query.as_str());
+                shown
+            },
+            |key| {
+                let visible = commands::visible_for_host(&all_commands, key);
+                let (host_specific, global): (Vec<_>, Vec<_>) =
+                    visible.into_iter().partition(|c| !c.host_tags.is_empty());
+
+                let mut shown = false;
+                if !host_specific.is_empty() {
+                    let resolved = host::resolve(key, &saved_hosts);
+                    shown |=
+                        self.append_command_section(&resolved.name, &host_specific, query.as_str());
+                }
+                shown |= self.append_command_section("Global", &global, query.as_str());
+                shown
+            },
+        );
+
+        imp.command_scroll.set_visible(any_shown);
+        imp.command_empty.set_visible(!any_shown);
+    }
+
+    fn append_command_section(
+        &self,
+        section_label: &str,
+        items: &[SavedCommand],
+        query: &str,
+    ) -> bool {
+        let imp = self.imp();
+        let filtered: Vec<_> = items.iter().filter(|c| commands::matches_query(c, query)).collect();
+        if filtered.is_empty() {
+            return false;
         }
-        .into_iter()
-        .filter(|command| commands::matches_query(command, &query))
-        .collect();
+
+        let label = gtk4::Label::new(Some(section_label));
+        label.set_xalign(0.0);
+        label.add_css_class("dim-label");
+        label.add_css_class("caption");
+        label.set_margin_start(6);
+        label.set_margin_top(8);
+        label.set_margin_bottom(2);
+        let label_row = gtk4::ListBoxRow::new();
+        label_row.set_child(Some(&label));
+        label_row.set_selectable(false);
+        label_row.set_activatable(false);
+        imp.command_list.append(&label_row);
 
         for command in &filtered {
             let action_row = adw::ActionRow::new();
@@ -288,21 +352,18 @@ impl Window {
             imp.command_list.append(&action_row);
 
             let win = self.clone();
-            let command_for_run = command.clone();
+            let command_for_run = (*command).clone();
             action_row.connect_activated(move |_| {
                 win.execute_saved_command(&command_for_run, CommandRunMode::Run);
             });
 
             let win = self.clone();
-            let command_clone = command.clone();
+            let command_clone = (*command).clone();
             insert_button.connect_clicked(move |_| {
                 win.execute_saved_command(&command_clone, CommandRunMode::Insert);
             });
         }
-
-        let is_empty = imp.command_list.row_at_index(0).is_none();
-        imp.command_scroll.set_visible(!is_empty);
-        imp.command_empty.set_visible(is_empty);
+        true
     }
 
     /// Collect all host keys referenced by places and commands.
