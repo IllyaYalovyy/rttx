@@ -634,7 +634,7 @@ impl Window {
         );
         pane.set_current_directory(Some(&restore.cwd));
         if !restore.title.is_empty() && pane.custom_title().is_none() {
-            pane.set_title(&restore.title);
+            pane.set_daemon_title(&restore.title);
         }
         pane.set_connected(true);
 
@@ -858,7 +858,7 @@ impl Window {
             }
             Msg::TitleChanged(title_changed) => {
                 if pane.custom_title().is_none() {
-                    pane.set_title(&title_changed.title);
+                    pane.set_daemon_title(&title_changed.title);
                 }
                 self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }

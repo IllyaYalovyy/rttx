@@ -1046,10 +1046,10 @@ fn terminal_handle_reports_titles_and_managed_current_directory() {
 
     let managed =
         rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
-    managed.set_title("Managed Title");
+    managed.set_daemon_title("Managed Title");
     managed.set_current_directory(Some("/tmp/managed-cwd"));
     let managed_handle = rttx::terminal::handle::TerminalHandle::Managed(managed);
-    assert_eq!(managed_handle.title(), "Managed Title");
+    assert_eq!(managed_handle.title(), "Managed Title : /tmp/managed-cwd");
     assert_eq!(managed_handle.current_directory().as_deref(), Some("/tmp/managed-cwd"));
 }
 
@@ -1395,7 +1395,7 @@ fn persistent_pane_view_set_title_and_custom_title() {
     require_display!();
 
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
-    pane.set_title("my title");
+    pane.set_daemon_title("my title");
     assert_eq!(pane.title_label().label(), "my title");
 
     assert!(pane.custom_title().is_none());
@@ -1405,6 +1405,8 @@ fn persistent_pane_view_set_title_and_custom_title() {
 
     pane.set_custom_title(None);
     assert!(pane.custom_title().is_none());
+    // After clearing custom title, daemon title is restored.
+    assert_eq!(pane.title_label().label(), "my title");
 }
 
 #[test]
