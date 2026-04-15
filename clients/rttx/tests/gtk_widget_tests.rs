@@ -2364,3 +2364,96 @@ fn utility_switcher_has_bottom_margin() {
     remove_env("RTTX_DISABLE_SHELL_SPAWN");
     remove_env("XDG_CONFIG_HOME");
 }
+
+// ── HostTagPicker widget tests ──────────────────────────────────
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_shows_local_checkbox() {
+    require_display!();
+
+    let picker = rttx::host_tag_picker::HostTagPicker::with_hosts(&[], &[]);
+
+    // No hosts checked → empty selection (global)
+    assert!(picker.selected_tags().is_empty());
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_prechecks_selected_tags() {
+    require_display!();
+
+    let picker = rttx::host_tag_picker::HostTagPicker::with_hosts(&[], &["local".to_string()]);
+
+    let tags = picker.selected_tags();
+    assert_eq!(tags, vec!["local"]);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_shows_saved_remote_hosts() {
+    require_display!();
+
+    let host = rttx::host::Host::remote("deploy@example.com");
+    let picker =
+        rttx::host_tag_picker::HostTagPicker::with_hosts(&[host], &["example.com".to_string()]);
+
+    let tags = picker.selected_tags();
+    assert_eq!(tags, vec!["example.com"]);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_no_selection_means_global() {
+    require_display!();
+
+    let host = rttx::host::Host::remote("deploy@example.com");
+    let picker = rttx::host_tag_picker::HostTagPicker::with_hosts(&[host], &[]);
+
+    assert!(picker.selected_tags().is_empty(), "no selection should mean global");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_multiple_hosts_selected() {
+    require_display!();
+
+    let host = rttx::host::Host::remote("deploy@example.com");
+    let picker = rttx::host_tag_picker::HostTagPicker::with_hosts(
+        &[host],
+        &["local".to_string(), "example.com".to_string()],
+    );
+
+    let tags = picker.selected_tags();
+    assert_eq!(tags, vec!["local", "example.com"]);
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_skips_duplicate_local_in_saved_hosts() {
+    require_display!();
+
+    // If saved hosts somehow contain a "local" entry, it should not duplicate
+    let local_host = rttx::host::Host::local();
+    let remote = rttx::host::Host::remote("example.com");
+    let picker = rttx::host_tag_picker::HostTagPicker::with_hosts(
+        &[local_host, remote],
+        &["local".to_string()],
+    );
+
+    let tags = picker.selected_tags();
+    assert_eq!(tags, vec!["local"], "local should appear only once");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn host_tag_picker_unrecognized_tag_not_checked() {
+    require_display!();
+
+    // If selected_tags contains a host not in the saved list, it won't appear
+    let picker =
+        rttx::host_tag_picker::HostTagPicker::with_hosts(&[], &["unknown.example.com".to_string()]);
+
+    // Only local is in the picker, and it's not selected
+    assert!(picker.selected_tags().is_empty());
+}

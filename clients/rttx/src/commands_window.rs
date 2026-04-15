@@ -4,7 +4,7 @@ use libadwaita::prelude::*;
 
 use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::form_dialog::FormDialog;
-use crate::host;
+use crate::host_tag_picker::HostTagPicker;
 use crate::window::Window;
 
 pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
@@ -26,26 +26,25 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     run_mode_row.add_suffix(&run_mode);
     run_mode_row.set_activatable_widget(Some(&run_mode));
 
-    let host_tags_row =
-        adw::EntryRow::builder().title("Host tags (comma-separated, empty = global)").build();
+    let selected_tags = command.map_or_else(Vec::new, |c| c.host_tags.clone());
+    let host_picker = HostTagPicker::new(&selected_tags);
 
     let title_group = adw::PreferencesGroup::new();
     title_group.add(&title_row);
 
     let behavior_group = adw::PreferencesGroup::new();
     behavior_group.add(&run_mode_row);
-    behavior_group.add(&host_tags_row);
 
     form.content_box.append(&title_group);
     form.content_box.append(&body_scroll);
     form.content_box.append(&behavior_group);
+    form.content_box.append(&host_picker.group);
     form.finish_layout();
 
     if let Some(c) = command {
         title_row.set_text(&c.title);
         body_buffer.set_text(&c.body);
         run_mode.set_selected(run_mode_index(c.default_run_mode));
-        host_tags_row.set_text(&c.host_tags.join(", "));
     }
 
     let dialog = form.dialog.clone();
@@ -56,7 +55,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
             &title_row,
             &body_buffer,
             &run_mode,
-            &host_tags_row,
+            &host_picker,
             existing_uuid.clone(),
         ) {
             Ok(c) => c,
@@ -87,7 +86,7 @@ fn build_command(
     title_row: &adw::EntryRow,
     body_buffer: &gtk4::TextBuffer,
     run_mode: &gtk4::DropDown,
-    host_tags_row: &adw::EntryRow,
+    host_picker: &HostTagPicker,
     existing_uuid: Option<String>,
 ) -> Result<SavedCommand, String> {
     let title = title_row.text().trim().to_string();
@@ -106,20 +105,8 @@ fn build_command(
         command.uuid = uuid;
     }
     command.default_run_mode = run_mode_from_index(run_mode.selected());
-    command.host_tags = parse_host_tags(&host_tags_row.text());
+    command.host_tags = host_picker.selected_tags();
     Ok(command)
-}
-
-/// Parse a comma-separated host tags string into a deduplicated list of host keys.
-pub(crate) fn parse_host_tags(input: &str) -> Vec<String> {
-    let mut tags: Vec<String> = input
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(host::normalize_ssh_key)
-        .collect();
-    tags.dedup();
-    tags
 }
 
 const fn run_mode_from_index(index: u32) -> CommandRunMode {
@@ -133,36 +120,5 @@ const fn run_mode_index(run_mode: CommandRunMode) -> u32 {
     match run_mode {
         CommandRunMode::Run => 0,
         CommandRunMode::Insert => 1,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_host_tags_splits_on_comma() {
-        assert_eq!(parse_host_tags("local, example.com"), vec!["local", "example.com"]);
-    }
-
-    #[test]
-    fn parse_host_tags_trims_whitespace() {
-        assert_eq!(parse_host_tags("  local ,  example.com  "), vec!["local", "example.com"]);
-    }
-
-    #[test]
-    fn parse_host_tags_empty_string_returns_empty_vec() {
-        assert!(parse_host_tags("").is_empty());
-        assert!(parse_host_tags("  ").is_empty());
-    }
-
-    #[test]
-    fn parse_host_tags_normalizes_ssh_keys() {
-        assert_eq!(parse_host_tags("deploy@Example.COM"), vec!["example.com"]);
-    }
-
-    #[test]
-    fn parse_host_tags_deduplicates() {
-        assert_eq!(parse_host_tags("local, local"), vec!["local"]);
     }
 }
