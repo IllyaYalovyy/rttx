@@ -860,6 +860,12 @@ impl Server {
     }
 }
 
+/// Maximum bytes to accumulate before flushing a coalesced batch.
+const COALESCE_MAX_BYTES: usize = 64 * 1024;
+
+/// How long to wait for additional PTY data after the first read.
+const COALESCE_WINDOW: Duration = Duration::from_millis(1);
+
 /// Spawn a background task that reads PTY output and broadcasts Deltas.
 fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
@@ -874,13 +880,31 @@ fn spawn_pty_read_loop(
     let pane_short = short_id(pane_id);
     tokio::spawn(async move {
         let mut buf = [0u8; 4096];
+        let mut batch = bytes::BytesMut::with_capacity(COALESCE_MAX_BYTES);
         loop {
             tokio::select! {
                 result = reader.read(&mut buf) => {
                     match result {
                         Ok(0) => break,
                         Ok(n) => {
-                            let data = bytes::Bytes::copy_from_slice(&buf[..n]);
+                            batch.extend_from_slice(&buf[..n]);
+
+                            // Drain additional available data within a short window.
+                            if batch.len() < COALESCE_MAX_BYTES {
+                                let deadline = tokio::time::Instant::now() + COALESCE_WINDOW;
+                                loop {
+                                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                                    if remaining.is_zero() || batch.len() >= COALESCE_MAX_BYTES {
+                                        break;
+                                    }
+                                    match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
+                                        Ok(Ok(0) | Err(_)) | Err(_) => break,
+                                        Ok(Ok(n)) => batch.extend_from_slice(&buf[..n]),
+                                    }
+                                }
+                            }
+
+                            let data = batch.split().freeze();
 
                             // Phase 1: hold lock for state mutation and handle collection.
                             let (new_cwd, new_title, pending_replies, pty_writer, senders) = {
