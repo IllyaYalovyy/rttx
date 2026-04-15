@@ -255,11 +255,8 @@ impl Window {
                 let mut shown = false;
                 if !host_specific.is_empty() {
                     let resolved = host::resolve(key, &saved_hosts);
-                    shown |= self.append_command_section(
-                        &resolved.name,
-                        &host_specific,
-                        query.as_str(),
-                    );
+                    shown |=
+                        self.append_command_section(&resolved.name, &host_specific, query.as_str());
                 }
                 shown |= self.append_command_section("Global", &global, query.as_str());
                 shown

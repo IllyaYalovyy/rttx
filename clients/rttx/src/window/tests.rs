@@ -3835,10 +3835,7 @@ fn command_sidebar_filters_by_selected_host() {
     // Default is local host — should show local + global commands with section headers
     // 2 sections (Local header + cmd, Global header + cmd) = 4 rows
     let count = window.imp().command_list.observe_children().n_items();
-    assert_eq!(
-        count, 4,
-        "local host should show 2 section headers + 2 commands, got {count}"
-    );
+    assert_eq!(count, 4, "local host should show 2 section headers + 2 commands, got {count}");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -3882,10 +3879,7 @@ fn command_sidebar_groups_by_host_in_all_hosts_view() {
 
     // All Hosts view: 3 sections (Local header + cmd, example header + cmd, Global header + cmd)
     let count = window.imp().command_list.observe_children().n_items();
-    assert_eq!(
-        count, 6,
-        "All Hosts should show 3 section headers + 3 commands, got {count}"
-    );
+    assert_eq!(count, 6, "All Hosts should show 3 section headers + 3 commands, got {count}");
 
     // Verify section headers are present by checking first row is non-activatable (header)
     let first_row = window.imp().command_list.row_at_index(0).unwrap();
