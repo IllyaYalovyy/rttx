@@ -1489,3 +1489,14 @@ fn bytes_mut_split_reuses_allocation_for_batching() {
     assert!(batch.is_empty(), "split must drain the buffer");
     assert!(batch.capacity() > 0, "split must preserve allocation for reuse");
 }
+
+// ── Mutex hold instrumentation ──────────────────────────────────
+
+#[test]
+fn mutex_hold_warn_threshold_is_reasonable() {
+    let threshold_ms = MUTEX_HOLD_WARN_THRESHOLD.as_millis();
+    // Must be short enough to detect stalls but long enough to avoid
+    // false positives on loaded systems.
+    assert!(threshold_ms >= 5, "threshold too aggressive: {threshold_ms}ms");
+    assert!(threshold_ms <= 100, "threshold too lenient: {threshold_ms}ms");
+}
