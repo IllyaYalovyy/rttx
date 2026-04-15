@@ -1042,7 +1042,6 @@ mod tests {
         assert_eq!(replies[2], b"\x1b[0n"); // status OK
         assert_eq!(replies[3], b"\x1b[1;1R"); // cursor at 1,1
     }
-}
 
     // --- strip_client_queries ---
 
@@ -1165,3 +1164,4 @@ mod tests {
         let input = b"line1\r\n\x1b[6n\x1b[6nline2\r\n\x1b[6n\x1b[c";
         assert_eq!(strip_client_queries(input), b"line1\r\nline2\r\n");
     }
+}

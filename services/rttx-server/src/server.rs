@@ -460,11 +460,9 @@ impl Server {
                         cwd: pane.effective_cwd().unwrap_or_default(),
                         cols: u32::from(pane.cols),
                         rows: u32::from(pane.rows),
-                        scrollback: bytes::Bytes::from(
-                            crate::screen::strip_client_queries(
-                                pane.screen.snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES),
-                            ),
-                        ),
+                        scrollback: bytes::Bytes::from(crate::screen::strip_client_queries(
+                            pane.screen.snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES),
+                        )),
                         exit_status: pane.exit_status,
                         bracketed_paste_mode: pane.screen.bracketed_paste_mode(),
                         application_cursor_keys: pane.screen.application_cursor_keys(),
