@@ -24,7 +24,7 @@ process. Read it fully before opening a pull request.
 
 ## Project philosophy
 
-rttx has five core principles (see `designs/RFC-001-manifesto.md` for the full rationale):
+rttx has six core principles (see `designs/RFC-001-manifesto.md` for the full rationale):
 
 1. **Native GNOME integration over cross-platform portability** — Libadwaita widgets, GNOME HIG,
    system light/dark mode. No portability shims.
@@ -32,11 +32,10 @@ rttx has five core principles (see `designs/RFC-001-manifesto.md` for the full r
    Every critical path has tests.
 3. **Workflow context over layout geometry** — Per-pane recovery recipes reconstruct what the user
    was doing, not just the shape of the window.
-4. **Composable building blocks over monolithic workflows** — Bookmarks, commands, and templates
-   are distinct but composable concepts.
+4. **Composable building blocks over monolithic workflows** — Places, commands, and hosts are
+   distinct but composable concepts.
 5. **Practical tools over impressive features** — Every feature must answer: does this help a
    developer or sysadmin get real work done faster?
-
 6. **Infrastructure serves the application, never the reverse** — Do not downgrade dependencies,
    remove features, or lower version requirements to satisfy CI runners, old distributions, or
    test environments. If CI fails because a runner lacks a library, fix the runner. If a
