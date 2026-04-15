@@ -76,7 +76,9 @@ fn ping_answered_while_mutex_held() {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
                     session_id: session_id.clone(),
                     pane_id,
-                    data: bytes::Bytes::from_static(b"for i in $(seq 1 500); do echo line$i; done\n"),
+                    data: bytes::Bytes::from_static(
+                        b"for i in $(seq 1 500); do echo line$i; done\n",
+                    ),
                 })),
             })
             .await;
