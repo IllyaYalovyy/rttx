@@ -1392,3 +1392,73 @@ async fn client_writer_prioritizes_resp_over_push() {
         messages[0].msg
     );
 }
+
+// ── Lock-free broadcast via collected senders ───────────────────
+
+#[tokio::test]
+async fn collect_session_senders_returns_attached_client_senders() {
+    let server = new_server();
+    let client_a = Uuid::new_v4();
+    let client_b = Uuid::new_v4();
+    let (session_id, _) = setup_session_with_pane(&server, client_a).await;
+
+    // Attach a second client.
+    {
+        let mut s = server.lock().await;
+        s.sessions
+            .get_mut(&session_id)
+            .unwrap()
+            .attached_clients
+            .insert(client_b, crate::session::ClientRole::Writer);
+    }
+
+    let (tx_a, _rx_a) = mpsc::channel(16);
+    let (tx_b, _rx_b) = mpsc::channel(16);
+    {
+        let mut s = server.lock().await;
+        s.client_senders.insert(client_a, tx_a);
+        s.client_senders.insert(client_b, tx_b);
+    }
+
+    let senders = server.lock().await.collect_session_senders(session_id);
+    let ids: std::collections::HashSet<Uuid> = senders.iter().map(|(id, _)| *id).collect();
+    assert!(ids.contains(&client_a));
+    assert!(ids.contains(&client_b));
+    assert_eq!(senders.len(), 2);
+}
+
+#[tokio::test]
+async fn collect_session_senders_returns_empty_for_unknown_session() {
+    let server = new_server();
+    let senders = server.lock().await.collect_session_senders(Uuid::new_v4());
+    assert!(senders.is_empty());
+}
+
+#[tokio::test]
+async fn send_to_collected_delivers_messages() {
+    let (tx, mut rx) = mpsc::channel(16);
+    let client_id = Uuid::new_v4();
+    let senders = vec![(client_id, tx)];
+
+    let msg = protocol::delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"hi"));
+    send_to_collected(&senders, &msg);
+
+    let received = rx.try_recv().unwrap();
+    assert!(matches!(received.msg, Some(proto::server_message::Msg::Delta(_))));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn send_to_collected_drops_when_channel_full() {
+    let (tx, rx) = mpsc::channel(1);
+    let client_id = Uuid::new_v4();
+    let senders = vec![(client_id, tx)];
+
+    let msg = protocol::delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"a"));
+    send_to_collected(&senders, &msg);
+    // Channel is now full.
+    send_to_collected(&senders, &msg);
+
+    assert!(logs_contain("channel full"));
+    drop(rx);
+}

@@ -39,6 +39,22 @@ pub const PUSH_CHANNEL_BOUND: usize = 4096;
 /// Capacity for the per-client response channel (pong, snapshots).
 const RESP_CHANNEL_BOUND: usize = 256;
 
+/// Send a message to previously collected sender handles.
+///
+/// This is the lock-free counterpart of [`Server::broadcast_to_session`]:
+/// collect handles with [`Server::collect_session_senders`] while holding
+/// the mutex, then call this after releasing it.
+fn send_to_collected(
+    senders: &[(Uuid, mpsc::Sender<proto::ServerMessage>)],
+    msg: &proto::ServerMessage,
+) {
+    for (client_id, sender) in senders {
+        if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(msg.clone()) {
+            tracing::warn!("Client {} push channel full — dropping message", short_id(*client_id),);
+        }
+    }
+}
+
 /// Shared mutable server state.
 pub struct Server {
     /// All active sessions.
@@ -283,6 +299,24 @@ impl Server {
             return;
         };
         self.broadcast_to_clients(session.attached_clients.keys().copied(), None, msg);
+    }
+
+    /// Collect cloned sender handles for all clients attached to a session.
+    ///
+    /// The returned senders can be used after releasing the server mutex via
+    /// [`send_to_collected`].
+    fn collect_session_senders(
+        &self,
+        session_id: Uuid,
+    ) -> Vec<(Uuid, mpsc::Sender<proto::ServerMessage>)> {
+        let Some(session) = self.sessions.get(&session_id) else {
+            return Vec::new();
+        };
+        session
+            .attached_clients
+            .keys()
+            .filter_map(|&cid| self.client_senders.get(&cid).map(|s| (cid, s.clone())))
+            .collect()
     }
 
     fn terminate_session(
@@ -847,27 +881,39 @@ fn spawn_pty_read_loop(
                         Ok(0) => break,
                         Ok(n) => {
                             let data = bytes::Bytes::copy_from_slice(&buf[..n]);
-                            let mut s = server.lock().await;
-                            let (new_cwd, new_title, pending_replies) = if let Some(session) = s.sessions.get_mut(&session_id)
-                                && let Some(pane) = session.panes.get_mut(&pane_id)
-                            {
-                                let result = pane.feed_output(&data);
-                                let cwd = result.new_cwd.and_then(|cwd| {
-                                    let rev = session.set_pane_cwd(pane_id, &cwd)?;
-                                    Some((cwd, rev))
-                                });
-                                let title = result.new_title.and_then(|title| {
-                                    let rev = session.set_pane_title(pane_id, title.clone())?;
-                                    Some((title, rev))
-                                });
-                                (cwd, title, result.pending_replies)
-                            } else {
-                                (None, None, Vec::new())
+
+                            // Phase 1: hold lock for state mutation and handle collection.
+                            let (new_cwd, new_title, pending_replies, pty_writer, senders) = {
+                                let mut s = server.lock().await;
+                                let (new_cwd, new_title, pending_replies) = if let Some(session) = s.sessions.get_mut(&session_id)
+                                    && let Some(pane) = session.panes.get_mut(&pane_id)
+                                {
+                                    let result = pane.feed_output(&data);
+                                    let cwd = result.new_cwd.and_then(|cwd| {
+                                        let rev = session.set_pane_cwd(pane_id, &cwd)?;
+                                        Some((cwd, rev))
+                                    });
+                                    let title = result.new_title.and_then(|title| {
+                                        let rev = session.set_pane_title(pane_id, title.clone())?;
+                                        Some((title, rev))
+                                    });
+                                    (cwd, title, result.pending_replies)
+                                } else {
+                                    (None, None, Vec::new())
+                                };
+                                let pty_writer = if pending_replies.is_empty() {
+                                    None
+                                } else {
+                                    s.pty_writers.get(&pane_id).cloned()
+                                };
+                                let senders = s.collect_session_senders(session_id);
+                                drop(s);
+                                (new_cwd, new_title, pending_replies, pty_writer, senders)
                             };
-                            // Write DSR replies back to the PTY before broadcasting.
-                            if !pending_replies.is_empty()
-                                && let Some(writer) = s.pty_writers.get(&pane_id)
-                            {
+                            // Lock released.
+
+                            // Phase 2: write DSR replies without the server lock.
+                            if let Some(writer) = pty_writer {
                                 let mut w = writer.lock().await;
                                 for reply in &pending_replies {
                                     if let Err(e) = w.write_all(reply).await {
@@ -882,15 +928,17 @@ fn spawn_pty_read_loop(
                                     );
                                 }
                             }
+
+                            // Phase 3: broadcast to clients without the server lock.
                             let msg = protocol::delta(session_id, pane_id, data);
-                            s.broadcast_to_session(session_id, &msg);
+                            send_to_collected(&senders, &msg);
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = protocol::cwd_changed(session_id, pane_id, cwd, revision);
-                                s.broadcast_to_session(session_id, &msg);
+                                send_to_collected(&senders, &msg);
                             }
                             if let Some((title, revision)) = new_title {
                                 let msg = protocol::title_changed(session_id, pane_id, title, revision);
-                                s.broadcast_to_session(session_id, &msg);
+                                send_to_collected(&senders, &msg);
                             }
                         }
                         Err(e) => {
