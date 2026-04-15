@@ -904,7 +904,8 @@ impl Window {
             | Msg::SessionTerminated(_)
             | Msg::SessionRenamed(_)
             | Msg::Pong(_)
-            | Msg::Error(_) => {}
+            | Msg::Error(_)
+            | Msg::DiagnosticsReport(_) => {}
         }
 
         let _ = workspace_id;

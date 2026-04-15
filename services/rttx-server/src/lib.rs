@@ -1,5 +1,6 @@
 //! rttx-server: persistent session daemon for the rttx terminal emulator.
 
+pub mod diagnostics;
 pub mod engine;
 pub mod ipc;
 pub mod logging;

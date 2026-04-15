@@ -150,6 +150,12 @@ impl Pane {
         !self.pending_flush.is_empty()
     }
 
+    /// Number of bytes waiting to be flushed to disk.
+    #[must_use]
+    pub const fn pending_flush_len(&self) -> usize {
+        self.pending_flush.len()
+    }
+
     /// Read the child process CWD from /proc/<pid>/cwd.
     /// Returns None if the PID is unknown or the read fails.
     #[must_use]

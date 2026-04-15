@@ -103,6 +103,18 @@ impl Server {
         let _ = self.shutdown_tx.send(true);
     }
 
+    /// Number of connected client push channels.
+    #[must_use]
+    pub fn client_sender_count(&self) -> usize {
+        self.client_senders.len()
+    }
+
+    /// Number of active PTY write handles.
+    #[must_use]
+    pub fn pty_writer_count(&self) -> usize {
+        self.pty_writers.len()
+    }
+
     /// Human-readable label for a session: `"name" (short_id)`.
     ///
     /// Falls back to just the short ID when the session is not found.
@@ -374,6 +386,11 @@ impl Server {
                 let s = server.lock().await;
                 let infos = protocol::session_inventory_for(client_id, s.sessions.values());
                 Some(protocol::session_list(infos))
+            }
+
+            proto::client_message::Msg::GetDiagnostics(_) => {
+                let s = server.lock().await;
+                Some(protocol::diagnostics_report(&s))
             }
 
             proto::client_message::Msg::CreateSession(req) => {
@@ -1024,6 +1041,7 @@ pub async fn serialization_loop(
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
     let mut ticker = tokio::time::interval(interval);
+    let mut diagnostics_counter = 0u64;
     loop {
         tokio::select! {
             _ = ticker.tick() => {}
@@ -1049,6 +1067,12 @@ pub async fn serialization_loop(
                     }
                 }
             }
+        }
+
+        // Log diagnostics every 30 ticks (~30 seconds at 1s interval).
+        diagnostics_counter += 1;
+        if diagnostics_counter.is_multiple_of(30) {
+            s.log_diagnostics();
         }
 
         let snapshot = s.build_snapshot();
