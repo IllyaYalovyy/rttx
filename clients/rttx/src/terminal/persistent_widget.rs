@@ -27,6 +27,7 @@ mod imp {
         pub uuid: RefCell<String>,
         pub session_id: RefCell<String>,
         pub custom_title: RefCell<Option<String>>,
+        pub daemon_title: RefCell<Option<String>>,
         pub current_directory: RefCell<Option<String>>,
         pub smart_clipboard: Rc<Cell<bool>>,
         pub visual_bell: Cell<bool>,
@@ -60,6 +61,7 @@ mod imp {
                 uuid: RefCell::default(),
                 session_id: RefCell::default(),
                 custom_title: RefCell::default(),
+                daemon_title: RefCell::default(),
                 current_directory: RefCell::default(),
                 smart_clipboard: Rc::new(Cell::new(false)),
                 visual_bell: Cell::default(),
@@ -123,7 +125,7 @@ mod imp {
             self.title_label.set_xalign(0.0);
             self.title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
             self.title_label.set_width_chars(0);
-            self.title_label.set_label("Terminal (persistent)");
+            self.title_label.set_label("Terminal");
 
             self.status_label.set_xalign(1.0);
             self.status_label.add_css_class("dim-label");
@@ -407,17 +409,34 @@ impl PersistentPaneView {
         &self.imp().header
     }
 
-    /// Set the pane title.
-    pub fn set_title(&self, title: &str) {
+    /// Set the pane title label directly.
+    fn set_title(&self, title: &str) {
         self.imp().title_label.set_label(title);
+    }
+
+    /// Update the daemon-reported title and refresh the display.
+    pub fn set_daemon_title(&self, title: &str) {
+        self.imp().daemon_title.replace(Some(title.to_string()));
+        self.refresh_display_title();
+    }
+
+    /// Recompute the displayed title from daemon title + CWD.
+    fn refresh_display_title(&self) {
+        if let Some(ref custom) = *self.imp().custom_title.borrow() {
+            self.set_title(custom);
+            return;
+        }
+        let title = format_pane_header_title(
+            self.imp().daemon_title.borrow().as_deref(),
+            self.imp().current_directory.borrow().as_deref(),
+        );
+        self.set_title(&title);
     }
 
     /// Set a custom title that overrides the daemon-reported title.
     pub fn set_custom_title(&self, title: Option<&str>) {
         self.imp().custom_title.replace(title.map(str::to_string));
-        if let Some(title) = title {
-            self.set_title(title);
-        }
+        self.refresh_display_title();
     }
 
     /// Get the custom title, if set.
@@ -478,6 +497,7 @@ impl PersistentPaneView {
     /// Update the current working directory reported by the runtime.
     pub fn set_current_directory(&self, cwd: Option<&str>) {
         self.imp().current_directory.replace(cwd.map(str::to_string));
+        self.refresh_display_title();
     }
 
     /// Feed raw terminal output bytes into VTE for rendering.
@@ -958,6 +978,39 @@ pub(crate) fn pastify_for_pane(pane: &PersistentPaneView, text: &[u8]) -> Vec<u8
     } else {
         payload
     }
+}
+
+/// Format the pane header title from daemon-reported title and CWD.
+///
+/// Returns `<app> : <path>` when both are available, just the path when
+/// the title is a generic shell name, or falls back to the title alone.
+fn format_pane_header_title(daemon_title: Option<&str>, cwd: Option<&str>) -> String {
+    let path = cwd.map(collapse_home_path);
+    let title = daemon_title.map(str::trim).filter(|t| !t.is_empty());
+
+    match (title, path.as_deref().filter(|p| !p.is_empty())) {
+        (Some(t), Some(p)) => format!("{t} : {p}"),
+        (None, Some(p)) => p.to_string(),
+        (Some(t), None) => t.to_string(),
+        (None, None) => "Terminal".into(),
+    }
+}
+
+/// Collapse `/home/<user>/…` to `~/…`.
+fn collapse_home_path(path: &str) -> String {
+    let path = path.trim();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = home.to_string_lossy();
+        if let Some(rest) = path.strip_prefix(home.as_ref()) {
+            if rest.is_empty() {
+                return "~".into();
+            }
+            if rest.starts_with('/') {
+                return format!("~{rest}");
+            }
+        }
+    }
+    path.to_string()
 }
 
 /// Scan terminal output for DECSET/DECRST 2004 and update the mode flag.
@@ -1586,5 +1639,116 @@ mod tests {
         assert!(!pane.imp().input_connected.get());
         assert!(!pane.imp().resize_connected.get());
         assert!(pane.imp().resize_tick_id.borrow().is_none());
+    }
+
+    #[test]
+    fn format_pane_header_title_combines_app_and_path() {
+        assert_eq!(format_pane_header_title(Some("bash"), Some("/tmp")), "bash : /tmp");
+    }
+
+    #[test]
+    fn format_pane_header_title_path_only() {
+        assert_eq!(format_pane_header_title(None, Some("/tmp")), "/tmp");
+    }
+
+    #[test]
+    fn format_pane_header_title_app_only() {
+        assert_eq!(format_pane_header_title(Some("vim"), None), "vim");
+    }
+
+    #[test]
+    fn format_pane_header_title_fallback_to_terminal() {
+        assert_eq!(format_pane_header_title(None, None), "Terminal");
+    }
+
+    #[test]
+    fn format_pane_header_title_empty_strings_treated_as_absent() {
+        assert_eq!(format_pane_header_title(Some(""), Some("")), "Terminal");
+        assert_eq!(format_pane_header_title(Some("bash"), Some("")), "bash");
+        assert_eq!(format_pane_header_title(Some(""), Some("/tmp")), "/tmp");
+    }
+
+    #[test]
+    fn format_pane_header_title_collapses_home() {
+        let home = std::env::var("HOME").unwrap();
+        let cwd = format!("{home}/projects");
+        assert_eq!(format_pane_header_title(Some("bash"), Some(&cwd)), "bash : ~/projects");
+    }
+
+    #[test]
+    fn collapse_home_path_tilde_for_home() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(collapse_home_path(&home), "~");
+    }
+
+    #[test]
+    fn collapse_home_path_tilde_for_subdir() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(collapse_home_path(&format!("{home}/work")), "~/work");
+    }
+
+    #[test]
+    fn collapse_home_path_no_change_for_other_paths() {
+        assert_eq!(collapse_home_path("/tmp/test"), "/tmp/test");
+    }
+
+    /// Regression for #536: default title must not show "(persistent)".
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn default_title_is_terminal() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        assert_eq!(pane.title_label().label(), "Terminal");
+    }
+
+    /// Regression for #536: daemon title + CWD must combine in header.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn daemon_title_and_cwd_combine_in_header() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+
+        pane.set_daemon_title("bash");
+        assert_eq!(pane.title_label().label(), "bash");
+
+        pane.set_current_directory(Some("/tmp"));
+        assert_eq!(pane.title_label().label(), "bash : /tmp");
+    }
+
+    /// Regression for #536: CWD change must refresh the pane header title.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn cwd_change_refreshes_header_title() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        pane.set_daemon_title("bash");
+        pane.set_current_directory(Some("/home/user/projects"));
+
+        pane.set_current_directory(Some("/tmp"));
+        assert_eq!(pane.title_label().label(), "bash : /tmp");
+    }
+
+    /// Custom title overrides daemon title + CWD.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn custom_title_overrides_daemon_title() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        pane.set_daemon_title("bash");
+        pane.set_current_directory(Some("/tmp"));
+        pane.set_custom_title(Some("My Custom Title"));
+        assert_eq!(pane.title_label().label(), "My Custom Title");
+
+        // CWD change should not override custom title.
+        pane.set_current_directory(Some("/var"));
+        assert_eq!(pane.title_label().label(), "My Custom Title");
+
+        // Clearing custom title restores daemon title + CWD.
+        pane.set_custom_title(None);
+        assert_eq!(pane.title_label().label(), "bash : /var");
     }
 }

@@ -1046,10 +1046,10 @@ fn terminal_handle_reports_titles_and_managed_current_directory() {
 
     let managed =
         rttx::terminal::persistent_widget::PersistentPaneView::new("managed-1", "runtime-1");
-    managed.set_title("Managed Title");
+    managed.set_daemon_title("Managed Title");
     managed.set_current_directory(Some("/tmp/managed-cwd"));
     let managed_handle = rttx::terminal::handle::TerminalHandle::Managed(managed);
-    assert_eq!(managed_handle.title(), "Managed Title");
+    assert_eq!(managed_handle.title(), "Managed Title : /tmp/managed-cwd");
     assert_eq!(managed_handle.current_directory().as_deref(), Some("/tmp/managed-cwd"));
 }
 
@@ -1395,7 +1395,7 @@ fn persistent_pane_view_set_title_and_custom_title() {
     require_display!();
 
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
-    pane.set_title("my title");
+    pane.set_daemon_title("my title");
     assert_eq!(pane.title_label().label(), "my title");
 
     assert!(pane.custom_title().is_none());
@@ -1405,6 +1405,8 @@ fn persistent_pane_view_set_title_and_custom_title() {
 
     pane.set_custom_title(None);
     assert!(pane.custom_title().is_none());
+    // After clearing custom title, daemon title is restored.
+    assert_eq!(pane.title_label().label(), "my title");
 }
 
 #[test]
@@ -2254,4 +2256,33 @@ fn persistent_pane_resize_uses_tick_callback() {
         pane.has_resize_tick_for_test(),
         "tick callback must be registered after connect_resize"
     );
+}
+
+/// Regression for #536: persistent pane header must show "app : path" format
+/// and update when CWD changes.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_header_title_combines_daemon_title_and_cwd() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("title-536", "runtime-1");
+
+    // Default title is "Terminal", not "Terminal (persistent)".
+    assert_eq!(pane.title_label().label(), "Terminal");
+
+    // Setting daemon title alone shows just the title.
+    pane.set_daemon_title("bash");
+    assert_eq!(pane.title_label().label(), "bash");
+
+    // Setting CWD combines title + path.
+    pane.set_current_directory(Some("/tmp/project"));
+    assert_eq!(pane.title_label().label(), "bash : /tmp/project");
+
+    // Changing CWD updates the combined title.
+    pane.set_current_directory(Some("/var/log"));
+    assert_eq!(pane.title_label().label(), "bash : /var/log");
+
+    // Changing daemon title also updates.
+    pane.set_daemon_title("vim");
+    assert_eq!(pane.title_label().label(), "vim : /var/log");
 }
