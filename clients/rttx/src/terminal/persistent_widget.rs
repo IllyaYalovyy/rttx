@@ -1672,10 +1672,7 @@ mod tests {
     fn format_pane_header_title_collapses_home() {
         let home = std::env::var("HOME").unwrap();
         let cwd = format!("{home}/projects");
-        assert_eq!(
-            format_pane_header_title(Some("bash"), Some(&cwd)),
-            "bash : ~/projects"
-        );
+        assert_eq!(format_pane_header_title(Some("bash"), Some(&cwd)), "bash : ~/projects");
     }
 
     #[test]
