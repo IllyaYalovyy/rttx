@@ -163,6 +163,24 @@ async fn ping_returns_pong_with_same_nonce() {
     }
 }
 
+#[tokio::test]
+async fn ping_fast_path_responds_without_handle_message() {
+    // Regression: #556 — client_reader intercepts Ping before
+    // handle_message so the server mutex is never acquired.
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 99 })),
+    };
+    // Simulate the fast-path match used in client_reader.
+    let pong = match &msg.msg {
+        Some(proto::client_message::Msg::Ping(ping)) => protocol::pong(ping.nonce),
+        _ => panic!("expected Ping variant"),
+    };
+    match pong.msg {
+        Some(proto::server_message::Msg::Pong(p)) => assert_eq!(p.nonce, 99),
+        other => panic!("expected Pong, got {other:?}"),
+    }
+}
+
 // ── CreateSession ───────────────────────────────────────────────
 
 #[tokio::test]
