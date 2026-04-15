@@ -2,7 +2,7 @@
 
 | Field         | Value                                   |
 |---------------|-----------------------------------------|
-| Status        | Accepted                                |
+| Status        | Accepted (partially implemented)        |
 | Author(s)     | Illya Yalovyy                           |
 | Supersedes    | —                                       |
 | Superseded by | —                                       |
@@ -52,20 +52,21 @@ orphaned workspaces.
 ### Current behaviour
 
 The GUI connects to a daemon endpoint once and multiplexes all workspaces for that endpoint
-over a single `EndpointConnectionManager` connection (`daemon_bridge.rs:156`). Each managed
-workspace holds a `runtime_id` and uses `attach_session(runtime_id, …)` to rebuild local
-state from the daemon's snapshot.
+over a single `EndpointConnectionManager` connection (defined in `daemon_bridge.rs`). Each
+managed workspace holds a `runtime_id` and uses `attach_session(runtime_id, …)` to rebuild
+local state from the daemon's snapshot.
 
 Three failure paths exist when the session UUID no longer exists on the daemon:
 
-1. **At initial attach** — `attach_session` returns `ServerError { code, message }`
-   (`daemon.rs:267`). The caller must translate that into workspace state.
+1. **At initial attach** — `attach_session` (in `daemon.rs`) returns
+   `ServerError { code, message }`. The caller must translate that into workspace state.
 2. **After reconnect** — on endpoint reconnect, every workspace re-attaches. Stale UUIDs
    return the same error.
-3. **Unsolicited errors during operation** — `dispatch_managed_runtime_message` receives
-   `Error` frames for commands referencing a since-removed pane/session. Current code
-   (`window/runtime.rs:712-715`) just logs and returns, leaving the workspace in an
-   indeterminate state. This is issue #407.
+3. **Unsolicited errors during operation** — `dispatch_managed_runtime_message` (in
+   `window/runtime.rs`) receives `Error` frames for commands referencing a since-removed
+   pane/session. Current code logs at warn level and returns, leaving the workspace in an
+   indeterminate state. This was the symptom described in issue
+   [#407](https://github.com/IllyaYalovyy/rttx/issues/407) (now closed).
 
 ### Why sibling workspaces break today
 
@@ -159,14 +160,21 @@ shown, not auto-closed. Cleanup is always an explicit user action.
 
 ### 1. Extend the connection state machine (RFC-018)
 
-Add one state to the managed-workspace status enum:
+**Status: implemented.**
+
+`ConnectionStatus::SessionMissing` was added to the state enum in `runtime.rs`:
 
 ```rust
 pub enum ConnectionStatus {
+    Starting,
     Connecting,
     Connected,
+    Reconnecting { attempt: u32, retry_in_secs: u32 },
+    Blocked(ConnectionProblem),
     Disconnected,
-    SessionMissing,   // NEW
+    Recovered,
+    /// The daemon has no record of this workspace's runtime.
+    SessionMissing,
 }
 ```
 
@@ -176,13 +184,14 @@ Semantics:
   this workspace's `runtime_id`.
 - It is *durable*: once observed, the workspace stays in `SessionMissing` until the user
   closes it or assigns a new runtime.
-- Input is disabled in this state. The sidebar icon uses the `warning` CSS class (same
-  family as `Disconnected`, distinct glyph).
+- Input is disabled in this state (`accepts_input()` returns `false`).
+- The sidebar icon uses the `warning` CSS class (same family as `Disconnected`, distinct
+  tooltip: "Session no longer exists on daemon").
 
-Transitions:
+Transitions (implemented via `advance_connection_status` and `ConnectionEvent::SessionMissing`):
 
 - `Connecting → SessionMissing` — initial attach returned `ServerError` with the
-  session-not-found code
+  session-not-found code (`ERR_SESSION_NOT_FOUND`, code 4)
 - `Connected → SessionMissing` — unsolicited error from the daemon identifies the session
   or a bound pane as not found *and* a follow-up `ListSessions` confirms the session is
   gone
@@ -192,50 +201,52 @@ Transitions:
 
 ### 2. Fault isolation
 
-All three failure paths must return a per-workspace error, not tear down the endpoint:
+**Status: partially implemented.**
 
-- `attach_session`: caller already receives a typed `DaemonError::ServerError { code, … }`.
-  Promote the session-not-found code to `DaemonError::SessionMissing(runtime_id)` so
-  callers do not pattern-match on integers. No transport-level cleanup.
-- Unsolicited `Error` frames in `dispatch_managed_runtime_message`: stop swallowing. When
-  the error references a bound pane or session, trigger one-shot reconciliation (see §3)
-  for *that workspace only*. The endpoint stream continues to deliver events for other
-  workspaces throughout.
+Error classification uses `classify_connection_problem` in `runtime.rs` to map
+`DaemonError::ServerError { code: 4, .. }` (the daemon's `ERR_SESSION_NOT_FOUND`) to
+`ConnectionProblem::SessionMissing`. This replaces the originally proposed
+`DaemonError::SessionMissing(runtime_id)` typed variant — the classification approach is
+simpler and avoids adding a new `DaemonError` variant.
 
-Acceptance: a test that kills one session while two are active proves the second session
-keeps receiving `Delta` / `TitleChanged` events uninterrupted.
+The initial-attach and reconnect paths in `daemon_bridge.rs` now detect
+`ConnectionProblem::SessionMissing` and emit `ConnectionStatus::SessionMissing` for the
+affected workspace only, without tearing down the endpoint connection.
+
+**Remaining work:** unsolicited `Error` frames in `dispatch_managed_runtime_message`
+(`window/runtime.rs`) are still logged and returned without triggering reconciliation.
+Step 3 of the development plan addresses this.
+
+Acceptance: a test (`session_missing_does_not_affect_sibling_workspaces` in
+`session_lifecycle.rs`) proves that marking one workspace as `SessionMissing` does not
+affect a sibling workspace on the same endpoint.
 
 ### 3. Reconciliation — the single primitive
 
-Introduce one helper on `Window`:
+**Status: not yet implemented as a standalone helper.**
 
-```rust
-async fn reconcile_workspace_against_daemon(
-    &self,
-    workspace_uuid: &str,
-    endpoint: &RuntimeEndpoint,
-) -> ReconcileOutcome { … }
-```
+The original design proposed a `reconcile_workspace_against_daemon` async method on
+`Window`. In practice, the implemented approach routes session-missing detection through
+the existing `EndpointEvent::WorkspaceConnectionChanged` event in the state machine
+(`workspace_state.rs`), which is simpler and avoids adding async I/O to the `Window` type.
 
-It:
-
-1. Calls `ListSessions` on the endpoint (already supported by the daemon — `daemon.rs:224`)
-2. Compares the workspace's `runtime_id` against the returned list
-3. Returns `Present` or `Missing`
-4. On `Missing`, sets the workspace status to `SessionMissing`
-
-Everything else in this RFC is a caller of that helper.
+The full `ListSessions`-based reconciliation helper (querying the daemon and cross-
+referencing against all bound `runtime_id`s) remains unimplemented. It is needed for:
+- The reconnect-path bulk reconciliation (Step 5)
+- The "Refresh sessions from daemon" menu action (Step 6)
 
 ### 4. Trigger points
 
-| Trigger | Scope | Notes |
-|---------|-------|-------|
-| Initial attach returned `SessionMissing` | Single workspace | No extra `ListSessions` call needed — we already know |
-| Unsolicited pane/session-not-found error | Single workspace | Call reconcile to disambiguate "session gone" from "transient race" |
-| Endpoint reconnect succeeded | All workspaces on that endpoint | One `ListSessions` call, cross-reference against every bound runtime_id |
-| User menu action "Refresh sessions from daemon" | All workspaces on *all* endpoints | Iterates across endpoints; see §5 |
+| Trigger | Scope | Status | Notes |
+|---------|-------|--------|-------|
+| Initial attach returned `SessionMissing` | Single workspace | ✅ Implemented | No extra `ListSessions` call needed — we already know |
+| Unsolicited pane/session-not-found error | Single workspace | ❌ Not yet | Call reconcile to disambiguate "session gone" from "transient race" |
+| Endpoint reconnect succeeded | All workspaces on that endpoint | ✅ Implemented | Reattach per workspace; missing sessions detected individually |
+| User menu action "Refresh sessions from daemon" | All workspaces on *all* endpoints | ❌ Not yet | Iterates across endpoints; see §5 |
 
 ### 5. User action: "Refresh sessions from daemon"
+
+**Status: not yet implemented.**
 
 A new top-level action, available both as:
 
@@ -251,6 +262,8 @@ Behaviour:
 No keyboard shortcut is assigned initially — this is a rare, deliberate action.
 
 ### 6. Cleanup dialog
+
+**Status: not yet implemented.**
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -278,13 +291,15 @@ already handles this once §2 is in place).
 
 ### 7. Per-workspace presentation
 
+**Status: implemented.**
+
 `SessionMissing` workspaces render with:
 
-- **Sidebar icon**: distinct from `Disconnected` — proposed `network-workgroup-symbolic`
-  with `warning` CSS class, or `dialog-question-symbolic`
-- **Subtitle**: `Session no longer exists` followed by the endpoint label
-- **Inline action**: context menu gains a single highlighted **Close** item; the
-  pane area shows a small status page with that action rather than an empty pane
+- **Sidebar icon**: same icon as the endpoint type (`computer-symbolic` for local,
+  `network-server-symbolic` for remote) with `warning` CSS class
+- **Tooltip**: `Session no longer exists on daemon`
+- **Short label**: `Session Missing` (in pane headers)
+- **Full label**: `Session no longer exists` (in sidebar summaries)
 
 No confirmation prompt on Close — the session is already gone.
 
@@ -301,35 +316,40 @@ the user explicitly closes it.
 
 ## Goals Alignment
 
-| Goal | How addressed |
-|------|---------------|
-| G1 — Isolate failed attach | §2 keeps errors per-workspace; endpoint stream is not touched |
-| G2 — Named terminal state | `SessionMissing` added to RFC-018 state enum |
-| G3 — Explicit discovery and cleanup | §5 Refresh action + §6 cleanup dialog |
-| G4 — No silent deletion | §8 — workspaces persist in `SessionMissing` until user closes |
-| G5 — Reuse existing protocol | `ListSessions` RPC already implemented |
+| Goal | How addressed | Status |
+|------|---------------|--------|
+| G1 — Isolate failed attach | §2 keeps errors per-workspace; endpoint stream is not touched | ✅ Implemented for attach/reconnect paths |
+| G2 — Named terminal state | `SessionMissing` added to RFC-018 state enum | ✅ Implemented |
+| G3 — Explicit discovery and cleanup | §5 Refresh action + §6 cleanup dialog | ❌ Not yet implemented |
+| G4 — No silent deletion | §8 — workspaces persist in `SessionMissing` until user closes | ✅ Implemented |
+| G5 — Reuse existing protocol | `ListSessions` RPC already implemented | ✅ No new protocol messages needed |
 
 ---
 
 ## Development Plan
 
-- [ ] **Step 1** — Add `ConnectionStatus::SessionMissing` and its CSS/icon presentation
+- [x] **Step 1** — Add `ConnectionStatus::SessionMissing` and its CSS/icon presentation
   *(prerequisite: —)*
-- [ ] **Step 2** — Add `DaemonError::SessionMissing(runtime_id)` typed error from
-  `attach_session` *(prerequisite: Step 1)*
+- [x] **Step 2** — Classify `ERR_SESSION_NOT_FOUND` (code 4) as
+  `ConnectionProblem::SessionMissing` via `classify_connection_problem`; emit
+  `ConnectionStatus::SessionMissing` from the attach and reconnect paths in
+  `daemon_bridge.rs` *(prerequisite: Step 1)*
 - [ ] **Step 3** — Isolate unsolicited daemon-error handling in
-  `dispatch_managed_runtime_message` — never tear down the endpoint
+  `dispatch_managed_runtime_message` — stop swallowing `Error` frames and trigger
+  per-workspace reconciliation instead of logging and returning
   *(prerequisite: Step 1)*
-- [ ] **Step 4** — Implement `reconcile_workspace_against_daemon` using the existing
-  `ListSessions` RPC *(prerequisite: Step 2)*
+- [ ] **Step 4** — Implement `ListSessions`-based reconciliation that cross-references
+  all bound `runtime_id`s for an endpoint against the daemon's session list
+  *(prerequisite: Step 2)*
 - [ ] **Step 5** — Call reconcile from the reconnect path (once per endpoint)
   *(prerequisite: Step 4)*
 - [ ] **Step 6** — Add the "Refresh sessions from daemon" menu action and wire it to
   reconcile across all endpoints *(prerequisite: Step 4)*
 - [ ] **Step 7** — Implement the orphan cleanup dialog *(prerequisite: Step 6)*
-- [ ] **Step 8** — Unit tests for `reconcile_workspace_against_daemon` against a fake
-  daemon; integration test proving a missing session on one workspace does not stop event
-  delivery to a sibling *(prerequisite: Step 4)*
+- [x] **Step 8** — Unit tests for `SessionMissing` state transitions and fault isolation;
+  integration test (`session_missing_does_not_affect_sibling_workspaces`) proving a
+  missing session on one workspace does not affect event delivery to a sibling
+  *(prerequisite: Step 1)*
 
 ---
 
@@ -338,9 +358,10 @@ the user explicitly closes it.
 - [ ] **Q1** — Should `SessionMissing` workspaces participate in auto-reconnect (they
   currently would via the shared endpoint reconciliation)? Proposed: no — once marked, only
   an explicit user action (close, or future rebind) transitions out of the state.
-- [ ] **Q2** — Should the daemon expose a distinct error code for "session not found" so
-  the client does not have to pattern-match on text? Current code uses numeric codes; we
-  should document which code maps to `SessionMissing`.
+- [x] **Q2** — ~~Should the daemon expose a distinct error code for "session not found" so
+  the client does not have to pattern-match on text?~~ **Resolved.** The daemon uses
+  `ERR_SESSION_NOT_FOUND` (code 4), defined in `protocol.rs`. The client maps this via
+  `classify_connection_problem` to `ConnectionProblem::SessionMissing`.
 - [ ] **Q3** — Should the Refresh action also verify that direct workspaces' local
   daemons are reachable, or remain strictly scoped to managed workspaces?
 
@@ -351,5 +372,5 @@ the user explicitly closes it.
 - [RFC-007: Session Recovery](./RFC-007-session-recovery.md)
 - [RFC-016: Workspace Management v2](./RFC-016-workspace-management-v2.md)
 - [RFC-018: Workspace Connection State Machine](./RFC-018-workspace-connection-state-machine.md)
-- GitHub issue [#478](https://github.com/IllyaYalovyy/rttx/issues/478)
-- GitHub issue [#407](https://github.com/IllyaYalovyy/rttx/issues/407) — related symptom from swallowed errors
+- GitHub issue [#478](https://github.com/IllyaYalovyy/rttx/issues/478) (closed — RFC written)
+- GitHub issue [#407](https://github.com/IllyaYalovyy/rttx/issues/407) (closed — swallowed errors fixed for attach/reconnect; unsolicited error path remains)
