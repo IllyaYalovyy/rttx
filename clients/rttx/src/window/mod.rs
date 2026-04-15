@@ -56,7 +56,6 @@ mod imp {
         pub place_list: gtk4::ListBox,
         pub place_scroll: gtk4::ScrolledWindow,
         pub place_empty: adw::StatusPage,
-        pub command_search_entry: gtk4::SearchEntry,
         pub command_list: gtk4::ListBox,
         pub command_scroll: gtk4::ScrolledWindow,
         pub command_empty: adw::StatusPage,
@@ -262,12 +261,6 @@ mod imp {
             commands_header.append(&commands_title);
             commands_header.append(&add_command_button);
 
-            self.command_search_entry.set_placeholder_text(Some("Search commands"));
-            self.command_search_entry.set_margin_start(12);
-            self.command_search_entry.set_margin_end(12);
-            self.command_search_entry.set_margin_top(12);
-            self.command_search_entry.set_margin_bottom(12);
-
             self.command_scroll.set_hscrollbar_policy(gtk4::PolicyType::Never);
             self.command_scroll.set_vexpand(true);
             self.command_scroll.set_margin_start(12);
@@ -285,7 +278,6 @@ mod imp {
 
             let commands_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             commands_page.append(&commands_header);
-            commands_page.append(&self.command_search_entry);
             commands_page.append(&self.command_scroll);
             commands_page.append(&self.command_empty);
 
@@ -504,11 +496,6 @@ impl Window {
         let win = self.clone();
         self.imp().sidebar_search_entry.connect_changed(move |_| {
             win.refresh_place_sidebar();
-            win.refresh_command_sidebar();
-        });
-
-        let win = self.clone();
-        self.imp().command_search_entry.connect_changed(move |_| {
             win.refresh_command_sidebar();
         });
 

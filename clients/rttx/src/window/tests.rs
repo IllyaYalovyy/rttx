@@ -428,13 +428,54 @@ fn utility_sidebar_shows_and_filters_commands() {
         "utility sidebar should show saved commands"
     );
 
-    window.imp().command_search_entry.set_text("deploy");
+    window.imp().sidebar_search_entry.set_text("deploy");
     pump_events(50);
     assert_eq!(
         window.imp().command_list.observe_children().n_items(),
         1,
         "search should filter the utility sidebar command list"
     );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn commands_page_has_no_separate_search_entry() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.commands-no-search-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let commands_page = window
+        .imp()
+        .utility_stack
+        .child_by_name("commands")
+        .expect("commands page must exist")
+        .downcast::<gtk4::Box>()
+        .expect("commands page must be a Box");
+
+    let mut has_search = false;
+    let mut child = commands_page.first_child();
+    while let Some(widget) = child {
+        if widget.downcast_ref::<gtk4::SearchEntry>().is_some() {
+            has_search = true;
+            break;
+        }
+        child = widget.next_sibling();
+    }
+    assert!(!has_search, "commands page should not contain a separate SearchEntry");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
