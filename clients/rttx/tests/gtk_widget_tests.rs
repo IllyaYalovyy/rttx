@@ -2257,3 +2257,32 @@ fn persistent_pane_resize_uses_tick_callback() {
         "tick callback must be registered after connect_resize"
     );
 }
+
+/// Regression for #536: persistent pane header must show "app : path" format
+/// and update when CWD changes.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_header_title_combines_daemon_title_and_cwd() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("title-536", "runtime-1");
+
+    // Default title is "Terminal", not "Terminal (persistent)".
+    assert_eq!(pane.title_label().label(), "Terminal");
+
+    // Setting daemon title alone shows just the title.
+    pane.set_daemon_title("bash");
+    assert_eq!(pane.title_label().label(), "bash");
+
+    // Setting CWD combines title + path.
+    pane.set_current_directory(Some("/tmp/project"));
+    assert_eq!(pane.title_label().label(), "bash : /tmp/project");
+
+    // Changing CWD updates the combined title.
+    pane.set_current_directory(Some("/var/log"));
+    assert_eq!(pane.title_label().label(), "bash : /var/log");
+
+    // Changing daemon title also updates.
+    pane.set_daemon_title("vim");
+    assert_eq!(pane.title_label().label(), "vim : /var/log");
+}
