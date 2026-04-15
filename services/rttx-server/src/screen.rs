@@ -368,6 +368,98 @@ impl vte::Perform for ScreenPerformer {
     }
 }
 
+/// Strip terminal query sequences that the daemon handles server-side.
+///
+/// Applications send DSR, DA1, DA2, and DECRQM queries expecting the terminal
+/// to respond. The daemon's `PaneScreen` already intercepts these and writes
+/// replies back to the PTY. If the raw queries are also forwarded to the
+/// client's VTE widget, VTE generates duplicate responses that leak back as
+/// visible garbage (`;1R` fragments).
+///
+/// This function removes those query sequences from the output stream before
+/// it is broadcast to clients. Non-query bytes pass through unchanged.
+///
+/// Stripped sequences:
+/// - `ESC [ 5 n` / `ESC [ 6 n` (DSR)
+/// - `ESC [ c` / `ESC [ 0 c` (DA1)
+/// - `ESC [ > c` / `ESC [ > 0 c` (DA2)
+/// - `ESC [ ? <digits> $ p` (DECRQM)
+#[must_use]
+pub fn strip_client_queries(data: &[u8]) -> Vec<u8> {
+    // Fast path: no ESC byte means no CSI sequences to strip.
+    if !data.contains(&0x1b) {
+        return data.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+
+    while i < data.len() {
+        if data[i] == 0x1b
+            && let Some(seq_len) = csi_query_len(&data[i..])
+        {
+            i += seq_len;
+        } else {
+            out.push(data[i]);
+            i += 1;
+        }
+    }
+
+    out
+}
+
+/// If `data` starts with a CSI query sequence handled by the daemon, return
+/// its length in bytes. Otherwise return `None`.
+fn csi_query_len(data: &[u8]) -> Option<usize> {
+    // Minimum CSI sequence: ESC [ <final> = 3 bytes.
+    if data.len() < 3 || data[0] != 0x1b || data[1] != b'[' {
+        return None;
+    }
+
+    let mut pos = 2;
+
+    // Collect intermediates (0x20..=0x2F) and parameter bytes (0x30..=0x3F).
+    // CSI structure: ESC [ <param bytes 0x30-0x3F>* <intermediate bytes 0x20-0x2F>* <final 0x40-0x7E>
+    let param_start = pos;
+    while pos < data.len() && (0x30..=0x3F).contains(&data[pos]) {
+        pos += 1;
+    }
+    let params = &data[param_start..pos];
+
+    let inter_start = pos;
+    while pos < data.len() && (0x20..=0x2F).contains(&data[pos]) {
+        pos += 1;
+    }
+    let intermediates = &data[inter_start..pos];
+
+    // Final byte must be in 0x40..=0x7E.
+    if pos >= data.len() || !(0x40..=0x7E).contains(&data[pos]) {
+        return None;
+    }
+    let final_byte = data[pos];
+    let seq_len = pos + 1;
+
+    match final_byte {
+        // DSR: CSI 5 n, CSI 6 n
+        b'n' if intermediates.is_empty() && matches!(params, b"5" | b"6") => Some(seq_len),
+        // DA1: CSI c, CSI 0 c
+        b'c' if intermediates.is_empty() && matches!(params, b"" | b"0") => Some(seq_len),
+        // DA2: ESC [ > c or ESC [ > 0 c
+        // `>` (0x3E) falls in the param byte range, so the parser puts it in params.
+        b'c' if intermediates.is_empty() && matches!(params, b">" | b">0") => Some(seq_len),
+        // DECRQM: ESC [ ? <digits> $ p
+        // `?` (0x3F) is a param byte, `$` (0x24) is an intermediate byte.
+        b'p' if intermediates == b"$"
+            && params.first() == Some(&b'?')
+            && params.len() >= 2
+            && params[1..].iter().all(u8::is_ascii_digit) =>
+        {
+            Some(seq_len)
+        }
+        _ => None,
+    }
+}
+
 fn parse_osc7_current_directory(uri: &str) -> Option<String> {
     let path_with_host = uri.strip_prefix("file://")?;
     let path_start = path_with_host.find('/')?;
@@ -949,5 +1041,127 @@ mod tests {
         assert_eq!(replies[1], b"\x1b[>65;0;0c"); // DA2
         assert_eq!(replies[2], b"\x1b[0n"); // status OK
         assert_eq!(replies[3], b"\x1b[1;1R"); // cursor at 1,1
+    }
+
+    // --- strip_client_queries ---
+
+    #[test]
+    fn strip_passes_plain_text_through() {
+        assert_eq!(strip_client_queries(b"hello world"), b"hello world");
+    }
+
+    #[test]
+    fn strip_passes_empty_input_through() {
+        assert_eq!(strip_client_queries(b""), b"");
+    }
+
+    #[test]
+    fn strip_removes_dsr_cursor_position() {
+        assert_eq!(strip_client_queries(b"before\x1b[6nafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_dsr_operating_status() {
+        assert_eq!(strip_client_queries(b"before\x1b[5nafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_da1_no_param() {
+        assert_eq!(strip_client_queries(b"before\x1b[cafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_da1_zero_param() {
+        assert_eq!(strip_client_queries(b"before\x1b[0cafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_da2() {
+        assert_eq!(strip_client_queries(b"before\x1b[>cafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_da2_zero_param() {
+        assert_eq!(strip_client_queries(b"before\x1b[>0cafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_decrqm() {
+        assert_eq!(strip_client_queries(b"before\x1b[?2004$pafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_multiple_queries() {
+        let input = b"text\x1b[6n\x1b[c\x1b[>cmore\x1b[5n";
+        assert_eq!(strip_client_queries(input), b"textmore");
+    }
+
+    #[test]
+    fn strip_preserves_non_query_csi_sequences() {
+        // SGR (color), CUP (cursor position), CUU (cursor up) should pass through.
+        let input = b"\x1b[31mred\x1b[0m \x1b[1;1H \x1b[2A";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_preserves_osc_sequences() {
+        let input = b"\x1b]0;title\x07text";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_preserves_decset_decrst() {
+        // DECSET/DECRST should not be stripped.
+        let input = b"\x1b[?2004h\x1b[?1l";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_handles_query_at_start() {
+        assert_eq!(strip_client_queries(b"\x1b[6ntext"), b"text");
+    }
+
+    #[test]
+    fn strip_handles_query_at_end() {
+        assert_eq!(strip_client_queries(b"text\x1b[6n"), b"text");
+    }
+
+    #[test]
+    fn strip_handles_only_queries() {
+        assert_eq!(strip_client_queries(b"\x1b[6n\x1b[c\x1b[>c"), b"");
+    }
+
+    #[test]
+    fn strip_handles_incomplete_csi_at_end() {
+        // Incomplete CSI at end of buffer should pass through.
+        let input = b"text\x1b[";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_handles_bare_esc_at_end() {
+        let input = b"text\x1b";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_does_not_remove_da1_with_nonzero_param() {
+        // CSI 2 c is not DA1 (only 0 or no param).
+        let input = b"\x1b[2c";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_does_not_remove_dsr_with_other_params() {
+        // CSI 1 n is not a handled DSR.
+        let input = b"\x1b[1n";
+        assert_eq!(strip_client_queries(input), input.to_vec());
+    }
+
+    #[test]
+    fn strip_interleaved_with_real_output() {
+        // Simulate rapid DSR queries mixed with real application output.
+        let input = b"line1\r\n\x1b[6n\x1b[6nline2\r\n\x1b[6n\x1b[c";
+        assert_eq!(strip_client_queries(input), b"line1\r\nline2\r\n");
     }
 }

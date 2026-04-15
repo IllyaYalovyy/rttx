@@ -460,9 +460,9 @@ impl Server {
                         cwd: pane.effective_cwd().unwrap_or_default(),
                         cols: u32::from(pane.cols),
                         rows: u32::from(pane.rows),
-                        scrollback: bytes::Bytes::copy_from_slice(
+                        scrollback: bytes::Bytes::from(crate::screen::strip_client_queries(
                             pane.screen.snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES),
-                        ),
+                        )),
                         exit_status: pane.exit_status,
                         bracketed_paste_mode: pane.screen.bracketed_paste_mode(),
                         application_cursor_keys: pane.screen.application_cursor_keys(),
@@ -984,8 +984,14 @@ fn spawn_pty_read_loop(
                             }
 
                             // Phase 3: broadcast to clients without the server lock.
-                            let msg = protocol::delta(session_id, pane_id, data);
-                            send_to_collected(&senders, &msg);
+                            // Strip terminal query sequences (DSR, DA1, DA2, DECRQM)
+                            // that the daemon already handles. If forwarded, VTE would
+                            // generate duplicate responses that leak as visible garbage.
+                            let client_data = crate::screen::strip_client_queries(&data);
+                            if !client_data.is_empty() {
+                                let msg = protocol::delta(session_id, pane_id, bytes::Bytes::from(client_data));
+                                send_to_collected(&senders, &msg);
+                            }
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = protocol::cwd_changed(session_id, pane_id, cwd, revision);
                                 send_to_collected(&senders, &msg);
