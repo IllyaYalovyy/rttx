@@ -17,16 +17,36 @@ production build. Development mode uses a distinct application identity, a separ
 and an unmistakable visual indicator. This is not cosmetic. It removes day-to-day friction for
 contributors and makes the project materially easier to develop, test, and adopt.
 
-## Current implementation snapshot (2026-03)
+## Current implementation snapshot (2026-04)
 
-- The client uses a separate application/profile identity in dev mode:
-  - app ID: `io.github.IllyaYalovyy.rttx.Devel`
-  - config dir: `rttx-devel`
-- The daemon also uses separate runtime/cache roots in dev mode:
-  - socket root: `$XDG_RUNTIME_DIR/rttx-server-devel/v1/`
-  - state root: `$XDG_CACHE_HOME/rttx-server-devel/`
-- The monorepo docs in `README.md` and `CONTRIBUTING.md` now document both client and daemon dev
-  mode together because a safe dev run requires both sides to stay isolated from production state.
+Development mode is fully implemented across both the GUI client and the daemon. Activation is a
+single environment variable (`RTTX_DEV_MODE=1`) that isolates every runtime path.
+
+**Client (rttx):**
+- App ID: `io.github.IllyaYalovyy.rttx.Devel`
+- Config dir: `$XDG_CONFIG_HOME/rttx-devel/`
+- Log dir: `$XDG_CACHE_HOME/rttx-devel/`
+- Default log level: `debug` (production: `rttx=info,warn`)
+- Visual indicators: window title `rttx (Devel)`, header bar pill badge, distinct icon
+
+**Daemon (rttx-server):**
+- Socket: `$XDG_RUNTIME_DIR/rttx-server-devel/v1/`
+- State/cache: `$XDG_CACHE_HOME/rttx-server-devel/`
+- Log dir: `$XDG_CACHE_HOME/rttx-server-devel/`
+- Default log level: `debug` (production: `info`)
+
+**Integration:**
+- The GUI propagates `RTTX_DEV_MODE=1` to the daemon when auto-starting it, so a single env var
+  on `cargo run -p rttx` activates dev mode for the entire stack.
+- The client resolves the daemon socket path through the same dev-mode flag, connecting to the dev
+  daemon automatically.
+
+The `AppProfile` struct in `clients/rttx/src/config.rs` centralizes all identity and path
+decisions. The daemon uses a parallel `dir_name_for(is_dev)` helper in
+`services/rttx-server/src/os/unix.rs`.
+
+Docs in `README.md` and `CONTRIBUTING.md` document both client and daemon dev mode together
+because a safe dev run requires both sides to stay isolated from production state.
 
 ---
 
@@ -137,31 +157,34 @@ contributor has to think hard before `cargo run`, the design failed.
 Development mode is enabled by an environment variable:
 
 ```bash
-RTTX_DEV_MODE=1 cargo run
+RTTX_DEV_MODE=1 cargo run -p rttx
+RTTX_DEV_MODE=1 cargo run -p rttx-server -- start --foreground
 ```
 
 This is the primary supported workflow because it is simple, shell-friendly, and does not require
 special command-line parsing in the GTK application startup path.
 
-The application may later expose more granular environment overrides, but v1 should keep one clear
-switch:
+The variable is checked with `std::env::var_os` and treated as enabled when the value is non-empty
+and not `"0"`.
 
-- `RTTX_DEV_MODE=1` → development profile
-- unset / any other value → production profile
+When the GUI auto-starts the daemon (via `daemon_bridge.rs`), it propagates `RTTX_DEV_MODE=1` to
+the child process so a single env var on the client activates dev mode for the entire stack.
 
 ### Runtime profile abstraction
 
-Introduce a small runtime profile abstraction in config/application code rather than scattering
-`if dev mode` checks across the codebase.
-
-Example conceptual shape:
+A `const fn` profile constructor centralizes all identity and path decisions in
+`clients/rttx/src/config.rs`:
 
 ```rust
-struct AppProfile {
-    app_id: &'static str,
-    config_dir: &'static str,
-    display_name: &'static str,
-    is_development: bool,
+pub struct AppProfile {
+    pub app_id: &'static str,
+    pub icon_name: &'static str,
+    pub display_name: &'static str,
+    pub config_dir: &'static str,
+    pub settings_id: &'static str,
+    pub settings_path: &'static str,
+    pub badge_label: Option<&'static str>,
+    pub is_development: bool,
 }
 ```
 
@@ -176,22 +199,48 @@ Development profile:
 - `app_id = "io.github.IllyaYalovyy.rttx.Devel"`
 - `config_dir = "rttx-devel"`
 - `display_name = "rttx (Devel)"`
+- `badge_label = Some("Devel")`
 
-This profile should become the single source of truth for:
+This profile is the single source of truth for:
 
 - `adw::Application::builder().application_id(...)`
-- window title / visible labeling
-- icon name if needed
-- XDG config path resolution in preferences, sessions, bookmarks, commands, and schemes
+- window title and visible labeling
+- icon name
+- XDG config path resolution for preferences, sessions, bookmarks, commands, and schemes
+- GSettings schema ID and path (for future migration)
 
-This is preferable to ad-hoc environment lookups in every module.
+### Daemon-side isolation
+
+The daemon mirrors the client's dev-mode pattern with its own directory helpers in
+`services/rttx-server/src/os/unix.rs`:
+
+| Resource | Production | Development |
+|---|---|---|
+| Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
+| State/cache | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
+| Logs | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
+
+The daemon checks `RTTX_DEV_MODE` at startup and logs `"Running in DEVELOPMENT mode"` with the
+resolved paths. The single-instance lock is per-directory, so a dev daemon and a production daemon
+can run simultaneously without conflict.
+
+### Logging isolation
+
+Both the GUI and daemon write logs to dev-specific directories when in dev mode:
+
+| Component | Production log dir | Development log dir | Default level |
+|---|---|---|---|
+| GUI (`rttx`) | `$XDG_CACHE_HOME/rttx/` | `$XDG_CACHE_HOME/rttx-devel/` | `debug` (prod: `rttx=info,warn`) |
+| Daemon (`rttx-server`) | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` | `debug` (prod: `info`) |
+
+`RUST_LOG` overrides the default level in both modes. See RFC-017 for the full logging design.
 
 ### App identity
 
-The dev application ID must differ from production so `cargo run` launches a separate process even
+The dev application ID differs from production so `cargo run` launches a separate process even
 while the installed app is running.
 
-Recommended dev app ID:
+Dev app ID:
 
 ```text
 io.github.IllyaYalovyy.rttx.Devel
@@ -207,12 +256,11 @@ Development mode uses a distinct XDG config directory:
 ~/.config/rttx-devel
 ```
 
-Everything that currently writes under `~/.config/rttx/...` must instead resolve through the
-active profile:
+Everything that writes under `~/.config/rttx/...` resolves through the active profile:
 
 - preferences
 - session state
-- bookmarks
+- bookmarks / places
 - commands
 - color schemes
 
@@ -220,21 +268,17 @@ The rule is strict: production and development state do not mix.
 
 ### Visual indication
 
-Development mode should be visible at a glance. One signal is not enough; users stop noticing a
-small title suffix after a while. The UI should include:
+Development mode is visible at a glance through multiple signals:
 
-1. Window title: `rttx (Devel)`
-2. Header-level visual marker: a small `Devel` badge or pill in the header bar
-3. Distinct development icon name so the app is visually separable in the dock, app switcher, and
-   GNOME overview
+1. **Window title**: `rttx (Devel)`
+2. **Header bar badge**: a small `Devel` pill with accent styling and a tooltip explaining that
+   development mode uses a separate app profile
+3. **Distinct icon**: `io.github.IllyaYalovyy.rttx.Devel` — visually separable in the dock, app
+   switcher, and GNOME overview
 
-The marker should be obvious but restrained. This is a tool window, not a warning dialog.
-
-The visual cue exists to prevent category errors:
-
-- typing in the wrong window
-- assuming production state is being tested
-- forgetting that settings/bookmarks were created in the dev profile
+The marker is obvious but restrained. The visual cue prevents category errors: typing in the wrong
+window, assuming production state is being tested, or forgetting that settings were created in the
+dev profile.
 
 ### Scope boundaries
 
@@ -248,26 +292,24 @@ already centered on `cargo run`.
 
 ### Relationship to future GSettings
 
-The current app uses JSON files, but `src/config.rs` already carries `SETTINGS_ID` and
-`SETTINGS_PATH`. Development mode should be designed so a future GSettings migration stays
-straightforward:
-
-- production settings schema ID/path remain production-specific
-- development mode can later derive a distinct settings ID/path if and when GSettings is adopted
-
-The profile abstraction should therefore be designed around app identity, not only JSON paths.
+The current app uses JSON files, but `config.rs` carries `SETTINGS_ID` and `SETTINGS_PATH`
+constants alongside their dev-mode counterparts (`DEV_SETTINGS_ID`, `DEV_SETTINGS_PATH`). The
+`AppProfile` struct includes `settings_id` and `settings_path` fields so a future GSettings
+migration can derive distinct schema paths from the active profile without restructuring.
 
 ### Testing strategy
 
-The feature should be covered at the requirement level:
+The feature is covered at the requirement level:
 
 - profile selection returns production defaults when `RTTX_DEV_MODE` is unset
 - profile selection returns dev values when `RTTX_DEV_MODE=1`
 - config path builders use `rttx-devel` in dev mode
-- application title / visible label reflect the profile
-- a dev-mode session save/load roundtrip does not touch production paths
+- application title and visible label reflect the profile
+- settings path follows the runtime settings ID for both profiles
+- development icon asset exists at the expected path
+- daemon path helpers produce `rttx-server-devel` directories in dev mode
 
-No test should require a real installed copy of rttx. The contract is profile-driven path and app
+No test requires a real installed copy of rttx. The contract is profile-driven path and app
 identity selection.
 
 ---
@@ -276,30 +318,33 @@ identity selection.
 
 | Goal | How addressed |
 | --- | --- |
-| G1 — parallel installed and dev runs | Distinct application ID for development mode |
-| G2 — isolated state | Separate config directory root `rttx-devel` |
-| G3 — visible dev build | Window title suffix plus header badge |
-| G4 — daily convenience | Single env var activation: `RTTX_DEV_MODE=1 cargo run` |
-| G5 — future compatibility | Runtime profile abstraction owns identity and path decisions |
+| G1 — parallel installed and dev runs | Distinct application ID and daemon socket path |
+| G2 — isolated state | Separate config, cache, log, and socket directories for both client and daemon |
+| G3 — visible dev build | Window title suffix, header badge pill, and distinct icon |
+| G4 — daily convenience | Single env var activation: `RTTX_DEV_MODE=1 cargo run -p rttx` with automatic daemon propagation |
+| G5 — future compatibility | `AppProfile` struct owns identity, path, and GSettings decisions |
 
 ---
 
 ## Development Plan
 
-- [x] **Profile abstraction** — add a runtime `AppProfile` and centralize profile selection
-- [x] **Application identity** — use the active profile's application ID in app startup
-- [x] **Config path plumbing** — route all XDG config path builders through the active profile
-- [x] **Visual dev labeling** — add `rttx (Devel)` title and a visible header badge
-- [x] **Distinct dev icon** — use a development-only icon name/asset so the shell chrome also distinguishes the profile
-- [x] **Tests** — add unit coverage for profile selection, path isolation, and dev icon asset presence
-- [x] **Docs** — document the contributor workflow in `README.md`
+- [x] **Profile abstraction** — `AppProfile` struct centralizes profile selection in `config.rs`
+- [x] **Application identity** — active profile's app ID used in app startup
+- [x] **Config path plumbing** — all XDG config path builders route through the active profile
+- [x] **Visual dev labeling** — `rttx (Devel)` title and header badge pill
+- [x] **Distinct dev icon** — development-only icon asset at `io.github.IllyaYalovyy.rttx.Devel`
+- [x] **Daemon isolation** — separate socket, state, cache, and log directories for dev daemon
+- [x] **Daemon auto-start propagation** — GUI propagates `RTTX_DEV_MODE=1` when starting daemon
+- [x] **Logging isolation** — separate log directories and debug-level defaults in dev mode
+- [x] **Tests** — unit coverage for profile selection, path isolation, daemon paths, and dev icon
+- [x] **Docs** — contributor workflow documented in `README.md` and `CONTRIBUTING.md`
 
 ---
 
 ## Open Questions
 
-- [x] **Q1** — Development mode should use a distinct icon in addition to title + badge
-- [x] **Q2** — Keep activation simple in v1: `RTTX_DEV_MODE` only; no granular override layer yet
+- [x] **Q1** — Development mode uses a distinct icon in addition to title + badge
+- [x] **Q2** — Activation kept simple: `RTTX_DEV_MODE` only; no granular override layer
 
 ---
 
@@ -307,3 +352,5 @@ identity selection.
 
 - [designs/RFC-000-template.md](RFC-000-template.md)
 - [designs/RFC-001-manifesto.md](RFC-001-manifesto.md)
+- [designs/RFC-013-persistent-host-sessions.md](RFC-013-persistent-host-sessions.md) — daemon architecture that dev mode isolates
+- [designs/RFC-017-logging.md](RFC-017-logging.md) — logging design with dev-mode directory separation
