@@ -5264,3 +5264,111 @@ fn rebuild_session_content_preserves_terminals_from_other_workspaces() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// Closing the last managed workspace must remove the session from state
+/// and add the runtime_id to dismissed_runtime_ids so the daemon session
+/// is not resurrected on next launch. Regression test for #578.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_last_managed_workspace_dismisses_runtime() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.close-last-managed-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Replace the default session with a managed one that has a runtime_id.
+    let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+    let managed = crate::test_helpers::managed_session_with_runtime(
+        "managed-ws",
+        "Managed",
+        crate::test_helpers::term("t1"),
+        crate::runtime::RuntimeEndpoint::Local,
+        crate::runtime::WorkspacePolicy::Persistent,
+        Some(runtime_id),
+    );
+    let session_uuid = managed.uuid.clone();
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions.clear();
+        state.sessions.push(managed.clone());
+    }
+    window.build_session(&managed, false);
+
+    assert_eq!(window.imp().state.borrow().sessions.len(), 1);
+
+    window.close_session(&session_uuid);
+    pump_events(50);
+
+    let state = window.imp().state.borrow();
+    assert!(
+        !state.sessions.iter().any(|s| s.uuid == session_uuid),
+        "closed managed workspace must be removed from state"
+    );
+    assert!(
+        state.dismissed_runtime_ids.contains(runtime_id),
+        "runtime_id must be added to dismissed_runtime_ids"
+    );
+
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+/// After closing the last managed workspace, the persisted state must not
+/// contain the closed session. This prevents resurrection on next launch.
+/// Regression test for #578.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_last_managed_workspace_persists_clean_state() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.close-last-managed-persist-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let runtime_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    let managed = crate::test_helpers::managed_session_with_runtime(
+        "managed-ws",
+        "Managed",
+        crate::test_helpers::term("t1"),
+        crate::runtime::RuntimeEndpoint::Local,
+        crate::runtime::WorkspacePolicy::Persistent,
+        Some(runtime_id),
+    );
+    let session_uuid = managed.uuid.clone();
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions.clear();
+        state.sessions.push(managed.clone());
+    }
+    window.build_session(&managed, false);
+
+    window.close_session(&session_uuid);
+    pump_events(50);
+
+    // Reload persisted state and verify the closed session is gone.
+    let saved = crate::session::load_window_state();
+    assert!(
+        !saved.sessions.iter().any(|s| s.uuid == session_uuid),
+        "persisted state must not contain the closed managed workspace"
+    );
+    assert!(
+        saved.dismissed_runtime_ids.contains(runtime_id),
+        "persisted state must contain the dismissed runtime_id"
+    );
+
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
