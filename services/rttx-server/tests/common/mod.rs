@@ -199,9 +199,12 @@ pub async fn attach_rw(client: &mut TestClient, session_id: &[u8]) -> proto::Sna
             })),
         })
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(s)) => s,
-        other => panic!("expected Snapshot, got {other:?}"),
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(s)) => return s,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     }
 }
 
@@ -215,9 +218,12 @@ pub async fn attach_ro(client: &mut TestClient, session_id: &[u8]) -> proto::Sna
             })),
         })
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(s)) => s,
-        other => panic!("expected Snapshot, got {other:?}"),
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(s)) => return s,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     }
 }
 
