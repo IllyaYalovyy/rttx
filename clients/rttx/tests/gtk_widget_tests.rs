@@ -2321,3 +2321,46 @@ fn persistent_pane_header_title_combines_daemon_title_and_cwd() {
     pane.set_daemon_title("vim");
     assert_eq!(pane.title_label().label(), "vim : /var/log");
 }
+
+/// Regression for #574: the StackSwitcher (Places/Commands tab selector)
+/// must have a bottom margin so there is a visual gap between the tool
+/// selector and the content list below it.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn utility_switcher_has_bottom_margin() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    set_env("XDG_CONFIG_HOME", tmp.path());
+    set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.utility-switcher-gap-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = rttx::window::Window::new(&app);
+    window.set_default_size(1200, 800);
+    window.present();
+    pump_events(100);
+
+    let sidebar_box = &window.imp().utility_sidebar_box;
+    let mut found_switcher = false;
+    let mut child = sidebar_box.first_child();
+    while let Some(widget) = child {
+        if widget.is::<gtk4::StackSwitcher>() {
+            assert!(
+                widget.margin_bottom() > 0,
+                "StackSwitcher must have a bottom margin for visual separation from content"
+            );
+            found_switcher = true;
+            break;
+        }
+        child = widget.next_sibling();
+    }
+    assert!(found_switcher, "utility sidebar must contain a StackSwitcher");
+
+    window.close();
+    remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    remove_env("XDG_CONFIG_HOME");
+}
