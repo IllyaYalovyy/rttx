@@ -2482,14 +2482,8 @@ mod tests {
         let ws_runtime = Uuid::new_v4();
 
         let ((reader, writer), server_stream) = split_duplex_connection();
-        let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Local,
-            event_tx,
-            self_tx,
-            cmd_rx,
-            false,
-            10,
-        );
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
         // Simulate 5 prior reconnect cycles.
         actor.reconnect_attempt = 5;
         actor.tracked_workspaces.insert("ws-1".into(), ws_runtime.to_string());
