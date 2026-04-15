@@ -290,6 +290,7 @@ mod imp {
             utility_switcher.set_margin_start(12);
             utility_switcher.set_margin_end(12);
             utility_switcher.set_margin_top(8);
+            utility_switcher.set_margin_bottom(4);
 
             self.utility_sidebar_box.set_orientation(gtk4::Orientation::Vertical);
             self.utility_sidebar_box.append(&self.sidebar_search_entry);
