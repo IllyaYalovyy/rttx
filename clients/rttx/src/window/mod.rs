@@ -1015,6 +1015,14 @@ impl Window {
                     s.uses_managed_runtime()
                         .then(|| (s.runtime.endpoint.clone(), s.runtime.runtime_id.clone()))
                 });
+                // Remove the session and dismiss the runtime so save_state()
+                // (triggered by close_request) writes clean state to disk.
+                state.sessions.retain(|s| s.uuid != session_uuid);
+                if let Some((_, ref runtime_id)) = managed_runtime
+                    && let Some(runtime_id) = runtime_id
+                {
+                    state.dismissed_runtime_ids.insert(runtime_id.clone());
+                }
                 drop(state);
                 if let Some((endpoint, runtime_id)) = managed_runtime
                     && let Some(manager) = imp.connection_manager.borrow().as_ref()
