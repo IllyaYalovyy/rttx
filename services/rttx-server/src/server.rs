@@ -883,6 +883,9 @@ const COALESCE_MAX_BYTES: usize = 64 * 1024;
 /// How long to wait for additional PTY data after the first read.
 const COALESCE_WINDOW: Duration = Duration::from_millis(1);
 
+/// Warn when the server mutex is held longer than this in the PTY read loop.
+pub const MUTEX_HOLD_WARN_THRESHOLD: Duration = Duration::from_millis(10);
+
 /// Spawn a background task that reads PTY output and broadcasts Deltas.
 fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
@@ -925,6 +928,7 @@ fn spawn_pty_read_loop(
 
                             // Phase 1: hold lock for state mutation and handle collection.
                             let (new_cwd, new_title, pending_replies, pty_writer, senders) = {
+                                let lock_start = std::time::Instant::now();
                                 let mut s = server.lock().await;
                                 let (new_cwd, new_title, pending_replies) = if let Some(session) = s.sessions.get_mut(&session_id)
                                     && let Some(pane) = session.panes.get_mut(&pane_id)
@@ -949,6 +953,15 @@ fn spawn_pty_read_loop(
                                 };
                                 let senders = s.collect_session_senders(session_id);
                                 drop(s);
+                                let hold = lock_start.elapsed();
+                                if hold > MUTEX_HOLD_WARN_THRESHOLD {
+                                    tracing::warn!(
+                                        hold_ms = hold.as_millis() as u64,
+                                        pane = %pane_short,
+                                        session = %session_label,
+                                        "server mutex held too long in PTY read loop",
+                                    );
+                                }
                                 (new_cwd, new_title, pending_replies, pty_writer, senders)
                             };
                             // Lock released.
