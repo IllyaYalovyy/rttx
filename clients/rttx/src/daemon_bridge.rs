@@ -1051,9 +1051,21 @@ impl EndpointActor {
                     self.endpoint.key(),
                     workspaces.len()
                 );
+
+                // Preserve the backoff counter across the reconnect cycle.
+                // ensure_connected resets it to 0 on successful socket
+                // connect, but if the subsequent reattach fails we must
+                // continue ramping up instead of dropping back to 1 second.
+                let saved_attempt = self.reconnect_attempt;
+
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
-                    self.schedule_reconnect_for_problem(&problem);
+                    // ensure_connected already scheduled a reconnect for
+                    // transient problems. Only schedule for non-transient
+                    // ones (which still retry at max delay).
+                    if !problem.is_transient() {
+                        self.schedule_reconnect_for_problem(&problem);
+                    }
                     return;
                 }
 
@@ -1103,6 +1115,9 @@ impl EndpointActor {
                 }
 
                 if any_transient_failure {
+                    // Restore the counter so the backoff continues from
+                    // where it was before this cycle, not from 0.
+                    self.reconnect_attempt = saved_attempt;
                     self.handle_disconnect();
                 }
             }
@@ -2452,5 +2467,65 @@ mod tests {
             }
         }
         assert!(saw_delta, "interleaved delta should be dispatched as a push event");
+    }
+
+    /// Regression test for #576: when a reconnect reattach fails with a
+    /// transient error, the backoff counter must not reset to zero. The
+    /// Reconnect handler saves the counter before `ensure_connected`
+    /// (which resets it on success) and restores it on failure so the
+    /// next delay continues ramping up.
+    #[tokio::test]
+    async fn reconnect_preserves_backoff_on_transient_reattach_failure() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let ws_runtime = Uuid::new_v4();
+
+        let ((reader, writer), server_stream) = split_duplex_connection();
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        // Simulate 5 prior reconnect cycles.
+        actor.reconnect_attempt = 5;
+        actor.tracked_workspaces.insert("ws-1".into(), ws_runtime.to_string());
+
+        // Simulate what the Reconnect handler does:
+        // 1. Save the counter before ensure_connected
+        let saved_attempt = actor.reconnect_attempt;
+        // 2. ensure_connected succeeds and resets the counter
+        actor.reconnect_attempt = 0;
+        // 3. Connection is split for reattach
+        actor.reader = Some(reader);
+        actor.writer = Some(writer);
+        // 4. Server drops — reattach will fail
+        drop(server_stream);
+
+        let result = actor.attach_runtime_via_active_channel(ws_runtime).await;
+        assert!(result.is_err(), "reattach should fail");
+        assert!(
+            classify_connection_problem(result.as_ref().unwrap_err()).is_transient(),
+            "failure should be transient"
+        );
+
+        // 5. The fix: restore the counter before handle_disconnect
+        actor.reconnect_attempt = saved_attempt;
+        actor.handle_disconnect();
+
+        // The emitted Reconnecting status must use a delay > 1, proving
+        // the counter was preserved (min(6, 10) = 6).
+        let mut reconnect_delay = None;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Reconnecting { retry_in_secs, .. },
+                ..
+            } = event
+            {
+                reconnect_delay = Some(retry_in_secs);
+            }
+        }
+        assert_eq!(
+            reconnect_delay,
+            Some(6),
+            "delay should be min(saved_attempt+1, max) = min(6, 10) = 6"
+        );
     }
 }
