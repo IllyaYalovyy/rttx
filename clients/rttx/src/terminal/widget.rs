@@ -254,7 +254,10 @@ mod imp {
             let context_menu = gtk4::PopoverMenu::from_model(Some(&menu));
             context_menu.set_has_arrow(false);
             context_menu.set_halign(crate::terminal::CONTEXT_MENU_HALIGN);
-            context_menu.set_parent(obj.upcast_ref::<gtk4::Widget>());
+            // Parent to the VTE so set_pointing_to coordinates (which come
+            // from the gesture on the VTE) are in the correct coordinate
+            // space.
+            context_menu.set_parent(self.vte.upcast_ref::<gtk4::Widget>());
             self.context_menu.replace(Some(context_menu.clone()));
 
             let right_click = gtk4::GestureClick::new();

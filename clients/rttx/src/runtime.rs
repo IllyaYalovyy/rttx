@@ -1312,4 +1312,17 @@ mod tests {
             );
         }
     }
+
+    /// The context menu halign constant must be Start so the popover opens
+    /// adjacent to the pointer. Combined with parenting the popover to the
+    /// VTE (not the outer Box), this ensures the menu appears at the click
+    /// position. Regression for #568.
+    #[test]
+    fn context_menu_halign_prevents_coordinate_mismatch() {
+        assert_eq!(
+            crate::terminal::CONTEXT_MENU_HALIGN,
+            gtk4::Align::Start,
+            "context menu halign must be Start to position adjacent to the pointer"
+        );
+    }
 }

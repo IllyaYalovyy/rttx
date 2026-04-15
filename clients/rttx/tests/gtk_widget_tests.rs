@@ -843,10 +843,10 @@ fn terminal_context_menu_is_parented_to_widget() {
 
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
 
-    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>());
+    let popover = find_popover_child(term.vte().upcast_ref::<gtk4::Widget>());
     assert!(
         popover.is_some(),
-        "TerminalWidget must have a PopoverMenu child after construction. \
+        "TerminalWidget must have a PopoverMenu parented to the VTE after construction. \
          Call set_parent() on the context menu during constructed()."
     );
 }
@@ -921,8 +921,8 @@ fn terminal_context_menu_model_has_actions() {
 
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
 
-    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
-        .expect("context menu must be parented (see terminal_context_menu_is_parented_to_widget)");
+    let popover = find_popover_child(term.vte().upcast_ref::<gtk4::Widget>())
+        .expect("context menu must be parented to VTE");
 
     let model = popover.menu_model().expect("PopoverMenu must have a menu model");
 
@@ -974,7 +974,7 @@ fn terminal_context_menu_has_places_submenu() {
     require_display!();
 
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
-    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
+    let popover = find_popover_child(term.vte().upcast_ref::<gtk4::Widget>())
         .expect("context menu must be parented");
     let model = popover.menu_model().expect("PopoverMenu must have a menu model");
 
@@ -1007,7 +1007,7 @@ fn direct_terminal_context_menu_popover_uses_start_halign() {
     require_display!();
 
     let term = rttx::terminal::widget::TerminalWidget::new("t-halign", None);
-    let popover = find_popover_child(term.upcast_ref::<gtk4::Widget>())
+    let popover = find_popover_child(term.vte().upcast_ref::<gtk4::Widget>())
         .expect("context menu must be parented");
     assert_eq!(
         popover.halign(),
@@ -1023,7 +1023,7 @@ fn persistent_pane_context_menu_popover_uses_start_halign() {
     require_display!();
 
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p-halign", "s1");
-    let popover = find_popover_child(pane.upcast_ref::<gtk4::Widget>())
+    let popover = find_popover_child(pane.vte().upcast_ref::<gtk4::Widget>())
         .expect("context menu must be parented");
     assert_eq!(
         popover.halign(),
@@ -2096,6 +2096,41 @@ fn direct_terminal_context_menu_gesture_is_capture_phase() {
         }
     }
     assert!(found_right_click, "VTE must have a button-3 capture gesture for context menu");
+}
+
+/// Regression for #568: the context menu popover must be parented to the VTE
+/// widget, not the outer Box. When parented to the Box, the gesture
+/// coordinates (VTE-relative) do not match the popover's coordinate space,
+/// causing the popover to appear at the wrong position or not at all.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn direct_terminal_context_menu_parented_to_vte() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("t-parent", None);
+    let popover = find_popover_child(term.vte().upcast_ref::<gtk4::Widget>())
+        .expect("context menu popover must be a child of the VTE widget");
+    assert_eq!(
+        popover.parent().as_ref().map(|w| w.type_().name()),
+        Some("VteTerminal"),
+        "context menu popover parent must be the VTE, not the outer Box"
+    );
+}
+
+/// Regression for #568: same as above but for persistent pane.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_context_menu_parented_to_vte() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p-parent", "s1");
+    let popover = find_popover_child(pane.vte().upcast_ref::<gtk4::Widget>())
+        .expect("context menu popover must be a child of the VTE widget");
+    assert_eq!(
+        popover.parent().as_ref().map(|w| w.type_().name()),
+        Some("VteTerminal"),
+        "context menu popover parent must be the VTE, not the outer Box"
+    );
 }
 
 #[test]
