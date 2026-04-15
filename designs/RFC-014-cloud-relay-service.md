@@ -1,20 +1,43 @@
 # RFC-014: Cloud Relay Service
 
-| Field       | Value                                    |
-|-------------|------------------------------------------|
-| Status      | Draft                                    |
-| Authors     | Illya Yalovyy                            |
-| Supersedes  | -                                        |
+| Field         | Value                                    |
+|---------------|------------------------------------------|
+| Status        | Draft                                    |
+| Author(s)     | Illya Yalovyy                            |
+| Supersedes    | —                                        |
+| Superseded by | —                                        |
 
 ## Summary
 
 A cloud relay service that brokers connections between rttx clients and rttx-server daemons over the internet, eliminating the need for SSH, open inbound ports, or VPN infrastructure. Daemons establish outbound-only WebSocket connections to the relay; clients connect to the same relay and are routed to their registered daemons. End-to-end encryption ensures the relay cannot read terminal content, while OAuth2-based user authentication and device registration provide access control. The relay is a dumb pipe by design - it forwards opaque frames without understanding the rttx protocol.
 
-## Current implementation baseline (2026-03)
+## Current implementation baseline (2026-04)
 
+- The relay itself is unimplemented; this RFC remains a forward-looking design document.
 - Implemented endpoint types today are local Unix-socket and remote SSH stdio.
-- The monorepo consolidation and endpoint-manager work referenced below are now on `mainline`.
-- The relay itself is still unimplemented; this RFC remains a forward-looking design document.
+- The monorepo consolidation (RFC-010) is complete: client, daemon, and protocol live in one
+  workspace under `clients/rttx/`, `services/rttx-server/`, and `protocols/rttx-proto/`.
+- The `DaemonConnection::into_split()` refactor (#136) is implemented: `DaemonConnection` accepts
+  any `AsyncRead + AsyncWrite` stream and splits into `DaemonReader`/`DaemonWriter` for concurrent
+  use by the endpoint actor.
+- `EndpointConnectionManager` in `clients/rttx/src/daemon_bridge.rs` runs one async
+  `EndpointActor` per endpoint, multiplexing workspaces and runtimes on a shared transport.
+- The connection state machine (RFC-018) is implemented as `advance_connection_status` in
+  `clients/rttx/src/runtime.rs` with durable states: `Starting`, `Connecting`, `Connected`,
+  `Reconnecting`, `Blocked(ConnectionProblem)`, `Disconnected`, `Recovered`, `SessionMissing`.
+- `ConnectionProblem` classifies daemon/protocol errors into 7 variants; only
+  `DaemonUnavailable` is transient (auto-retryable).
+- The wire protocol is v2 (protobuf over 4-byte LE length-prefixed frames). Protocol v3 direction
+  is defined in RFC-021 with capability negotiation, structured command/event envelopes, and
+  explicit ownership/discovery semantics.
+- Workspace management v2 (RFC-016) provides the action-oriented creation model: `New`,
+  `Connect to Existing`, `New Direct`.
+- RFC-019 added `SessionMissing` state for workspaces whose daemon-side runtime has disappeared.
+- RFC-020 ensures the daemon answers terminal queries independently of client attachment.
+- RFC-022 proposes a v2 daemon state layout with per-session directories and schema versioning.
+- RFC-023 proposes a redesigned client-side configuration and state store.
+- No relay-related code exists in the codebase yet. Adding a relay endpoint type is a natural
+  extension of the existing `EndpointActor` architecture.
 
 ## Terminology
 
@@ -61,7 +84,7 @@ rttx currently supports two endpoint types: local (Unix socket to a co-located d
 
 A relay service inverts the connectivity model: daemons connect outbound to the relay (through any firewall that allows HTTPS), and clients connect to the same relay. The relay matches them based on authenticated identity. This eliminates all four limitations above while preserving the security properties that matter - the terminal content is end-to-end encrypted and the daemon's session ownership model is unchanged.
 
-**Why now**: the monorepo consolidation (RFC-010) places the client, server, and protocol in a single workspace, making coordinated transport changes practical. The `DaemonConnection::into_split()` refactor (rttx#136) already abstracts the transport boundary, and the `EndpointConnectionManager` supports per-endpoint actors - adding a relay endpoint type is a natural extension.
+**Why now**: the monorepo consolidation (RFC-010) places the client, server, and protocol in a single workspace, making coordinated transport changes practical. The `DaemonConnection::into_split()` refactor (#136) already abstracts the transport boundary — `DaemonConnection` accepts any `AsyncRead + AsyncWrite` stream, so adding a WebSocket-backed stream is a drop-in change. The `EndpointConnectionManager` runs one async actor per endpoint with independent connection lifecycle, and `RuntimeEndpoint` already distinguishes `Local` and `Remote { host }` — adding a `Relay { device_id }` variant is a natural extension.
 
 ## User Impact
 
@@ -139,7 +162,7 @@ The architecture explicitly supports promoting specific capabilities to the rela
 
 ### Security
 
-- R5: Terminal content is end-to-end encrypted using the Noise protocol (XX handshake pattern). The relay cannot decrypt payload content.
+- R5: Terminal content is end-to-end encrypted using the Noise protocol (IK handshake pattern). The relay cannot decrypt payload content.
 - R6: Users authenticate to the relay control plane via OAuth2/OIDC (GitHub, Google, or self-hosted provider). The control plane issues short-lived JWTs for relay API access.
 - R7: Daemons authenticate to the relay using device tokens issued during a user-initiated registration flow. Device tokens are long-lived but revocable.
 - R8: The relay enforces authorization: a client can only be routed to devices registered to the authenticated user (or explicitly shared with them).
@@ -351,7 +374,10 @@ After the handshake, both sides derive symmetric keys for encrypting all subsequ
 
 ### Transport Adapter
 
-The relay endpoint integrates into the existing transport abstraction. `DaemonConnection` already works over any `AsyncRead + AsyncWrite` stream. The WebSocket adapter provides this interface:
+The relay endpoint integrates into the existing transport abstraction. `DaemonConnection` in
+`clients/rttx/src/daemon.rs` already works over any `AsyncRead + AsyncWrite` stream — it accepts
+boxed trait objects and splits them into `DaemonReader`/`DaemonWriter` via `into_split()`. The
+WebSocket adapter provides this interface:
 
 ```
                 ┌──────────────────────────────────────┐
@@ -381,11 +407,23 @@ The relay endpoint integrates into the existing transport abstraction. `DaemonCo
 - `NoiseTransport`: encrypts outbound frames, decrypts inbound frames, handles Noise handshake on channel open
 - `DaemonReader` / `DaemonWriter`: unchanged from the existing interface; they see plaintext rttx protocol frames
 
-The daemon side uses the same layer stack in reverse. The `rttx-server` binary gains a `relay` subcommand (alongside `start`, `stop`, `attach-stdio`) that connects outbound to the relay and serves clients through it.
+The daemon side uses the same layer stack in reverse. The `rttx-server` binary gains a `relay` subcommand (alongside `start`, `stop`, `attach-stdio`) that connects outbound to the relay and serves clients through it. This mirrors the existing `StdioStream` in `services/rttx-server/src/ipc.rs` which wraps stdin/stdout as an `AsyncRead + AsyncWrite` stream for SSH tunneling.
 
 ### Endpoint Configuration
 
-A relay endpoint in the GUI's workspace configuration:
+A relay endpoint in the GUI's workspace configuration. The current `RuntimeEndpoint` enum in
+`clients/rttx/src/runtime.rs` has `Local` and `Remote { host }` variants; the relay adds a
+third variant:
+
+```rust
+pub enum RuntimeEndpoint {
+    Local,
+    Remote { host: String },
+    Relay { relay_url: String, device_id: String, name: String },
+}
+```
+
+Equivalent TOML representation for configuration:
 
 ```
 [[endpoints]]
@@ -395,11 +433,14 @@ device_id = "a1b2c3d4-..."
 name = "production-server"
 ```
 
-The client stores OAuth2 credentials in the system keyring, keyed by relay URL. Device token on the daemon side is stored in `~/.config/rttx-server/relay.json`.
+The client stores OAuth2 credentials in the system keyring, keyed by relay URL. Device token on the daemon side is stored in `~/.config/rttx-server/relay.json`. Note: RFC-023 (client configuration state store) may change the client-side storage location; RFC-022 (daemon state storage) may change the daemon-side storage location. The relay credential storage should align with whichever storage redesign lands first.
 
 ### Connection State Machine
 
-The relay endpoint follows the existing `ConnectionStatus` state machine with relay-specific transitions:
+The relay endpoint extends the existing `ConnectionStatus` state machine (RFC-018) with
+relay-specific transitions. The current implemented states are `Starting`, `Connecting`,
+`Connected`, `Reconnecting`, `Blocked(ConnectionProblem)`, `Disconnected`, `Recovered`, and
+`SessionMissing`. The relay adds a `Handshaking` state for the Noise key exchange:
 
 ```
                 ┌──────────┐
@@ -413,7 +454,7 @@ The relay endpoint follows the existing `ConnectionStatus` state machine with re
                      │ CHANNEL_READY                        │ backoff + retry
                      ▼                                      │
               ┌──────────────┐                              │
-              │  Handshaking │──── Noise fails ────► Disconnected
+              │  Handshaking │──── Noise fails ────► Blocked(problem)
               └──────┬───────┘
                      │ Noise transport ready
                      ▼
@@ -423,7 +464,10 @@ The relay endpoint follows the existing `ConnectionStatus` state machine with re
                                                             └────────┘
 ```
 
-`Handshaking` is a new state specific to relay endpoints, covering the Noise handshake after the relay channel is established but before rttx protocol messages can flow.
+`Handshaking` is a new state specific to relay endpoints, covering the Noise handshake after the
+relay channel is established but before rttx protocol messages can flow. Failures during
+handshake transition to `Blocked(ConnectionProblem)` rather than `Disconnected`, since a Noise
+failure likely indicates a key mismatch or security issue requiring user attention.
 
 ### Self-Hosted Deployment
 
@@ -472,22 +516,29 @@ Minimum self-hosted requirements: a single VM or container with a public IP and 
 
 ## Goals Alignment
 
-| Principle (RFC-001)              | Alignment |
-|----------------------------------|-----------|
-| P1: Native GNOME integration     | Unchanged; relay is a transport concern, not a UI concern |
-| P2: Rock-solid stability         | Relay is optional and additive; existing SSH and local endpoints are unaffected. Failure mode is clean: relay down = can't reach relay endpoints, everything else works |
-| P3: Workflow context over layout | Relay endpoints appear alongside local/SSH endpoints in the workspace model; no workflow changes |
-| P4: Composable building blocks   | The relay is a pure transport primitive. E2E encryption, auth, and frame routing are independent layers that compose |
-| P5: Practical tools              | Solves a real pain point (accessing hosts behind NAT/firewalls) without requiring VPN or bastion infrastructure |
+| Principle (RFC-001)              | Alignment | Status |
+|----------------------------------|-----------|--------|
+| P1: Native GNOME integration     | Unchanged; relay is a transport concern, not a UI concern | N/A — relay is unimplemented; existing GNOME integration is unaffected |
+| P2: Rock-solid stability         | Relay is optional and additive; existing SSH and local endpoints are unaffected. Failure mode is clean: relay down = can't reach relay endpoints, everything else works | N/A — the additive design is validated by the existing `EndpointActor` architecture where each endpoint has independent lifecycle |
+| P3: Workflow context over layout | Relay endpoints appear alongside local/SSH endpoints in the workspace model; no workflow changes | N/A — `RuntimeEndpoint` already distinguishes endpoint types; adding a relay variant preserves the model |
+| P4: Composable building blocks   | The relay is a pure transport primitive. E2E encryption, auth, and frame routing are independent layers that compose | N/A — the layered transport adapter design (RelayWebSocket → NoiseTransport → DaemonReader/Writer) follows the existing `DaemonConnection` abstraction |
+| P5: Practical tools              | Solves a real pain point (accessing hosts behind NAT/firewalls) without requiring VPN or bastion infrastructure | N/A — unimplemented |
 
 ## Development Plan
+
+All phases are unimplemented. The prerequisite infrastructure (monorepo, endpoint actor
+architecture, transport abstraction, connection state machine) is complete on `mainline`.
 
 ### Phase 1: WebSocket Transport Adapter
 - [ ] Implement `RelayWebSocket` layer: WebSocket client with envelope serialization/deserialization
 - [ ] Implement `RelayWebSocket` on daemon side with outbound connection and reconnection
-- [ ] Add `relay` endpoint type to `EndpointConnectionManager`
-- [ ] Add `Handshaking` state to `ConnectionStatus`
+- [ ] Add `Relay { device_id }` variant to `RuntimeEndpoint` and wire it through `EndpointConnectionManager`
+- [ ] Add `Handshaking` state to `ConnectionStatus` (extends RFC-018 state machine)
 - [ ] Integration test: client ↔ in-process relay ↔ daemon, plaintext (no encryption), verify rttx protocol frames pass through
+
+*Prerequisite*: the `DaemonConnection` abstraction (#136, implemented) and `EndpointActor`
+architecture already support pluggable transports. Protocol v3 (RFC-021) may affect the
+handshake and capability negotiation if it lands first.
 
 ### Phase 2: Relay Service (Data Plane)
 - [ ] Implement `rttx-relay` binary with WebSocket listener
@@ -529,21 +580,34 @@ Minimum self-hosted requirements: a single VM or container with a public IP and 
 
 **Dependencies**: Phase 1 → Phase 2 → Phase 3 → Phase 4. Phase 5 depends on Phase 3. Phase 6 is parallel to Phase 4/5.
 
+**Interactions with other RFCs**: Protocol v3 (RFC-021) may change the handshake and framing
+format. Daemon state storage v2 (RFC-022) may affect how device registration credentials are
+persisted on the daemon side. Client configuration store (RFC-023) may affect where relay
+endpoint configuration and TOFU keys are stored on the client side.
+
 ## Open Questions
 
-- [ ] Q1: **Noise IK vs. XX**: IK saves a round trip but requires the client to know the daemon's public key before the handshake. If the control plane is compromised and serves a wrong key, the client would connect to an impersonator. Is TOFU verification sufficient, or should we support an out-of-band key verification mechanism (QR code, fingerprint comparison)?
-- [ ] Q2: **Multi-region routing**: for the managed relay, should the data plane support regional endpoints with automatic routing (client connects to nearest region, relay routes to daemon's region)? Or is single-region sufficient for v1?
-- [ ] Q3: **Device sharing**: should a user be able to share a device with another user (granting relay access to someone else's daemon)? This has significant UX and security implications. Likely a post-v1 concern but worth considering in the authorization model.
-- [ ] Q4: **Connection multiplexing**: should a single WebSocket tunnel carry multiple channels (to different devices), or one tunnel per channel? Multiplexing is more efficient but adds complexity to the envelope routing.
-- [ ] Q5: **Relay protocol versioning**: the envelope format includes a version byte. What is the compatibility contract? Must the relay support older envelope versions, or can it require clients/daemons to upgrade?
-- [ ] Q6: **Daemon auto-registration**: should `rttx-server` support a mode where it automatically registers with a pre-configured relay on first startup (using a provisioning token), for fleet deployment scenarios?
+- [ ] Q1: **Noise IK vs. XX**: IK saves a round trip but requires the client to know the daemon's public key before the handshake. If the control plane is compromised and serves a wrong key, the client would connect to an impersonator. Is TOFU verification sufficient, or should we support an out-of-band key verification mechanism (QR code, fingerprint comparison)? *Progress*: the TOFU model is consistent with SSH's `known_hosts` approach, which rttx users are already familiar with. An out-of-band verification option (fingerprint display on daemon, manual comparison on client) is low-cost to add alongside TOFU and would strengthen the security story for high-value hosts.
+- [ ] Q2: **Multi-region routing**: for the managed relay, should the data plane support regional endpoints with automatic routing (client connects to nearest region, relay routes to daemon's region)? Or is single-region sufficient for v1? *Progress*: single-region is sufficient for v1 and self-hosted deployments. Multi-region can be added later as a managed-service optimization without protocol changes — the client already discovers the data plane URL from the control plane, so regional routing is a control plane concern.
+- [ ] Q3: **Device sharing**: should a user be able to share a device with another user (granting relay access to someone else's daemon)? This has significant UX and security implications. Likely a post-v1 concern but worth considering in the authorization model. *Progress*: the daemon's single-writer model (RFC-013) means sharing a device grants terminal access to all runtimes on that host. This is a significant security decision that should be deferred to post-v1 but the authorization model should not preclude it.
+- [ ] Q4: **Connection multiplexing**: should a single WebSocket tunnel carry multiple channels (to different devices), or one tunnel per channel? Multiplexing is more efficient but adds complexity to the envelope routing. *Progress*: the envelope format already includes a `channel_id` field, so multiplexing is supported at the wire level. The initial implementation can use one tunnel per channel for simplicity and add multiplexing as an optimization later.
+- [ ] Q5: **Relay protocol versioning**: the envelope format includes a version byte. What is the compatibility contract? Must the relay support older envelope versions, or can it require clients/daemons to upgrade? *Progress*: RFC-021 (protocol v3) introduces capability negotiation for the rttx protocol. The relay envelope version should follow a similar pattern: the relay advertises supported versions during WebSocket upgrade, and clients/daemons select the highest common version.
+- [ ] Q6: **Daemon auto-registration**: should `rttx-server` support a mode where it automatically registers with a pre-configured relay on first startup (using a provisioning token), for fleet deployment scenarios? *Progress*: this is a post-v1 concern. The initial implementation should require explicit `rttx-server register --relay <url>` invocation. Auto-registration can be added later with a provisioning token mechanism.
 
 ## References
 
 - [RFC-001: Project Manifesto](RFC-001-manifesto.md)
 - [RFC-010: Maintainability Refactor](RFC-010-maintainability-refactor.md)
-- [RFC-013: Persistent Host Sessions](RFC-013-persistent-host-sessions.md)
+- [RFC-013: Daemon-Backed Workspaces and Runtimes](RFC-013-persistent-host-sessions.md)
+- [RFC-016: Workspace Management v2](RFC-016-workspace-management-v2.md) — action-oriented workspace creation model
+- [RFC-018: Workspace Connection State Machine](RFC-018-workspace-connection-state-machine.md) — the state machine this RFC extends with `Handshaking`
+- [RFC-019: Missing Session Handling](RFC-019-missing-session-handling.md) — `SessionMissing` state for disappeared runtimes
+- [RFC-020: Terminal Response Ownership](RFC-020-terminal-response-ownership.md) — daemon answers terminal queries independently of client
+- [RFC-021: Client/Server Protocol v3](RFC-021-client-server-protocol-v3.md) — protocol evolution that may affect relay handshake and framing
+- [RFC-022: Daemon State Storage](RFC-022-daemon-state-storage.md) — may affect device credential persistence on daemon side
+- [RFC-023: Client Configuration State Store](RFC-023-client-configuration-state-store.md) — may affect relay endpoint and TOFU key storage on client side
 - [Noise Protocol Framework](https://noiseprotocol.org/noise.html)
 - [Noise IK Pattern](https://noiseprotocol.org/noise.html#interactive-handshake-patterns-fundamental)
-- [VS Code Remote Tunnels](https://code.visualstudio.com/docs/remote/tunnels) - prior art for relay-based remote development
-- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) - prior art for outbound-only connectivity
+- [VS Code Remote Tunnels](https://code.visualstudio.com/docs/remote/tunnels) — prior art for relay-based remote development
+- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) — prior art for outbound-only connectivity
+- [Tracking issue](https://github.com/IllyaYalovyy/rttx/issues/604)
