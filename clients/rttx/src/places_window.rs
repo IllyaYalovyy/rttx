@@ -35,14 +35,13 @@ pub fn show_form(parent: &Window, place: Option<&Place>) {
     let status_label = form.status_label.clone();
     let parent_for_save = parent.clone();
     form.save_button.connect_clicked(move |_| {
-        let place =
-            match build_place(&name_row, &path_row, &host_picker, existing_uuid.clone()) {
-                Ok(p) => p,
-                Err(msg) => {
-                    status_label.set_text(&msg);
-                    return;
-                }
-            };
+        let place = match build_place(&name_row, &path_row, &host_picker, existing_uuid.clone()) {
+            Ok(p) => p,
+            Err(msg) => {
+                status_label.set_text(&msg);
+                return;
+            }
+        };
 
         let mut items = places::load();
         if let Some(existing) = items.iter_mut().find(|i| i.uuid == place.uuid) {

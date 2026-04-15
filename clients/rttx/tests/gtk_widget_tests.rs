@@ -2451,10 +2451,8 @@ fn host_tag_picker_unrecognized_tag_not_checked() {
     require_display!();
 
     // If selected_tags contains a host not in the saved list, it won't appear
-    let picker = rttx::host_tag_picker::HostTagPicker::with_hosts(
-        &[],
-        &["unknown.example.com".to_string()],
-    );
+    let picker =
+        rttx::host_tag_picker::HostTagPicker::with_hosts(&[], &["unknown.example.com".to_string()]);
 
     // Only local is in the picker, and it's not selected
     assert!(picker.selected_tags().is_empty());

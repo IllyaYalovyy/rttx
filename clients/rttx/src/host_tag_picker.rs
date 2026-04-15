@@ -69,11 +69,8 @@ impl HostTagPicker {
 
     fn add_row(group: &adw::PreferencesGroup, key: &str, label: &str) -> gtk4::CheckButton {
         let check = gtk4::CheckButton::new();
-        let row = adw::ActionRow::builder()
-            .title(label)
-            .subtitle(key)
-            .activatable_widget(&check)
-            .build();
+        let row =
+            adw::ActionRow::builder().title(label).subtitle(key).activatable_widget(&check).build();
         row.add_prefix(&check);
         group.add(&row);
         check
