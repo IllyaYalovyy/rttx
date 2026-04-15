@@ -774,17 +774,11 @@ mod tests {
     fn pane_description_uses_cwd_not_combined_header_title() {
         // Even if the pane header shows "bash : /tmp", the sidebar should
         // show just the CWD path.
-        assert_eq!(
-            pane_description(Some("bash : /tmp"), Some("/tmp")),
-            Some("/tmp".into())
-        );
+        assert_eq!(pane_description(Some("bash : /tmp"), Some("/tmp")), Some("/tmp".into()));
         // When CWD is absent, the combined title is not generic and would
         // be shown — but this scenario doesn't arise in practice because
         // the sidebar reads CWD directly from the pane.
-        assert_eq!(
-            pane_description(Some("bash : /tmp"), None),
-            Some("bash : /tmp".into())
-        );
+        assert_eq!(pane_description(Some("bash : /tmp"), None), Some("bash : /tmp".into()));
     }
 
     #[test]
