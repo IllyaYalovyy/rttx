@@ -184,6 +184,33 @@ jobs:
             coverage/lcov.info
             coverage/summary.txt
 
+  memory-gate:
+    name: Memory profiling gate
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install toolchain and dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkg-config rustup \
+            protobuf-compiler protobuf-devel
+
+      - uses: actions/checkout@v5
+
+      - name: Setup Rust
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: |
+          rustup-init -y --default-toolchain stable
+          echo "/usr/local/cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Run memory profiling gate
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+        run: bash .github/scripts/run-memory-gate.sh
+
   manifest:
     name: Flatpak manifest
     runs-on: ubuntu-latest
