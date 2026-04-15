@@ -3,6 +3,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::form_dialog::FormDialog;
+use crate::host_tag_picker::HostTagPicker;
 use crate::places::{self, Place};
 use crate::window::Window;
 
@@ -13,34 +14,35 @@ pub fn show_form(parent: &Window, place: Option<&Place>) {
 
     let name_row = adw::EntryRow::builder().title("Name").build();
     let path_row = adw::EntryRow::builder().title("Path").build();
-    let host_tags_row =
-        adw::EntryRow::builder().title("Host tags (comma-separated, empty = global)").build();
+
+    let selected_tags = place.map_or_else(Vec::new, |p| p.host_tags.clone());
+    let host_picker = HostTagPicker::new(&selected_tags);
 
     let group = adw::PreferencesGroup::new();
     group.add(&name_row);
     group.add(&path_row);
-    group.add(&host_tags_row);
 
     form.content_box.append(&group);
+    form.content_box.append(&host_picker.group);
     form.finish_layout();
 
     if let Some(p) = place {
         name_row.set_text(&p.name);
         path_row.set_text(&p.path);
-        host_tags_row.set_text(&p.host_tags.join(", "));
     }
 
     let dialog = form.dialog.clone();
     let status_label = form.status_label.clone();
     let parent_for_save = parent.clone();
     form.save_button.connect_clicked(move |_| {
-        let place = match build_place(&name_row, &path_row, &host_tags_row, existing_uuid.clone()) {
-            Ok(p) => p,
-            Err(msg) => {
-                status_label.set_text(&msg);
-                return;
-            }
-        };
+        let place =
+            match build_place(&name_row, &path_row, &host_picker, existing_uuid.clone()) {
+                Ok(p) => p,
+                Err(msg) => {
+                    status_label.set_text(&msg);
+                    return;
+                }
+            };
 
         let mut items = places::load();
         if let Some(existing) = items.iter_mut().find(|i| i.uuid == place.uuid) {
@@ -62,7 +64,7 @@ pub fn show_form(parent: &Window, place: Option<&Place>) {
 fn build_place(
     name_row: &adw::EntryRow,
     path_row: &adw::EntryRow,
-    host_tags_row: &adw::EntryRow,
+    host_picker: &HostTagPicker,
     existing_uuid: Option<String>,
 ) -> Result<Place, String> {
     let name = name_row.text().trim().to_string();
@@ -79,6 +81,6 @@ fn build_place(
     if let Some(uuid) = existing_uuid {
         place.uuid = uuid;
     }
-    place.host_tags = crate::commands_window::parse_host_tags(&host_tags_row.text());
+    place.host_tags = host_picker.selected_tags();
     Ok(place)
 }
