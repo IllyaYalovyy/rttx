@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted                |
+| Status        | Implemented             |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -16,24 +16,38 @@ library; failures at the Rust/C boundary produce segfaults and process aborts, n
 The test suite is organized around specific crash categories and is designed to catch each class
 of GTK-Rust failure as a failing test before it reaches a user.
 
-## Current implementation snapshot (2026-03)
+## Current implementation snapshot (2026-04)
 
-- The project is now a monorepo, so the live test surfaces span:
-  - `clients/rttx/` for GTK/unit/integration/UI tests
-  - `services/rttx-server/` for daemon/unit/integration tests
-  - `protocols/rttx-proto/` for protocol framing/unit tests
-- Known GTK-heavy suites now run as ignored tests by default, so plain `cargo test --workspace`
-  remains a supported baseline command without crashing in the stock Rust harness.
-- The CI-equivalent local command remains `bash .github/scripts/run-quality-tests.sh`, which still
-  provides the broader curated matrix and isolated GTK client test selection.
-- Pull request CI now includes a diff-aware runtime behavior gate for tracked daemon/runtime/UI
-  reconciliation paths. Those changes must add both a pure-state regression test and an
-  integration or black-box regression test.
-- `run_ui_tests.sh` and the AT-SPI suite exist and run locally/in CI-style environments, but the
-  nightly GitHub job is still tracked separately.
-- The highest-value remaining testing gaps are now deeper client+daemon end-to-end recovery
-  coverage and the daemon adversarial test backlog now tracked in the monorepo issue set
-  (`#144`–`#153`).
+- The project is a monorepo with test surfaces spanning:
+  - `clients/rttx/` — GTK/unit/integration/UI tests (25+ unit test modules, 16 integration test
+    files, 8 AT-SPI behavioral UI tests)
+  - `services/rttx-server/` — daemon unit/integration tests (13 unit test modules, 40+
+    integration test files)
+  - `protocols/rttx-proto/` — protocol framing/unit tests
+- GTK-heavy suites run as `#[ignore]` tests so plain `cargo test --workspace` stays reliable.
+  The quality script (`run-quality-tests.sh`) runs each ignored test in its own process with
+  Broadway.
+- GTK client tests are deterministic under the plain Rust harness (#222 resolved). The
+  `std::sync::Once` + `catch_unwind` pattern ensures GTK initialization is main-thread-only.
+- Pull request CI includes:
+  - **Runtime behavior gate** — diff-aware policy enforcing both a pure-state regression test and
+    an integration or behavioral regression test for tracked daemon/runtime/UI reconciliation
+    paths
+  - **Quality tests** — full Clippy, library, binary, integration, and doc test matrix via
+    Broadway
+  - **UI behavioral tests** — AT-SPI2 suite on headless Weston, running on every PR
+  - **Coverage reporting** — `cargo-llvm-cov` for rttx-server and rttx-proto (GTK client excluded
+    due to display server requirements)
+  - **Memory profiling gate** — application-level leak detection via diagnostics protocol
+  - **Flatpak manifest validation**
+- The daemon adversarial test backlog (#144–#153) is fully resolved: negative protocol input,
+  persistence failure injection, ownership races, recovery matrix, scale/stress, PTY chaos,
+  persistence compatibility, stdio failure paths, lifecycle leak loops, and shared test harness
+  utilities are all implemented.
+- Client+daemon end-to-end integration coverage (#185) is implemented with black-box GTK tests
+  for restore, restart, and selection sync.
+- The remaining testing gap is full C4 (signal doubling) and C5 (GLib source leak) crash taxonomy
+  coverage, tracked in #324.
 
 ---
 
@@ -123,28 +137,59 @@ violated?" Tests that can't answer that question don't belong in the suite.
 
 ### Test layers
 
-**Unit tests** (`clients/rttx/src/session/layout.rs`, `clients/rttx/src/config.rs`,
-`clients/rttx/src/color_scheme.rs`, `clients/rttx/src/preferences.rs`,
-`services/rttx-server/src/session.rs`, `services/rttx-server/src/protocol.rs`)
-— data model correctness, serialization, tree invariants. No GTK required.
+**Unit tests** (`clients/rttx/src/**`, `services/rttx-server/src/**`, `protocols/rttx-proto/src/`)
+— data model correctness, serialization, tree invariants, daemon state, protocol framing. No GTK
+required. Client modules with inline tests include `session/layout.rs`, `session/state.rs`,
+`session/recovery.rs`, `config.rs`, `color_scheme.rs`, `preferences.rs`, `commands.rs`,
+`places.rs`, `host.rs`, `workspace_state.rs`, `runtime.rs`, `daemon.rs`, `daemon_bridge.rs`,
+`sidebar.rs`, `terminal/links.rs`, `terminal/paste_guard.rs`, `terminal/mod.rs`,
+`terminal/widget.rs`, `terminal/persistent_widget.rs`, `window/mod.rs`,
+`connect_existing_dialog.rs`, `new_workspace_dialog.rs`, and `host_tag_picker.rs`. Server modules
+with inline tests include `session.rs`, `protocol.rs`, `serialization.rs`, `server.rs`, `pane.rs`,
+`screen.rs`, `pty.rs`, `ipc.rs`, `diagnostics.rs`, `logging.rs`, `single_instance.rs`,
+`os/unix.rs`, and `main.rs`.
 
-**Property-based tests** (`proptest`) — randomized layout trees with guaranteed UUID uniqueness.
-Found a real duplicate-UUID bug in early development.
+**Property-based tests** (`proptest`) — randomized layout trees with guaranteed UUID uniqueness
+(`clients/rttx/src/session/layout.rs`). Found a real duplicate-UUID bug in early development.
 
-**Integration tests** (`clients/rttx/tests/session_lifecycle.rs`,
-`clients/rttx/tests/color_scheme_compat.rs`, `services/rttx-server/tests/*.rs`) — end-to-end
-persistence, Tilix color scheme compatibility, daemon lifecycle, reconnect, ownership, revisions,
-and runtime policy coverage.
+**Integration tests** — end-to-end persistence, compatibility, daemon lifecycle, and runtime
+behavior:
+
+- *Client* (`clients/rttx/tests/`): `session_lifecycle.rs`, `color_scheme_compat.rs`,
+  `commands_integration.rs`, `places_integration.rs`, `preferences_integration.rs`,
+  `reconnect_layout_stability.rs`, `reconnect_scheduling.rs`, `retry_connection.rs`,
+  `ssh_connection.rs`, `stale_terminal_cleanup.rs`, `vte_parity.rs`
+- *Daemon* (`services/rttx-server/tests/`): PTY I/O and chaos (`pty_basic.rs`, `pty_io.rs`,
+  `pty_chaos.rs`, `pty_coalesce.rs`), lifecycle (`session_lifecycle.rs`, `client_lifecycle.rs`,
+  `lifecycle_leaks.rs`, `lifecycle_logging.rs`, `shutdown.rs`, `clean_sessions.rs`), persistence
+  (`serialization.rs`, `persistence_compat.rs`, `persistence_failures.rs`, `scrollback.rs`,
+  `exited_pane_scrollback.rs`), reconnect and recovery (`reconnect.rs`, `reconstruction.rs`,
+  `recovery_matrix.rs`, `gui_restore_flow.rs`), ownership and concurrency (`ownership.rs`,
+  `ownership_races.rs`, `lock_free_broadcast.rs`, `writer_priority.rs`, `bounded_channels.rs`),
+  protocol and transport (`negative_protocol.rs`, `stdio_transport.rs`, `stdio_failures.rs`,
+  `managed_input_parity.rs`, `dsr_response.rs`, `dsr_stripped_from_client.rs`,
+  `device_attributes.rs`, `colorfgbg.rs`), runtime policy (`runtime_policy.rs`,
+  `make_pane_persistent.rs`), scale and stress (`scale_stress.rs`, `buffer_capacity.rs`),
+  diagnostics and observability (`diagnostics.rs`, `memory_cleanup.rs`,
+  `mutex_hold_instrumentation.rs`, `log_context.rs`, `logging_integration.rs`, `heartbeat.rs`,
+  `inventory.rs`), and features (`split_cwd.rs`, `cwd_propagation.rs`, `title_propagation.rs`,
+  `shell_editing.rs`, `single_instance.rs`)
 
 **GTK contract tests** (`clients/rttx/tests/gtk_boundary_contracts.rs`) — validate data-model
-assumptions that `window.rs` relies on. These are the C1/C6/C7 defenses: UUID uniqueness, terminal
-count consistency, split/remove invariants, serialization roundtrips, backward compatibility.
+assumptions that `window.rs` relies on. These are the C1/C4/C6/C7 defenses: UUID uniqueness,
+terminal count consistency, split/remove invariants, serialization roundtrips, backward
+compatibility, signal-doubling prevention on widget reuse, and active-index bounds clamping.
 
 **GTK widget tests** (`clients/rttx/tests/gtk_widget_tests.rs`,
-`clients/rttx/tests/layout_widget_tests.rs`, `clients/rttx/tests/terminal_lifecycle_tests.rs`) —
-instantiate real GTK4 widgets via broadway backend. Test
-exact Stack→Paned→unparent→rebuild sequences, GObject ref-count survival, and Paned position
-application after allocation.
+`clients/rttx/tests/layout_widget_tests.rs`, `clients/rttx/tests/terminal_lifecycle_tests.rs`,
+`clients/rttx/tests/host_sidebar_tests.rs`) — instantiate real GTK4 widgets via broadway backend.
+Test exact Stack→Paned→unparent→rebuild sequences, GObject ref-count survival, Paned position
+application after allocation, and host sidebar widget tree structure.
+
+**Behavioral UI tests** (`clients/rttx/tests/ui/`) — Python + AT-SPI2 tests running on headless
+Weston. Cover launch, split, zoom, sidebar toggling, sidebar content, workspace close/reorder,
+workspace rename, and managed workspace black-box behavior. These catch silent functional failures
+invisible to Rust test layers.
 
 ### Headless execution
 
@@ -152,10 +197,19 @@ application after allocation.
 bash .github/scripts/run-quality-tests.sh
 ```
 
+The quality script starts a Broadway display server, then runs each `#[ignore]` GTK test in its
+own `cargo test` invocation for process isolation. Non-GTK tests run normally.
+
 For focused local client-only runs, `GDK_BACKEND=broadway GTK_A11Y=none cargo test -p rttx`
 remains useful. Tests that run on non-GTK threads are skipped via `std::sync::Once` +
 `std::panic::catch_unwind` pattern (not `OnceLock<bool>`, which would dispatch GTK calls from
 non-main threads).
+
+Behavioral UI tests require Weston and AT-SPI2:
+
+```bash
+cargo build -p rttx && ./run_ui_tests.sh
+```
 
 ### Coverage map
 
@@ -164,18 +218,19 @@ non-main threads).
 | C1 — parent/child invariant | ✓ | ✓ | — |
 | C2 — RefCell re-entrancy | fix in code | — | — |
 | C3 — use-after-free | ✓ | ✓ | — |
-| C4 — signal doubling | — | — | — |
+| C4 — signal doubling | partial | — | — |
 | C5 — GLib source leaks | — | — | — |
-| C6 — index out of bounds | partial | — | — |
+| C6 — index out of bounds | ✓ | — | — |
 | C7 — duplicate UUID | ✓ | — | ✓ |
 
-### Highest-value remaining gaps
+C4 has a contract test verifying that widget reuse does not double signal handlers. C5 and full
+C4 coverage (rebuild cycles, reconnect flows) remain open (#324). C6 now has full contract
+coverage including active-index bounds clamping and empty-session-list deserialization.
 
-- **GAP1** — Make the client GTK suite deterministic under the plain Rust harness, not just the
-  curated Broadway quality script
-- **GAP2** — Add more real client+daemon restart/reconcile coverage now that both live in one repo
-- **GAP3** — Expand daemon adversarial tests: malformed protocol input, persistence failure
-  injection, race-heavy ownership, stress/load, and leak-oriented lifecycle loops
+### Highest-value remaining gap
+
+- **C4/C5 crash taxonomy completion** — Full signal-doubling and GLib-source-leak regression tests
+  across rebuild, reconnect, and destroy flows (#324)
 
 ---
 
@@ -183,25 +238,29 @@ non-main threads).
 
 | Goal | How addressed |
 | --- | --- |
-| G1 — crash class coverage | Taxonomy C1–C7; each category has dedicated test layer |
+| G1 — crash class coverage | Taxonomy C1–C7; each category has dedicated test layer. C4 partial, C5 open (#324) |
 | G2 — requirement validation | Tests assert user-visible invariants; tautological tests explicitly excluded |
-| G3 — headless CI | Broadway GDK backend; `Once` + `catch_unwind` pattern for thread safety |
+| G3 — headless CI | Broadway GDK backend for widget tests; Weston for AT-SPI behavioral tests |
 
 ---
 
 ## Development Plan
 
 - [x] Unit + proptest suite for layout model
-- [x] GTK contract tests (C1, C3, C7, C6 partial)
+- [x] GTK contract tests (C1, C3, C6, C7)
 - [x] GTK widget tests (C1, C3)
 - [x] Paned position regression tests (nested split goes dark)
 - [x] Active-index bounds contract coverage
 - [x] Activity indicator timer regression coverage
 - [x] Nested split ratio restore regression coverage
-- [x] Runtime-affecting PR gate requiring pure-state plus behavior-layer evidence
+- [x] Runtime-affecting PR gate requiring pure-state plus behavior-layer evidence (#202)
 - [x] AT-SPI behavioral UI tests running in CI on every PR (Weston headless)
-- [ ] Deterministic plain-harness GTK execution
-- [ ] Deeper client+daemon restart/reconcile integration coverage
-- [ ] Expanded daemon adversarial test matrix
+- [x] Deterministic plain-harness GTK execution (#222)
+- [x] Client+daemon restart/reconcile integration coverage (#185)
+- [x] Daemon adversarial test matrix (#144–#153)
+- [x] Coverage reporting CI job (`cargo-llvm-cov`)
+- [x] Memory profiling CI gate (diagnostics-based leak detection)
+- [x] Signal-doubling prevention contract test (C4 partial)
+- [ ] Full C4/C5 crash taxonomy coverage (#324)
 
 ---
