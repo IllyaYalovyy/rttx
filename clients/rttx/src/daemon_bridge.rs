@@ -2215,7 +2215,7 @@ mod tests {
             "SSH timeout should be at least 10s to allow for slow networks"
         );
         assert!(
-            SSH_CONNECT_TIMEOUT <= Duration::from_mins(1),
+            SSH_CONNECT_TIMEOUT <= Duration::from_secs(60),
             "SSH timeout should not exceed 60s to avoid blocking the actor too long"
         );
     }
