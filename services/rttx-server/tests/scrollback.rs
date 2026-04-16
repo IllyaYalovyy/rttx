@@ -236,20 +236,14 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             session_id: session_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(
-                b"printf '\\033[6n' && echo DSR_STRIP_MARKER\n",
-            ),
+            data: bytes::Bytes::from_static(b"printf '\\033[6n' && echo DSR_STRIP_MARKER\n"),
         })),
     };
     client.send(&input).await;
 
     // Wait for serialization tick to flush scrollback.
-    wait_for_state_containing(
-        &tmp.path().join("cache"),
-        "dsr-strip-test",
-        Duration::from_secs(10),
-    )
-    .await;
+    wait_for_state_containing(&tmp.path().join("cache"), "dsr-strip-test", Duration::from_secs(10))
+        .await;
     // Extra wait for the scrollback flush after the DSR-producing command.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -273,10 +267,7 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
 
     // The log must contain our marker.
     let text = String::from_utf8_lossy(&content);
-    assert!(
-        text.contains("DSR_STRIP_MARKER"),
-        "scrollback should contain marker, got: {text}"
-    );
+    assert!(text.contains("DSR_STRIP_MARKER"), "scrollback should contain marker, got: {text}");
 
     // The log must NOT contain DSR query sequences (ESC[6n, ESC[5n, ESC[c, ESC[>c).
     let dsr_patterns: &[&[u8]] = &[
