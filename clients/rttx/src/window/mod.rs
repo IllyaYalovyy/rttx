@@ -588,7 +588,7 @@ impl Window {
 
         let mut hosts: Vec<host::Host> = keys.iter().map(|k| host::resolve(k, &saved)).collect();
         // Sort remotes alphabetically, keeping Local first
-        hosts[1..].sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        hosts[1..].sort_by_key(|a| a.name.to_lowercase());
 
         let new_menu = gtk4::gio::Menu::new();
         let connect_menu = gtk4::gio::Menu::new();
