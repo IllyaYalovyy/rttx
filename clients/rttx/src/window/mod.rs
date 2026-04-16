@@ -215,6 +215,7 @@ mod imp {
             places_header.set_margin_start(12);
             places_header.set_margin_end(12);
             places_header.set_margin_top(12);
+            places_header.set_margin_bottom(6);
             let places_title = gtk4::Label::new(Some("Places"));
             places_title.set_xalign(0.0);
             places_title.set_hexpand(true);
@@ -254,6 +255,7 @@ mod imp {
             commands_header.set_margin_start(12);
             commands_header.set_margin_end(12);
             commands_header.set_margin_top(12);
+            commands_header.set_margin_bottom(6);
             let commands_title = gtk4::Label::new(Some("Commands"));
             commands_title.set_xalign(0.0);
             commands_title.set_hexpand(true);
@@ -586,7 +588,7 @@ impl Window {
 
         let mut hosts: Vec<host::Host> = keys.iter().map(|k| host::resolve(k, &saved)).collect();
         // Sort remotes alphabetically, keeping Local first
-        hosts[1..].sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        hosts[1..].sort_by_key(|a| a.name.to_lowercase());
 
         let new_menu = gtk4::gio::Menu::new();
         let connect_menu = gtk4::gio::Menu::new();

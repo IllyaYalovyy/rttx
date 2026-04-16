@@ -1307,3 +1307,16 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
     assert!(!state.dismissed_runtime_ids.contains(&stale), "stale dismissed ID should be pruned");
     assert!(state.dismissed_runtime_ids.contains(&live), "live dismissed ID should be retained");
 }
+
+#[test]
+fn default_window_state_has_reasonable_sidebar_widths() {
+    let state = rttx::session::WindowState::default();
+    assert!(
+        state.left_sidebar_width >= 150,
+        "left sidebar should be at least 150px for workspace names"
+    );
+    assert!(
+        state.right_sidebar_width >= 200,
+        "right sidebar should be at least 200px for commands/places"
+    );
+}
