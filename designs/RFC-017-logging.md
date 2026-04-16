@@ -143,25 +143,71 @@ tail -f "$(rttx-server logs)"/rttx-server.log.*
 
 - **Daemon** (`services/rttx-server/src/logging.rs`): `init_file_logging()` and
   `cleanup_old_logs()` are public functions in the `logging` module. `main.rs` calls
-  `init_file_logging()` in both `start()` and `attach_stdio()` paths.
+  `init_tracing()` — a local wrapper around `init_file_logging()` — in both `start()` and
+  `attach_stdio()` paths.
 - **GUI** (`clients/rttx/src/application.rs`): `init_logging()` replaces the previous
-  `pretty_env_logger` initialization. `cleanup_old_logs()` is duplicated (not shared across
-  crates) to avoid adding a shared utility crate for a single function.
+  `pretty_env_logger` initialization. The GUI uses `log` crate macros (`log::info!()`,
+  `log::warn!()`, etc.) with `tracing-subscriber` as the backend — the built-in tracing-log
+  bridge captures all `log` calls automatically. `cleanup_old_logs()` is duplicated (not shared
+  across crates) to avoid adding a shared utility crate for a single function.
 - **ANSI disabled**: file output uses `.with_ansi(false)` since log files are not terminals.
-- **No stderr output**: logs go only to files, not to stderr. This is a deliberate trade-off —
-  it keeps the journal clean and avoids double-logging. For interactive debugging, use
+- **No stderr output**: tracing output goes only to files, not to stderr. Pre-logging startup
+  errors (e.g., "already running", "failed to daemonize") still use `eprintln!` since the
+  tracing subscriber is not yet initialized at that point. For interactive debugging, use
   `RUST_LOG=debug cargo run -p rttx-server -- start --foreground` which still writes to the
   log file.
 
 ### Future considerations
 
-- **Size-based rotation**: if daily files grow too large, switch to
-  `tracing_appender::rolling::Rotation::max_bytes()` or a custom appender.
+- **Size-based rotation**: if daily files grow too large, a custom appender or a third-party
+  crate (e.g., `tracing-rolling-file`) would be needed — `tracing-appender` only supports
+  time-based rotation (`DAILY`, `HOURLY`, `MINUTELY`), not size-based.
 - **Log deduplication**: repeated identical errors (e.g., "pane not found" ×5) could be collapsed
   with a rate-limiting layer. Not implemented yet — the current volume is manageable.
 - **GUI log access**: a menu action or `--show-logs` CLI flag to open the log directory in the
   file manager. Deferred — `rttx-server logs` covers the immediate need for the daemon, and the
   GUI log path is documented.
+
+---
+
+## Current implementation snapshot (2026-04)
+
+File logging is fully implemented for both the GUI client and the daemon. All design goals are met.
+
+### Dependencies
+
+| Crate | Version | Used by |
+|---|---|---|
+| `tracing` | 0.1 | Daemon (direct macros) |
+| `tracing-appender` | 0.2 | GUI and daemon (daily file rotation) |
+| `tracing-subscriber` | 0.3 (with `env-filter`) | GUI and daemon (formatting + `RUST_LOG` filtering) |
+| `log` | 0.4 | GUI (macros, captured by tracing-log bridge) |
+
+### Source locations
+
+| Component | File | Key symbols |
+|---|---|---|
+| Daemon logging | `services/rttx-server/src/logging.rs` | `init_file_logging()`, `cleanup_old_logs()` |
+| Daemon init | `services/rttx-server/src/main.rs` | `init_tracing()` — calls `init_file_logging()` in `start()` and `attach_stdio()` |
+| Daemon CLI | `services/rttx-server/src/main.rs` | `logs()` — prints `cache_dir()` path |
+| GUI logging | `clients/rttx/src/application.rs` | `init_logging()`, `cleanup_old_logs()`, `log_dir_path()` |
+| GUI log dir | `clients/rttx/src/application.rs` | `log_dir_path()` — `$XDG_CACHE_HOME/{rttx,rttx-devel}/` |
+| Daemon log dir | `services/rttx-server/src/os/unix.rs` | `cache_dir()` — `$XDG_CACHE_HOME/{rttx-server,rttx-server-devel}/` |
+
+### Test coverage
+
+| Test | Layer | Location |
+|---|---|---|
+| `cleanup_removes_oldest_files_beyond_keep_days` | Unit | `services/rttx-server/src/logging.rs` |
+| `cleanup_is_noop_when_fewer_files_than_limit` | Unit | `services/rttx-server/src/logging.rs` |
+| `cleanup_ignores_unrelated_files` | Unit | `services/rttx-server/src/logging.rs` |
+| `cleanup_handles_missing_directory` | Unit | `services/rttx-server/src/logging.rs` |
+| `cleanup_old_logs_keeps_correct_number_of_files` | Integration | `services/rttx-server/tests/logging_integration.rs` |
+| `cleanup_old_logs_does_not_panic_on_missing_dir` | Integration | `services/rttx-server/tests/logging_integration.rs` |
+
+### Deviations from original design
+
+None. The implementation matches the design as specified.
 
 ---
 
