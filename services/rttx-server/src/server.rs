@@ -10,7 +10,7 @@ use crate::ipc::{ClientConnection, ClientConnectionReader, ClientConnectionWrite
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
-use crate::screen::restart_safe_scrollback;
+use crate::screen::{restart_safe_scrollback, strip_client_queries};
 use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
 use crate::session::{
     AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Session,
@@ -167,13 +167,14 @@ impl Server {
                         match std::fs::read(log_path) {
                             Ok(data) => {
                                 let restart_safe = restart_safe_scrollback(&data);
+                                let clean = strip_client_queries(restart_safe);
                                 tracing::info!(
                                     "Replaying {} bytes of scrollback for pane {pane_short} in session {label}",
-                                    restart_safe.len(),
+                                    clean.len(),
                                 );
-                                pane.screen.feed(restart_safe);
-                                if restart_safe.len() != data.len()
-                                    && let Err(e) = std::fs::write(log_path, restart_safe)
+                                pane.screen.feed(&clean);
+                                if clean.len() != data.len()
+                                    && let Err(e) = std::fs::write(log_path, &clean)
                                 {
                                     tracing::error!(
                                         "Failed to rewrite restart-safe scrollback for pane {pane_short} in session {label}: {e}",
