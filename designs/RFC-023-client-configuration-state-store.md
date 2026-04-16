@@ -17,7 +17,7 @@ loosely related JSON files.
 
 The current storage shape was useful while the product model was still moving quickly. It now
 gets in the way of RFC-016 workspace management, host-aware places and commands, explicit
-daemon session discovery, direct-mode fallback, and future protocol evolution. Because rttx is
+daemon session discovery, and future protocol evolution. Because rttx is
 not yet v1, this RFC intentionally allows a breaking storage migration with a one-time importer
 from the current development files.
 
@@ -30,9 +30,9 @@ from the current development files.
 - **G2** - Introduce explicit schema versions and typed migrations for every persisted client
   document.
 - **G3** - Make the host/endpoint model first-class so RFC-016 creation, attach, sidebar, place,
-  and command flows do not need legacy bookmark/session translation.
-- **G4** - Remove legacy concepts from the canonical store: `Bookmark` and `SessionMode` become
-  import-only compatibility types.
+  and command flows do not need legacy session translation.
+- **G4** - Remove legacy concepts from the canonical store: `SessionMode` becomes an
+  import-only compatibility type. (`Bookmark` has already been removed.)
 - **G5** - Stop silently losing user data on malformed JSON or partial writes.
 - **G6** - Keep the implementation approachable: plain JSON documents, atomic file writes, and
   targeted migration tests instead of a database.
@@ -65,8 +65,6 @@ Current files and responsibilities:
 - `places.json` stores saved places with host tags, plus built-in Home and Root generated in
   code.
 - `commands.json` stores saved commands with host tags.
-- `bookmarks.json` still stores legacy path/SSH bookmark data that overlaps with hosts and
-  places.
 - `schemes/` stores custom color schemes.
 
 That shape creates several structural problems.
@@ -89,14 +87,12 @@ That shape creates several structural problems.
    intentionally so user data is not silently discarded.
 
 4. **Cross-file changes are not coherent.**
-   Host deletion can touch hosts, places, and commands. Bookmark migration can touch hosts and
-   places. Today those writes are independent, so a crash or write error can leave the store
-   partially updated.
+   Host deletion can touch hosts, places, and commands. Today those writes are independent, so a
+   crash or write error can leave the store partially updated.
 
 5. **Legacy and canonical concepts coexist.**
-   `SessionMode` and `WorkspaceRuntime` both represent runtime intent. `Bookmark`, `Host`, and
-   `Place` overlap. Code must keep translating between old and new concepts instead of relying on
-   one canonical model.
+   `SessionMode` and `WorkspaceRuntime` both represent runtime intent. Code must keep translating
+   between old and new concepts instead of relying on one canonical model.
 
 6. **Runtime attachment state is too durable.**
    A workspace needs durable intent such as endpoint, policy, layout, and persistent runtime
@@ -309,7 +305,6 @@ Rules:
 - Empty `host_tags` means global.
 - Host tags reference endpoint keys, not host display names.
 - Home and Root are built-in global entries and are not persisted.
-- `Bookmark` is not canonical. Legacy bookmarks are imported into hosts and places, then archived.
 - Orphaned tags are preserved so users can find and repair content for removed hosts.
 
 #### `workspaces.json`
@@ -349,7 +344,8 @@ Rules:
 
 - A workspace remains one tab and one endpoint, consistent with RFC-016.
 - `endpoint_key` is canonical. It may be `local` or a normalized remote key.
-- `policy` records whether the workspace is daemon-backed or direct fallback.
+- `policy` records the workspace runtime policy (ephemeral or persistent); both are
+  daemon-backed.
 - `runtime_ref` is durable identity for reconnecting to a persistent runtime, not current
   connection status.
 - Live state such as connected/disconnected/reconnecting belongs in memory and protocol events,
@@ -430,7 +426,6 @@ Legacy sources:
 - `hosts.json`
 - `places.json`
 - `commands.json`
-- `bookmarks.json`
 - `sessions.json`
 - `schemes/`
 
@@ -439,10 +434,8 @@ Migration flow:
 1. Detect absence of envelope-based documents and presence of legacy files.
 2. Copy legacy files into `backups/pre-v1-<timestamp>/` before writing anything new.
 3. Import preferences into the new `preferences.json`.
-4. Import hosts into `hosts.json`; synthesize remote hosts from legacy bookmark `ssh_target`
-   values.
-5. Import places into `library.json`; import bookmark directories as places tagged to the
-   matching host when `ssh_target` is present.
+4. Import hosts into `hosts.json`.
+5. Import places into `library.json`.
 6. Import commands into `library.json`.
 7. Import sessions into `workspaces.json` and `ui.json`.
 8. Move dismissed runtime IDs into `runtime-cache.json`.
@@ -451,6 +444,7 @@ Migration flow:
 Legacy ambiguity rules:
 
 - Missing `host_tags` on old commands means legacy local-only content.
+  (`commands::migrate_legacy()` already handles this by tagging untagged commands with `"local"`.)
 - Present but empty `host_tags` means intentionally global content.
 - Unknown remote hosts are preserved as orphaned endpoint keys rather than discarded.
 - Unsupported or malformed individual records are skipped only after being recorded in the
@@ -461,7 +455,7 @@ Post-migration rules:
 - The canonical store is the new envelope-based document set.
 - Old files are not written again.
 - Old files may remain in the backup directory for manual recovery.
-- No code path should create new canonical bookmarks or new canonical `SessionMode` records.
+- No code path should create new canonical `SessionMode` records.
 
 ### 6. Store API
 
@@ -505,7 +499,6 @@ Implementation must include regression coverage for:
 - Loading each new document from a valid fixture.
 - Rejecting unsupported future versions without overwriting them.
 - Migrating representative current development files into the new store.
-- Importing bookmarks into hosts and places.
 - Preserving orphaned host tags.
 - Distinguishing missing `host_tags` from intentionally empty `host_tags`.
 - Recovering from malformed current documents with a usable backup.
@@ -518,6 +511,121 @@ real old file shapes, not hand-waved defaults.
 
 ---
 
+## Implementation Snapshot
+
+This RFC is in Review status. None of the proposed changes have been implemented.
+The sections below document the current v1 persistence code as a baseline for future
+implementation work.
+
+### Current source locations
+
+| Component | File | Key symbols |
+|---|---|---|
+| Config paths | `clients/rttx/src/config.rs` | `config_dir_path()`, `AppProfile`, `config_dir` |
+| Session persistence | `clients/rttx/src/session/mod.rs` | `save_window_state()`, `load_window_state()`, `sessions_dir()` |
+| Session/workspace state | `clients/rttx/src/session/state.rs` | `WindowState`, `SessionState`, `SessionMode`, `SessionColor`, `LayoutNode` |
+| Runtime metadata | `clients/rttx/src/runtime.rs` | `WorkspaceRuntime`, `RuntimeEndpoint`, `WorkspacePolicy` |
+| Pane recovery | `clients/rttx/src/session/recovery.rs` | `PaneRecovery`, `PaneSource`, `PaneTarget` |
+| Preferences | `clients/rttx/src/preferences.rs` | `Preferences`, `PreferencesDisk`, `load()`, `save()` |
+| Places | `clients/rttx/src/places.rs` | `Place`, `load()`, `save()`, `builtins()` |
+| Commands | `clients/rttx/src/commands.rs` | `SavedCommand`, `load()`, `save()`, `migrate_legacy()` |
+| Hosts | `clients/rttx/src/host.rs` | `Host`, `load()`, `save()`, `LOCAL_KEY` |
+| Workspace state helper | `clients/rttx/src/workspace_state.rs` | `WorkspaceState` (in-memory runtime state, not persisted) |
+
+### Current test coverage for persistence
+
+| Test | Layer | Location |
+|---|---|---|
+| `save_and_load_roundtrip` | Unit | `clients/rttx/src/session/mod.rs` |
+| `save_complex_layout_and_reload` | Unit | `clients/rttx/src/session/mod.rs` |
+| `window_state_active_index_preserved` | Unit | `clients/rttx/src/session/mod.rs` |
+| `load_returns_default_when_no_file` | Unit | `clients/rttx/src/session/mod.rs` |
+| `load_returns_default_on_corrupt_json` | Unit | `clients/rttx/src/session/mod.rs` |
+| `window_state_roundtrip` | Unit | `clients/rttx/src/session/state.rs` |
+| `session_mode_roundtrips_through_json` | Unit | `clients/rttx/src/session/state.rs` |
+| `backward_compat_session_without_mode_field` | Unit | `clients/rttx/src/session/state.rs` |
+| `persistent_session_in_window_state_roundtrips` | Unit | `clients/rttx/src/session/state.rs` |
+| `normalize_runtime_metadata_migrates_remote_legacy_mode` | Unit | `clients/rttx/src/session/state.rs` |
+| `zoom_state_defaults_to_none_for_backward_compat` | Unit | `clients/rttx/src/session/state.rs` |
+| `pane_recovery_roundtrips_structured_target` | Unit | `clients/rttx/src/session/state.rs` |
+| `user_renamed_defaults_to_false_on_deserialize` | Unit | `clients/rttx/src/session/state.rs` |
+| `roundtrip_via_file` | Unit | `clients/rttx/src/preferences.rs` |
+| `missing_file_returns_default` | Unit | `clients/rttx/src/preferences.rs` |
+| `corrupt_json_returns_default` | Unit | `clients/rttx/src/preferences.rs` |
+| `partial_json_fills_defaults` | Unit | `clients/rttx/src/preferences.rs` |
+| `legacy_single_color_scheme_populates_light_and_dark` | Unit | `clients/rttx/src/preferences.rs` |
+| `roundtrip_via_file` | Unit | `clients/rttx/src/places.rs` |
+| `missing_file_returns_empty_list` | Unit | `clients/rttx/src/places.rs` |
+| `legacy_json_without_host_tags_deserializes_with_empty_vec` | Unit | `clients/rttx/src/places.rs` |
+| `roundtrip_via_file` | Unit | `clients/rttx/src/host.rs` |
+| `missing_file_returns_empty_list` | Unit | `clients/rttx/src/host.rs` |
+| `deserialize_without_ssh_target_defaults_to_none` | Unit | `clients/rttx/src/host.rs` |
+| `host_tags_roundtrip_via_file` | Unit | `clients/rttx/src/commands.rs` |
+| `legacy_json_without_host_tags_deserializes_with_empty_vec` | Unit | `clients/rttx/src/commands.rs` |
+| `migrate_legacy_tags_untagged_commands_with_local` | Unit | `clients/rttx/src/commands.rs` |
+| `migrate_legacy_preserves_existing_tags` | Unit | `clients/rttx/src/commands.rs` |
+| `workflow_persist_and_restore_with_cwds` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
+| `session_order_persists_through_serialization` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
+| `dismissed_runtime_ids_persist_through_save_load` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
+| `remote_managed_session_persists_and_restores` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
+
+### What exists vs what RFC-023 proposes
+
+| RFC Feature | Current Status |
+|---|---|
+| XDG config/state/cache split | ❌ Everything in `$XDG_CONFIG_HOME/rttx/` via `config::config_dir_path()` |
+| Document envelope (`schema`, `version`) | ❌ Bare JSON structs with `#[serde(default)]` for backward compat |
+| `ClientStore` abstraction | ❌ Each module has independent `load()`/`save()` free functions |
+| Atomic writes (temp + rename) | ❌ Plain `std::fs::write()` — crash during write can corrupt files |
+| Malformed file recovery | ❌ Malformed files silently return defaults via `unwrap_or_default()` |
+| Separate `workspaces.json` | ❌ Workspace state embedded in `sessions.json` as `WindowState` |
+| Separate `ui.json` | ❌ Window geometry and sidebar widths embedded in `WindowState` |
+| Separate `library.json` | ❌ Places and commands are separate files (`places.json`, `commands.json`) |
+| `runtime-cache.json` | ❌ Dismissed runtime IDs embedded in `WindowState.dismissed_runtime_ids` |
+| `migrations.json` ledger | ❌ No migration ledger; ad-hoc inline serde migrations only |
+| `SessionMode` removal | ❌ Still serialized alongside `WorkspaceRuntime`; `sync_legacy_mode_from_runtime()` keeps both in sync |
+| `Bookmark` removal | ✅ Fully removed — `PaneSource::Bookmark` only exists as a backward-compat deserialization fallback that maps to `Manual` |
+| Host-tag migration | Partial — `commands::migrate_legacy()` tags untagged commands with `"local"` |
+| Versioned migrations | ❌ Only inline `#[serde(default)]`, custom `Deserialize` impls, and `normalize_*()` methods |
+
+### Deviations from original text
+
+**`bookmarks.json` no longer exists.** The original Background section listed
+`bookmarks.json` as a current file. Bookmarks have been fully removed from the
+codebase since the RFC was written. The `PaneSource::Bookmark` enum variant was
+removed and only exists as a backward-compat deserialization fallback in
+`session/recovery.rs` that maps to `PaneSource::Manual`. No `bookmarks.json`
+file is read or written. References to bookmark import in the migration flow
+and testing requirements have been removed from this RFC.
+
+**No direct-mode fallback.** The original Summary mentioned "direct-mode
+fallback" as a motivation. The current architecture has no direct-mode fallback
+— all workspaces are daemon-backed per RFC-013 and RFC-016. The `SessionMode`
+enum still has a `Direct` variant as the default for backward compatibility,
+but new workspaces always use `WorkspaceRuntime` with a daemon endpoint.
+
+**`host_tags` migration already partially implemented.** The original Problem 7
+described host-tag ambiguity as an open problem. `commands::migrate_legacy()`
+already handles the primary case by tagging commands with empty `host_tags`
+as `"local"`. The places module does not have an equivalent migration — legacy
+places without `host_tags` deserialize with an empty vec (global visibility).
+
+**Five current files, not six.** With `bookmarks.json` removed, the client
+persists exactly five JSON files: `sessions.json`, `preferences.json`,
+`hosts.json`, `places.json`, and `commands.json`, plus the `schemes/`
+directory for custom color schemes.
+
+### Relationship to RFC-022
+
+RFC-022 (Daemon State Storage) proposes a parallel redesign for the daemon
+side, also targeting `$XDG_STATE_HOME/rttx/`. The two RFCs share the same XDG
+base directory but govern different subdirectories: RFC-022 covers daemon-owned
+runtime state, while RFC-023 covers client-owned configuration and UI state.
+Implementation should coordinate the directory layout to avoid conflicts.
+RFC-022 is also in Draft status with no implementation started.
+
+---
+
 ## Goals Alignment
 
 | Goal | How addressed |
@@ -525,7 +633,7 @@ real old file shapes, not hand-waved defaults.
 | G1   | Config, state, and cache move into separate XDG roots based on ownership and durability |
 | G2   | Every document has an envelope with `schema` and `version` |
 | G3   | Hosts, library tags, and workspace endpoints all use canonical endpoint keys |
-| G4   | Bookmarks and `SessionMode` are import-only and excluded from canonical documents |
+| G4   | `SessionMode` is import-only and excluded from canonical documents. `Bookmark` is already removed. |
 | G5   | Malformed files are backed up, diagnosed, and recovered intentionally |
 | G6   | The design keeps JSON and avoids a database while requiring atomic writes |
 | G7   | Preferences, hosts, library, workspaces, UI, and cache each have a clear home |
@@ -540,11 +648,11 @@ real old file shapes, not hand-waved defaults.
   *(prerequisite: Step 1)*
 - [ ] **Step 3** - Implement legacy import with backups and migration ledger
   *(prerequisite: Step 2)*
-- [ ] **Step 4** - Move preferences, hosts, places, commands, and bookmarks behind the store API
+- [ ] **Step 4** - Move preferences, hosts, places, and commands behind the store API
   *(prerequisite: Step 3)*
 - [ ] **Step 5** - Move workspace, UI, and runtime-cache state behind the store API
   *(prerequisite: Step 3)*
-- [ ] **Step 6** - Remove canonical writes of legacy bookmarks and `SessionMode`
+- [ ] **Step 6** - Remove canonical writes of legacy `SessionMode`
   *(prerequisite: Steps 4 and 5)*
 - [ ] **Step 7** - Add follow-up issues for cleanup, diagnostics polish, and migration UX
   *(prerequisite: Steps 4 and 5)*
@@ -553,17 +661,34 @@ real old file shapes, not hand-waved defaults.
 
 ## Open Questions
 
-- [ ] **Q1** - Should malformed-file diagnostics be shown as a startup dialog, a toast with a
-  details button, or a log entry plus status indicator?
+- [x] **Q1** - Should malformed-file diagnostics be shown as a startup dialog, a toast with a
+  details button, or a log entry plus status indicator? **Resolved:** use an `adw::Toast` with a
+  details button. This follows the project's existing pattern (CONTRIBUTING.md: "Errors visible
+  to the user are surfaced as `adw::Toast` notifications, not modal dialogs or console output")
+  and avoids blocking startup. A log entry should also be written for diagnostic purposes.
 - [ ] **Q2** - Should `runtime_ref` be stored in `workspaces.json`, or should all daemon runtime
-  identity live in a separate state document once protocol v3 lands?
-- [ ] **Q3** - Should imported legacy files be left in place after backup, or moved out of the
-  old root to make accidental fallback impossible?
+  identity live in a separate state document once protocol v3 lands? RFC-021 (protocol v3) is
+  still in Review status, so this remains open until the protocol design stabilizes.
+- [x] **Q3** - Should imported legacy files be left in place after backup, or moved out of the
+  old root to make accidental fallback impossible? **Resolved:** leave legacy files in place
+  after copying to `backups/`. Moving files risks breaking users who downgrade. The envelope
+  detection (presence of `schema` field) is sufficient to distinguish new from legacy files.
 
 ---
 
 ## References
 
 - [Issue #510: RFC: redesign client configuration and state storage](https://github.com/IllyaYalovyy/rttx/issues/510)
-- [RFC-016: Workspace Management v2](./RFC-016-workspace-management-v2.md)
-- [RFC-021: Client/Server Protocol v3](./RFC-021-client-server-protocol-v3.md)
+  (Closed — RFC written)
+- [Issue #630: Review and update RFC-023](https://github.com/IllyaYalovyy/rttx/issues/630)
+- [RFC-013: Persistent Host Sessions](./RFC-013-persistent-host-sessions.md) (Implemented) —
+  established the daemon-backed runtime model; no direct-mode fallback
+- [RFC-016: Workspace Management v2](./RFC-016-workspace-management-v2.md) (Implemented) —
+  one-workspace-one-endpoint rule that this RFC's storage model serves
+- [RFC-021: Client/Server Protocol v3](./RFC-021-client-server-protocol-v3.md) (Review) —
+  protocol evolution that may affect `runtime_ref` storage location (Q2)
+- [RFC-022: Daemon State Storage](./RFC-022-daemon-state-storage.md) (Draft) —
+  parallel daemon-side storage redesign sharing `$XDG_STATE_HOME/rttx/`
+- `clients/rttx/src/config.rs` — profile and path configuration
+- `clients/rttx/src/session/mod.rs` — current `WindowState` persistence
+- `clients/rttx/src/session/state.rs` — `SessionState`, `SessionMode`, `WorkspaceRuntime`
