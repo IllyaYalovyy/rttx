@@ -64,7 +64,7 @@ separate from append-only scrollback logs, and a durable-vs-ephemeral split.
 ### Current layout
 
 ```
-$XDG_CACHE_HOME/rttx/
+$XDG_CACHE_HOME/rttx-server/
 ├── state.json                              # all sessions, rewritten every tick
 ├── scrollback/<session_id>/<pane_id>.log   # raw bytes, tail-truncated at 10MB
 └── history/<session_id>/<pane_id>.hist     # per-pane shell history
@@ -72,6 +72,9 @@ $XDG_CACHE_HOME/rttx/
 
 `state.json` contains a single `ServerState { sessions, serialized_at, server_version }`.
 See `services/rttx-server/src/serialization.rs` and `session.rs:PersistedSession`.
+
+In dev mode (`RTTX_DEV_MODE=1`), the daemon uses `$XDG_CACHE_HOME/rttx-server-devel/`
+instead, so development and production state are fully isolated.
 
 ### Pain points observed today
 
@@ -81,25 +84,28 @@ See `services/rttx-server/src/serialization.rs` and `session.rs:PersistedSession
 
 2. **Monolithic rewrite.** Every serialization tick builds a full snapshot under
    the server mutex, pretty-prints it, writes to `.tmp`, renames over the old file
-   (`server.rs:905–929`). Cost grows linearly with total session count even if
+   (see `serialization_loop` in `server.rs` and `write_state_atomic` in
+   `serialization.rs`). Cost grows linearly with total session count even if
    only one session actually changed.
 
 3. **No schema version.** The only version marker is `server_version: String` —
    the Cargo package version. There is no `schema_version`, no migration entry
-   point, and `#[serde(default)]` is used ad-hoc per field. A non-trivial schema
-   change today requires bespoke logic scattered across struct definitions.
+   point, and `#[serde(default)]` is used ad-hoc per field (e.g., on `policy`
+   and `revision` in `PersistedSession`). A non-trivial schema change today
+   requires bespoke logic scattered across struct definitions.
 
-4. **Scrollback truncation corrupts replay.** `Pane::flush_scrollback` calls
-   `truncate_log_tail(path, 10MB)` on overflow (`pane.rs:114–140`, `195–200`),
-   which reads the full file, slices off the head at a byte boundary, and
-   rewrites. The kept tail may start mid-escape-sequence, producing visible
-   garbage when replayed. `MAX_SNAPSHOT_BYTES = 256KB` masks but does not fix
+4. **Scrollback truncation corrupts replay.** `Pane::flush_scrollback` appends
+   pending bytes to the scrollback log, then calls `truncate_log_tail` when the
+   file exceeds `DEFAULT_MAX_SCROLLBACK_LOG` (10 MB). The truncation reads the
+   full file, slices off the head at a raw byte boundary, and rewrites. The kept
+   tail may start mid-escape-sequence, producing visible garbage when replayed.
+   `MAX_SNAPSHOT_BYTES = 256 KB` (defined in `pane.rs`) masks but does not fix
    this.
 
 5. **Durable and transient are mixed.** `PersistedSession` holds `revision` and
-   `last_active_at` alongside `policy` and `panes`, but not `attached_clients`
-   (which is correctly ephemeral). The boundary is implicit and easy to get
-   wrong on the next field.
+   `last_active_at` alongside `policy`, `panes`, `command_history`, and
+   `active_pane_id`, but not `attached_clients` (which is correctly ephemeral).
+   The boundary is implicit and easy to get wrong on the next field.
 
 6. **No cleanup.** When a session is deleted, its scrollback and history
    directories remain on disk. Over months of use the cache grows unboundedly.
@@ -109,7 +115,17 @@ See `services/rttx-server/src/serialization.rs` and `session.rs:PersistedSession
    bad byte in the monolith loses everything.
 
 8. **No write coalescing or dirty tracking.** A session that hasn't changed in
-   an hour is rewritten identically 3600+ times.
+   an hour is rewritten identically 3 600+ times. `Session` has a `revision: u64`
+   field that bumps on every mutation, but there is no `persisted_revision` to
+   compare against.
+
+### Current screen model
+
+`PaneScreen` stores raw PTY bytes in a `Vec<u8>` and tracks cursor position,
+title, CWD, and terminal mode flags via a VTE parser. The code explicitly notes
+that a full cell-grid model is deferred: snapshots replay raw bytes to
+reconstruct state. This is the foundation for the screen-snapshot proposal in
+§4.
 
 ### Why this is worth an RFC, not a patch
 
@@ -197,7 +213,7 @@ best-effort import of v1 `state.json` on first v2 startup.
 ### 1. On-disk layout
 
 ```
-$XDG_STATE_HOME/rttx/                   # (was: $XDG_CACHE_HOME/rttx/)
+$XDG_STATE_HOME/rttx/                   # (was: $XDG_CACHE_HOME/rttx-server/)
 ├── daemon.json                         # server-level index, schema v1
 ├── daemon.json.bak                     # previous good copy
 └── sessions/
@@ -212,6 +228,11 @@ $XDG_STATE_HOME/rttx/                   # (was: $XDG_CACHE_HOME/rttx/)
 
 The scrollback log remains under the session directory so deleting the session
 directory is one `remove_dir_all` call.
+
+The `OsInterface` trait currently exposes `cache_dir()` backed by
+`$XDG_CACHE_HOME`. Implementation will add a `state_dir()` method (or rename
+`cache_dir`) backed by `$XDG_STATE_HOME`, with the dev-mode variant using
+`rttx-server-devel` as it does today.
 
 ### 2. Versioning & migration
 
@@ -251,6 +272,7 @@ struct SessionSpecV1 {
     created_at: SystemTime,
     panes: Vec<PaneSpecV1>,
     active_pane_id: Option<Uuid>,
+    command_history: Vec<HistoryEntry>,
 }
 
 // Semi-durable: also in session.json, but bounded & bounded-age
@@ -261,10 +283,10 @@ struct SessionInstanceV1 {
 }
 
 // Ephemeral: never written
-// - attached_clients (always rebuilt on attach)
-// - reconstructed flag
+// - attached_clients: HashMap<Uuid, ClientRole> (always rebuilt on attach)
+// - reconstructed: bool
 // - pending PTY replies
-// - in-memory PaneScreen
+// - in-memory PaneScreen (raw_bytes, cursor, terminal mode flags)
 ```
 
 `session.json` wraps both:
@@ -279,8 +301,10 @@ struct SessionFileV1 {
 ### 4. Screen snapshot as a first-class type
 
 The current design persists raw PTY bytes and replays them into VTE on the
-client. This is the root cause of "leading bytes start mid-escape-sequence"
-after truncation.
+client. `PaneScreen` stores a `raw_bytes: Vec<u8>` stream and tracks cursor
+position, title, CWD, and terminal mode flags (bracketed paste, application
+cursor keys, mouse tracking, etc.) via a VTE parser. The code explicitly notes
+that a full cell-grid model is deferred to a later iteration.
 
 New contract:
 
@@ -380,6 +404,94 @@ scrollback_rotate_keep = 3
 
 ---
 
+## Implementation Snapshot
+
+This RFC is in Draft status. None of the proposed changes have been implemented.
+The sections below document the current v1 state as a baseline for future
+implementation work.
+
+### Current source locations
+
+| Component | File |
+| --- | --- |
+| State serialization | `services/rttx-server/src/serialization.rs` — `write_state_atomic()`, `load_state()`, `ServerState`, path helpers |
+| Serialization loop | `services/rttx-server/src/server.rs` — `serialization_loop()` (1-second tick, unconditional full rewrite) |
+| Session persistence | `services/rttx-server/src/session.rs` — `PersistedSession`, `Session::persist()`, `Session::resurrect()` |
+| Scrollback flush | `services/rttx-server/src/pane.rs` — `flush_scrollback()`, `truncate_log_tail()` |
+| Screen model | `services/rttx-server/src/screen.rs` — `PaneScreen`, `ScreenPerformer` (raw-bytes model, no cell grid) |
+| Snapshot constant | `services/rttx-server/src/pane.rs` — `MAX_SNAPSHOT_BYTES = 256 KB` |
+| OS path abstraction | `services/rttx-server/src/os/unix.rs` — `UnixOs::cache_dir()` (XDG_CACHE_HOME) |
+| Dev-mode isolation | `services/rttx-server/src/os/unix.rs` — `rttx-server` vs `rttx-server-devel` directory names |
+
+### Current test coverage for persistence
+
+| Test | Layer | Location |
+| --- | --- | --- |
+| `round_trip_write_and_load` | Integration | `tests/serialization.rs` |
+| `missing_state_file_returns_none` | Integration | `tests/serialization.rs` |
+| `default_policy_is_ephemeral` | Integration | `tests/serialization.rs` |
+| `load_state_rejects_corrupt_json` | Integration | `tests/persistence_failures.rs` |
+| `corrupt_pane_does_not_crash_daemon` | Integration | `tests/persistence_failures.rs` |
+| `missing_pane_fields_use_defaults` | Integration | `tests/persistence_failures.rs` |
+| Backward-compat round-trips | Integration | `tests/persistence_compat.rs` |
+| `scrollback_flushed_to_disk_after_serialization_tick` | Integration | `tests/scrollback.rs` |
+
+### What exists vs what RFC-022 proposes
+
+| RFC Feature | Current Status |
+| --- | --- |
+| XDG_STATE_HOME | ❌ Uses `$XDG_CACHE_HOME/rttx-server/` via `OsInterface::cache_dir()` |
+| Per-session files | ❌ Monolithic `state.json` with all sessions |
+| `schema_version` field | ❌ Only `server_version: String` (Cargo package version) |
+| Migration module | ❌ No `state/` module; ad-hoc `#[serde(default)]` on individual fields |
+| Dirty-flag writes | ❌ Full rewrite every 1-second tick; `revision` exists but no `persisted_revision` |
+| Screen snapshot type | ❌ Raw byte tails via `PaneScreen::snapshot_bytes()` |
+| Scrollback rotation | ❌ `truncate_log_tail` slices at byte boundary (can corrupt escape sequences) |
+| Corruption containment | ❌ One bad byte in `state.json` loses all sessions |
+| `.bak` backup files | ❌ Atomic tmp+rename only, no backup copy |
+| Dead session cleanup | ❌ Scrollback/history directories accumulate on disk |
+| Durable/transient split | ❌ Mixed in `PersistedSession` (durable + semi-durable fields together) |
+| Orphan sweep | ❌ Not implemented |
+| `no_persist` pane flag | ❌ Not implemented |
+
+### Deviations from original text
+
+**Current layout path.** The original Background section listed the current
+layout as `$XDG_CACHE_HOME/rttx/`. The actual production path is
+`$XDG_CACHE_HOME/rttx-server/` (with `rttx-server-devel/` in dev mode). The
+proposed v2 path `$XDG_STATE_HOME/rttx/` drops the `-server` suffix, which is
+intentional — the daemon is the only writer to this directory.
+
+**PersistedSession fields.** The original text listed `revision`,
+`last_active_at`, `policy`, and `panes` as the persisted fields. The actual
+struct also includes `command_history: Vec<HistoryEntry>` and
+`active_pane_id: Option<Uuid>`, both of which are durable and belong in the
+proposed `SessionSpecV1`.
+
+**Screen model.** The original text described the screen model abstractly.
+`PaneScreen` wraps a VTE parser (`vte::Parser`) and a `ScreenPerformer` that
+tracks `raw_bytes`, cursor position, title, CWD, and terminal mode flags
+(bracketed paste, application cursor keys, application keypad, mouse tracking,
+SGR mouse, focus events, cursor visibility). The code contains an explicit
+comment noting that a full cell-grid model is deferred to a later iteration.
+
+**Serialization interval.** The original §10 proposed a default of 5 seconds
+for `serialize_interval_secs`. The current implementation uses 1 second. The
+proposed default should be reconciled with the current behavior during
+implementation — the dirty-flag optimization (§5) makes the interval less
+performance-critical, so a longer default may be acceptable.
+
+### Relationship to RFC-023
+
+RFC-023 (Client Configuration and State Store) proposes a parallel redesign for
+the client side, also targeting `$XDG_STATE_HOME/rttx/`. The two RFCs share the
+same XDG base directory but govern different subdirectories: RFC-022 covers
+daemon-owned runtime state (`daemon.json`, `sessions/`), while RFC-023 covers
+client-owned configuration and UI state. Implementation should coordinate the
+directory layout to avoid conflicts.
+
+---
+
 ## Goals Alignment
 
 | Goal | How addressed |
@@ -421,6 +533,9 @@ scrollback_rotate_keep = 3
   *(prerequisite: Steps 4–7)*
 - [ ] **Step 10** — Update packaging docs and the first-run log line to
   announce the new state location *(prerequisite: Step 4)*
+- [ ] **Step 11** — Coordinate with RFC-023 on shared `$XDG_STATE_HOME/rttx/`
+  directory layout to avoid conflicts between daemon and client state
+  *(prerequisite: Step 1)*
 
 Steps 1–4 can land as a single PR behind a feature flag. Steps 5–8 are
 additive. Step 9 is gating. Step 10 ships with the release that removes the
@@ -430,30 +545,41 @@ v1 flag.
 
 ## Open Questions
 
-- [ ] **Q1** — Should we keep the legacy `state.json` importer in the code
-  indefinitely, or remove it one minor release after the v2 cutover? Proposed:
+- [x] **Q1** — Should we keep the legacy `state.json` importer in the code
+  indefinitely, or remove it one minor release after the v2 cutover? **Resolved:**
   remove after one release; users who skip that release get a clean start and
   a loud log line.
-- [ ] **Q2** — Should `daemon.json` hold any per-session summary (name, pane
+- [x] **Q2** — Should `daemon.json` hold any per-session summary (name, pane
   count) to render a sidebar without reading every `session.json`, or keep it
-  minimal (ids only)? Proposed: minimal — the daemon always has sessions
+  minimal (ids only)? **Resolved:** minimal — the daemon always has sessions
   in-memory after startup, so the index is only consulted once.
-- [ ] **Q3** — Scrollback rotation default of 3×10MB = 30MB per pane may be
-  higher than current effective limit. Acceptable? Proposed: yes, the old cap
+- [x] **Q3** — Scrollback rotation default of 3×10 MB = 30 MB per pane may be
+  higher than current effective limit. Acceptable? **Resolved:** yes, the old cap
   was an artefact of the truncation bug, not a user-facing promise.
-- [ ] **Q4** — Is `$XDG_STATE_HOME` correct on macOS / sandboxed Flatpak?
-  Needs packager review.
+- [x] **Q4** — Is `$XDG_STATE_HOME` correct on macOS / sandboxed Flatpak?
+  **Resolved:** rttx targets GNOME/Linux only (RFC-001 principle 1); macOS is
+  permanently out of scope. Flatpak sandboxes map `$XDG_STATE_HOME` correctly
+  via the portal filesystem, so no special handling is needed.
 
 ---
 
 ## References
 
-- [RFC-007: Session Recovery](./RFC-007-session-recovery.md)
-- [RFC-010: Maintainability Refactor](./RFC-010-maintainability-refactor.md)
-- [RFC-013: Persistent Host Sessions](./RFC-013-persistent-host-sessions.md)
+- [RFC-007: Session Recovery](./RFC-007-session-recovery.md) — recipe-based recovery; daemon-side
+  persistence delegated to this RFC
+- [RFC-010: Maintainability Refactor](./RFC-010-maintainability-refactor.md) (Implemented)
+- [RFC-013: Persistent Host Sessions](./RFC-013-persistent-host-sessions.md) (Implemented) —
+  established the daemon-backed runtime model that this RFC's storage redesign serves
 - [RFC-018: Workspace Connection State Machine](./RFC-018-workspace-connection-state-machine.md)
-- [RFC-019: Missing Daemon Session Handling](./RFC-019-missing-session-handling.md)
-- [RFC-021: Client/Server Protocol v3](./RFC-021-client-server-protocol-v3.md)
+  (Implemented)
+- [RFC-019: Missing Daemon Session Handling](./RFC-019-missing-session-handling.md) (Implemented)
+- [RFC-021: Client/Server Protocol v3](./RFC-021-client-server-protocol-v3.md) (Review) — grid
+  snapshot wire encoding deferred to protocol v3
+- [RFC-023: Client Configuration and State Store](./RFC-023-client-configuration-state-store.md)
+  (Review) — parallel client-side storage redesign sharing `$XDG_STATE_HOME/rttx/`
 - `services/rttx-server/src/serialization.rs` — current monolith writer
-- `services/rttx-server/src/session.rs:PersistedSession` — current schema
-- `services/rttx-server/src/pane.rs:truncate_log_tail` — current truncation bug
+- `services/rttx-server/src/session.rs` — `PersistedSession` current schema
+- `services/rttx-server/src/pane.rs` — `flush_scrollback()`, `truncate_log_tail()`
+- `services/rttx-server/src/screen.rs` — `PaneScreen` raw-bytes model
+- `services/rttx-server/src/os/unix.rs` — `OsInterface::cache_dir()` path abstraction
+- [#622](https://github.com/IllyaYalovyy/rttx/issues/622) — tracking issue for this review
