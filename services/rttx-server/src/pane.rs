@@ -3,7 +3,7 @@
 //! Each pane represents a single terminal within a session, backed by a PTY
 //! process and an in-memory screen state.
 
-use crate::screen::PaneScreen;
+use crate::screen::{PaneScreen, strip_client_queries};
 use crate::serialization::scrollback_log_path;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -131,7 +131,8 @@ impl Pane {
         }
 
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
-        file.write_all(&self.pending_flush)?;
+        let clean = strip_client_queries(&self.pending_flush);
+        file.write_all(&clean)?;
         self.pending_flush = Vec::new();
         self.scrollback_log_path = Some(path.clone());
 
@@ -503,5 +504,21 @@ mod tests {
         pane.release_scrollback();
         pane.release_scrollback();
         assert!(pane.screen.raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn flush_scrollback_strips_dsr_queries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        // Feed output containing DSR queries mixed with real content.
+        pane.feed_output(b"line1\r\n\x1b[6nline2\r\n\x1b[c\x1b[>c");
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+
+        let log_path = pane.scrollback_log_path.as_ref().unwrap();
+        let content = std::fs::read(log_path).unwrap();
+        // Scrollback log should not contain DSR/DA1/DA2 query sequences.
+        assert_eq!(content, b"line1\r\nline2\r\n");
     }
 }

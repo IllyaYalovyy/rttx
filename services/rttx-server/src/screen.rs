@@ -1164,4 +1164,34 @@ mod tests {
         let input = b"line1\r\n\x1b[6n\x1b[6nline2\r\n\x1b[6n\x1b[c";
         assert_eq!(strip_client_queries(input), b"line1\r\nline2\r\n");
     }
+
+    // --- Scrollback replay: DSR queries must not generate stale replies ---
+
+    #[test]
+    fn replay_stripped_scrollback_produces_no_pending_replies() {
+        // Simulate scrollback data that was stored with DSR queries.
+        let scrollback = b"line1\r\n\x1b[6nline2\r\n\x1b[c\x1b[>c\x1b[5n";
+        let cleaned = strip_client_queries(scrollback);
+
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(&cleaned);
+
+        // No stale replies should be generated from cleaned scrollback.
+        assert!(screen.take_pending_replies().is_empty());
+        // Real content should be preserved.
+        assert_eq!(screen.raw_bytes(), b"line1\r\nline2\r\n");
+    }
+
+    #[test]
+    fn raw_scrollback_replay_generates_stale_replies() {
+        // Demonstrates the bug: replaying raw scrollback with DSR queries
+        // generates stale pending_replies that would be written to the PTY.
+        let scrollback = b"line1\r\n\x1b[6nline2\r\n";
+
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(scrollback);
+
+        let replies = screen.take_pending_replies();
+        assert!(!replies.is_empty(), "raw replay should generate stale replies (the bug)");
+    }
 }
