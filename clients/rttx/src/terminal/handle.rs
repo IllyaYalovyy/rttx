@@ -62,7 +62,7 @@ impl TerminalHandle {
 
     /// Copy the current terminal selection to the clipboard.
     pub fn copy_clipboard(&self) {
-        self.vte().copy_clipboard_format(vte4::Format::Text);
+        crate::terminal::copy_to_clipboard(self.vte());
     }
 
     /// Mark the pane as active or inactive in the UI.

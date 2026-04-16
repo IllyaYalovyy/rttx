@@ -73,6 +73,8 @@ pub struct Preferences {
     pub visual_bell: bool,
     #[serde(default)]
     pub smart_clipboard: bool,
+    #[serde(default)]
+    pub trim_trailing_whitespace_on_copy: bool,
     #[serde(default = "default_session_folder")]
     pub default_session_folder: DefaultSessionFolder,
     #[serde(default)]
@@ -130,6 +132,7 @@ impl Default for Preferences {
             audible_bell: true,
             visual_bell: true,
             smart_clipboard: false,
+            trim_trailing_whitespace_on_copy: false,
             default_session_folder: default_session_folder(),
             pane_navigation_keys: PaneNavigationKeys::default(),
             auto_start_daemon: true,
@@ -183,6 +186,8 @@ struct PreferencesDisk {
     visual_bell: bool,
     #[serde(default)]
     smart_clipboard: bool,
+    #[serde(default)]
+    trim_trailing_whitespace_on_copy: bool,
     #[serde(default = "default_session_folder")]
     default_session_folder: DefaultSessionFolder,
     #[serde(default)]
@@ -224,6 +229,7 @@ impl From<PreferencesDisk> for Preferences {
             audible_bell: raw.audible_bell,
             visual_bell: raw.visual_bell,
             smart_clipboard: raw.smart_clipboard,
+            trim_trailing_whitespace_on_copy: raw.trim_trailing_whitespace_on_copy,
             default_session_folder: raw.default_session_folder,
             pane_navigation_keys: raw.pane_navigation_keys,
             auto_start_daemon: raw.auto_start_daemon,
@@ -298,6 +304,7 @@ mod tests {
         assert!(prefs.scroll_on_keystroke);
         assert!(!prefs.scroll_on_output);
         assert!(!prefs.smart_clipboard);
+        assert!(!prefs.trim_trailing_whitespace_on_copy);
         assert!(prefs.auto_start_daemon);
         assert_eq!(prefs.reconnect_delay_secs, 10);
         assert!(prefs.paste_guard);

@@ -173,7 +173,7 @@ mod imp {
                     term.imp().smart_clipboard.get(),
                 ) {
                     TerminalKeyAction::CopySelection => {
-                        vte.copy_clipboard_format(vte4::Format::Text);
+                        crate::terminal::copy_to_clipboard(&vte);
                         vte.unselect_all();
                         glib::Propagation::Stop
                     }

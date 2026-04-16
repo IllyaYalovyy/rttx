@@ -105,6 +105,12 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     paste_guard_row.set_active(prefs.paste_guard);
     terminal_group.add(&paste_guard_row);
 
+    let trim_whitespace_row = adw::SwitchRow::new();
+    trim_whitespace_row.set_title("Trim trailing whitespace on copy");
+    trim_whitespace_row.set_subtitle("Remove trailing spaces from each line when copying text");
+    trim_whitespace_row.set_active(prefs.trim_trailing_whitespace_on_copy);
+    terminal_group.add(&trim_whitespace_row);
+
     let session_group = adw::PreferencesGroup::new();
     session_group.set_title("Workspaces");
 
@@ -195,6 +201,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             audible_bell: bell_row.is_active(),
             visual_bell: visual_bell_row.is_active(),
             smart_clipboard: smart_clipboard_row.is_active(),
+            trim_trailing_whitespace_on_copy: trim_whitespace_row.is_active(),
             default_session_folder: match folder_mode_row.selected() {
                 1 => DefaultSessionFolder::CurrentSession,
                 2 => DefaultSessionFolder::Custom(custom_folder_row.text().to_string()),
