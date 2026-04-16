@@ -468,8 +468,8 @@ When reading older RFCs, note that some architecture assumptions have been super
 
 - RFC-007 (session recovery) — recipe-based recovery and retry UX remain relevant, but L3/L4
   recovery is now delegated to the daemon per RFC-013
-- RFC-010 (maintainability refactor) — the monorepo consolidation is complete, but the
-  window.rs/layout.rs module decomposition is still in progress
+- RFC-010 (maintainability refactor) — fully implemented; `window.rs` is now a module directory
+  with 8 submodules, `session/layout.rs` is split into layout, recovery, and state modules
 - RFC-011 (Flatpak) — packaging and host integration model remains relevant, but daemon-related
   assumptions are superseded by RFC-013
 - RFC-012 (CI/CD) — describes the live GitHub Actions workflows, not a future plan
