@@ -6,6 +6,29 @@ pub mod persistent_widget;
 pub mod widget;
 
 use gtk4::prelude::*;
+use vte4::prelude::*;
+
+/// Trim trailing whitespace from each line in `text`.
+fn trim_trailing_whitespace(text: &str) -> String {
+    text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n")
+}
+
+/// Copy the terminal selection to the system clipboard, trimming trailing
+/// whitespace per line when the preference is enabled.
+pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
+    let prefs = crate::preferences::load();
+    if !prefs.trim_trailing_whitespace_on_copy {
+        vte.copy_clipboard_format(vte4::Format::Text);
+        return;
+    }
+    let Some(selected) = vte.text_selected(vte4::Format::Text) else {
+        return;
+    };
+    let trimmed = trim_trailing_whitespace(&selected);
+    if let Some(display) = gtk4::gdk::Display::default() {
+        display.clipboard().set_text(&trimmed);
+    }
+}
 
 /// Context menu alignment: Start so the left edge aligns with the pointer,
 /// preventing immediate item activation on button release (#480).
@@ -836,6 +859,56 @@ mod tests {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
         assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, ctrl), Some(vec![0x03]),);
         assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::d, ctrl), Some(vec![0x04]),);
+    }
+}
+
+#[cfg(test)]
+mod trim_tests {
+    use super::trim_trailing_whitespace;
+
+    #[test]
+    fn no_trailing_whitespace_unchanged() {
+        assert_eq!(trim_trailing_whitespace("hello\nworld"), "hello\nworld");
+    }
+
+    #[test]
+    fn trailing_spaces_removed() {
+        assert_eq!(trim_trailing_whitespace("hello   \nworld  "), "hello\nworld");
+    }
+
+    #[test]
+    fn trailing_tabs_removed() {
+        assert_eq!(trim_trailing_whitespace("hello\t\t\nworld\t"), "hello\nworld");
+    }
+
+    #[test]
+    fn mixed_whitespace_removed() {
+        assert_eq!(trim_trailing_whitespace("hello \t \nworld\t "), "hello\nworld");
+    }
+
+    #[test]
+    fn empty_string() {
+        assert_eq!(trim_trailing_whitespace(""), "");
+    }
+
+    #[test]
+    fn all_whitespace_lines_become_empty() {
+        assert_eq!(trim_trailing_whitespace("   \n\t\t\n  \t  "), "\n\n");
+    }
+
+    #[test]
+    fn single_line_no_newline() {
+        assert_eq!(trim_trailing_whitespace("hello   "), "hello");
+    }
+
+    #[test]
+    fn leading_whitespace_preserved() {
+        assert_eq!(trim_trailing_whitespace("  hello  \n  world  "), "  hello\n  world");
+    }
+
+    #[test]
+    fn preserves_internal_spaces() {
+        assert_eq!(trim_trailing_whitespace("hello  world   "), "hello  world");
     }
 }
 

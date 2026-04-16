@@ -29,6 +29,7 @@ fn preferences_roundtrip_all_fields() {
         audible_bell: false,
         visual_bell: true,
         smart_clipboard: true,
+        trim_trailing_whitespace_on_copy: true,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
         pane_navigation_keys: PaneNavigationKeys::AltArrow,
         auto_start_daemon: true,
@@ -239,4 +240,30 @@ fn paste_guard_backward_compat_missing_fields() {
     let loaded = preferences::load_from(&path);
     assert!(loaded.paste_guard);
     assert_eq!(loaded.paste_guard_threshold, 1024);
+}
+
+#[test]
+fn trim_trailing_whitespace_on_copy_defaults_to_false() {
+    let prefs = Preferences::default();
+    assert!(!prefs.trim_trailing_whitespace_on_copy);
+}
+
+#[test]
+fn trim_trailing_whitespace_on_copy_roundtrips() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+
+    let prefs = Preferences { trim_trailing_whitespace_on_copy: true, ..Default::default() };
+    preferences::save_to(&prefs, &path).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert!(loaded.trim_trailing_whitespace_on_copy);
+}
+
+#[test]
+fn trim_trailing_whitespace_on_copy_backward_compat_missing_field() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert!(!loaded.trim_trailing_whitespace_on_copy);
 }

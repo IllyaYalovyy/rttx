@@ -807,7 +807,7 @@ impl PersistentPaneView {
                 pane.imp().smart_clipboard.get(),
             ) {
                 TerminalKeyAction::CopySelection => {
-                    pane.vte().copy_clipboard_format(vte4::Format::Text);
+                    crate::terminal::copy_to_clipboard(pane.vte());
                     pane.vte().unselect_all();
                     glib::Propagation::Stop
                 }
