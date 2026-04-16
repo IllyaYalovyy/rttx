@@ -58,7 +58,8 @@ impl Pty {
         if config.command.len() > 1 {
             cmd = cmd.args(&config.command[1..]);
         }
-        if let Some(ref cwd) = config.cwd {
+        let effective_cwd = config.cwd.clone().or_else(home_dir).filter(|p| p.is_dir());
+        if let Some(ref cwd) = effective_cwd {
             cmd = cmd.current_dir(cwd);
         }
         cmd = cmd.env("TERM", "xterm-256color").env("COLORTERM", "truecolor");
@@ -132,6 +133,11 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
 
+/// Resolve the user's home directory from the environment.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME").ok().map(PathBuf::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +164,58 @@ mod tests {
             );
             pty.kill().expect("kill must succeed");
         });
+    }
+
+    #[test]
+    fn none_cwd_resolves_to_home_directory() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let home = std::env::var("HOME").expect("HOME must be set");
+            let config = PtyConfig {
+                command: vec!["/bin/sh".into(), "-c".into(), "pwd".into()],
+                cwd: None,
+                ..PtyConfig::default()
+            };
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let output = read_pty_output(&mut pty).await;
+            let cwd = output.trim();
+            assert_eq!(cwd, home, "PTY with cwd=None must start in $HOME, got {cwd}");
+        });
+    }
+
+    #[test]
+    fn explicit_cwd_is_used() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let config = PtyConfig {
+                command: vec!["/bin/sh".into(), "-c".into(), "pwd".into()],
+                cwd: Some(PathBuf::from("/tmp")),
+                ..PtyConfig::default()
+            };
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let output = read_pty_output(&mut pty).await;
+            let cwd = output.trim();
+            assert_eq!(cwd, "/tmp", "PTY with cwd=Some(\"/tmp\") must start in /tmp, got {cwd}");
+        });
+    }
+
+    async fn read_pty_output(pty: &mut Pty) -> String {
+        let mut buf = [0u8; 4096];
+        let mut output = String::new();
+        loop {
+            match pty.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => output.push_str(&String::from_utf8_lossy(&buf[..n])),
+            }
+        }
+        let _ = pty.wait().await;
+        output
+    }
+
+    #[test]
+    fn home_dir_returns_value_from_env() {
+        let result = home_dir();
+        let expected = std::env::var("HOME").ok().map(PathBuf::from);
+        assert_eq!(result, expected);
     }
 }
