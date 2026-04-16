@@ -1005,4 +1005,21 @@ mod search_tests {
         let light = crate::application::accent_css_for_dark(false);
         assert_ne!(dark, light);
     }
+
+    /// CPR responses must be stripped from VTE commit data so they do not
+    /// leak into the daemon's shell input. Regression for #633.
+    #[test]
+    fn cpr_responses_stripped_from_commit_data() {
+        use super::persistent_widget::strip_cpr_responses;
+
+        // Pure CPR response is fully removed.
+        assert_eq!(strip_cpr_responses(b"\x1b[1;6R").unwrap(), b"");
+
+        // Mouse sequences pass through unchanged.
+        assert!(strip_cpr_responses(b"\x1b[<0;5;10M").is_none());
+
+        // Mixed: mouse preserved, CPR removed.
+        let mixed = b"\x1b[<0;5;10M\x1b[1;6R";
+        assert_eq!(strip_cpr_responses(mixed).unwrap(), b"\x1b[<0;5;10M");
+    }
 }
