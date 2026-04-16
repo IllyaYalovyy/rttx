@@ -2215,7 +2215,7 @@ mod tests {
             "SSH timeout should be at least 10s to allow for slow networks"
         );
         assert!(
-            SSH_CONNECT_TIMEOUT <= Duration::from_secs(60),
+            SSH_CONNECT_TIMEOUT <= Duration::from_mins(1),
             "SSH timeout should not exceed 60s to avoid blocking the actor too long"
         );
     }
@@ -2526,6 +2526,18 @@ mod tests {
             reconnect_delay,
             Some(6),
             "delay should be min(saved_attempt+1, max) = min(6, 10) = 6"
+        );
+    }
+
+    #[test]
+    fn heartbeat_interval_is_within_bounds() {
+        assert!(
+            HEARTBEAT_INTERVAL >= Duration::from_millis(10),
+            "heartbeat should not fire more often than every 10ms"
+        );
+        assert!(
+            HEARTBEAT_INTERVAL <= Duration::from_secs(10),
+            "heartbeat should fire at least every 10s to detect stale connections"
         );
     }
 }
