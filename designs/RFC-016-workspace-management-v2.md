@@ -14,7 +14,7 @@
 Rework workspace creation, session attachment, split-pane creation, and the right sidebar to
 make the product action-oriented and consistent.
 
-The UI should lead with what the user wants to do:
+The UI leads with what the user wants to do:
 - create a new daemon-backed workspace
 - connect to an existing daemon-backed workspace
 - fall back to a direct connection when needed
@@ -87,33 +87,35 @@ instead of user-led.
 
 ### 1. Top bar actions
 
-Replace the current creation affordance with three primary actions:
+The current creation affordance uses three primary actions:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ [New ▾]  [Connect to Existing ▾]  [New Direct]   [Tools] [≡]     │
+│ [New ▾]  [Connect ▾]  [Direct]                    [Tools] [≡]    │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-These controls are action-oriented, not runtime-oriented.
+These controls are action-oriented, not runtime-oriented. The button labels are concise
+(`Connect`, `Direct`) while tooltips and accessible labels carry the full intent
+(`Connect to existing workspace`, `New direct workspace`).
 
 #### New
 
 Creates a new daemon-backed workspace.
 
-- The menu contains the local host plus saved remote hosts
+- The menu contains the local host plus saved remote hosts, with an "Add Host…" entry
 - Selecting a host opens the **New Workspace** dialog for that host
 - The dialog is the same for local and remote
 
-#### Connect to Existing
+#### Connect
 
 Attaches to an already-running daemon-backed workspace.
 
-- The menu contains the local host plus saved remote hosts
+- The menu contains the local host plus saved remote hosts, with an "Add Host…" entry
 - Selecting a host opens the **Connect to Existing** dialog for that host
 - The dialog is the same for local and remote
 
-#### New Direct
+#### Direct
 
 Creates a new direct workspace immediately.
 
@@ -131,7 +133,7 @@ main workflow.
 
 ### 2. Host model
 
-Local and remote should participate in the same selection model.
+Local and remote participate in the same selection model.
 
 ```rust
 struct Host {
@@ -188,8 +190,7 @@ This flow makes "new local" and "new remote" the same user experience.
 
 ### 4. Connect to Existing dialog
 
-When the user chooses a host from **Connect to Existing**, the GUI opens a session picker for
-that host.
+When the user chooses a host from **Connect**, the GUI opens a session picker for that host.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -210,7 +211,7 @@ that host.
 - The dialog shows all daemon-backed sessions discoverable on the selected host
 - Sessions connected by another client are visible but disabled
 - Sessions already attached by the same client are visible but disabled
-- Busy and already-open sessions must be visually distinct
+- Busy and already-open sessions are visually distinct
 - This RFC does not add takeover. That remains future work
 
 The key product rule is explicitness: the user is consciously in a "connect to existing"
@@ -225,13 +226,13 @@ flows.
 
 - Direct is a backup path
 - Direct is not the default
-- Direct should not shape the main mental model
+- Direct does not shape the main mental model
 
 This keeps the feature available without letting it stand in the way of the primary experience.
 
 ### 6. Places and commands
 
-Bookmarks are replaced with **Places**. Commands remain commands.
+Bookmarks were replaced with **Places**. Commands remain commands.
 
 Both are tag-based rather than single-host-bound.
 
@@ -269,19 +270,22 @@ Additional global places and commands are user-managed content.
 
 #### Migration
 
-Existing bookmarks are migrated as follows:
-- bookmark with only `directory` → local-tagged Place
-- bookmark with only `ssh_target` → Host
-- bookmark with `ssh_target` + `directory` → Place tagged with that host key
-- bookmark with `tmux_session` → dropped
+The old `Bookmark` type was removed entirely. Legacy persisted data is handled through
+backward-compatible deserialization stubs rather than an explicit data migration:
 
-Existing commands migrate into the new tag model:
-- local-only commands become tagged with `local`
-- commands that were intended to be global may later be retagged by the user
+- `PaneSource::Bookmark` deserializes as `PaneSource::Manual` — old bookmark-driven panes
+  lose their bookmark association on load but continue to function
+- `PaneSource::SessionTemplate` deserializes as `PaneSource::Manual`
+- `PaneTarget` variants `local-tmux` and `remote-tmux` deserialize as `None`
+
+For commands, `commands::migrate_legacy()` tags any untagged commands with `"local"` on load.
+
+Users create new Places and Hosts through the current UI rather than having old bookmarks
+automatically converted.
 
 ### 7. Host-aware right sidebar
 
-The right sidebar becomes host-aware, but not host-blind.
+The right sidebar is host-aware, but not host-blind.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -321,7 +325,7 @@ If a host record is deleted but items still reference that host key:
 
 - the tag remains intact
 - orphaned items appear in the **All Hosts** view under a clearly marked orphaned section
-- the UI renders orphaned host keys as missing (e.g. strikethrough or dimmed label)
+- the UI renders orphaned host keys with an `"(orphaned)"` suffix
 - cleanup is explicit, not automatic
 
 Automatic cleanup on host deletion is worse UX because it silently removes information users
@@ -355,16 +359,105 @@ creates cross-host or cross-runtime panes.
 
 ---
 
+## Implementation Snapshot
+
+All development plan items are complete. This section documents the actual code structure and
+any deviations from the original design.
+
+### Source locations
+
+| Component | File | Lines |
+|-----------|------|-------|
+| Host model, persistence, deletion | `clients/rttx/src/host.rs` | 462 |
+| Places model, builtins, persistence | `clients/rttx/src/places.rs` | 310 |
+| Commands model, host tags, migration | `clients/rttx/src/commands.rs` | 324 |
+| New Workspace dialog | `clients/rttx/src/new_workspace_dialog.rs` | 246 |
+| Connect to Existing dialog | `clients/rttx/src/connect_existing_dialog.rs` | 379 |
+| Host tag picker widget | `clients/rttx/src/host_tag_picker.rs` | 118 |
+| Places management window | `clients/rttx/src/places_window.rs` | — |
+| Commands management window | `clients/rttx/src/commands_window.rs` | — |
+| Sidebar row widget | `clients/rttx/src/sidebar.rs` | 502 |
+| Right sidebar (host selector, refresh) | `clients/rttx/src/window/sidebar.rs` | 535 |
+| Host deletion cleanup dialog | `clients/rttx/src/window/dialogs.rs` | 701 |
+| Top bar buttons and host menus | `clients/rttx/src/window/mod.rs` | — |
+| Keyboard shortcuts | `clients/rttx/src/window/actions.rs` | — |
+| Split pane (CWD cloning) | `clients/rttx/src/window/terminal.rs` | — |
+| Endpoint → host key bridge | `clients/rttx/src/runtime.rs` | — |
+| Legacy deserialization stubs | `clients/rttx/src/session/recovery.rs` | — |
+
+### Deviations from original design
+
+**Button labels.** The RFC originally proposed `Connect to Existing` and `New Direct` as
+button labels. The implementation uses shorter labels — `Connect` and `Direct` — with the
+full intent carried by tooltips and accessible labels. This follows GNOME HIG guidance for
+concise header bar controls.
+
+**Bookmark migration.** The RFC proposed explicit data migration (bookmark → Place, SSH
+bookmark → Host). The implementation instead removed the `Bookmark` type entirely and added
+backward-compatible deserialization stubs in `session/recovery.rs`. Legacy `Bookmark` pane
+sources deserialize as `Manual`; legacy tmux targets deserialize as `None`. Users create
+Places and Hosts fresh through the new UI. For commands, `migrate_legacy()` tags untagged
+commands with `"local"` on load.
+
+**Orphaned tag rendering.** The RFC suggested strikethrough or dimmed labels for orphaned
+host keys. The implementation appends `"(orphaned)"` as a text suffix in the All Hosts view.
+
+**Host menus include "Add Host…".** Both the New and Connect dropdown menus include an
+"Add Host…" entry at the bottom, allowing users to add a remote host inline without
+navigating to a separate settings page. This was not in the original design but follows
+naturally from the host selection model.
+
+### Test coverage
+
+| Area | Layer | Location |
+|------|-------|----------|
+| Host key normalization, dedup, resolution | Unit (24 tests) | `host.rs` |
+| Place visibility, builtins, search | Unit (15+ tests) | `places.rs` |
+| Command visibility, migration, search | Unit (24+ tests) | `commands.rs` |
+| Host sidebar integration | Integration (9 tests) | `tests/host_sidebar_tests.rs` |
+| Legacy bookmark/tmux deserialization | Unit (6 tests) | `session/recovery.rs` |
+| Host deletion affected items | Unit | `host.rs` |
+| Sidebar layout and visibility | AT-SPI behavioral | `tests/ui/test_sidebar.py` |
+| Sidebar content and host scoping | AT-SPI behavioral | `tests/ui/test_sidebar_content.py` |
+| Split pane CWD propagation | AT-SPI behavioral | `tests/ui/test_split.py` |
+| Top bar button accessibility | AT-SPI behavioral | `tests/ui/test_managed_blackbox.py` |
+
+### Persistence
+
+- Hosts are persisted to `hosts.json` in the config directory
+- Places are persisted to `places.json` in the config directory
+- Commands are persisted to `commands.json` in the config directory
+- All three use `#[serde(default)]` for forward compatibility
+
+### Related issues
+
+Key implementation issues (all closed):
+- #424 — Introduce canonical Host model with stable host keys
+- #425 — Replace top bar with New / Connect to Existing / New Direct actions
+- #426 — Add New Workspace dialog with host-scoped place selection
+- #427 — Add Connect to Existing dialog with available/busy session state
+- #428 — Replace bookmarks with Places model and host tagging
+- #429 — Update commands to use host tags instead of single-host binding
+- #430 — Rework right sidebar with host selector, search, and tagged content
+- #431 — Add host deletion cleanup dialog
+- #432 — Remove tmux-related data model and UI paths
+- #433 — Remove template-related UI and data paths
+- #473 — Set accessible names on New / Connect / Direct top bar buttons
+- #483 — Remove legacy Bookmark struct after migration stabilizes
+- #484 — Verify RFC-016 completeness and mark as Implemented
+
+---
+
 ## Goals Alignment
 
 | Goal | How addressed |
 |------|---------------|
-| G1 — Explicit primary actions | Top bar uses `New`, `Connect to Existing`, `New Direct` |
-| G2 — Same local/remote model | Both flows begin with host selection |
+| G1 — Explicit primary actions | Top bar uses `New`, `Connect`, `Direct` with full-intent tooltips |
+| G2 — Same local/remote model | Both flows begin with host selection from the same menu |
 | G3 — Explicit session discovery | Existing sessions are reachable only through a dedicated attach flow |
 | G4 — Host-aware but manageable sidebar | Default host-following selector, global section, orphan visibility |
 | G5 — Direct as backup | Direct remains available but secondary |
-| G6 — Remove dead weight | Tmux and templates are dropped |
+| G6 — Remove dead weight | Tmux and templates are dropped; legacy data handled by deserialization stubs |
 
 ---
 
@@ -401,5 +494,8 @@ creates cross-host or cross-runtime panes.
 ## References
 
 - [RFC-002: Adwaita Modernization & SessionRow Redesign](./RFC-002-adwaita-modernization.md)
+- [RFC-006: Commands Sidebar](./RFC-006-commands-sidebar.md)
 - [RFC-013: Persistent Host Sessions](./RFC-013-persistent-host-sessions.md)
 - [RFC-015: Workspace Sidebar Row Content Specification](./RFC-015-workspace-sidebar-rows.md)
+- [RFC-018: Workspace Connection State Machine](./RFC-018-workspace-connection-state-machine.md)
+- [RFC-023: Client Configuration State Store](./RFC-023-client-configuration-state-store.md)
