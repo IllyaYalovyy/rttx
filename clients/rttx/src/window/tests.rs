@@ -5372,3 +5372,75 @@ fn close_last_managed_workspace_persists_clean_state() {
 
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// When the terminal widget has no CWD (e.g. managed pane before OSC 7),
+/// `split_terminal` should fall back to the layout node's CWD.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn split_falls_back_to_layout_cwd_when_terminal_has_none() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.split-layout-cwd-fallback")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1200, 800);
+    window.present();
+    pump_events(100);
+
+    let t1_uuid = {
+        let state = window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+
+    // Set CWD on the layout node only — the terminal widget has no CWD.
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions[0].layout.set_terminal_cwd(&t1_uuid, Some("/srv/project".into()));
+    }
+
+    // Confirm the terminal widget itself has no CWD.
+    {
+        let terminals = window.imp().terminals.borrow();
+        let t1 = terminals.get(&t1_uuid).unwrap();
+        assert!(
+            t1.current_directory().is_none(),
+            "precondition: terminal widget should have no CWD"
+        );
+    }
+
+    window.split_terminal(&t1_uuid, SplitOrientation::Horizontal);
+
+    let (t2_uuid, t2_cwd) = {
+        let state = window.imp().state.borrow();
+        let uuids = state.sessions[0].layout.terminal_uuids();
+        let t2 = uuids.into_iter().find(|u| u != &t1_uuid).unwrap();
+        let cwd = state.sessions[0].layout.terminal_cwd(&t2);
+        (t2, cwd)
+    };
+
+    assert_eq!(
+        t2_cwd.as_deref(),
+        Some("/srv/project"),
+        "new pane should inherit CWD from layout node when terminal widget has none"
+    );
+
+    {
+        let terminals = window.imp().terminals.borrow();
+        let t2 = terminals.get(&t2_uuid).unwrap();
+        assert_eq!(
+            t2.initial_cwd_for_test(),
+            Some("/srv/project".to_string()),
+            "new TerminalWidget should receive layout-fallback CWD"
+        );
+    }
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

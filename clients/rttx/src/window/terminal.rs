@@ -267,7 +267,7 @@ impl Window {
 
         let imp = self.imp();
 
-        let source_cwd =
+        let terminal_cwd =
             self.terminal_handle(terminal_uuid).and_then(|terminal| terminal.current_directory());
 
         let mut state = imp.state.borrow_mut();
@@ -287,10 +287,13 @@ impl Window {
                 return;
             }
 
+            // Fall back to the layout node's CWD when the terminal widget has none.
+            let source_cwd =
+                terminal_cwd.or_else(|| state.sessions[idx].layout.terminal_cwd(terminal_uuid));
+
             if let Some((mut new_layout, new_terminal_uuid)) =
                 state.sessions[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
-                // Propagate the source terminal's CWD to the new terminal node.
                 if let Some(cwd) = &source_cwd {
                     new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd.clone()));
                 }
@@ -307,6 +310,7 @@ impl Window {
                     terminal_uuid,
                     &new_terminal_uuid,
                     orientation,
+                    source_cwd.as_deref(),
                 ) {
                     self.refresh_sidebar_subtitle(&session_uuid);
                 } else {
@@ -416,6 +420,7 @@ impl Window {
         target_uuid: &str,
         new_terminal_uuid: &str,
         orientation: SplitOrientation,
+        source_cwd: Option<&str>,
     ) -> bool {
         let imp = self.imp();
         let target = {
@@ -436,7 +441,7 @@ impl Window {
             SplitOrientation::Vertical => target.height() / 2,
         };
 
-        let inherited_cwd = target.current_directory();
+        let inherited_cwd = target.current_directory().or_else(|| source_cwd.map(str::to_string));
         let new_term = TerminalWidget::new(new_terminal_uuid, inherited_cwd.as_deref());
         self.connect_terminal_signals(&new_term);
         imp.terminals.borrow_mut().insert(new_terminal_uuid.to_string(), new_term.clone());

@@ -264,6 +264,9 @@ impl Window {
         }
 
         let placeholder_terminal_uuid = session_state.layout.terminal_uuids().into_iter().next();
+        let cwd = placeholder_terminal_uuid
+            .as_deref()
+            .and_then(|uuid| session_state.layout.terminal_cwd(uuid));
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
             manager.open_workspace(
                 &session_state.uuid,
@@ -272,6 +275,7 @@ impl Window {
                 session_state.runtime.policy,
                 session_state.runtime.runtime_id.as_deref(),
                 placeholder_terminal_uuid.as_deref(),
+                cwd.as_deref(),
             );
         }
     }
