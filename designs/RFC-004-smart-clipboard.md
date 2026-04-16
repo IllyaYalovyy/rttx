@@ -47,7 +47,7 @@ keystroke.
 | Audience | Impact |
 | --- | --- |
 | End users | Optional: `Ctrl+C` copies selected text; `Ctrl+V` pastes — matches IDE conventions |
-| Contributors | Minimal: one `ShortcutController` on `TerminalWidget`; one boolean preference |
+| Contributors | Minimal: one `EventControllerKey` per terminal widget; one boolean preference |
 | Packagers | None |
 
 ---
@@ -93,23 +93,89 @@ preference governs both keys.
 
 ## Design
 
-A `gtk4::ShortcutController` is added to `TerminalWidget` at construction time. It runs in the
-`Capture` propagation phase and `Local` scope to intercept shortcuts before VTE's default handler.
-The callbacks downcast the widget to read the live preference value from `imp().smart_clipboard`,
-avoiding stale-capture bugs from `Cell::clone()`.
+Key interception is handled by a centralized `terminal_key_action()` function that determines the
+correct action for any key event based on the terminal backend type, modifier state, selection
+state, and smart clipboard preference. This function is shared by both direct (`TerminalWidget`)
+and managed (`PersistentPaneView`) terminal paths.
+
+Modifier normalization strips non-shortcut modifiers (pointer buttons, lock keys) before matching,
+so `Ctrl+C` with Caps Lock or a mouse button held down still triggers the clipboard action.
+
+### Direct terminals (`TerminalWidget`)
+
+A `gtk4::EventControllerKey` is added to the VTE widget at construction time. It runs in the
+`Capture` propagation phase to intercept key events before VTE's default handler. The callback
+upgrades a weak reference to the widget to read the live `smart_clipboard` preference value,
+then delegates to `terminal_key_action()`.
+
+### Managed terminals (`PersistentPaneView`)
+
+The managed terminal's input `EventControllerKey` (which already intercepts all keys to forward
+them to the daemon PTY) calls the same `terminal_key_action()` function. Smart clipboard actions
+are handled identically; other keys are encoded and forwarded to the daemon.
+
+### Key action logic
 
 ```text
-ShortcutController (Capture phase, Local scope)
-  Ctrl+C pressed:
-    if smart_clipboard and vte.has_selection() → copy_clipboard_format(Text) → unselect_all() → Stop
-    else → Proceed (shell receives \x03)
-  Ctrl+V pressed:
-    if smart_clipboard → paste_clipboard() → Stop propagation
-    else → Proceed (shell receives \x16)
+terminal_key_action(backend, key, modifiers, has_selection, smart_clipboard_enabled):
+  normalized = strip non-shortcut modifiers
+
+  if smart_clipboard_enabled and normalized == Ctrl:
+    Ctrl+C with selection → CopySelection
+    Ctrl+V              → PasteClipboard
+
+  (managed backend only) if normalized == Ctrl+Shift:
+    Ctrl+Shift+C with selection → CopySelection
+    Ctrl+Shift+V               → PasteClipboard
+
+  ... remaining key handling per backend
 ```
 
-Preference: `smart_clipboard: bool` in `Preferences`, default `false`.
-Toggle exposed in `AdwPreferencesWindow` under the Terminal section.
+When `CopySelection` fires: `vte.copy_clipboard_format(Text)` then `vte.unselect_all()`.
+When `PasteClipboard` fires: activates `win.paste` action on the parent window.
+
+### Preference
+
+`smart_clipboard: bool` in `Preferences`, default `false`. Stored in the user's preferences JSON
+file with `#[serde(default)]` for backward compatibility.
+
+Toggle exposed in `AdwPreferencesWindow` as an `adw::SwitchRow` titled "Smart Ctrl+C / Ctrl+V"
+in the Terminal section.
+
+---
+
+## Implementation Snapshot
+
+### Source locations
+
+| Component | File |
+| --- | --- |
+| Key action logic | `clients/rttx/src/terminal/mod.rs` — `smart_clipboard_action()`, `terminal_key_action()` |
+| Modifier normalization | `clients/rttx/src/terminal/mod.rs` — `normalized_shortcut_modifiers()` |
+| Direct terminal controller | `clients/rttx/src/terminal/widget.rs` — `EventControllerKey` in `constructed()` |
+| Managed terminal controller | `clients/rttx/src/terminal/persistent_widget.rs` — `connect_input()` |
+| Preference storage | `clients/rttx/src/preferences.rs` — `smart_clipboard: bool` |
+| Preference UI | `clients/rttx/src/preferences_window.rs` — `SwitchRow` |
+| Preference application | `clients/rttx/src/window/input.rs` — `apply_preferences_to_terminal()`, `apply_preferences_to_persistent_pane()` |
+
+### Test coverage
+
+| Test | Layer | What it verifies |
+| --- | --- | --- |
+| `smart_clipboard_only_copies_selected_ctrl_c` | Unit | Ctrl+C copies only when selection exists and feature is enabled |
+| `smart_clipboard_paste_requires_plain_ctrl_v_and_opt_in` | Unit | Ctrl+V requires opt-in, rejects Ctrl+Shift+V and disabled state |
+| `smart_clipboard_ignores_extra_non_shortcut_modifiers_for_ctrl_shortcuts` | Unit | Lock keys and pointer buttons do not block clipboard shortcuts |
+| `smart_clipboard_key_controller_ignores_extra_non_shortcut_modifiers` | GTK widget | Live EventControllerKey handles modifier normalization |
+| `smart_clipboard_preference_reaches_live_terminals` | GTK widget | Preference toggle propagates to live terminal widgets |
+| `direct_and_managed_share_clipboard_policy` | Unit | Both backends produce the same clipboard action for the same inputs |
+| `managed_ctrl_v_prefers_clipboard_paste_over_shell_syn` | Unit | Managed backend routes Ctrl+V to clipboard, not PTY |
+
+### Resolved issues
+
+- **#169** — Managed pane key input swallows clipboard shortcuts
+- **#175** — Ctrl+V smart clipboard breaks when lock modifiers are present
+- **#180** — Ctrl+V can fail when GTK reports extra lock modifiers
+- **#233** — Managed workspaces: Ctrl+V does not paste clipboard text
 
 ---
 
@@ -126,11 +192,16 @@ Toggle exposed in `AdwPreferencesWindow` under the Terminal section.
 ## Development Plan
 
 - [x] Add `smart_clipboard: bool` to `Preferences`
-- [x] Add `ShortcutController` to `TerminalWidget` (Capture phase, Local scope)
+- [x] Add `EventControllerKey` to `TerminalWidget` (Capture phase)
 - [x] Implement `Ctrl+C` selection-guard copy
 - [x] Implement `Ctrl+V` conditional paste
-- [x] Expose toggle in `AdwPreferencesWindow`
-- [x] Fix: callbacks read live preference via widget downcast, not stale `Cell::clone()`
-- [x] Test: `set_smart_clipboard_takes_effect_after_construction` regression test
+- [x] Expose toggle in `AdwPreferencesWindow` as `SwitchRow`
+- [x] Fix: callbacks read live preference via weak reference upgrade, not stale `Cell::clone()`
+- [x] Centralize key action logic in `terminal_key_action()` shared by both backends
+- [x] Add smart clipboard support to managed terminals (`PersistentPaneView`)
+- [x] Normalize modifiers to ignore lock keys and pointer buttons (#175, #180)
+- [x] Unit tests for key action logic (copy, paste, modifier normalization)
+- [x] GTK widget test for live preference propagation
+- [x] GTK widget test for EventControllerKey modifier handling
 
 ---
