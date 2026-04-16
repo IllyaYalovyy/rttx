@@ -363,7 +363,7 @@ async fn wrapped_shell_line_editing_survives_detach_and_reattach() {
     reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
 
     send_input(&mut client, &session_id, &pane_id, b"c\r").await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
     assert!(
