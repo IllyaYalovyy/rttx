@@ -77,9 +77,9 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     );
 }
 
-/// Pane created without CWD should still work (spawns in default directory). #297.
+/// Pane created without CWD should start in the user's home directory. #644.
 #[tokio::test]
-async fn create_pane_without_cwd_uses_default() {
+async fn create_pane_without_cwd_starts_in_home_directory() {
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, _handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&socket_path).await;
@@ -97,6 +97,44 @@ async fn create_pane_without_cwd_uses_default() {
         other => panic!("expected SessionCreated, got {other:?}"),
     };
 
-    // Should not panic — None CWD is valid.
-    let _pane_id = create_pane_with_cwd(&mut client, &session_id, None).await;
+    let pane_id = create_pane_with_cwd(&mut client, &session_id, None).await;
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
+            session_id: session_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    client.send(&attach).await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            session_id: session_id.clone(),
+            pane_id: pane_id.clone(),
+            data: bytes::Bytes::from_static(b"pwd\n"),
+        })),
+    };
+    client.send(&input).await;
+
+    let home = std::env::var("HOME").expect("HOME must be set");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut output = String::new();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
+            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+        {
+            output.push_str(&String::from_utf8_lossy(&delta.data));
+            if output.contains(&home) {
+                return;
+            }
+        }
+    }
+    panic!("pwd output did not contain home directory {home:?} within timeout.\nOutput: {output}");
 }
