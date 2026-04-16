@@ -85,7 +85,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         };
 
     if !foreground {
-        let daemon = daemonize::Daemonize::new().pid_file(&pid_path).working_directory(".");
+        let daemon = daemonize::Daemonize::new().pid_file(&pid_path).working_directory("/");
 
         match daemon.start() {
             Ok(()) => {}
