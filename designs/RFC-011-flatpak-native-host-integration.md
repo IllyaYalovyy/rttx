@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted / In Progress  |
+| Status        | Accepted / Partially Implemented |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
@@ -14,14 +14,38 @@
 > that assumes direct VTE sessions are the long-term primary execution path is superseded by
 > RFC-013.
 
-## Current implementation snapshot (2026-03)
+## Current implementation snapshot (2026-04)
 
-- The repo is now a monorepo, and packaging assets live under `packaging/rttx/`.
+- The repo is a monorepo; packaging assets live under `packaging/rttx/`.
 - The daemon-backed runtime architecture from RFC-013 is the live baseline on `mainline`.
-- The Flatpak manifest and release workflow exist in-repo, but the broader host-integration and
-  permission profile decisions in this RFC are still an ongoing packaging/design track.
-- Any “host shell” or deeper Flatpak-native integration work must now layer on top of the
-  daemon-backed runtime model, not the earlier direct-terminal assumptions.
+  The daemon (`rttx-server`) owns all PTYs and runs on the host, not inside the Flatpak sandbox.
+  The GUI client connects to the daemon via Unix socket. This fundamentally changes the Flatpak
+  integration model: the `flatpak-spawn --host` approach described in this RFC applies to daemon
+  communication rather than direct VTE shell spawning.
+- The Flatpak manifest exists at `packaging/rttx/io.github.IllyaYalovyy.rttx.json` and bundles
+  VTE 0.78.7 against the GNOME 49 runtime. Offline Cargo dependencies are listed in
+  `packaging/rttx/flatpak/cargo-sources.json`.
+- The release workflow (`.github/workflows/release.yml`) builds a Flatpak bundle on version tags.
+- The base manifest ships a conservative permission set (no `--talk-name=org.freedesktop.Flatpak`
+  in the default manifest), matching the "safe default" profile described in this RFC.
+- The README documents host shell access as an opt-in override with `flatpak override` commands
+  for `org.freedesktop.Flatpak`, `--filesystem=home`, `--socket=ssh-auth`, and
+  `--socket=gpg-agent`.
+- Rollout Phase 1 (packaging skeleton) is complete. Phase 2–4 (safe default productization,
+  native host mode, native-feel polish) are partially addressed through the daemon architecture
+  and README documentation, but the Flatpak-specific first-run UX and in-app mode detection
+  described in this RFC are not yet implemented.
+- Flathub submission (Phase 5) has not been started.
+
+### Deviations from original design
+
+| Area | RFC design | Actual implementation |
+|---|---|---|
+| Terminal execution model | Client-side `flatpak-spawn --host` for shell launching | Daemon runs on host and owns PTYs; client connects via Unix socket |
+| Host agent (section 10) | Deferred as premature | `rttx-server` daemon exists and serves this role for PTY ownership |
+| First-run UX (section 9) | In-app sandbox/host mode indicator and one-time hint | Not yet implemented; README documents overrides instead |
+| `packaging/rttx/flatpak/README.md` | Recommended in section 11 | Does not exist; setup guidance lives in the main README |
+| CI Flatpak smoke test | Recommended in section 11 | Release workflow builds the bundle but does not run a smoke test |
 
 ## Summary
 
@@ -101,11 +125,11 @@ The current codebase is still a good base for this design:
 - bookmark/session recovery already feeds ordinary shell commands such as `ssh` and `tmux` into the
   terminal rather than depending on custom IPC
 - clickable paths and links open through
-  [`gio::AppInfo::launch_default_for_uri()`](../clients/rttx/src/terminal/widget.rs),
+  [`gio::AppInfo::launch_default_for_uri()`](../clients/rttx/src/terminal/links.rs),
   which aligns well with portal-backed desktop integration
 - notifications go through
-  [`gio::Notification`](../clients/rttx/src/window.rs), which GTK desktops and portals already
-  understand
+  [`gio::Notification`](../clients/rttx/src/window/sidebar.rs), which GTK desktops and portals
+  already understand
 - config lives under `glib::user_config_dir()` in
   [`clients/rttx/src/config.rs`](../clients/rttx/src/config.rs), so the app already respects
   XDG-style
@@ -280,7 +304,15 @@ This profile is for:
 
 ### 3. Terminal execution model
 
-`rttx` should support both shell launch paths internally.
+> **Implementation note (2026-04):** The daemon-backed architecture from RFC-013 changes this
+> section significantly. The daemon (`rttx-server`) runs on the host and owns all PTYs. The
+> Flatpak-sandboxed GUI client connects to the daemon via Unix socket rather than spawning shells
+> directly via VTE. The `flatpak-spawn --host` mechanism is relevant for starting or communicating
+> with the host-side daemon, not for individual shell launches. The client-side `spawn_shell` in
+> `terminal/widget.rs` is only used for the standalone fallback terminal widget, not for
+> daemon-backed workspaces.
+
+The original design assumed the client would support both shell launch paths internally.
 
 Baseline launch path:
 
@@ -293,7 +325,12 @@ Native-mode launch path:
 with explicit arguments that start the user's host shell as a login shell in the desired working
 directory.
 
-Recommended implementation shape:
+With the daemon architecture, the Flatpak integration question becomes: how does the sandboxed
+client reach the host-side daemon? The daemon listens on a Unix socket under
+`$XDG_RUNTIME_DIR/rttx-server/v1/`. In Flatpak, the client needs either `--filesystem` access to
+the socket path or `--talk-name=org.freedesktop.Flatpak` to spawn the daemon on the host.
+
+The original recommended implementation shape remains relevant for the standalone fallback widget:
 
 - extract shell launch construction into a small dedicated module such as `src/terminal/launch.rs`
 - detect Flatpak via `FLATPAK_ID` or `/.flatpak-info`
@@ -457,38 +494,51 @@ The key principle is clarity:
 
 ### 10. When a host agent becomes necessary
 
-The current design deliberately avoids shipping a helper daemon on day one.
+> **Implementation note (2026-04):** The `rttx-server` daemon from RFC-013 now fills the role of
+> the "host agent" discussed here. It runs on the host, owns all PTYs, manages process lifetime,
+> tracks working directories and pane titles, and persists scrollback. The question is no longer
+> whether to ship a host-side daemon, but whether the existing daemon covers all Flatpak-specific
+> host integration needs.
 
-However, a host agent becomes justified if we later need:
+The original design deliberately avoided shipping a helper daemon on day one.
 
-- reliable host PID / foreground process inspection
-- shell semantic tracking that breaks under PID namespace boundaries
-- stronger current-directory/process-title tracking than the shell escape sequence path provides
+The daemon now exists and handles:
+
+- PTY ownership and shell spawning on the host
+- working directory and pane title tracking
+- scrollback persistence and replay
+- runtime lifecycle (ephemeral and persistent policies)
+
+Remaining gaps that may still require additional Flatpak-specific work:
+
+- reliable host PID / foreground process inspection across namespace boundaries
 - container or remote-host awareness comparable to Ptyxis
 
-For the current feature set, this is not a blocker.
+The important distinction remains:
 
-The important distinction is:
-
-- host shell launching is required now
-- host process introspection is not
+- host shell launching is handled by the daemon
+- advanced host process introspection beyond what the daemon provides is not yet needed
 
 ### 11. Manifest and repository layout
 
-Recommended repo additions:
+> **Implementation note (2026-04):** The manifest and cargo-sources.json are implemented. The
+> Flatpak README is not; setup guidance lives in the main README instead.
 
-- `packaging/rttx/io.github.IllyaYalovyy.rttx.json`
-- `packaging/rttx/flatpak/cargo-sources.json`
-- `packaging/rttx/flatpak/README.md`
+Implemented repo additions:
 
-Recommended CI tasks:
+- `packaging/rttx/io.github.IllyaYalovyy.rttx.json` — ✅ exists
+- `packaging/rttx/flatpak/cargo-sources.json` — ✅ exists
+- `packaging/rttx/flatpak/build-bundle.sh` — ✅ exists (not in original plan)
+- `packaging/rttx/flatpak/README.md` — ❌ not created; guidance is in the main README
 
-1. regenerate cargo sources when `Cargo.lock` changes
-2. build the Flatpak manifest in CI
-3. run the app smoke test in Flatpak
-4. export a test bundle for manual QA
+CI tasks status:
 
-The Flatpak packaging should live in `packaging/rttx/`, not in ad hoc root-level files.
+1. regenerate cargo sources when `Cargo.lock` changes — manual process documented in README
+2. build the Flatpak manifest in CI — ✅ release workflow builds the bundle on version tags
+3. run the app smoke test in Flatpak — ❌ not implemented
+4. export a test bundle for manual QA — ✅ `build-bundle.sh` and release workflow artifact
+
+The Flatpak packaging lives in `packaging/rttx/`, as recommended.
 
 ### 12. User-facing setup guidance
 
@@ -518,13 +568,14 @@ This documentation is part of the product. Without it, support cost will go up i
 
 Not trivial, but very realistic.
 
-### Why it is feasible
+### Why it is feasible — confirmed
 
-- the app already centralizes shell spawning in one place
-- the recovery model already uses shell commands rather than deep host-specific plumbing
-- GTK already aligns with portal-backed notifications and URI handling
-- config and app identity already fit modern desktop packaging conventions
-- current `rttx` does not yet depend on advanced host PID inspection that would force a host agent
+- the daemon centralizes shell spawning on the host — ✅ confirmed by RFC-013 implementation
+- the recovery model uses shell commands rather than deep host-specific plumbing — ✅ confirmed
+- GTK aligns with portal-backed notifications and URI handling — ✅ confirmed
+- config and app identity fit modern desktop packaging conventions — ✅ confirmed
+- the daemon handles host process ownership without requiring a separate Flatpak-specific agent —
+  ✅ confirmed
 
 ### Main risks
 
@@ -562,12 +613,15 @@ Flatpak will never reproduce every host customization automatically. The design 
 
 not for magical parity with every hand-tuned host setup.
 
-### Practical effort estimate
+### Practical effort estimate — updated
 
-- Packaging + manifest work: moderate
-- App code changes for dual sandbox/host-shell mode: moderate
-- Documentation and QA: moderate to high
-- Need for a host agent immediately: low
+- Packaging + manifest work: ✅ complete (manifest, cargo-sources, build-bundle script, release
+  workflow)
+- App code changes for dual sandbox/host-shell mode: largely superseded by daemon architecture;
+  remaining work is Flatpak-specific daemon connectivity and first-run UX
+- Documentation and QA: partially complete (README documents install and overrides); cross-distro
+  Flatpak QA and Flathub submission remain
+- Need for a host agent immediately: resolved — `rttx-server` daemon serves this role
 
 ### What this means strategically
 
@@ -582,31 +636,34 @@ But that is not this product's goal.
 
 ## Rollout Plan
 
-### Phase 1 — Packaging skeleton
+### Phase 1 — Packaging skeleton ✅ Complete
 
-- add Flatpak manifest and cargo source generation
-- build successfully against GNOME runtime
-- verify app launches in sandbox-shell fallback mode
+- add Flatpak manifest and cargo source generation — ✅ done
+- build successfully against GNOME runtime — ✅ GNOME 49, VTE 0.78.7 bundled
+- verify app launches in sandbox-shell fallback mode — ✅ done
 
-### Phase 2 — Safe default productization
+### Phase 2 — Safe default productization — Partially complete
 
-- verify sandbox-shell mode is stable and clearly documented
-- add first-run/setup UX for optional native mode
-- verify links, notifications, themes, fonts, and persistence in the default profile
+- verify sandbox-shell mode is stable and clearly documented — ✅ README documents the default
+- add first-run/setup UX for optional native mode — ❌ not implemented
+- verify links, notifications, themes, fonts, and persistence in the default profile — pending
 
-### Phase 3 — Native host mode
+### Phase 3 — Native host mode — Partially addressed by daemon architecture
 
-- implement Flatpak-aware shell launch builder
-- make host-shell mode activate when permission is present
-- verify local-folder, SSH, and tmux recovery on host
+- implement Flatpak-aware shell launch builder — superseded by daemon-backed PTY ownership
+- make host-shell mode activate when permission is present — the daemon runs on the host; the
+  client needs `org.freedesktop.Flatpak` or socket access to reach it
+- verify local-folder, SSH, and tmux recovery on host — recovery works through the daemon
 
-### Phase 4 — Native-feel polish
+### Phase 4 — Native-feel polish — Partially complete
 
-- validate notifications, URI opening, theme behavior, fonts, icons
-- test on Fedora, Ubuntu, and one non-GNOME distro
-- write user-facing setup and troubleshooting guide
+- validate notifications, URI opening, theme behavior, fonts, icons — pending
+- test on Fedora, Ubuntu, and one non-GNOME distro — Fedora tested via COPR; Flatpak cross-distro
+  testing pending
+- write user-facing setup and troubleshooting guide — ✅ README documents Flatpak install and
+  host shell access overrides
 
-### Phase 5 — Flathub submission
+### Phase 5 — Flathub submission — Not started
 
 Complete the following steps once the manifest is stable and the native-mode implementation
 is done (or submit the safe-default manifest first and add native mode in a follow-up PR).
@@ -667,10 +724,11 @@ updated manifest to that repository — no further PRs to `flathub/flathub` are 
 The CI release pipeline (`release.yml`) should be extended to commit the new manifest there
 on each version tag.
 
-### Phase 6 — Reassess helper needs
+### Phase 6 — Reassess helper needs — Partially superseded
 
-- only if real bugs show namespace/process-tracking limitations
-- consider a small host helper then, not earlier
+- the `rttx-server` daemon now handles PTY ownership and process lifecycle on the host
+- remaining question: whether additional Flatpak-specific host integration is needed beyond what
+  the daemon provides (e.g., PID namespace visibility, foreground process detection)
 
 ---
 
@@ -715,7 +773,23 @@ Supplementary references:
 Local implementation references:
 
 - [`clients/rttx/Cargo.toml`](../clients/rttx/Cargo.toml)
-- [`clients/rttx/src/terminal/widget.rs`](../clients/rttx/src/terminal/widget.rs)
-- [`clients/rttx/src/window.rs`](../clients/rttx/src/window.rs)
-- [`clients/rttx/src/config.rs`](../clients/rttx/src/config.rs)
+- [`clients/rttx/src/terminal/widget.rs`](../clients/rttx/src/terminal/widget.rs) — standalone
+  fallback shell spawning
+- [`clients/rttx/src/terminal/links.rs`](../clients/rttx/src/terminal/links.rs) — URI launching
+  via `gio::AppInfo::launch_default_for_uri()`
+- [`clients/rttx/src/window/`](../clients/rttx/src/window/) — window module directory (formerly
+  `window.rs`, split per RFC-010)
+- [`clients/rttx/src/window/sidebar.rs`](../clients/rttx/src/window/sidebar.rs) — desktop
+  notifications via `gio::Notification`
+- [`clients/rttx/src/config.rs`](../clients/rttx/src/config.rs) — XDG-compliant config paths
+- [`packaging/rttx/io.github.IllyaYalovyy.rttx.json`](../packaging/rttx/io.github.IllyaYalovyy.rttx.json)
+  — Flatpak manifest
+- [`packaging/rttx/flatpak/cargo-sources.json`](../packaging/rttx/flatpak/cargo-sources.json) —
+  offline Cargo dependencies for Flatpak builds
+- [`packaging/rttx/flatpak/build-bundle.sh`](../packaging/rttx/flatpak/build-bundle.sh) — local
+  Flatpak bundle build script
+- [`.github/workflows/release.yml`](../.github/workflows/release.yml) — release workflow with
+  Flatpak build job
 - [`designs/RFC-005-distribution-packaging.md`](RFC-005-distribution-packaging.md)
+- [`designs/RFC-013-persistent-host-sessions.md`](RFC-013-persistent-host-sessions.md) — daemon
+  architecture that supersedes the direct-terminal execution model
