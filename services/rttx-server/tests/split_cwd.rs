@@ -77,7 +77,32 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     );
 }
 
-/// Pane created without CWD should start in the user's home directory. #644.
+/// Pane created without CWD should still work (spawns in default directory). #297.
+#[tokio::test]
+async fn create_pane_without_cwd_uses_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let create = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            name: "no-cwd-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    client.send(&create).await;
+    let session_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
+        other => panic!("expected SessionCreated, got {other:?}"),
+    };
+
+    // Should not panic — None CWD is valid.
+    let _pane_id = create_pane_with_cwd(&mut client, &session_id, None).await;
+}
+
+/// Pane created without CWD starts in the user's home directory, not the
+/// daemon's working directory. Regression test for #644.
 #[tokio::test]
 async fn create_pane_without_cwd_starts_in_home_directory() {
     let tmp = tempfile::tempdir().unwrap();
@@ -87,7 +112,7 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
 
     let create = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
-            name: "no-cwd-test".into(),
+            name: "home-cwd-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
