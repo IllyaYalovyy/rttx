@@ -1,5 +1,7 @@
 use gtk4::prelude::*;
 use rttx::session::{self, *};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
@@ -459,5 +461,52 @@ fn build_layout_widget_does_not_set_magic_paned_position() {
         0,
         "build_layout_widget must not set a hardcoded paned position; \
          position application is deferred to schedule_initial_paned_ratios"
+    );
+}
+
+/// After splitting a terminal whose layout node carries a CWD, the source
+/// terminal's CWD must remain accessible and the new terminal's widget
+/// builder receives the propagated CWD.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn split_layout_propagates_source_cwd_to_new_terminal_widget() {
+    require_display!();
+
+    let layout = LayoutNode::Terminal {
+        uuid: "src".into(),
+        profile: None,
+        cwd: Some("/srv/project".into()),
+        custom_title: None,
+    };
+
+    let (mut new_layout, new_uuid) =
+        layout.split_terminal_with_new_uuid("src", SplitOrientation::Horizontal).unwrap();
+
+    // Propagate source CWD to the new terminal (mirrors what split_terminal does).
+    if let Some(cwd) = new_layout.terminal_cwd("src") {
+        new_layout.set_terminal_cwd(&new_uuid, Some(cwd));
+    }
+
+    let received_cwds: Rc<RefCell<Vec<_>>> = Rc::default();
+    let captured = received_cwds.clone();
+
+    let _widget = session::build_layout_widget(&new_layout, &|spec| {
+        captured.borrow_mut().push((spec.uuid.to_string(), spec.cwd.map(str::to_string)));
+        gtk4::Label::new(Some(spec.uuid)).upcast()
+    });
+
+    let cwds = received_cwds.borrow();
+    let src_entry = cwds.iter().find(|(u, _)| u == "src").unwrap();
+    let new_entry = cwds.iter().find(|(u, _)| u == &new_uuid).unwrap();
+
+    assert_eq!(
+        src_entry.1.as_deref(),
+        Some("/srv/project"),
+        "source terminal builder spec should carry its CWD"
+    );
+    assert_eq!(
+        new_entry.1.as_deref(),
+        Some("/srv/project"),
+        "new terminal builder spec should inherit propagated CWD"
     );
 }

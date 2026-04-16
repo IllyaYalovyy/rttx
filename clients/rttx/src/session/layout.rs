@@ -980,6 +980,29 @@ mod tests {
     }
 
     #[test]
+    fn split_preserves_source_terminal_cwd_in_layout() {
+        let layout = LayoutNode::Terminal {
+            uuid: "t1".into(),
+            profile: None,
+            cwd: Some("/srv/project".into()),
+            custom_title: None,
+        };
+        let (new_layout, new_uuid) =
+            layout.split_terminal_with_new_uuid("t1", SplitOrientation::Horizontal).unwrap();
+
+        assert_eq!(
+            new_layout.terminal_cwd("t1").as_deref(),
+            Some("/srv/project"),
+            "source terminal CWD must survive the split"
+        );
+        assert_eq!(
+            new_layout.terminal_cwd(&new_uuid),
+            None,
+            "new terminal should have no CWD until explicitly set"
+        );
+    }
+
+    #[test]
     fn split_then_set_cwd_on_new_terminal() {
         let layout = LayoutNode::Terminal {
             uuid: "t1".into(),
