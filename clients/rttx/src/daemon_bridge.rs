@@ -104,6 +104,7 @@ enum EndpointCommand {
         policy: WorkspacePolicy,
         runtime_id: Option<String>,
         placeholder_terminal_uuid: Option<String>,
+        cwd: Option<String>,
     },
     CreatePane {
         workspace_id: String,
@@ -221,6 +222,7 @@ impl EndpointConnectionManager {
     }
 
     /// Create or attach a managed workspace runtime asynchronously.
+    #[allow(clippy::too_many_arguments)] // CWD must travel alongside the placeholder UUID
     pub fn open_workspace(
         &self,
         workspace_id: &str,
@@ -229,6 +231,7 @@ impl EndpointConnectionManager {
         policy: WorkspacePolicy,
         runtime_id: Option<&str>,
         placeholder_terminal_uuid: Option<&str>,
+        cwd: Option<&str>,
     ) {
         let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::OpenWorkspace {
             workspace_id: workspace_id.to_string(),
@@ -236,6 +239,7 @@ impl EndpointConnectionManager {
             policy,
             runtime_id: runtime_id.map(str::to_string),
             placeholder_terminal_uuid: placeholder_terminal_uuid.map(str::to_string),
+            cwd: cwd.map(str::to_string),
         });
     }
 
@@ -581,6 +585,7 @@ impl EndpointActor {
                 policy,
                 runtime_id,
                 placeholder_terminal_uuid,
+                cwd,
             } => {
                 self.emit_status(&workspace_id, ConnectionStatus::Connecting);
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
@@ -614,7 +619,7 @@ impl EndpointActor {
                             workspace_id,
                             runtime_id,
                             layout_terminal_uuid,
-                            cwd: None,
+                            cwd,
                             dark_background: true,
                         });
                     } else {

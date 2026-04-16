@@ -12,12 +12,12 @@ fn reset_endpoint_creates_fresh_actor_on_next_access() {
     let endpoint = RuntimeEndpoint::Local;
 
     // First access creates an actor.
-    manager.open_workspace("ws-1", &endpoint, "Test", WorkspacePolicy::default(), None, None);
+    manager.open_workspace("ws-1", &endpoint, "Test", WorkspacePolicy::default(), None, None, None);
 
     // Reset kills the old actor.
     manager.reset_endpoint(&endpoint);
 
     // Next access should create a fresh actor (not reuse the old one).
     // If the old actor were reused, it would be shut down and unable to process.
-    manager.open_workspace("ws-1", &endpoint, "Test", WorkspacePolicy::default(), None, None);
+    manager.open_workspace("ws-1", &endpoint, "Test", WorkspacePolicy::default(), None, None, None);
 }
