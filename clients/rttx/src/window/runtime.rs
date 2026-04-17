@@ -1,5 +1,9 @@
 use super::*;
 
+/// Maximum events the poller processes per GTK timer callback.
+/// Keeps the main loop responsive during output bursts.
+pub(super) const EVENT_POLL_BATCH_LIMIT: usize = 64;
+
 impl Window {
     pub fn add_session(&self) {
         crate::new_workspace_dialog::show(self, &crate::host::Host::local());
@@ -501,8 +505,11 @@ impl Window {
             let Some(win) = win.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            while let Ok(event) = rx.try_recv() {
-                win.handle_endpoint_event(event);
+            for _ in 0..EVENT_POLL_BATCH_LIMIT {
+                match rx.try_recv() {
+                    Ok(event) => win.handle_endpoint_event(event),
+                    Err(_) => break,
+                }
             }
             glib::ControlFlow::Continue
         });

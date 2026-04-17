@@ -5530,3 +5530,12 @@ fn split_managed_pane_passes_source_terminal_size() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// The event poller batch limit must be positive and bounded to prevent
+/// the main loop from starving during output bursts. Regression for #653.
+#[test]
+fn event_poll_batch_limit_is_bounded() {
+    use super::runtime::EVENT_POLL_BATCH_LIMIT;
+    const { assert!(EVENT_POLL_BATCH_LIMIT > 0) };
+    const { assert!(EVENT_POLL_BATCH_LIMIT <= 256) };
+}
