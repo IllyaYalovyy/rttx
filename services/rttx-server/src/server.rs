@@ -1197,7 +1197,6 @@ where
 {
     let client_id = Uuid::new_v4();
     let client_short = short_id(client_id);
-    tracing::info!("Client {client_short} connected");
 
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     // Channel for responses that the reader task needs to send back to the
@@ -1214,14 +1213,17 @@ where
     let write_short = client_short.clone();
     let writer_task = tokio::spawn(client_writer(writer, rx, resp_rx, write_short));
 
-    let result = client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await;
+    let (result, handshake_completed) =
+        client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await;
 
     // Cleanup: remove sender and detach from all sessions.
     {
         let mut s = server.lock().await;
         s.client_senders.remove(&client_id);
-        for session in s.sessions.values_mut() {
-            let _ = session.detach_client(client_id, DetachReason::Disconnect);
+        if handshake_completed {
+            for session in s.sessions.values_mut() {
+                let _ = session.detach_client(client_id, DetachReason::Disconnect);
+            }
         }
     }
 
@@ -1237,31 +1239,49 @@ where
 
 /// Read client messages and dispatch responses via `resp_tx`.
 ///
-/// Runs until the client disconnects or an error occurs.
+/// Runs until the client disconnects or an error occurs. Returns `true`
+/// if the client completed the handshake (sent at least one message),
+/// `false` if it disconnected before sending anything (probe connection).
 async fn client_reader(
     server: Arc<Mutex<Server>>,
     client_id: Uuid,
     client_short: &str,
     mut reader: ClientConnectionReader,
     resp_tx: mpsc::Sender<proto::ServerMessage>,
-) -> anyhow::Result<()> {
+) -> (anyhow::Result<()>, bool) {
+    let mut handshake_completed = false;
     loop {
-        let Some(msg) = reader.read_message().await? else {
-            tracing::info!("Client {client_short} disconnected");
-            return Ok(());
+        let msg = match reader.read_message().await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                if handshake_completed {
+                    tracing::info!("Client {client_short} disconnected");
+                } else {
+                    tracing::debug!(
+                        "Client probe from {client_short} (disconnected without handshake)"
+                    );
+                }
+                return (Ok(()), handshake_completed);
+            }
+            Err(e) => return (Err(e.into()), handshake_completed),
         };
+
+        if !handshake_completed {
+            handshake_completed = true;
+            tracing::info!("Client {client_short} connected");
+        }
 
         if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
             tracing::info!("Shutdown requested by client {client_short}");
             server.lock().await.request_shutdown();
-            return Ok(());
+            return (Ok(()), handshake_completed);
         }
 
         // Fast-path: respond to Ping without acquiring the server mutex.
         // The heartbeat must never stall behind PTY I/O or session work.
         if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
             if resp_tx.send(protocol::pong(ping.nonce)).await.is_err() {
-                return Ok(());
+                return (Ok(()), handshake_completed);
             }
             continue;
         }
@@ -1269,7 +1289,7 @@ async fn client_reader(
         if let Some(response) = Server::handle_message(&server, client_id, msg).await
             && resp_tx.send(response).await.is_err()
         {
-            return Ok(());
+            return (Ok(()), handshake_completed);
         }
     }
 }
