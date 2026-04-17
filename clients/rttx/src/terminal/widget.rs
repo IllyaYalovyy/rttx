@@ -563,7 +563,8 @@ impl TerminalWidget {
             if custom_title.borrow().is_none()
                 && let Some(title) = vte.window_title()
             {
-                title_label.set_label(&title);
+                let cleaned = crate::terminal::persistent_widget::strip_user_host_prefix(&title);
+                title_label.set_label(cleaned);
             }
         });
 
