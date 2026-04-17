@@ -203,12 +203,9 @@ fn sustained_pings_answered_during_continuous_output() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let session_id = create_session(
-            &mut client,
-            "sustained-heartbeat",
-            proto::RuntimePolicy::Persistent,
-        )
-        .await;
+        let session_id =
+            create_session(&mut client, "sustained-heartbeat", proto::RuntimePolicy::Persistent)
+                .await;
         let _snapshot = attach_rw(&mut client, &session_id).await;
         let pane_id = common::create_pane(&mut client, &session_id).await;
 
