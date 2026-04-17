@@ -26,6 +26,8 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
             session_id: session_id.clone(),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     };
     client.send(&create_pane).await;

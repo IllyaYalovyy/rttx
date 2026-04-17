@@ -44,6 +44,8 @@ async fn reconnect_restores_scrollback() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;
@@ -218,6 +220,8 @@ async fn restart_preserves_session_count_and_scrollback() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;

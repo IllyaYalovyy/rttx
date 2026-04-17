@@ -583,6 +583,7 @@ impl Window {
                     &request.layout_terminal_uuid,
                     request.cwd.clone(),
                     adw::StyleManager::default().is_dark(),
+                    (0, 0),
                 );
             }
         }

@@ -170,6 +170,8 @@ mod tests {
                     session_id: session_id.clone(),
                     cwd: None,
                     dark_background: None,
+                    cols: 0,
+                    rows: 0,
                 })),
             },
             proto::ClientMessage {
@@ -393,6 +395,8 @@ mod tests {
                     session_id: session_id.clone(),
                     cwd: Some("/tmp".into()),
                     dark_background: dark,
+                    cols: 0,
+                    rows: 0,
                 })),
             };
             let mut buf = BytesMut::new();
@@ -400,6 +404,32 @@ mod tests {
             let decoded: proto::ClientMessage = decode_frame(&mut buf).unwrap();
             if let Some(proto::client_message::Msg::CreatePane(cp)) = decoded.msg {
                 assert_eq!(cp.dark_background, dark);
+            } else {
+                panic!("expected CreatePane");
+            }
+        }
+    }
+
+    #[test]
+    fn create_pane_cols_rows_roundtrip() {
+        let session_id = uuid_to_bytes(uuid::Uuid::new_v4());
+
+        for (cols, rows) in [(0, 0), (80, 24), (132, 43), (300, 100)] {
+            let msg = proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+                    session_id: session_id.clone(),
+                    cwd: None,
+                    dark_background: None,
+                    cols,
+                    rows,
+                })),
+            };
+            let mut buf = BytesMut::new();
+            encode_frame(&msg, &mut buf).unwrap();
+            let decoded: proto::ClientMessage = decode_frame(&mut buf).unwrap();
+            if let Some(proto::client_message::Msg::CreatePane(cp)) = decoded.msg {
+                assert_eq!(cp.cols, cols);
+                assert_eq!(cp.rows, rows);
             } else {
                 panic!("expected CreatePane");
             }

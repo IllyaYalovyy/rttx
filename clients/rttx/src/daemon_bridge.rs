@@ -112,6 +112,8 @@ enum EndpointCommand {
         layout_terminal_uuid: String,
         cwd: Option<String>,
         dark_background: bool,
+        cols: u32,
+        rows: u32,
     },
     ClosePane {
         workspace_id: String,
@@ -249,6 +251,7 @@ impl EndpointConnectionManager {
     }
 
     /// Request a new pane inside an attached runtime.
+    #[allow(clippy::too_many_arguments)] // Protocol-level initial size added alongside existing pane params
     pub fn create_pane(
         &self,
         workspace_id: &str,
@@ -257,6 +260,7 @@ impl EndpointConnectionManager {
         layout_terminal_uuid: &str,
         cwd: Option<String>,
         dark_background: bool,
+        initial_size: (u32, u32),
     ) {
         let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::CreatePane {
             workspace_id: workspace_id.to_string(),
@@ -264,6 +268,8 @@ impl EndpointConnectionManager {
             layout_terminal_uuid: layout_terminal_uuid.to_string(),
             cwd,
             dark_background,
+            cols: initial_size.0,
+            rows: initial_size.1,
         });
     }
 
@@ -621,6 +627,8 @@ impl EndpointActor {
                             layout_terminal_uuid,
                             cwd,
                             dark_background: true,
+                            cols: 0,
+                            rows: 0,
                         });
                     } else {
                         self.emit_status(&workspace_id, ConnectionStatus::Connected);
@@ -635,6 +643,8 @@ impl EndpointActor {
                 layout_terminal_uuid,
                 cwd,
                 dark_background,
+                cols,
+                rows,
             } => {
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
                     self.emit_error(
@@ -659,6 +669,8 @@ impl EndpointActor {
                         session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         cwd,
                         dark_background: Some(dark_background),
+                        cols,
+                        rows,
                     })),
                 };
                 if let Err(error) = self.send_message(&msg).await {

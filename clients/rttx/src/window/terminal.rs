@@ -328,6 +328,7 @@ impl Window {
                         &new_terminal_uuid,
                         source_cwd,
                         adw::StyleManager::default().is_dark(),
+                        (0, 0),
                     );
                 }
             }

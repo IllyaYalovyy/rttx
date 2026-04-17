@@ -244,6 +244,8 @@ pub async fn create_pane_with_cwd(
                 session_id: session_id.to_vec(),
                 cwd,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;

@@ -33,6 +33,8 @@ async fn list_sessions_includes_runtime_inventory_metadata() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;
@@ -186,6 +188,8 @@ async fn list_sessions_marks_restored_runtime_and_panes_as_reconstructed() {
                     session_id: session_id.clone(),
                     cwd: None,
                     dark_background: None,
+                    cols: 0,
+                    rows: 0,
                 })),
             })
             .await;

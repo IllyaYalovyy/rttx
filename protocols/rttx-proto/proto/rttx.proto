@@ -46,6 +46,8 @@ message CreatePane {
     bytes session_id = 1;
     optional string cwd = 2;
     optional bool dark_background = 3;
+    uint32 cols = 4;
+    uint32 rows = 5;
 }
 
 message ClosePane {

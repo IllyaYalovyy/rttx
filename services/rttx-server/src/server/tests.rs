@@ -929,6 +929,8 @@ async fn create_pane_with_invalid_uuid_returns_invalid_parameter() {
             session_id: vec![0u8; 3],
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
@@ -961,6 +963,8 @@ async fn create_pane_without_write_access_returns_ownership_error() {
             session_id: uuid_to_bytes(session_id),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     };
     let resp = Server::handle_message(&server, reader, msg).await.unwrap();
@@ -982,6 +986,8 @@ async fn create_pane_nonexistent_session_returns_session_not_found() {
             session_id: uuid_to_bytes(Uuid::new_v4()),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
