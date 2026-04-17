@@ -1,5 +1,6 @@
 """Shared fixture and helpers for AT-SPI2 UI tests."""
 
+import atexit
 import ctypes
 import os
 import shutil
@@ -261,6 +262,17 @@ class TestEnvironment:
         self.wayland_socket = f"{WAYLAND_SOCKET}-{uuid.uuid4().hex[:8]}"
         self._weston: subprocess.Popen | None = None
         self._daemon: subprocess.Popen | None = None
+        atexit.register(self._emergency_cleanup)
+
+    def _emergency_cleanup(self) -> None:
+        """Kill managed processes by PID — last-resort handler for abnormal exits."""
+        for proc in (self._daemon, self._weston):
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    pass
 
     @property
     def weston_socket_path(self) -> str:
@@ -372,7 +384,8 @@ class TestEnvironment:
         if self._daemon is None and not os.path.exists(self.daemon_socket_path):
             return
 
-        if os.path.exists(self.daemon_socket_path):
+        socket_available = os.path.exists(self.daemon_socket_path)
+        if socket_available:
             subprocess.run(
                 [DAEMON_BINARY, "stop"],
                 env=self.process_env(),
@@ -382,9 +395,17 @@ class TestEnvironment:
             )
 
         if self._daemon is not None:
-            try:
-                self._daemon.wait(timeout=10)
-            except Exception:  # noqa: BLE001
+            if socket_available:
+                try:
+                    self._daemon.wait(timeout=10)
+                except Exception:  # noqa: BLE001
+                    self._daemon.terminate()
+                    try:
+                        self._daemon.wait(timeout=5)
+                    except Exception:  # noqa: BLE001
+                        self._daemon.kill()
+            else:
+                # Socket already gone — kill by PID directly.
                 self._daemon.terminate()
                 try:
                     self._daemon.wait(timeout=5)
