@@ -1506,3 +1506,63 @@ fn mutex_hold_warn_threshold_is_reasonable() {
     assert!(threshold_ms >= 5, "threshold too aggressive: {threshold_ms}ms");
     assert!(threshold_ms <= 100, "threshold too lenient: {threshold_ms}ms");
 }
+
+// ── Probe connection logging (#641) ─────────────────────────────
+
+#[tokio::test]
+#[traced_test]
+async fn probe_connection_logs_at_debug_not_info() {
+    let server = new_server();
+
+    // Create a duplex stream and immediately drop the client half so the
+    // server sees EOF on its first read.  A bare `_` drops immediately;
+    // `_client_half` would keep the value alive until end of scope.
+    let (server_half, _) = tokio::io::duplex(1024);
+    let conn = crate::ipc::ClientConnection::new(server_half);
+
+    // handle_client will see EOF immediately (no Hello sent).
+    let _ = super::handle_client(server, conn).await;
+
+    // Probe should be logged at debug level, not info.
+    assert!(logs_contain("Client probe from"));
+    assert!(logs_contain("disconnected without handshake"));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn real_client_logs_connected_and_disconnected_at_info() {
+    let server = new_server();
+
+    let (server_half, mut client_half) = tokio::io::duplex(64 * 1024);
+    let conn = crate::ipc::ClientConnection::new(server_half);
+
+    // Spawn handle_client in background.
+    let handle = tokio::spawn(async move {
+        let _ = super::handle_client(server, conn).await;
+    });
+
+    // Send a Hello message from the client side.
+    let hello = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+            protocol_version: rttx_proto::PROTOCOL_VERSION,
+            client_id: uuid_to_bytes(Uuid::new_v4()),
+        })),
+    };
+    let mut buf = bytes::BytesMut::new();
+    rttx_proto::encode_frame(&hello, &mut buf).unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut client_half, &buf).await.unwrap();
+
+    // Read the HelloAck response.
+    let mut resp_buf = [0u8; 4096];
+    let _ = tokio::io::AsyncReadExt::read(&mut client_half, &mut resp_buf).await.unwrap();
+
+    // Close the client half to trigger disconnect.
+    drop(client_half);
+
+    handle.await.unwrap();
+
+    assert!(logs_contain("connected"));
+    assert!(logs_contain("disconnected"));
+    // Must NOT contain probe message.
+    assert!(!logs_contain("Client probe from"));
+}
