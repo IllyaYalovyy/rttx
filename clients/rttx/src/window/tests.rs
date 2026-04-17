@@ -5469,7 +5469,10 @@ fn persistent_terminal_size_returns_vte_dimensions() {
     window.build_session(&session_state, false);
 
     let (cols, rows) = window.persistent_terminal_size("pane-a");
-    assert!(cols > 0 && rows > 0, "registered terminal must report non-zero size, got {cols}x{rows}");
+    assert!(
+        cols > 0 && rows > 0,
+        "registered terminal must report non-zero size, got {cols}x{rows}"
+    );
 
     let (cols, rows) = window.persistent_terminal_size("no-such-pane");
     assert_eq!((cols, rows), (0, 0), "unregistered terminal must return (0, 0)");
@@ -5487,9 +5490,8 @@ fn split_managed_pane_passes_source_terminal_size() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.split-pane-size-test")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.split-pane-size-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
