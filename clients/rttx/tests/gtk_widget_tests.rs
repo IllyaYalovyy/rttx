@@ -2457,3 +2457,21 @@ fn host_tag_picker_unrecognized_tag_not_checked() {
     // Only local is in the picker, and it's not selected
     assert!(picker.selected_tags().is_empty());
 }
+
+/// Regression for #655: managed pane title must strip user@host prefix
+/// and avoid duplicating the path when CWD is available.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_title_strips_user_host_prefix() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-title", "rt-1");
+    let home = std::env::var("HOME").unwrap();
+
+    pane.set_daemon_title(&format!("user@host: {home}/projects"));
+    pane.set_current_directory(Some(&format!("{home}/projects")));
+
+    let label = pane.title_label().label().to_string();
+    assert!(!label.contains('@'), "pane title must not contain user@host, got: {label}");
+    assert_eq!(label, "~/projects");
+}

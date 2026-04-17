@@ -992,20 +992,43 @@ pub(crate) fn pastify_for_pane(pane: &PersistentPaneView, text: &[u8]) -> Vec<u8
     }
 }
 
+/// Strip `user@host: ` prefix that shells set via OSC 0/2.
+///
+/// Returns the remainder after the prefix, or the original string when
+/// no prefix is found.
+pub(crate) fn strip_user_host_prefix(title: &str) -> &str {
+    if let Some(at) = title.find('@')
+        && let Some(colon_space) = title[at..].find(": ")
+    {
+        let prefix_end = at + colon_space + 2;
+        let candidate = &title[..at];
+        if !candidate.is_empty() && !candidate.contains(' ') {
+            return title[prefix_end..].trim();
+        }
+    }
+    title
+}
+
 /// Format the pane header title from daemon-reported title and CWD.
 ///
-/// Returns `<app> : <path>` when both are available, just the path when
-/// the title is a generic shell name, or falls back to the title alone.
+/// Strips `user@host: path` prefixes so the pane header shows a clean
+/// `<app> : <path>` when both are available, just the path when the
+/// title is redundant, or falls back to the title alone.
 fn format_pane_header_title(daemon_title: Option<&str>, cwd: Option<&str>) -> String {
     let path = cwd.map(collapse_home_path);
-    let title = daemon_title.map(str::trim).filter(|t| !t.is_empty());
+    let title = daemon_title.map(|t| strip_user_host_prefix(t.trim())).filter(|t| !t.is_empty());
 
     match (title, path.as_deref().filter(|p| !p.is_empty())) {
+        (Some(t), Some(p)) if looks_like_path(t) => p.to_string(),
         (Some(t), Some(p)) => format!("{t} : {p}"),
         (None, Some(p)) => p.to_string(),
         (Some(t), None) => t.to_string(),
         (None, None) => "Terminal".into(),
     }
+}
+
+fn looks_like_path(s: &str) -> bool {
+    s.starts_with('/') || s.starts_with('~')
 }
 
 /// Collapse `/home/<user>/…` to `~/…`.
@@ -1932,6 +1955,63 @@ mod tests {
     #[test]
     fn collapse_home_path_no_change_for_other_paths() {
         assert_eq!(collapse_home_path("/tmp/test"), "/tmp/test");
+    }
+
+    #[test]
+    fn strip_user_host_prefix_removes_standard_prefix() {
+        assert_eq!(strip_user_host_prefix("user@host: ~/projects"), "~/projects");
+    }
+
+    #[test]
+    fn strip_user_host_prefix_preserves_plain_app_name() {
+        assert_eq!(strip_user_host_prefix("vim"), "vim");
+        assert_eq!(strip_user_host_prefix("bash"), "bash");
+    }
+
+    #[test]
+    fn strip_user_host_prefix_preserves_app_with_args() {
+        assert_eq!(strip_user_host_prefix("vim /tmp/file.txt"), "vim /tmp/file.txt");
+    }
+
+    #[test]
+    fn strip_user_host_prefix_handles_fqdn_host() {
+        assert_eq!(strip_user_host_prefix("user@host.example.com: /tmp"), "/tmp");
+    }
+
+    #[test]
+    fn strip_user_host_prefix_preserves_email_like_without_colon_space() {
+        assert_eq!(strip_user_host_prefix("user@host"), "user@host");
+    }
+
+    #[test]
+    fn strip_user_host_prefix_empty_string() {
+        assert_eq!(strip_user_host_prefix(""), "");
+    }
+
+    /// Regression for #655: shell title with user@host + CWD must not
+    /// produce a double path in the pane header.
+    #[test]
+    fn format_pane_header_title_strips_user_host_and_deduplicates_path() {
+        let home = std::env::var("HOME").unwrap();
+        let cwd = format!("{home}/projects");
+        assert_eq!(
+            format_pane_header_title(Some(&format!("user@host: {home}/projects")), Some(&cwd)),
+            "~/projects"
+        );
+    }
+
+    /// Regression for #655: when the stripped title is a path and CWD is
+    /// available, only the CWD should appear.
+    #[test]
+    fn format_pane_header_title_path_title_with_cwd_shows_cwd_only() {
+        assert_eq!(format_pane_header_title(Some("user@host: /tmp"), Some("/tmp")), "/tmp");
+    }
+
+    /// Regression for #655: app name after stripping user@host must still
+    /// combine with CWD.
+    #[test]
+    fn format_pane_header_title_app_after_strip_combines_with_path() {
+        assert_eq!(format_pane_header_title(Some("user@host: vim"), Some("/tmp")), "vim : /tmp");
     }
 
     /// Regression for #536: default title must not show "(persistent)".
