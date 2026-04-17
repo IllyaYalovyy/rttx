@@ -189,3 +189,68 @@ fn ping_answered_during_pty_output() {
         assert!(got_pong, "pong should arrive even during PTY output");
     });
 }
+
+/// Regression test for #640: sustained heartbeat pings must all receive
+/// matching pongs even when the server is under continuous PTY output
+/// pressure. With the old 3-miss limit (6s timeout), transient socket
+/// backpressure could cause the client to declare the connection lost.
+/// The raised limit (8 misses, 16s) gives the server enough headroom.
+#[test]
+fn sustained_pings_answered_during_continuous_output() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (sock, _handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
+
+        let session_id =
+            create_session(&mut client, "sustained-heartbeat", proto::RuntimePolicy::Persistent)
+                .await;
+        let _snapshot = attach_rw(&mut client, &session_id).await;
+        let pane_id = common::create_pane(&mut client, &session_id).await;
+
+        // Generate continuous output to create backpressure.
+        client
+            .send(&proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::Input(proto::Input {
+                    session_id: session_id.clone(),
+                    pane_id,
+                    data: bytes::Bytes::from_static(
+                        b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n",
+                    ),
+                })),
+            })
+            .await;
+
+        // Simulate the client heartbeat pattern: send 8 pings at short
+        // intervals (matching the new HEARTBEAT_MISS_LIMIT of 8).
+        let ping_count = 8u64;
+        for nonce in 0..ping_count {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            client
+                .send(&proto::ClientMessage {
+                    msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce })),
+                })
+                .await;
+        }
+
+        // All pongs must arrive within a generous deadline.
+        let mut pong_nonces = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while (pong_nonces.len() as u64) < ping_count && tokio::time::Instant::now() < deadline {
+            match client.try_recv(std::time::Duration::from_secs(3)).await {
+                Some(msg) => {
+                    if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                        pong_nonces.push(pong.nonce);
+                    }
+                }
+                None => break,
+            }
+        }
+        let expected: Vec<u64> = (0..ping_count).collect();
+        assert_eq!(
+            pong_nonces, expected,
+            "all {ping_count} pongs must arrive during sustained output"
+        );
+    });
+}

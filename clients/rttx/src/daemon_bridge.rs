@@ -405,8 +405,9 @@ struct HeartbeatMonitor {
 
 /// Number of consecutive heartbeat ticks with an outstanding ping before
 /// the connection is declared lost. With a 2-second interval this gives
-/// the server 6 seconds to respond.
-const HEARTBEAT_MISS_LIMIT: u8 = 3;
+/// the server 16 seconds to respond — generous enough to survive transient
+/// socket backpressure from large Delta writes or a busy GTK main thread.
+const HEARTBEAT_MISS_LIMIT: u8 = 8;
 
 impl HeartbeatMonitor {
     const fn on_tick(&mut self) -> HeartbeatAction {
@@ -2556,5 +2557,68 @@ mod tests {
             HEARTBEAT_INTERVAL <= Duration::from_secs(10),
             "heartbeat should fire at least every 10s to detect stale connections"
         );
+    }
+
+    /// The effective heartbeat timeout must be generous enough to survive
+    /// transient backpressure on local Unix sockets (large Delta writes
+    /// blocking Pong delivery) without spurious disconnections.
+    #[test]
+    fn heartbeat_miss_limit_provides_adequate_tolerance() {
+        const {
+            assert!(
+                HEARTBEAT_MISS_LIMIT >= 5,
+                "miss limit must be >= 5 to tolerate transient socket backpressure",
+            );
+            assert!(
+                HEARTBEAT_MISS_LIMIT <= 15,
+                "miss limit must be <= 15 to detect actual daemon failures promptly",
+            );
+        }
+    }
+
+    /// A late Pong arriving after several missed ticks must reset the
+    /// monitor and prevent a spurious disconnect declaration.
+    #[test]
+    fn heartbeat_monitor_recovers_from_late_pong() {
+        let mut heartbeat = HeartbeatMonitor::default();
+        // First tick sends nonce 0.
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        // Simulate several missed ticks (but fewer than the limit).
+        for _ in 1..HEARTBEAT_MISS_LIMIT.saturating_sub(1) {
+            assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        }
+        // Late Pong arrives just before the limit.
+        assert!(heartbeat.observe_inbound(&proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 0 })),
+        }));
+        // Next tick should issue a fresh nonce, not declare lost.
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 1 });
+    }
+
+    /// Multiple consecutive missed ticks below the limit must not trigger
+    /// a false disconnect when interspersed with inbound traffic.
+    #[test]
+    fn heartbeat_monitor_survives_intermittent_traffic() {
+        let mut heartbeat = HeartbeatMonitor::default();
+        assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        // Miss half the limit.
+        let half = HEARTBEAT_MISS_LIMIT / 2;
+        for _ in 0..half {
+            assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
+        }
+        // Inbound Delta resets the monitor.
+        assert!(!heartbeat.observe_inbound(&proto::ServerMessage {
+            msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+                session_id: vec![],
+                pane_id: vec![],
+                data: bytes::Bytes::from_static(b"output"),
+            })),
+        }));
+        // Miss another half — should still be fine because we reset.
+        for _ in 0..half {
+            assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 1 });
+        }
+        // Should NOT be declared lost.
+        assert_ne!(heartbeat.on_tick(), HeartbeatAction::DeclareLost);
     }
 }
