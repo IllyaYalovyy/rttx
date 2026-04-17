@@ -1016,9 +1016,7 @@ pub(crate) fn strip_user_host_prefix(title: &str) -> &str {
 /// title is redundant, or falls back to the title alone.
 fn format_pane_header_title(daemon_title: Option<&str>, cwd: Option<&str>) -> String {
     let path = cwd.map(collapse_home_path);
-    let title = daemon_title
-        .map(|t| strip_user_host_prefix(t.trim()))
-        .filter(|t| !t.is_empty());
+    let title = daemon_title.map(|t| strip_user_host_prefix(t.trim())).filter(|t| !t.is_empty());
 
     match (title, path.as_deref().filter(|p| !p.is_empty())) {
         (Some(t), Some(p)) if looks_like_path(t) => p.to_string(),
@@ -2006,20 +2004,14 @@ mod tests {
     /// available, only the CWD should appear.
     #[test]
     fn format_pane_header_title_path_title_with_cwd_shows_cwd_only() {
-        assert_eq!(
-            format_pane_header_title(Some("user@host: /tmp"), Some("/tmp")),
-            "/tmp"
-        );
+        assert_eq!(format_pane_header_title(Some("user@host: /tmp"), Some("/tmp")), "/tmp");
     }
 
     /// Regression for #655: app name after stripping user@host must still
     /// combine with CWD.
     #[test]
     fn format_pane_header_title_app_after_strip_combines_with_path() {
-        assert_eq!(
-            format_pane_header_title(Some("user@host: vim"), Some("/tmp")),
-            "vim : /tmp"
-        );
+        assert_eq!(format_pane_header_title(Some("user@host: vim"), Some("/tmp")), "vim : /tmp");
     }
 
     /// Regression for #536: default title must not show "(persistent)".
