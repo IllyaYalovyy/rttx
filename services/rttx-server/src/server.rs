@@ -1257,7 +1257,9 @@ async fn client_reader(
                 if handshake_completed {
                     tracing::info!("Client {client_short} disconnected");
                 } else {
-                    tracing::debug!("Client probe from {client_short} (disconnected without handshake)");
+                    tracing::debug!(
+                        "Client probe from {client_short} (disconnected without handshake)"
+                    );
                 }
                 return (Ok(()), handshake_completed);
             }
