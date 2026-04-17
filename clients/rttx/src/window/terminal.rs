@@ -321,6 +321,7 @@ impl Window {
                     && let Some(runtime_id) = session_state.runtime.runtime_id.as_deref()
                     && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
                 {
+                    let size = self.persistent_terminal_size(terminal_uuid);
                     manager.create_pane(
                         &session_uuid,
                         &session_state.runtime.endpoint,
@@ -328,7 +329,7 @@ impl Window {
                         &new_terminal_uuid,
                         source_cwd,
                         adw::StyleManager::default().is_dark(),
-                        (0, 0),
+                        size,
                     );
                 }
             }
