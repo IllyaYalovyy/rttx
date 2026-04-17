@@ -1095,4 +1095,16 @@ mod search_tests {
         let mixed = b"\x1b[<0;5;10M\x1b[1;6R";
         assert_eq!(strip_cpr_responses(mixed).unwrap(), b"\x1b[<0;5;10M");
     }
+
+    /// Regression for #655: `strip_user_host_prefix` must remove the
+    /// user@host prefix that shells set via OSC 0/2 so pane titles
+    /// do not show redundant host information.
+    #[test]
+    fn strip_user_host_prefix_removes_shell_title_prefix() {
+        use super::persistent_widget::strip_user_host_prefix;
+
+        assert_eq!(strip_user_host_prefix("user@host: ~/projects"), "~/projects");
+        assert_eq!(strip_user_host_prefix("bash"), "bash");
+        assert_eq!(strip_user_host_prefix(""), "");
+    }
 }
