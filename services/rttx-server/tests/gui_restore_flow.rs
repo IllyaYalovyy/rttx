@@ -44,6 +44,8 @@ async fn gui_restore_flow_no_duplicates() {
                     session_id: sid.clone(),
                     cwd: None,
                     dark_background: None,
+                    cols: 0,
+                    rows: 0,
                 })),
             })
             .await;

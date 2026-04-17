@@ -32,6 +32,8 @@ async fn slow_client_does_not_block_server() {
             session_id: session_id.clone(),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     })
     .await;

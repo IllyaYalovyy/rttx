@@ -129,6 +129,8 @@ async fn read_only_attach_cannot_mutate_runtime() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;

@@ -134,6 +134,8 @@ fn ping_answered_during_pty_output() {
                     session_id: session_id.clone(),
                     cwd: None,
                     dark_background: Some(true),
+                    cols: 0,
+                    rows: 0,
                 })),
             })
             .await;

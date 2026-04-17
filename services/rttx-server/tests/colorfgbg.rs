@@ -16,6 +16,8 @@ async fn create_pane_with_appearance(
                 session_id: session_id.to_vec(),
                 cwd: None,
                 dark_background,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;

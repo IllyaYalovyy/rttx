@@ -170,6 +170,8 @@ mod tests {
                     session_id: session_id.clone(),
                     cwd: None,
                     dark_background: None,
+                    cols: 0,
+                    rows: 0,
                 })),
             },
             proto::ClientMessage {
@@ -393,6 +395,8 @@ mod tests {
                     session_id: session_id.clone(),
                     cwd: Some("/tmp".into()),
                     dark_background: dark,
+                    cols: 0,
+                    rows: 0,
                 })),
             };
             let mut buf = BytesMut::new();

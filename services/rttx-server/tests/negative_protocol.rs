@@ -149,6 +149,8 @@ async fn create_pane_in_nonexistent_session_returns_error() {
             session_id: bogus_uuid(),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     };
     client.send(&msg).await;
@@ -418,6 +420,8 @@ async fn attach_and_create_pane(client: &mut TestClient, session_id: &[u8]) -> V
             session_id: session_id.to_vec(),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     };
     client.send(&msg).await;

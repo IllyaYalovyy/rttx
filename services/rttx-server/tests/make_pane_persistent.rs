@@ -53,6 +53,8 @@ async fn make_pane_persistent_flow() {
             session_id: session_id.clone(),
             cwd: None,
             dark_background: None,
+            cols: 0,
+            rows: 0,
         })),
     })
     .await;

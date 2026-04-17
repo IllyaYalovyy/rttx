@@ -68,6 +68,8 @@ async fn readers_observe_pane_created_push() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;

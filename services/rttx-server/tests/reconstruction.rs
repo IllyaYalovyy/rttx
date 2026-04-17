@@ -40,6 +40,8 @@ async fn reconstruct_session_after_restart() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         };
         client.send(&create_pane).await;
@@ -164,6 +166,8 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
                     session_id: session_id.clone(),
                     cwd: None,
                     dark_background: None,
+                    cols: 0,
+                    rows: 0,
                 })),
             })
             .await;

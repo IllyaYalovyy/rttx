@@ -50,6 +50,8 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;
@@ -177,6 +179,8 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
                     session_id: session_id.clone(),
                     cwd: None,
                     dark_background: None,
+                    cols: 0,
+                    rows: 0,
                 })),
             })
             .await;
@@ -269,6 +273,8 @@ async fn failed_close_pane_returns_error_without_revision_change() {
                 session_id: session_id.clone(),
                 cwd: None,
                 dark_background: None,
+                cols: 0,
+                rows: 0,
             })),
         })
         .await;
