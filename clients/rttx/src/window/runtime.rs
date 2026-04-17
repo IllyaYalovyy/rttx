@@ -576,6 +576,7 @@ impl Window {
 
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
             for request in &transition.pane_create_requests {
+                let size = self.persistent_terminal_size(&request.layout_terminal_uuid);
                 manager.create_pane(
                     &request.workspace_id,
                     &request.endpoint,
@@ -583,7 +584,7 @@ impl Window {
                     &request.layout_terminal_uuid,
                     request.cwd.clone(),
                     adw::StyleManager::default().is_dark(),
-                    (0, 0),
+                    size,
                 );
             }
         }
@@ -1040,5 +1041,18 @@ impl Window {
             }
             idx += 1;
         }
+    }
+
+    /// Return `(cols, rows)` from a persistent terminal's VTE widget.
+    ///
+    /// Returns `(0, 0)` when the terminal is not yet registered, letting the
+    /// daemon fall back to its default size.
+    pub(super) fn persistent_terminal_size(&self, layout_terminal_uuid: &str) -> (u32, u32) {
+        let panes = self.imp().persistent_terminals.borrow();
+        let Some(pane) = panes.get(layout_terminal_uuid) else {
+            return (0, 0);
+        };
+        let (cols, rows) = pane.terminal_size();
+        (u32::from(cols), u32::from(rows))
     }
 }

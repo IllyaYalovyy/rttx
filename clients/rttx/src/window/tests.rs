@@ -5444,3 +5444,89 @@ fn split_falls_back_to_layout_cwd_when_terminal_has_none() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_terminal_size_returns_vte_dimensions() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.persistent-terminal-size-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session(
+        "ws-size",
+        "Size Workspace",
+        LayoutNode::new_terminal_with_uuid("pane-a"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let (cols, rows) = window.persistent_terminal_size("pane-a");
+    assert!(
+        cols > 0 && rows > 0,
+        "registered terminal must report non-zero size, got {cols}x{rows}"
+    );
+
+    let (cols, rows) = window.persistent_terminal_size("no-such-pane");
+    assert_eq!((cols, rows), (0, 0), "unregistered terminal must return (0, 0)");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn split_managed_pane_passes_source_terminal_size() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.split-pane-size-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session(
+        "ws-split-size",
+        "Split Size Workspace",
+        LayoutNode::new_terminal_with_uuid("source-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let source_size = window.persistent_terminal_size("source-pane");
+    assert!(
+        source_size.0 > 0 && source_size.1 > 0,
+        "source pane should report non-zero size before split"
+    );
+
+    // Trigger a horizontal split on the source pane.
+    window.split_terminal("source-pane", SplitOrientation::Horizontal);
+
+    let state = window.imp().state.borrow();
+    let session = state.sessions.iter().find(|s| s.uuid == "ws-split-size").unwrap();
+    let uuids = session.layout.terminal_uuids();
+    assert_eq!(uuids.len(), 2, "split should produce two panes");
+    let new_uuid = uuids.into_iter().find(|u| u != "source-pane").unwrap();
+    drop(state);
+
+    let new_size = window.persistent_terminal_size(&new_uuid);
+    assert!(
+        new_size.0 > 0 && new_size.1 > 0,
+        "new pane from split should report non-zero size, got {}x{}",
+        new_size.0,
+        new_size.1
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
