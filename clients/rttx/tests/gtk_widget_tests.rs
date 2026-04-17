@@ -2472,9 +2472,6 @@ fn persistent_pane_title_strips_user_host_prefix() {
     pane.set_current_directory(Some(&format!("{home}/projects")));
 
     let label = pane.title_label().label().to_string();
-    assert!(
-        !label.contains('@'),
-        "pane title must not contain user@host, got: {label}"
-    );
+    assert!(!label.contains('@'), "pane title must not contain user@host, got: {label}");
     assert_eq!(label, "~/projects");
 }
