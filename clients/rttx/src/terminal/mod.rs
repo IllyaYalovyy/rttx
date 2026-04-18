@@ -1036,8 +1036,7 @@ mod pane_passive_tests {
     /// Regression for #659.
     #[test]
     fn ctrl_shift_right_click_passes_through() {
-        let mods =
-            gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
+        let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
         assert!(
             !super::should_open_context_menu(mods),
             "Ctrl+Shift+right-click must not open context menu"

@@ -2500,9 +2500,7 @@ fn context_menu_modifier_convention_matches_gnome() {
     for (label, controllers) in [
         (
             "TerminalWidget",
-            rttx::terminal::widget::TerminalWidget::new("t-mod", None)
-                .vte()
-                .observe_controllers(),
+            rttx::terminal::widget::TerminalWidget::new("t-mod", None).vte().observe_controllers(),
         ),
         (
             "PersistentPaneView",
