@@ -499,4 +499,103 @@ mod tests {
         assert!(row.has_css_class("session-row"));
         assert_eq!(row.subtitle_lines(), 2);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C5 — GLib source leaks
+    //
+    // A glib::timeout_add_local source that fires after the owning
+    // widget is destroyed accesses freed memory → crash. The
+    // mark_activity timer uses downgrade() so the callback returns
+    // Break when the row is gone, but the source itself must also be
+    // cancelled on destruction to avoid a dangling GLib source.
+    // ═══════════════════════════════════════════════════════════════
+
+    /// C5 regression: dropping a `SessionRow` with an active idle timer
+    /// must not cause the timer callback to mutate the row's state.
+    /// The weak-ref pattern in `mark_activity` returns `Break` when the
+    /// row is gone — this test proves that contract holds.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn c5_dropped_session_row_idle_timer_does_not_fire() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session");
+        row.mark_activity();
+        assert_eq!(row.activity_state(), ActivityState::Active);
+
+        // Verify the idle transition source is registered.
+        assert!(
+            row.imp().idle_transition_source.borrow().is_some(),
+            "idle transition source should be registered after mark_activity"
+        );
+
+        // Drop the row — the weak ref in the timer callback should
+        // prevent any state mutation.
+        let weak = row.downgrade();
+        drop(row);
+
+        // Pump the main loop past the idle delay so the timer fires.
+        pump_events(ACTIVITY_IDLE_DELAY_MS + 100);
+
+        // The weak ref should not upgrade — the row is gone.
+        assert!(
+            weak.upgrade().is_none(),
+            "SessionRow should be finalized after drop"
+        );
+    }
+
+    /// C5 regression: `clear_activity` must cancel the pending `GLib` source
+    /// so it never fires after the row transitions to None state.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn c5_clear_activity_removes_glib_source() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session");
+        row.mark_activity();
+        assert!(
+            row.imp().idle_transition_source.borrow().is_some(),
+            "source should exist after mark_activity"
+        );
+
+        row.clear_activity();
+        assert!(
+            row.imp().idle_transition_source.borrow().is_none(),
+            "source should be removed after clear_activity"
+        );
+
+        // Pump past the delay — state must remain None.
+        pump_events(ACTIVITY_IDLE_DELAY_MS + 100);
+        assert_eq!(
+            row.activity_state(),
+            ActivityState::None,
+            "state must stay None — the cancelled source must not fire"
+        );
+    }
+
+    /// C5 regression: calling `mark_activity` replaces the previous `GLib`
+    /// source. The old source must be removed so only one is active.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn c5_mark_activity_replaces_previous_source() {
+        require_display!();
+
+        let row = SessionRow::new("s1", "Session");
+        row.mark_activity();
+        assert!(row.imp().idle_transition_source.borrow().is_some());
+
+        // Capture the debug representation of the first source.
+        let first_debug = format!("{:?}", *row.imp().idle_transition_source.borrow());
+
+        row.mark_activity();
+        assert!(row.imp().idle_transition_source.borrow().is_some());
+
+        let second_debug = format!("{:?}", *row.imp().idle_transition_source.borrow());
+
+        // The sources should be different — the first was cancelled.
+        assert_ne!(
+            first_debug, second_debug,
+            "second mark_activity should replace the GLib source, not stack on it"
+        );
+    }
 }

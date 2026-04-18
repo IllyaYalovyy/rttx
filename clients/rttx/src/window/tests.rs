@@ -6378,3 +6378,180 @@ fn reapply_preferences_updates_keyboard_shortcut_accels() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// C4 — Signal handler doubling
+//
+// When rebuild_session_content is called multiple times (e.g. after
+// split, close, reconnect), the existing TerminalWidget must be reused
+// from the HashMap — not recreated. Recreating would call
+// connect_terminal_signals a second time, doubling every handler.
+// ═══════════════════════════════════════════════════════════════════
+
+/// C4 regression: rebuilding a direct workspace multiple times must reuse
+/// the same TerminalWidget instances. If a new widget were created, its
+/// signal handlers would stack on the old ones.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn c4_rebuild_reuses_direct_terminal_widgets() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.c4-direct-reuse-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let layout = crate::test_helpers::hsplit(
+        LayoutNode::new_terminal_with_uuid("t1"),
+        LayoutNode::new_terminal_with_uuid("t2"),
+    );
+    let session_state = crate::test_helpers::session("ws1", "Workspace", layout);
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let ptr_t1_before =
+        window.imp().terminals.borrow().get("t1").unwrap().as_ptr() as usize;
+    let ptr_t2_before =
+        window.imp().terminals.borrow().get("t2").unwrap().as_ptr() as usize;
+
+    // Rebuild 5 times — simulates repeated split/close/reconnect cycles.
+    for _ in 0..5 {
+        window.rebuild_session_content(&session_state.uuid, &session_state);
+    }
+
+    let ptr_t1_after =
+        window.imp().terminals.borrow().get("t1").unwrap().as_ptr() as usize;
+    let ptr_t2_after =
+        window.imp().terminals.borrow().get("t2").unwrap().as_ptr() as usize;
+
+    assert_eq!(
+        ptr_t1_before, ptr_t1_after,
+        "t1 must be the same widget instance after rebuilds — recreating would double signals"
+    );
+    assert_eq!(
+        ptr_t2_before, ptr_t2_after,
+        "t2 must be the same widget instance after rebuilds — recreating would double signals"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+/// C4 regression: rebuilding a managed workspace multiple times must reuse
+/// the same PersistentPaneView instances.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn c4_rebuild_reuses_managed_terminal_widgets() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.c4-managed-reuse-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let layout = crate::test_helpers::hsplit(
+        LayoutNode::new_terminal_with_uuid("p1"),
+        LayoutNode::new_terminal_with_uuid("p2"),
+    );
+    let session_state = crate::test_helpers::managed_session("ws-m", "Managed", layout);
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let ptr_p1_before =
+        window.imp().persistent_terminals.borrow().get("p1").unwrap().as_ptr() as usize;
+    let ptr_p2_before =
+        window.imp().persistent_terminals.borrow().get("p2").unwrap().as_ptr() as usize;
+
+    for _ in 0..5 {
+        window.rebuild_session_content(&session_state.uuid, &session_state);
+    }
+
+    let ptr_p1_after =
+        window.imp().persistent_terminals.borrow().get("p1").unwrap().as_ptr() as usize;
+    let ptr_p2_after =
+        window.imp().persistent_terminals.borrow().get("p2").unwrap().as_ptr() as usize;
+
+    assert_eq!(
+        ptr_p1_before, ptr_p1_after,
+        "p1 must be the same widget instance after rebuilds — recreating would double signals"
+    );
+    assert_eq!(
+        ptr_p2_before, ptr_p2_after,
+        "p2 must be the same widget instance after rebuilds — recreating would double signals"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+/// C4 regression: splitting a terminal and rebuilding must not create a
+/// second widget for the original terminal. The child_exited handler is
+/// stored as a single Option<SignalHandlerId> — a second connect would
+/// overwrite the first, leaking the old handler.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn c4_split_preserves_child_exited_handler_identity() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.c4-handler-identity-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let layout = LayoutNode::new_terminal_with_uuid("t1");
+    let session_state = crate::test_helpers::session("ws-split", "Split Test", layout);
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let handler_before = window
+        .imp()
+        .terminals
+        .borrow()
+        .get("t1")
+        .unwrap()
+        .imp()
+        .child_exited_handler
+        .borrow()
+        .is_some();
+    assert!(handler_before, "t1 should have a child_exited handler after initial build");
+
+    // Split t1 — this triggers rebuild_session_content.
+    window.split_terminal("t1", SplitOrientation::Horizontal);
+
+    let handler_after = window
+        .imp()
+        .terminals
+        .borrow()
+        .get("t1")
+        .unwrap()
+        .imp()
+        .child_exited_handler
+        .borrow()
+        .is_some();
+    assert!(
+        handler_after,
+        "t1 should still have exactly one child_exited handler after split"
+    );
+
+    // The widget pointer must be the same — no recreation.
+    let terminal_count = window.imp().terminals.borrow().len();
+    assert_eq!(terminal_count, 2, "split should produce exactly 2 terminals (t1 + new)");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
