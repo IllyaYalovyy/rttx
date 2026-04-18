@@ -50,16 +50,13 @@ impl Window {
     pub(crate) fn reapply_terminal_preferences(&self) {
         let prefs = preferences::load();
 
-        // Update pane navigation shortcuts in case the keybinding changed.
+        // Reapply all keyboard shortcuts from preferences.
         if let Some(app) = self.application().and_downcast::<adw::Application>() {
-            let (left, right, up, down) = prefs.pane_navigation_keys.accels();
-            for (name, accel) in [
-                ("navigate-left", left),
-                ("navigate-right", right),
-                ("navigate-up", up),
-                ("navigate-down", down),
-            ] {
-                app.set_accels_for_action(&format!("win.{name}"), &[accel]);
+            for def in crate::shortcuts::DEFAULT_SHORTCUTS {
+                let accels =
+                    crate::shortcuts::effective_accels(def.action, &prefs.keyboard_shortcuts);
+                let accel_refs: Vec<&str> = accels.iter().map(AsRef::as_ref).collect();
+                app.set_accels_for_action(&format!("win.{}", def.action), &accel_refs);
             }
         }
 

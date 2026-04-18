@@ -1,62 +1,67 @@
 use super::*;
+use crate::shortcuts;
 use crate::terminal::paste_guard::{PasteGuardDecision, decide};
+
+type ActionCallback = fn(&Window);
 
 impl Window {
     pub(super) fn setup_actions(&self, app: &adw::Application) {
-        type ActionCallback = fn(&Window);
-        let actions: &[(&str, &[&str], ActionCallback)] = &[
-            ("close-terminal", &["<Ctrl><Shift>W"], Self::close_focused_terminal),
-            ("split-horizontal", &["<Ctrl><Shift>E"], |w| {
+        let prefs = crate::preferences::load();
+        let overrides = &prefs.keyboard_shortcuts;
+
+        let actions: &[(&str, ActionCallback)] = &[
+            ("close-terminal", Self::close_focused_terminal),
+            ("split-horizontal", |w| {
                 w.split_focused(SplitOrientation::Horizontal);
             }),
-            ("split-vertical", &["<Ctrl><Shift>O"], |w| {
+            ("split-vertical", |w| {
                 w.split_focused(SplitOrientation::Vertical);
             }),
-            ("search", &["<Ctrl><Shift>F"], Self::toggle_focused_search),
-            ("copy", &["<Ctrl><Shift>C"], Self::clipboard_copy),
-            ("paste", &["<Ctrl><Shift>V"], Self::clipboard_paste),
-            ("prev-session", &["<Ctrl><Shift>Tab"], |w| w.cycle_session(-1)),
-            ("next-session", &["<Ctrl>Tab"], |w| w.cycle_session(1)),
-            ("toggle-sidebar", &["<Ctrl><Shift>N"], |w| {
+            ("search", Self::toggle_focused_search),
+            ("copy", Self::clipboard_copy),
+            ("paste", Self::clipboard_paste),
+            ("prev-session", |w| w.cycle_session(-1)),
+            ("next-session", |w| w.cycle_session(1)),
+            ("toggle-sidebar", |w| {
                 let panel = w.imp().left_paned.start_child().expect("left sidebar panel");
                 panel.set_visible(!panel.is_visible());
             }),
-            ("fullscreen", &["F11"], |w| {
+            ("fullscreen", |w| {
                 if w.is_fullscreen() {
                     w.unfullscreen();
                 } else {
                     w.fullscreen();
                 }
             }),
-            ("zoom-in", &["<Ctrl>plus", "<Ctrl>equal"], |w| w.zoom_focused(1)),
-            ("zoom-out", &["<Ctrl>minus"], |w| w.zoom_focused(-1)),
-            ("zoom-reset", &["<Ctrl>0"], |w| w.zoom_focused(0)),
-            ("toggle-pane-zoom", &["<Ctrl><Shift>Z"], Self::toggle_pane_zoom),
-            ("rotate-layout", &["<Ctrl><Shift>R"], Self::rotate_layout),
-            ("new-session", &["<Ctrl><Shift>T"], Self::add_session),
-            ("new-ephemeral-workspace", &[], Self::add_ephemeral_session),
-            ("new-remote-workspace", &[], Self::show_new_remote_workspace_dialog),
-            ("browse-remote-runtimes", &[], Self::show_browse_remote_runtimes_dialog),
-            ("connect-existing-local", &[], Self::connect_existing_local),
-            ("connect-to-existing", &["<Ctrl><Shift>A"], Self::connect_existing_local),
-            ("new-direct", &["<Ctrl><Shift>D"], |w| {
+            ("zoom-in", |w| w.zoom_focused(1)),
+            ("zoom-out", |w| w.zoom_focused(-1)),
+            ("zoom-reset", |w| w.zoom_focused(0)),
+            ("toggle-pane-zoom", Self::toggle_pane_zoom),
+            ("rotate-layout", Self::rotate_layout),
+            ("new-session", Self::add_session),
+            ("new-ephemeral-workspace", Self::add_ephemeral_session),
+            ("new-remote-workspace", Self::show_new_remote_workspace_dialog),
+            ("browse-remote-runtimes", Self::show_browse_remote_runtimes_dialog),
+            ("connect-existing-local", Self::connect_existing_local),
+            ("connect-to-existing", Self::connect_existing_local),
+            ("new-direct", |w| {
                 w.add_direct_session();
             }),
-            ("toggle-utility-sidebar", &["<Ctrl><Shift>B"], |w| {
+            ("toggle-utility-sidebar", |w| {
                 let sidebar = &w.imp().utility_sidebar_box;
                 sidebar.set_visible(!sidebar.is_visible());
             }),
-            ("add-current-host", &[], Self::do_add_current_host),
-            ("add-current-place", &[], Self::do_add_current_path_to_places),
-            ("add-command", &[], |w| {
+            ("add-current-host", Self::do_add_current_host),
+            ("add-current-place", Self::do_add_current_path_to_places),
+            ("add-command", |w| {
                 crate::commands_window::show_form(w, None);
             }),
-            ("add-place", &[], |w| {
+            ("add-place", |w| {
                 crate::places_window::show_form(w, None);
             }),
         ];
 
-        for (name, accels, callback) in actions {
+        for (name, callback) in actions {
             let action = gtk4::gio::SimpleAction::new(name, None);
             let win = self.clone();
             let cb = *callback;
@@ -64,7 +69,9 @@ impl Window {
                 cb(&win);
             });
             self.add_action(&action);
-            app.set_accels_for_action(&format!("win.{name}"), accels);
+            let accels = shortcuts::effective_accels(name, overrides);
+            let accel_refs: Vec<&str> = accels.iter().map(AsRef::as_ref).collect();
+            app.set_accels_for_action(&format!("win.{name}"), &accel_refs);
         }
 
         let sync_action =
@@ -77,7 +84,11 @@ impl Window {
             win.set_input_sync(new_val);
         });
         self.add_action(&sync_action);
-        app.set_accels_for_action("win.toggle-input-sync", &["<Ctrl><Shift>i"]);
+        {
+            let accels = shortcuts::effective_accels("toggle-input-sync", overrides);
+            let accel_refs: Vec<&str> = accels.iter().map(AsRef::as_ref).collect();
+            app.set_accels_for_action("win.toggle-input-sync", &accel_refs);
+        }
 
         let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
         let win = self.clone();
@@ -85,7 +96,11 @@ impl Window {
             crate::preferences_window::show(&win);
         });
         self.add_action(&prefs_action);
-        app.set_accels_for_action("win.preferences", &["<Ctrl>comma"]);
+        {
+            let accels = shortcuts::effective_accels("preferences", overrides);
+            let accel_refs: Vec<&str> = accels.iter().map(AsRef::as_ref).collect();
+            app.set_accels_for_action("win.preferences", &accel_refs);
+        }
 
         let edit_command_action =
             gtk4::gio::SimpleAction::new("edit-command", Some(glib::VariantTy::STRING));
@@ -151,23 +166,23 @@ impl Window {
         });
         self.add_action(&about_action);
 
-        // Pane navigation — shortcuts are configurable via preferences.
+        // Pane navigation — shortcuts are customizable via preferences.
         {
-            let nav_keys = crate::preferences::load().pane_navigation_keys;
-            let (left, right, up, down) = nav_keys.accels();
-            let nav_actions: &[(&str, &str, Direction)] = &[
-                ("navigate-left", left, Direction::Left),
-                ("navigate-right", right, Direction::Right),
-                ("navigate-up", up, Direction::Up),
-                ("navigate-down", down, Direction::Down),
+            let nav_actions: &[(&str, Direction)] = &[
+                ("navigate-left", Direction::Left),
+                ("navigate-right", Direction::Right),
+                ("navigate-up", Direction::Up),
+                ("navigate-down", Direction::Down),
             ];
-            for (name, accel, direction) in nav_actions {
+            for (name, direction) in nav_actions {
                 let action = gtk4::gio::SimpleAction::new(name, None);
                 let win = self.clone();
                 let dir = *direction;
                 action.connect_activate(move |_, _| win.navigate_focused(dir));
                 self.add_action(&action);
-                app.set_accels_for_action(&format!("win.{name}"), &[accel]);
+                let accels = shortcuts::effective_accels(name, overrides);
+                let accel_refs: Vec<&str> = accels.iter().map(AsRef::as_ref).collect();
+                app.set_accels_for_action(&format!("win.{name}"), &accel_refs);
             }
         }
 

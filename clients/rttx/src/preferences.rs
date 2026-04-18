@@ -1,5 +1,6 @@
 /// User preferences, persisted as JSON in `XDG_CONFIG_HOME/rttx/preferences.json`.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::color_scheme;
@@ -79,6 +80,8 @@ pub struct Preferences {
     pub default_session_folder: DefaultSessionFolder,
     #[serde(default)]
     pub pane_navigation_keys: PaneNavigationKeys,
+    #[serde(default)]
+    pub keyboard_shortcuts: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_true")]
     pub auto_start_daemon: bool,
     #[serde(default = "default_reconnect_delay_secs")]
@@ -135,6 +138,7 @@ impl Default for Preferences {
             trim_trailing_whitespace_on_copy: false,
             default_session_folder: default_session_folder(),
             pane_navigation_keys: PaneNavigationKeys::default(),
+            keyboard_shortcuts: BTreeMap::new(),
             auto_start_daemon: true,
             reconnect_delay_secs: default_reconnect_delay_secs(),
             paste_guard: true,
@@ -192,6 +196,8 @@ struct PreferencesDisk {
     default_session_folder: DefaultSessionFolder,
     #[serde(default)]
     pane_navigation_keys: PaneNavigationKeys,
+    #[serde(default)]
+    keyboard_shortcuts: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_true")]
     auto_start_daemon: bool,
     #[serde(default = "default_reconnect_delay_secs")]
@@ -209,6 +215,12 @@ impl From<PreferencesDisk> for Preferences {
         } else {
             Some(raw.color_scheme.clone())
         };
+
+        let mut keyboard_shortcuts = raw.keyboard_shortcuts;
+        crate::shortcuts::migrate_pane_navigation(
+            &raw.pane_navigation_keys,
+            &mut keyboard_shortcuts,
+        );
 
         Self {
             font: raw.font,
@@ -232,6 +244,7 @@ impl From<PreferencesDisk> for Preferences {
             trim_trailing_whitespace_on_copy: raw.trim_trailing_whitespace_on_copy,
             default_session_folder: raw.default_session_folder,
             pane_navigation_keys: raw.pane_navigation_keys,
+            keyboard_shortcuts,
             auto_start_daemon: raw.auto_start_daemon,
             reconnect_delay_secs: raw.reconnect_delay_secs,
             paste_guard: raw.paste_guard,
