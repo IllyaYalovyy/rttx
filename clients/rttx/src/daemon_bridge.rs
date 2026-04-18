@@ -1064,7 +1064,7 @@ impl EndpointActor {
                 if workspaces.is_empty() {
                     return;
                 }
-                log::debug!(
+                log::warn!(
                     "Reconnect attempt to {} for {} workspace(s)",
                     self.endpoint.key(),
                     workspaces.len()
@@ -1185,7 +1185,7 @@ impl EndpointActor {
             }
             Err(error) => {
                 let problem = classify_connection_problem(&error);
-                log::debug!(
+                log::warn!(
                     "Connection to {} failed: {error} ({})",
                     self.endpoint.key(),
                     if problem.is_transient() { "transient" } else { "permanent" }
@@ -1515,7 +1515,7 @@ impl EndpointActor {
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
-        log::info!(
+        log::warn!(
             "Scheduling reconnect to {} (attempt {}, delay {}s)",
             self.endpoint.key(),
             self.reconnect_attempt,
