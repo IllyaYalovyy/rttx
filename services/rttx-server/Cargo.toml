@@ -32,11 +32,7 @@ dbg_macro = "warn"
 [dependencies]
 rttx-proto = { path = "../../protocols/rttx-proto" }
 
-# IPC
-interprocess = { version = "2.2", features = ["tokio"] }
-
 # Protocol serialization
-prost = { version = "0.13", features = ["std", "prost-derive"] }
 bytes = "1"
 
 # Async runtime
@@ -73,6 +69,4 @@ anyhow = "1"
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"
-rstest = "0.23"
-tokio-test = "0.4"
 tracing-test = "0.2"

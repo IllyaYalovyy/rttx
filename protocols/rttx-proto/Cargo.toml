@@ -7,8 +7,7 @@ license.workspace = true
 [dependencies]
 prost = { version = "0.13", features = ["std", "prost-derive"] }
 bytes = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
-serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 
 [build-dependencies]
