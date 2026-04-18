@@ -89,3 +89,42 @@ fn reconnect_backoff_continues_after_transient_reattach_failure() {
         other => panic!("expected Reconnecting status, got {other:?}"),
     }
 }
+
+/// Regression test for #404: connection failure classification must
+/// produce a problem variant that carries diagnostic detail visible
+/// to the user. Before the fix, the log messages on the reconnect
+/// path were at debug/info level and invisible in production.
+#[test]
+fn connection_failure_produces_diagnosable_problem() {
+    use rttx::daemon::DaemonError;
+    use rttx::runtime::classify_connection_problem;
+
+    let cases: Vec<(DaemonError, &str)> = vec![
+        (
+            DaemonError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "connection refused",
+            )),
+            "I/O connection refused",
+        ),
+        (
+            DaemonError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "socket not found")),
+            "I/O socket not found",
+        ),
+        (DaemonError::Disconnected, "transport disconnected"),
+    ];
+
+    for (error, label) in cases {
+        let problem = classify_connection_problem(&error);
+        // The problem must be transient (so reconnect is scheduled)
+        // and must have a non-empty label for diagnostic display.
+        assert!(
+            problem.is_transient(),
+            "{label}: {problem:?} must be transient so reconnect is scheduled"
+        );
+        assert!(
+            !problem.label().is_empty(),
+            "{label}: problem label must be non-empty for diagnostic display"
+        );
+    }
+}
