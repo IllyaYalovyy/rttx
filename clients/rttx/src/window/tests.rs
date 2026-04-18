@@ -5724,3 +5724,617 @@ fn save_and_restart_full_session_persistence_roundtrip() {
     second_window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+// ── Managed workspace orchestration (window/runtime.rs) ─────────
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn open_runtime_ids_for_endpoint_returns_bound_runtime_ids() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.open-runtime-ids-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let local_host = crate::host::Host::local();
+    let remote_host = crate::host::Host::remote("deploy@prod");
+
+    // Add a local managed workspace with a runtime ID.
+    let s1 = crate::test_helpers::managed_session_with_runtime(
+        "ws-local",
+        "Local",
+        LayoutNode::new_terminal_with_uuid("pane-local"),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some("runtime-aaa"),
+    );
+    // Add a remote managed workspace with a runtime ID.
+    let s2 = crate::test_helpers::managed_session_with_runtime(
+        "ws-remote",
+        "Remote",
+        LayoutNode::new_terminal_with_uuid("pane-remote"),
+        RuntimeEndpoint::Remote { host: "deploy@prod".into() },
+        WorkspacePolicy::Persistent,
+        Some("runtime-bbb"),
+    );
+    // Add a local managed workspace without a runtime ID (not yet connected).
+    let s3 = crate::test_helpers::managed_session_with_runtime(
+        "ws-pending",
+        "Pending",
+        LayoutNode::new_terminal_with_uuid("pane-pending"),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.sessions.push(s1);
+        state.sessions.push(s2);
+        state.sessions.push(s3);
+    }
+
+    let local_ids = window.open_runtime_ids_for_endpoint(&local_host);
+    assert_eq!(local_ids, vec!["runtime-aaa"], "should return only the bound local runtime ID");
+
+    let remote_ids = window.open_runtime_ids_for_endpoint(&remote_host);
+    assert_eq!(remote_ids, vec!["runtime-bbb"], "should return only the bound remote runtime ID");
+
+    let unknown_host = crate::host::Host::remote("nobody@nowhere");
+    let unknown_ids = window.open_runtime_ids_for_endpoint(&unknown_host);
+    assert!(unknown_ids.is_empty(), "unknown endpoint should return no runtime IDs");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn restore_managed_snapshot_feeds_scrollback_and_cwd_to_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.restore-snapshot-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "snap-pane";
+    let session_state = crate::test_helpers::managed_session(
+        "ws-snap",
+        "Snapshot Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let restore = crate::workspace_state::WorkspacePaneRestore {
+        layout_terminal_uuid: layout_uuid.to_string(),
+        title: "vim main.rs".to_string(),
+        cwd: "/home/user/project".to_string(),
+        scrollback: bytes::Bytes::from_static(b"$ cargo build\r\nCompiling rttx\r\n"),
+        cols: 120,
+        rows: 40,
+        bracketed_paste_mode: true,
+        application_cursor_keys: false,
+        application_keypad: false,
+        mouse_tracking_mode: 0,
+        sgr_mouse_mode: false,
+    };
+    window.restore_managed_snapshot(&restore);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get(layout_uuid)
+        .cloned()
+        .expect("pane should exist");
+
+    assert_eq!(
+        pane.current_directory().as_deref(),
+        Some("/home/user/project"),
+        "snapshot restore should set CWD"
+    );
+    assert_eq!(pane.status_label_text_for_test(), "Connected", "snapshot restore marks connected");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn restore_managed_snapshot_skips_missing_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.restore-snapshot-missing-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Restore for a pane that doesn't exist — should not panic.
+    let restore = crate::workspace_state::WorkspacePaneRestore {
+        layout_terminal_uuid: "nonexistent-pane".to_string(),
+        title: String::new(),
+        cwd: "/tmp".to_string(),
+        scrollback: bytes::Bytes::new(),
+        cols: 80,
+        rows: 24,
+        bracketed_paste_mode: false,
+        application_cursor_keys: false,
+        application_keypad: false,
+        mouse_tracking_mode: 0,
+        sgr_mouse_mode: false,
+    };
+    window.restore_managed_snapshot(&restore);
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn restore_managed_snapshot_sets_daemon_title_when_no_custom_title() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.restore-snapshot-title-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "title-pane";
+    let session_state = crate::test_helpers::managed_session(
+        "ws-title",
+        "Title Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Set a custom title first — snapshot should NOT override it.
+    let pane = window.imp().persistent_terminals.borrow().get(layout_uuid).cloned().unwrap();
+    pane.set_custom_title(Some("My Custom Title"));
+
+    let restore = crate::workspace_state::WorkspacePaneRestore {
+        layout_terminal_uuid: layout_uuid.to_string(),
+        title: "daemon-reported-title".to_string(),
+        cwd: "/tmp".to_string(),
+        scrollback: bytes::Bytes::new(),
+        cols: 80,
+        rows: 24,
+        bracketed_paste_mode: false,
+        application_cursor_keys: false,
+        application_keypad: false,
+        mouse_tracking_mode: 0,
+        sgr_mouse_mode: false,
+    };
+    window.restore_managed_snapshot(&restore);
+
+    assert_eq!(
+        pane.custom_title().as_deref(),
+        Some("My Custom Title"),
+        "custom title should not be overridden by snapshot restore"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn mark_managed_pane_connected_sets_status_label() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.mark-connected-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "connect-pane";
+    let session_state = crate::test_helpers::managed_session(
+        "ws-connect",
+        "Connect Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Initially the pane is not connected.
+    let pane = window.imp().persistent_terminals.borrow().get(layout_uuid).cloned().unwrap();
+    assert_ne!(
+        pane.status_label_text_for_test(),
+        "Connected",
+        "pane should not be connected initially"
+    );
+
+    window.mark_managed_pane_connected(layout_uuid);
+
+    assert_eq!(
+        pane.status_label_text_for_test(),
+        "Connected",
+        "mark_managed_pane_connected should set status to Connected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn status_propagation_updates_sidebar_and_all_panes() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.status-propagation-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Create a workspace with two panes (split).
+    let layout = crate::test_helpers::hsplit(
+        LayoutNode::new_terminal_with_uuid("pane-a"),
+        LayoutNode::new_terminal_with_uuid("pane-b"),
+    );
+    let session_state = crate::test_helpers::managed_session("ws-status", "Status Test", layout);
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Set status to Disconnected — both panes should reflect it.
+    window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Disconnected);
+
+    let panes = window.imp().persistent_terminals.borrow();
+    let pane_a = panes.get("pane-a").expect("pane-a should exist");
+    let pane_b = panes.get("pane-b").expect("pane-b should exist");
+    assert_eq!(pane_a.status_label_text_for_test(), "Disconnected");
+    assert_eq!(pane_b.status_label_text_for_test(), "Disconnected");
+    assert!(!pane_a.input_enabled_for_test(), "disconnected pane should not accept input");
+    assert!(!pane_b.input_enabled_for_test(), "disconnected pane should not accept input");
+    drop(panes);
+
+    // Set status to Connected — both panes should reflect it.
+    window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connected);
+
+    let panes = window.imp().persistent_terminals.borrow();
+    let pane_a = panes.get("pane-a").unwrap();
+    let pane_b = panes.get("pane-b").unwrap();
+    assert_eq!(pane_a.status_label_text_for_test(), "Connected");
+    assert_eq!(pane_b.status_label_text_for_test(), "Connected");
+    assert!(pane_a.input_enabled_for_test(), "connected pane should accept input");
+    assert!(pane_b.input_enabled_for_test(), "connected pane should accept input");
+    drop(panes);
+
+    // Verify sidebar row exists and is accessible after status change.
+    let _row = session_row_for_uuid(&window, &session_state.uuid);
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn apply_transition_with_recovered_workspace_builds_session_and_sets_connecting() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.apply-transition-recovered-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let recovered = crate::test_helpers::managed_session_with_runtime(
+        "ws-recovered",
+        "Recovered",
+        LayoutNode::new_terminal_with_uuid("recovered-pane"),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some("runtime-recovered"),
+    );
+    window.imp().state.borrow_mut().sessions.push(recovered.clone());
+
+    let transition = crate::workspace_state::EndpointEventTransition {
+        recovered_workspaces: vec![recovered.clone()],
+        connection_status_updates: vec![crate::workspace_state::ConnectionStatusUpdate {
+            workspace_id: "ws-recovered".to_string(),
+            status: ConnectionStatus::Connecting,
+        }],
+        persist_window_state: true,
+        ..Default::default()
+    };
+    window.apply_endpoint_event_transition(&transition);
+
+    assert!(
+        window.imp().persistent_terminals.borrow().contains_key("recovered-pane"),
+        "recovered workspace pane should be materialized"
+    );
+    assert_eq!(
+        window.imp().workspace_connection_status.borrow().get("ws-recovered"),
+        Some(&ConnectionStatus::Connecting),
+        "recovered workspace should be in Connecting state"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn apply_transition_snapshot_restore_feeds_pane_data() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.apply-transition-snapshot-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "snap-transition-pane";
+    let session_state = crate::test_helpers::managed_session(
+        "ws-snap-t",
+        "Snap Transition",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let transition = crate::workspace_state::EndpointEventTransition {
+        pane_snapshot_restores: vec![crate::workspace_state::WorkspacePaneRestore {
+            layout_terminal_uuid: layout_uuid.to_string(),
+            title: "htop".to_string(),
+            cwd: "/var/log".to_string(),
+            scrollback: bytes::Bytes::from_static(b"log output\r\n"),
+            cols: 80,
+            rows: 24,
+            bracketed_paste_mode: false,
+            application_cursor_keys: false,
+            application_keypad: false,
+            mouse_tracking_mode: 0,
+            sgr_mouse_mode: false,
+        }],
+        connected_layout_terminals: vec![layout_uuid.to_string()],
+        ..Default::default()
+    };
+    window.apply_endpoint_event_transition(&transition);
+
+    let pane = window.imp().persistent_terminals.borrow().get(layout_uuid).cloned().unwrap();
+    assert_eq!(pane.current_directory().as_deref(), Some("/var/log"));
+    assert_eq!(pane.status_label_text_for_test(), "Connected");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn reconnect_countdown_cancels_on_status_change() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.reconnect-cancel-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let session_state = crate::test_helpers::managed_session(
+        "ws-cancel",
+        "Cancel Test",
+        LayoutNode::new_terminal_with_uuid("cancel-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Start a reconnect countdown.
+    window.set_workspace_connection_status(
+        &session_state.uuid,
+        &ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 10 },
+    );
+    assert!(
+        window.imp().workspace_reconnect_sources.borrow().contains_key(&session_state.uuid),
+        "reconnect countdown timer should be active"
+    );
+
+    // Transition to Connected — countdown should be cancelled.
+    window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connected);
+    assert!(
+        !window.imp().workspace_reconnect_sources.borrow().contains_key(&session_state.uuid),
+        "reconnect countdown should be cancelled when status changes to Connected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn reconnect_countdown_skipped_for_short_delay() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.reconnect-short-delay-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let session_state = crate::test_helpers::managed_session(
+        "ws-short",
+        "Short Delay",
+        LayoutNode::new_terminal_with_uuid("short-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // A retry_in_secs of 1 should not start a countdown timer.
+    window.set_workspace_connection_status(
+        &session_state.uuid,
+        &ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 },
+    );
+    assert!(
+        !window.imp().workspace_reconnect_sources.borrow().contains_key(&session_state.uuid),
+        "countdown should not start for retry_in_secs <= 1"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn workspace_session_missing_disables_pane_input() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.session-missing-input-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let session_state = crate::test_helpers::managed_session(
+        "ws-missing",
+        "Missing Test",
+        LayoutNode::new_terminal_with_uuid("missing-pane"),
+    );
+    window.imp().state.borrow_mut().sessions.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::SessionMissing);
+
+    let pane = window.imp().persistent_terminals.borrow().get("missing-pane").cloned().unwrap();
+    assert!(!pane.input_enabled_for_test(), "SessionMissing should disable pane input");
+    assert_eq!(pane.status_label_text_for_test(), "Session Missing");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_binding_for_terminal_resolves_bound_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.managed-binding-resolve-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "bound-pane";
+    let runtime_pane_id = "runtime-pane-123";
+    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+        "ws-binding",
+        "Binding Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some("runtime-binding"),
+    );
+    session_state
+        .runtime
+        .pane_bindings
+        .insert(layout_uuid.to_string(), runtime_pane_id.to_string());
+    window.imp().state.borrow_mut().sessions.push(session_state);
+
+    let binding = window.managed_binding_for_terminal(layout_uuid);
+    assert!(binding.is_some(), "should resolve binding for bound terminal");
+    let (workspace_id, endpoint, runtime_id, pane_id) = binding.unwrap();
+    assert_eq!(workspace_id, "ws-binding");
+    assert_eq!(endpoint, RuntimeEndpoint::Local);
+    assert_eq!(runtime_id, "runtime-binding");
+    assert_eq!(pane_id, runtime_pane_id);
+
+    // Unbound terminal should return None.
+    assert!(
+        window.managed_binding_for_terminal("nonexistent").is_none(),
+        "unbound terminal should return None"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn connection_presentation_delegates_to_pure_function() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.connection-presentation-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let connected = window.connection_presentation_for_workspace(&ConnectionStatus::Connected);
+    let pure = crate::runtime::present_connection_status(&ConnectionStatus::Connected);
+    assert_eq!(connected, pure, "window method should delegate to pure function");
+
+    let disconnected =
+        window.connection_presentation_for_workspace(&ConnectionStatus::Disconnected);
+    let pure_disc = crate::runtime::present_connection_status(&ConnectionStatus::Disconnected);
+    assert_eq!(disconnected, pure_disc);
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
