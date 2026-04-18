@@ -5539,3 +5539,188 @@ fn event_poll_batch_limit_is_bounded() {
     const { assert!(EVENT_POLL_BATCH_LIMIT > 0) };
     const { assert!(EVENT_POLL_BATCH_LIMIT <= 256) };
 }
+
+// ── Session persistence end-to-end (GUI round-trip) ─────────────
+
+/// Full GUI round-trip: create workspaces, split, rename, reorder →
+/// save_state → close → new Window (load_state) → verify widget tree.
+/// Covers the gap identified in #325.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn save_and_restart_full_session_persistence_roundtrip() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.persistence-e2e-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    // ── Phase 1: Build state through GUI actions ────────────────
+
+    let first_window = Window::new(&app);
+    first_window.set_default_size(1200, 800);
+    first_window.present();
+    pump_events(100);
+
+    // Add two more workspaces (3 total).
+    first_window.add_direct_session();
+    first_window.add_direct_session();
+    pump_events(100);
+
+    let (ws0_uuid, ws1_uuid, ws2_uuid) = {
+        let state = first_window.imp().state.borrow();
+        assert_eq!(state.sessions.len(), 3);
+        (
+            state.sessions[0].uuid.clone(),
+            state.sessions[1].uuid.clone(),
+            state.sessions[2].uuid.clone(),
+        )
+    };
+
+    // Rename workspace 0.
+    first_window.rename_session(&ws0_uuid, "Editor");
+
+    // Split workspace 0 horizontally.
+    let ws0_t1 = {
+        let state = first_window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    first_window.split_terminal(&ws0_t1, SplitOrientation::Horizontal);
+    pump_events(100);
+
+    let ws0_t2 = {
+        let state = first_window.imp().state.borrow();
+        state.sessions[0].layout.terminal_uuids().into_iter().find(|u| u != &ws0_t1).unwrap()
+    };
+
+    // Rename workspace 1.
+    first_window.rename_session(&ws1_uuid, "Build");
+
+    // Reorder: move workspace 2 to position 0.
+    first_window.reorder_session(&ws2_uuid, &ws0_uuid);
+    pump_events(50);
+
+    // Select workspace 1 (now at index 1 after reorder).
+    let active_index = {
+        let state = first_window.imp().state.borrow();
+        state.sessions.iter().position(|s| s.uuid == ws0_uuid).unwrap()
+    };
+    if let Some(row) = first_window.imp().sidebar_list.row_at_index(active_index as i32) {
+        first_window.imp().sidebar_list.select_row(Some(&row));
+    }
+    pump_events(50);
+
+    // Capture expected state before save.
+    let expected_order: Vec<String> = {
+        let state = first_window.imp().state.borrow();
+        state.sessions.iter().map(|s| s.uuid.clone()).collect()
+    };
+    let expected_names: Vec<String> = {
+        let state = first_window.imp().state.borrow();
+        state.sessions.iter().map(|s| s.name.clone()).collect()
+    };
+
+    // ── Phase 2: Save and close ─────────────────────────────────
+
+    first_window.save_state();
+    first_window.close();
+
+    // Verify saved state on disk.
+    let saved = session::load_window_state();
+    assert_eq!(saved.sessions.len(), 3, "saved state should have 3 workspaces");
+    let saved_order: Vec<&str> = saved.sessions.iter().map(|s| s.uuid.as_str()).collect();
+    assert_eq!(
+        saved_order,
+        expected_order.iter().map(String::as_str).collect::<Vec<_>>(),
+        "saved workspace order must match"
+    );
+    let saved_names: Vec<&str> = saved.sessions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        saved_names,
+        expected_names.iter().map(String::as_str).collect::<Vec<_>>(),
+        "saved workspace names must match"
+    );
+
+    // The "Editor" workspace should have 2 terminals (was split).
+    let editor_session = saved.sessions.iter().find(|s| s.uuid == ws0_uuid).unwrap();
+    assert_eq!(
+        editor_session.layout.terminal_count(),
+        2,
+        "Editor workspace should have 2 panes after split"
+    );
+    assert!(editor_session.layout.contains_terminal(&ws0_t1));
+    assert!(editor_session.layout.contains_terminal(&ws0_t2));
+
+    // ── Phase 3: Restore into a new window ──────────────────────
+
+    let second_window = Window::new(&app);
+    second_window.set_default_size(1200, 800);
+    second_window.present();
+    pump_events(200);
+
+    // Verify workspace count.
+    let restored_count = {
+        let state = second_window.imp().state.borrow();
+        state.sessions.len()
+    };
+    assert_eq!(restored_count, 3, "restored window should have 3 workspaces");
+
+    // Verify workspace order.
+    let restored_order: Vec<String> = {
+        let state = second_window.imp().state.borrow();
+        state.sessions.iter().map(|s| s.uuid.clone()).collect()
+    };
+    assert_eq!(restored_order, expected_order, "workspace order must survive restart");
+
+    // Verify workspace names.
+    let restored_names: Vec<String> = {
+        let state = second_window.imp().state.borrow();
+        state.sessions.iter().map(|s| s.name.clone()).collect()
+    };
+    assert_eq!(restored_names, expected_names, "workspace names must survive restart");
+
+    // Verify sidebar rows match.
+    for (i, expected_uuid) in expected_order.iter().enumerate() {
+        let row = session_row_at(&second_window, i as i32);
+        assert_eq!(row.uuid(), *expected_uuid, "sidebar row {i} UUID must match after restart");
+    }
+
+    // Verify the "Editor" workspace has 2 terminals in the widget tree.
+    let editor_content = second_window
+        .imp()
+        .session_stack
+        .child_by_name(&ws0_uuid)
+        .expect("Editor workspace content should exist");
+    let paned = editor_content
+        .downcast_ref::<gtk4::Paned>()
+        .expect("Editor workspace root should be a Paned (split)");
+    assert!(paned.start_child().is_some(), "split should have a start child");
+    assert!(paned.end_child().is_some(), "split should have an end child");
+
+    // Verify both terminals exist in the terminal map.
+    {
+        let terminals = second_window.imp().terminals.borrow();
+        assert!(terminals.contains_key(&ws0_t1), "first terminal should be restored");
+        assert!(terminals.contains_key(&ws0_t2), "second terminal (from split) should be restored");
+    }
+
+    // Verify the renamed sidebar labels.
+    let editor_row = session_row_for_uuid(&second_window, &ws0_uuid);
+    assert_eq!(
+        editor_row.session_name(),
+        "Editor",
+        "renamed workspace should keep its name after restart"
+    );
+    let build_row = session_row_for_uuid(&second_window, &ws1_uuid);
+    assert_eq!(
+        build_row.session_name(),
+        "Build",
+        "renamed workspace should keep its name after restart"
+    );
+
+    second_window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
