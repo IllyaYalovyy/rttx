@@ -255,7 +255,7 @@ impl Window {
                 true
             }
             Err(error) => {
-                log::error!("Failed to create endpoint connection manager: {error}");
+                tracing::error!("Failed to create endpoint connection manager: {error}");
                 self.show_toast("Failed to initialize runtime connection manager");
                 false
             }
@@ -524,7 +524,7 @@ impl Window {
                 self.dispatch_managed_runtime_message(&endpoint, &message);
             }
             EndpointEvent::WorkspaceError { workspace_id, detail, .. } => {
-                log::warn!("Workspace {workspace_id} runtime error: {detail}");
+                tracing::warn!("Workspace {workspace_id} runtime error: {detail}");
                 if !workspace_id.starts_with("inventory:") {
                     self.show_toast(&detail);
                 }
@@ -570,7 +570,7 @@ impl Window {
         }
 
         for runtime_pane_id in &transition.skipped_runtime_panes {
-            log::warn!("Failed to recover runtime pane {runtime_pane_id}: split depth limit");
+            tracing::warn!("Failed to recover runtime pane {runtime_pane_id}: split depth limit");
         }
 
         for layout_terminal_uuid in &transition.removed_layout_terminals {
@@ -824,7 +824,7 @@ impl Window {
         };
 
         if let Msg::Error(error) = inner {
-            log::warn!("Daemon error: {} (code {})", error.message, error.code);
+            tracing::warn!("Daemon error: {} (code {})", error.message, error.code);
             return;
         }
 

@@ -104,7 +104,7 @@ pub(crate) fn launch_uri(uri: &str) -> bool {
     match gtk4::gio::AppInfo::launch_default_for_uri(uri, gtk4::gio::AppLaunchContext::NONE) {
         Ok(()) => true,
         Err(error) => {
-            log::warn!("Failed to open terminal match '{uri}': {error}");
+            tracing::warn!("Failed to open terminal match '{uri}': {error}");
             false
         }
     }
@@ -158,7 +158,7 @@ fn register_openable_match(vte: &vte4::Terminal, pattern: &str) {
             vte.match_set_cursor_name(tag, "pointer");
         }
         Err(error) => {
-            log::error!("Failed to register terminal match regex '{pattern}': {error}");
+            tracing::error!("Failed to register terminal match regex '{pattern}': {error}");
         }
     }
 }
