@@ -476,7 +476,7 @@ impl Window {
         }
 
         if let Err(e) = session::save_window_state(&state) {
-            log::error!("Failed to save window state: {e}");
+            tracing::error!("Failed to save window state: {e}");
         }
     }
 

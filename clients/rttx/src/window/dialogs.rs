@@ -117,7 +117,7 @@ impl Window {
                 let mut items = commands::load();
                 items.retain(|c| c.uuid != uuid);
                 if let Err(e) = commands::save(&items) {
-                    log::error!("Failed to delete command: {e}");
+                    tracing::error!("Failed to delete command: {e}");
                 }
                 win.refresh_command_sidebar();
             },
@@ -130,7 +130,7 @@ impl Window {
             let mut items = places::load();
             items.retain(|p| p.uuid != uuid);
             if let Err(e) = places::save(&items) {
-                log::error!("Failed to delete place: {e}");
+                tracing::error!("Failed to delete place: {e}");
             }
             win.refresh_place_sidebar();
         });
@@ -151,7 +151,7 @@ impl Window {
                     let mut hosts = host::load();
                     hosts.retain(|h| h.key != host_key);
                     if let Err(e) = host::save(&hosts) {
-                        log::error!("Failed to delete host: {e}");
+                        tracing::error!("Failed to delete host: {e}");
                     }
                     win.rebuild_host_selector_model(None);
                     win.refresh_place_sidebar();
@@ -273,13 +273,13 @@ impl Window {
                 &command_uuids,
             );
             if let Err(e) = host::save(&new_hosts) {
-                log::error!("Failed to save hosts: {e}");
+                tracing::error!("Failed to save hosts: {e}");
             }
             if let Err(e) = places::save(&new_places) {
-                log::error!("Failed to save places: {e}");
+                tracing::error!("Failed to save places: {e}");
             }
             if let Err(e) = commands::save(&new_commands) {
-                log::error!("Failed to save commands: {e}");
+                tracing::error!("Failed to save commands: {e}");
             }
             win.rebuild_host_selector_model(None);
             win.refresh_place_sidebar();
@@ -339,7 +339,7 @@ impl Window {
             }
             hosts.push(new_host.clone());
             if let Err(e) = host::save(&hosts) {
-                log::error!("Failed to save hosts: {e}");
+                tracing::error!("Failed to save hosts: {e}");
                 win.show_toast("Failed to save host");
                 dialog_ref.close();
                 return;
@@ -622,7 +622,7 @@ impl Window {
 
         hosts.push(new_host.clone());
         if let Err(e) = host::save(&hosts) {
-            log::error!("Failed to save hosts: {e}");
+            tracing::error!("Failed to save hosts: {e}");
             self.show_toast("Failed to save host");
             return;
         }
@@ -654,7 +654,7 @@ impl Window {
         let mut places = crate::places::load();
         places.push(place);
         if let Err(e) = crate::places::save(&places) {
-            log::error!("Failed to save places: {e}");
+            tracing::error!("Failed to save places: {e}");
             self.show_toast("Failed to save place");
             return;
         }

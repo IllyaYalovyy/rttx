@@ -673,7 +673,7 @@ impl PersistentPaneView {
                 }
                 Ok(Some(_) | None) => {}
                 Err(error) => {
-                    log::warn!("Failed to read clipboard text for managed paste: {error}");
+                    tracing::warn!("Failed to read clipboard text for managed paste: {error}");
                 }
             }
         });

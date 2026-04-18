@@ -269,7 +269,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             paste_guard_threshold: prefs.paste_guard_threshold,
         };
         if let Err(e) = preferences::save(&new_prefs) {
-            log::error!("Failed to save preferences: {e}");
+            tracing::error!("Failed to save preferences: {e}");
         }
         if let Ok(win) = parent_window.clone().downcast::<crate::window::Window>() {
             win.reapply_terminal_preferences();

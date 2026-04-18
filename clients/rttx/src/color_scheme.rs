@@ -159,7 +159,7 @@ pub fn load_color_schemes() -> Vec<ColorScheme> {
                             schemes.insert(scheme.name.clone(), scheme);
                         }
                         Err(e) => {
-                            log::warn!("Failed to load color scheme {}: {e}", path.display());
+                            tracing::warn!("Failed to load color scheme {}: {e}", path.display());
                         }
                     }
                 }

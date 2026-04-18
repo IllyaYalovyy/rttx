@@ -770,7 +770,7 @@ impl EndpointActor {
                         Some(proto::server_message::Msg::Error(e)) if e.code == 6 => {
                             // ERR_PANE_NOT_FOUND: the pane is already gone on the
                             // daemon, so treat this as a successful close.
-                            log::info!(
+                            tracing::info!(
                                 "ClosePane for {workspace_id}: pane already removed on daemon, \
                                  treating as closed"
                             );
@@ -1064,7 +1064,7 @@ impl EndpointActor {
                 if workspaces.is_empty() {
                     return;
                 }
-                log::warn!(
+                tracing::warn!(
                     "Reconnect attempt to {} for {} workspace(s)",
                     self.endpoint.key(),
                     workspaces.len()
@@ -1092,7 +1092,7 @@ impl EndpointActor {
                 // push messages from previously attached sessions.
                 self.split_connection();
 
-                log::info!(
+                tracing::info!(
                     "Reconnected to {}, reattaching {} workspace(s)",
                     self.endpoint.key(),
                     self.tracked_workspaces.len()
@@ -1113,7 +1113,7 @@ impl EndpointActor {
                         }
                         Err(ref error) => {
                             let problem = classify_connection_problem(error);
-                            log::warn!("Reattach {workspace_id} failed during reconnect: {error}");
+                            tracing::warn!("Reattach {workspace_id} failed during reconnect: {error}");
                             if matches!(problem, ConnectionProblem::SessionMissing) {
                                 self.emit_status(&workspace_id, ConnectionStatus::SessionMissing);
                             } else {
@@ -1185,7 +1185,7 @@ impl EndpointActor {
             }
             Err(error) => {
                 let problem = classify_connection_problem(&error);
-                log::warn!(
+                tracing::warn!(
                     "Connection to {} failed: {error} ({})",
                     self.endpoint.key(),
                     if problem.is_transient() { "transient" } else { "permanent" }
@@ -1217,7 +1217,7 @@ impl EndpointActor {
             RuntimeEndpoint::Local => {
                 let socket_path = default_socket_path();
                 if !socket_path.exists() && !self.daemon_start_attempted && self.auto_start_daemon {
-                    log::info!("Auto-starting local daemon");
+                    tracing::info!("Auto-starting local daemon");
                     self.daemon_start_attempted = true;
                     Self::start_local_daemon(&socket_path).await?;
                 }
@@ -1343,7 +1343,7 @@ impl EndpointActor {
                         ConnectionProblem::SessionMissing
                     ) =>
                 {
-                    log::warn!(
+                    tracing::warn!(
                         "Session {runtime_id} no longer exists on daemon for workspace \
                          {workspace_id}"
                     );
@@ -1352,7 +1352,7 @@ impl EndpointActor {
                 }
                 // Runtime gone for other reasons — fall through to create a new one.
                 Err(error) => {
-                    log::info!(
+                    tracing::info!(
                         "Reattach to {runtime_id} failed for {workspace_id}: \
                          {error}, creating new runtime"
                     );
@@ -1468,19 +1468,19 @@ impl EndpointActor {
                     return;
                 };
                 if let Err(error) = writer.send_ping(nonce).await {
-                    log::warn!("Heartbeat ping failed for {}: {error}", self.endpoint.key());
+                    tracing::warn!("Heartbeat ping failed for {}: {error}", self.endpoint.key());
                     self.handle_disconnect();
                 }
             }
             HeartbeatAction::DeclareLost => {
-                log::warn!("Heartbeat timed out for {}", self.endpoint.key());
+                tracing::warn!("Heartbeat timed out for {}", self.endpoint.key());
                 self.handle_disconnect();
             }
         }
     }
 
     fn handle_disconnect(&mut self) {
-        log::warn!(
+        tracing::warn!(
             "Connection lost to {} ({} tracked workspace(s))",
             self.endpoint.key(),
             self.tracked_workspaces.len()
@@ -1515,7 +1515,7 @@ impl EndpointActor {
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
-        log::warn!(
+        tracing::warn!(
             "Scheduling reconnect to {} (attempt {}, delay {}s)",
             self.endpoint.key(),
             self.reconnect_attempt,

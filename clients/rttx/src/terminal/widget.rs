@@ -581,7 +581,7 @@ impl TerminalWidget {
             gtk4::gio::Cancellable::NONE,
             move |result| {
                 if let Err(error) = result {
-                    log::error!("Failed to spawn shell: {error}");
+                    tracing::error!("Failed to spawn shell: {error}");
                     let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
                     vte_for_spawn.feed(msg.as_bytes());
                     if let Some(widget) = widget_ref.upgrade()

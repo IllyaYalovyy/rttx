@@ -262,3 +262,70 @@ pub fn run() -> glib::ExitCode {
 
     app.run()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_old_logs_keeps_recent_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["rttx.log.2025-01-01", "rttx.log.2025-01-02", "rttx.log.2025-01-03"] {
+            std::fs::write(dir.path().join(name), "data").unwrap();
+        }
+        cleanup_old_logs(dir.path(), "rttx.log", 2);
+        let remaining: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.len(), 3);
+    }
+
+    #[test]
+    fn cleanup_old_logs_removes_excess_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "rttx.log.2025-01-01",
+            "rttx.log.2025-01-02",
+            "rttx.log.2025-01-03",
+            "rttx.log.2025-01-04",
+            "rttx.log.2025-01-05",
+        ] {
+            std::fs::write(dir.path().join(name), "data").unwrap();
+        }
+        cleanup_old_logs(dir.path(), "rttx.log", 2);
+        let mut remaining: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec!["rttx.log.2025-01-03", "rttx.log.2025-01-04", "rttx.log.2025-01-05"]
+        );
+    }
+
+    #[test]
+    fn cleanup_old_logs_ignores_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["rttx.log.2025-01-01", "rttx.log.2025-01-02", "other.txt"] {
+            std::fs::write(dir.path().join(name), "data").unwrap();
+        }
+        cleanup_old_logs(dir.path(), "rttx.log", 0);
+        let mut remaining: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining, vec!["other.txt", "rttx.log.2025-01-02"]);
+    }
+
+    #[test]
+    fn cleanup_old_logs_handles_missing_directory() {
+        let dir = std::path::Path::new("/tmp/rttx-nonexistent-test-dir");
+        cleanup_old_logs(dir, "rttx.log", 2);
+    }
+}
