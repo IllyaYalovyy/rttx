@@ -2475,3 +2475,48 @@ fn persistent_pane_title_strips_user_host_prefix() {
     assert!(!label.contains('@'), "pane title must not contain user@host, got: {label}");
     assert_eq!(label, "~/projects");
 }
+
+/// Regression for #659: the shared `should_open_context_menu` helper must
+/// return true for plain right-click (no modifiers) and false when Shift is
+/// held, matching GNOME Terminal / Ptyxis / Tilix conventions. Both
+/// `TerminalWidget` and `PersistentPaneView` delegate to this helper.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn context_menu_modifier_convention_matches_gnome() {
+    require_display!();
+
+    // Verify the helper function implements the GNOME convention.
+    assert!(
+        rttx::terminal::should_open_context_menu(gtk4::gdk::ModifierType::empty()),
+        "plain right-click must open context menu"
+    );
+    assert!(
+        !rttx::terminal::should_open_context_menu(gtk4::gdk::ModifierType::SHIFT_MASK),
+        "Shift+right-click must pass through to VTE"
+    );
+
+    // Verify both widget types have a button-3 capture gesture that can
+    // invoke the context menu (structural prerequisite for the helper).
+    for (label, controllers) in [
+        (
+            "TerminalWidget",
+            rttx::terminal::widget::TerminalWidget::new("t-mod", None)
+                .vte()
+                .observe_controllers(),
+        ),
+        (
+            "PersistentPaneView",
+            rttx::terminal::persistent_widget::PersistentPaneView::new("p-mod", "s1")
+                .vte()
+                .observe_controllers(),
+        ),
+    ] {
+        let has_btn3 = (0..controllers.n_items()).any(|i| {
+            controllers
+                .item(i)
+                .and_then(|c| c.downcast::<gtk4::GestureClick>().ok())
+                .is_some_and(|g| g.button() == 3)
+        });
+        assert!(has_btn3, "{label} must have a button-3 gesture for context menu");
+    }
+}

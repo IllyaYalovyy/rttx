@@ -34,6 +34,15 @@ pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
 /// preventing immediate item activation on button release (#480).
 pub(crate) const CONTEXT_MENU_HALIGN: gtk4::Align = gtk4::Align::Start;
 
+/// Whether a right-click with the given modifiers should open the context menu.
+///
+/// Plain right-click opens the menu (matches GNOME Terminal, Ptyxis, Tilix).
+/// Shift+right-click passes through to VTE for mouse-aware apps.
+#[must_use]
+pub const fn should_open_context_menu(mods: gtk4::gdk::ModifierType) -> bool {
+    !mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
+}
+
 /// Populate a `gio::Menu` with places visible on the given host key.
 ///
 /// Each item triggers `win.open-place` with the place path as parameter.
@@ -990,6 +999,48 @@ mod pane_passive_tests {
             super::CONTEXT_MENU_HALIGN,
             gtk4::Align::Start,
             "context menu must open adjacent to the pointer, not centered on it"
+        );
+    }
+
+    /// Plain right-click (no modifiers) must open the context menu.
+    /// Matches GNOME Terminal, Ptyxis, and Tilix conventions. Regression for #659.
+    #[test]
+    fn plain_right_click_opens_context_menu() {
+        assert!(
+            super::should_open_context_menu(gtk4::gdk::ModifierType::empty()),
+            "plain right-click must open context menu"
+        );
+    }
+
+    /// Shift+right-click must pass through to VTE for mouse-aware apps.
+    /// Regression for #659.
+    #[test]
+    fn shift_right_click_passes_through() {
+        assert!(
+            !super::should_open_context_menu(gtk4::gdk::ModifierType::SHIFT_MASK),
+            "Shift+right-click must not open context menu"
+        );
+    }
+
+    /// Ctrl+right-click (without Shift) must still open the context menu.
+    /// Only Shift suppresses the menu. Regression for #659.
+    #[test]
+    fn ctrl_right_click_opens_context_menu() {
+        assert!(
+            super::should_open_context_menu(gtk4::gdk::ModifierType::CONTROL_MASK),
+            "Ctrl+right-click (no Shift) must open context menu"
+        );
+    }
+
+    /// Ctrl+Shift+right-click must pass through (Shift is present).
+    /// Regression for #659.
+    #[test]
+    fn ctrl_shift_right_click_passes_through() {
+        let mods =
+            gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
+        assert!(
+            !super::should_open_context_menu(mods),
+            "Ctrl+Shift+right-click must not open context menu"
         );
     }
 }
