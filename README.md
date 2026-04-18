@@ -34,7 +34,7 @@ modern GNOME desktop.
 ### Terminal
 
 - Ctrl+click to open URLs, OSC 8 hyperlinks, and detected file paths
-- Shift+right-click for context menu; plain mouse events pass through to terminal apps
+- Right-click for context menu; Shift+right-click passes mouse events to terminal apps
 - Optional smart clipboard: plain Ctrl+C copies selected text, Ctrl+V pastes
 - Built-in Nightfall and Daybreak themes, with Tilix color scheme compatibility
 - Background process notifications via toast (foreground) or desktop notification (background)
