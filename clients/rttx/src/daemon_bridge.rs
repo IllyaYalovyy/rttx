@@ -2670,4 +2670,23 @@ mod tests {
             .expect("channel should not close");
         assert!(matches!(cmd, EndpointCommand::Reconnect));
     }
+
+    #[tokio::test]
+    async fn schedule_reconnect_emits_tracing_warn_without_panic() {
+        let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+
+        // Exercise the tracing::warn! path inside schedule_reconnect.
+        actor.schedule_reconnect(1);
+        assert_eq!(actor.reconnect_attempt, 1);
+
+        let cmd = tokio::time::timeout(Duration::from_secs(5), self_rx.recv())
+            .await
+            .expect("should receive reconnect command")
+            .expect("channel should not close");
+        assert!(matches!(cmd, EndpointCommand::Reconnect));
+    }
 }

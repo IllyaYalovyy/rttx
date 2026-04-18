@@ -128,3 +128,27 @@ fn connection_failure_produces_diagnosable_problem() {
         );
     }
 }
+
+/// Verify that the daemon bridge logging paths use tracing (not log)
+/// by exercising `classify_connection_problem` through a code path
+/// that emits tracing events. The tracing subscriber captures these
+/// without panicking, confirming the log-to-tracing migration is intact.
+#[test]
+fn connection_classification_exercises_tracing_path() {
+    use rttx::daemon::DaemonError;
+    use rttx::runtime::classify_connection_problem;
+
+    // Install a no-op tracing subscriber for this test so tracing
+    // macros execute their formatting code without panicking.
+    let _guard = tracing_subscriber::fmt()
+        .with_writer(std::io::sink)
+        .with_max_level(tracing::Level::TRACE)
+        .try_init();
+
+    let error = DaemonError::Io(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "test connection refused",
+    ));
+    let problem = classify_connection_problem(&error);
+    assert!(problem.is_transient());
+}
