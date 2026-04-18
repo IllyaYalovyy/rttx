@@ -1,12 +1,15 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::color_scheme;
-use crate::preferences::{
-    self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode,
-};
+use crate::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
+use crate::shortcuts::{self, DEFAULT_SHORTCUTS};
 
 /// Build and present the preferences window.
 pub fn show(parent: &impl IsA<gtk4::Window>) {
@@ -147,18 +150,69 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     session_group.add(&folder_mode_row);
     session_group.add(&custom_folder_row);
 
+    // --- Keyboard shortcuts ---
     let keyboard_group = adw::PreferencesGroup::new();
-    keyboard_group.set_title("Keyboard");
+    keyboard_group.set_title("Keyboard Shortcuts");
+    keyboard_group
+        .set_description(Some("Click a shortcut to change it. Press Backspace to clear."));
 
-    let nav_keys_row = adw::ComboRow::builder().title("Pane navigation keys").build();
-    let nav_keys_names = ["Alt + Arrow", "Ctrl + Shift + Arrow"];
-    let nav_keys_model = gtk4::StringList::new(&nav_keys_names);
-    nav_keys_row.set_model(Some(&nav_keys_model));
-    nav_keys_row.set_selected(match prefs.pane_navigation_keys {
-        PaneNavigationKeys::AltArrow => 0,
-        PaneNavigationKeys::CtrlShiftArrow => 1,
-    });
-    keyboard_group.add(&nav_keys_row);
+    let shortcut_overrides: Rc<RefCell<BTreeMap<String, Vec<String>>>> =
+        Rc::new(RefCell::new(prefs.keyboard_shortcuts.clone()));
+
+    for def in DEFAULT_SHORTCUTS {
+        let accels = shortcuts::effective_accels(def.action, &prefs.keyboard_shortcuts);
+        let is_custom = prefs.keyboard_shortcuts.contains_key(def.action);
+
+        let row = adw::ActionRow::builder().title(def.label).activatable(true).build();
+
+        let label_text = format_accel_label(&accels);
+        let accel_label = gtk4::Label::new(Some(&label_text));
+        accel_label.add_css_class("dim-label");
+        if is_custom {
+            accel_label.add_css_class("accent");
+        }
+        accel_label.set_valign(gtk4::Align::Center);
+        row.add_suffix(&accel_label);
+
+        let reset_button = gtk4::Button::from_icon_name("edit-undo-symbolic");
+        reset_button.set_valign(gtk4::Align::Center);
+        reset_button.set_tooltip_text(Some("Reset to default"));
+        reset_button.add_css_class("flat");
+        reset_button.set_visible(is_custom);
+        row.add_suffix(&reset_button);
+
+        let action_name = def.action.to_string();
+        let overrides_ref = shortcut_overrides.clone();
+        let accel_label_ref = accel_label.clone();
+        let reset_ref = reset_button.clone();
+        let window_ref = window.clone();
+        let label_text_for_dialog = def.label.to_string();
+        row.connect_activated(move |_row| {
+            let action = action_name.clone();
+            let overrides = overrides_ref.clone();
+            let label = accel_label_ref.clone();
+            let reset = reset_ref.clone();
+            show_shortcut_capture_dialog(&window_ref, &label_text_for_dialog, move |new_accels| {
+                overrides.borrow_mut().insert(action.clone(), new_accels.clone());
+                label.set_label(&format_accel_label(&new_accels));
+                label.add_css_class("accent");
+                reset.set_visible(true);
+            });
+        });
+
+        let action_name = def.action.to_string();
+        let overrides_ref = shortcut_overrides.clone();
+        let accel_label_ref = accel_label;
+        reset_button.connect_clicked(move |btn| {
+            overrides_ref.borrow_mut().remove(&action_name);
+            let defaults = shortcuts::default_accels(&action_name);
+            accel_label_ref.set_label(&format_accel_label(&defaults));
+            accel_label_ref.remove_css_class("accent");
+            btn.set_visible(false);
+        });
+
+        keyboard_group.add(&row);
+    }
 
     let page = adw::PreferencesPage::new();
     page.set_icon_name(Some("preferences-system-symbolic"));
@@ -207,10 +261,8 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
                 2 => DefaultSessionFolder::Custom(custom_folder_row.text().to_string()),
                 _ => DefaultSessionFolder::Home,
             },
-            pane_navigation_keys: match nav_keys_row.selected() {
-                1 => PaneNavigationKeys::CtrlShiftArrow,
-                _ => PaneNavigationKeys::AltArrow,
-            },
+            pane_navigation_keys: prefs.pane_navigation_keys,
+            keyboard_shortcuts: shortcut_overrides.borrow().clone(),
             auto_start_daemon: prefs.auto_start_daemon,
             reconnect_delay_secs: prefs.reconnect_delay_secs,
             paste_guard: paste_guard_row.is_active(),
@@ -234,4 +286,81 @@ fn load_scheme_names() -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+/// Format accelerator strings into a human-readable label.
+fn format_accel_label(accels: &[String]) -> String {
+    if accels.is_empty() {
+        return "Disabled".into();
+    }
+    accels
+        .iter()
+        .filter_map(|a| {
+            gtk4::accelerator_parse(a)
+                .map(|(key, mods)| gtk4::accelerator_get_label(key, mods).to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Show a dialog that captures a key combination from the user.
+fn show_shortcut_capture_dialog(
+    parent: &adw::PreferencesWindow,
+    action_label: &str,
+    on_captured: impl Fn(Vec<String>) + 'static,
+) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Set shortcut for \u{201c}{action_label}\u{201d}"))
+        .body("Press the desired key combination, or Backspace to disable.")
+        .close_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+
+    let controller = gtk4::EventControllerKey::new();
+    let dialog_ref = dialog.clone();
+    controller.connect_key_pressed(move |_controller, keyval, _keycode, state| {
+        // Ignore lone modifier presses.
+        if matches!(
+            keyval,
+            gtk4::gdk::Key::Shift_L
+                | gtk4::gdk::Key::Shift_R
+                | gtk4::gdk::Key::Control_L
+                | gtk4::gdk::Key::Control_R
+                | gtk4::gdk::Key::Alt_L
+                | gtk4::gdk::Key::Alt_R
+                | gtk4::gdk::Key::Super_L
+                | gtk4::gdk::Key::Super_R
+                | gtk4::gdk::Key::Meta_L
+                | gtk4::gdk::Key::Meta_R
+                | gtk4::gdk::Key::Hyper_L
+                | gtk4::gdk::Key::Hyper_R
+        ) {
+            return glib::Propagation::Proceed;
+        }
+
+        let mods = state
+            & (gtk4::gdk::ModifierType::CONTROL_MASK
+                | gtk4::gdk::ModifierType::SHIFT_MASK
+                | gtk4::gdk::ModifierType::ALT_MASK
+                | gtk4::gdk::ModifierType::SUPER_MASK);
+
+        if keyval == gtk4::gdk::Key::BackSpace && mods.is_empty() {
+            on_captured(vec![]);
+            dialog_ref.close();
+            return glib::Propagation::Stop;
+        }
+
+        if keyval == gtk4::gdk::Key::Escape && mods.is_empty() {
+            dialog_ref.close();
+            return glib::Propagation::Stop;
+        }
+
+        let accel = gtk4::accelerator_name(keyval, mods);
+        on_captured(vec![accel.to_string()]);
+        dialog_ref.close();
+        glib::Propagation::Stop
+    });
+
+    dialog.add_controller(controller);
+    dialog.present(Some(parent));
 }

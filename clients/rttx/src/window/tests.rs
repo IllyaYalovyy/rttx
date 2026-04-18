@@ -6338,3 +6338,43 @@ fn connection_presentation_delegates_to_pure_function() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn reapply_preferences_updates_keyboard_shortcut_accels() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.shortcut-reapply-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Default: fullscreen is bound to F11.
+    let accels = app.accels_for_action("win.fullscreen");
+    assert!(accels.iter().any(|a| a == "F11"), "fullscreen should default to F11, got: {accels:?}");
+
+    // Override fullscreen to Ctrl+Shift+F11 via preferences.
+    let mut prefs = crate::preferences::load();
+    prefs.keyboard_shortcuts.insert("fullscreen".into(), vec!["<Ctrl><Shift>F11".into()]);
+    crate::preferences::save(&prefs).unwrap();
+
+    window.reapply_terminal_preferences();
+
+    let accels = app.accels_for_action("win.fullscreen");
+    assert!(
+        accels.iter().any(|a| a == "<Ctrl><Shift>F11"),
+        "fullscreen should be rebound to Ctrl+Shift+F11, got: {accels:?}"
+    );
+    assert!(
+        !accels.iter().any(|a| a == "F11"),
+        "old F11 binding should be removed, got: {accels:?}"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

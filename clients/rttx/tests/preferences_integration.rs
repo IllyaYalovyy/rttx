@@ -1,4 +1,6 @@
 /// Integration tests for preferences persistence.
+use std::collections::BTreeMap;
+
 use rttx::preferences::{
     self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode,
 };
@@ -32,6 +34,7 @@ fn preferences_roundtrip_all_fields() {
         trim_trailing_whitespace_on_copy: true,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
         pane_navigation_keys: PaneNavigationKeys::AltArrow,
+        keyboard_shortcuts: BTreeMap::new(),
         auto_start_daemon: true,
         reconnect_delay_secs: 10,
         paste_guard: false,
@@ -266,4 +269,73 @@ fn trim_trailing_whitespace_on_copy_backward_compat_missing_field() {
     std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
     let loaded = preferences::load_from(&path);
     assert!(!loaded.trim_trailing_whitespace_on_copy);
+}
+
+#[test]
+fn keyboard_shortcuts_defaults_to_empty() {
+    let prefs = Preferences::default();
+    assert!(prefs.keyboard_shortcuts.is_empty());
+}
+
+#[test]
+fn keyboard_shortcuts_roundtrips() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+
+    let mut shortcuts = BTreeMap::new();
+    shortcuts.insert("close-terminal".into(), vec!["<Ctrl>q".into()]);
+    shortcuts.insert("fullscreen".into(), vec![]);
+
+    let prefs = Preferences { keyboard_shortcuts: shortcuts, ..Default::default() };
+    preferences::save_to(&prefs, &path).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.keyboard_shortcuts["close-terminal"], vec!["<Ctrl>q"]);
+    assert!(loaded.keyboard_shortcuts["fullscreen"].is_empty());
+}
+
+#[test]
+fn keyboard_shortcuts_backward_compat_missing_field() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert!(loaded.keyboard_shortcuts.is_empty());
+}
+
+#[test]
+fn keyboard_shortcuts_migration_from_ctrl_shift_arrow() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+    std::fs::write(&path, r#"{"pane_navigation_keys": "ctrl-shift-arrow"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.keyboard_shortcuts["navigate-left"], vec!["<Ctrl><Shift>Left"]);
+    assert_eq!(loaded.keyboard_shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
+    assert_eq!(loaded.keyboard_shortcuts["navigate-up"], vec!["<Ctrl><Shift>Up"]);
+    assert_eq!(loaded.keyboard_shortcuts["navigate-down"], vec!["<Ctrl><Shift>Down"]);
+}
+
+#[test]
+fn keyboard_shortcuts_migration_noop_for_alt_arrow() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+    std::fs::write(&path, r#"{"pane_navigation_keys": "alt-arrow"}"#).unwrap();
+    let loaded = preferences::load_from(&path);
+    assert!(!loaded.keyboard_shortcuts.contains_key("navigate-left"));
+}
+
+#[test]
+fn keyboard_shortcuts_explicit_override_wins_over_migration() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("prefs.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "pane_navigation_keys": "ctrl-shift-arrow",
+            "keyboard_shortcuts": {"navigate-left": ["<Alt>h"]}
+        }"#,
+    )
+    .unwrap();
+    let loaded = preferences::load_from(&path);
+    assert_eq!(loaded.keyboard_shortcuts["navigate-left"], vec!["<Alt>h"]);
+    assert_eq!(loaded.keyboard_shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
 }
