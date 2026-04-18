@@ -46,8 +46,10 @@ of GTK-Rust failure as a failing test before it reaches a user.
   utilities are all implemented.
 - Client+daemon end-to-end integration coverage (#185) is implemented with black-box GTK tests
   for restore, restart, and selection sync.
-- The remaining testing gap is full C4 (signal doubling) and C5 (GLib source leak) crash taxonomy
-  coverage, tracked in #324.
+- All crash taxonomy categories (C1–C7) now have test coverage. C4 (signal doubling) is covered
+  by contract tests (UUID preservation) and GTK widget tests (rebuild reuse verification). C5
+  (GLib source leaks) is covered by widget tests verifying weak-ref timer safety and source
+  cancellation.
 
 ---
 
@@ -218,19 +220,21 @@ cargo build -p rttx && ./run_ui_tests.sh
 | C1 — parent/child invariant | ✓ | ✓ | — |
 | C2 — RefCell re-entrancy | fix in code | — | — |
 | C3 — use-after-free | ✓ | ✓ | — |
-| C4 — signal doubling | partial | — | — |
-| C5 — GLib source leaks | — | — | — |
+| C4 — signal doubling | ✓ | ✓ | — |
+| C5 — GLib source leaks | — | ✓ | — |
 | C6 — index out of bounds | ✓ | — | — |
 | C7 — duplicate UUID | ✓ | — | ✓ |
 
-C4 has a contract test verifying that widget reuse does not double signal handlers. C5 and full
-C4 coverage (rebuild cycles, reconnect flows) remain open (#324). C6 now has full contract
-coverage including active-index bounds clamping and empty-session-list deserialization.
+C4 now has full coverage: contract tests verify UUID preservation across split/remove (preventing
+widget recreation), and GTK widget tests verify that `rebuild_session_content` reuses the same
+widget instances across multiple rebuild cycles for both direct and managed workspaces. C5 has
+widget tests verifying that the `SessionRow` idle timer uses weak references correctly and that
+`clear_activity` cancels the `GLib` source.
 
 ### Highest-value remaining gap
 
-- **C4/C5 crash taxonomy completion** — Full signal-doubling and GLib-source-leak regression tests
-  across rebuild, reconnect, and destroy flows (#324)
+All crash taxonomy categories (C1–C7) now have test coverage. The remaining testing gaps are in
+expanding behavioral UI test coverage for new features as they are added.
 
 ---
 
@@ -238,7 +242,7 @@ coverage including active-index bounds clamping and empty-session-list deseriali
 
 | Goal | How addressed |
 | --- | --- |
-| G1 — crash class coverage | Taxonomy C1–C7; each category has dedicated test layer. C4 partial, C5 open (#324) |
+| G1 — crash class coverage | Taxonomy C1–C7; each category has dedicated test layer. All categories covered. |
 | G2 — requirement validation | Tests assert user-visible invariants; tautological tests explicitly excluded |
 | G3 — headless CI | Broadway GDK backend for widget tests; Weston for AT-SPI behavioral tests |
 
@@ -261,6 +265,6 @@ coverage including active-index bounds clamping and empty-session-list deseriali
 - [x] Coverage reporting CI job (`cargo-llvm-cov`)
 - [x] Memory profiling CI gate (diagnostics-based leak detection)
 - [x] Signal-doubling prevention contract test (C4 partial)
-- [ ] Full C4/C5 crash taxonomy coverage (#324)
+- [x] Full C4/C5 crash taxonomy coverage (#324)
 
 ---
