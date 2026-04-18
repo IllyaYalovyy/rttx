@@ -1064,7 +1064,7 @@ impl EndpointActor {
                 if workspaces.is_empty() {
                     return;
                 }
-                log::debug!(
+                log::warn!(
                     "Reconnect attempt to {} for {} workspace(s)",
                     self.endpoint.key(),
                     workspaces.len()
@@ -1185,7 +1185,7 @@ impl EndpointActor {
             }
             Err(error) => {
                 let problem = classify_connection_problem(&error);
-                log::debug!(
+                log::warn!(
                     "Connection to {} failed: {error} ({})",
                     self.endpoint.key(),
                     if problem.is_transient() { "transient" } else { "permanent" }
@@ -1515,7 +1515,7 @@ impl EndpointActor {
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
-        log::info!(
+        log::warn!(
             "Scheduling reconnect to {} (attempt {}, delay {}s)",
             self.endpoint.key(),
             self.reconnect_attempt,
@@ -2620,5 +2620,52 @@ mod tests {
         }
         // Should NOT be declared lost.
         assert_ne!(heartbeat.on_tick(), HeartbeatAction::DeclareLost);
+    }
+
+    /// Regression test for #404: the reconnect scheduling path must emit
+    /// Disconnected + Reconnecting status events so the GUI can display
+    /// diagnostic information. Before the fix, the log messages on this
+    /// path were at debug/info level and invisible in production.
+    #[tokio::test]
+    async fn reconnect_scheduling_emits_diagnostic_status_events() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        actor.tracked_workspaces.insert("ws-diag".into(), Uuid::new_v4().to_string());
+
+        actor.handle_disconnect();
+
+        // Must emit Disconnected followed by Reconnecting with attempt/delay.
+        let ev1 = event_rx.try_recv().expect("should emit Disconnected");
+        assert!(
+            matches!(
+                ev1,
+                EndpointEvent::WorkspaceConnectionChanged {
+                    ref workspace_id,
+                    status: ConnectionStatus::Disconnected,
+                } if workspace_id == "ws-diag"
+            ),
+            "first event must be Disconnected, got {ev1:?}"
+        );
+        let ev2 = event_rx.try_recv().expect("should emit Reconnecting");
+        assert!(
+            matches!(
+                ev2,
+                EndpointEvent::WorkspaceConnectionChanged {
+                    ref workspace_id,
+                    status: ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 1 },
+                } if workspace_id == "ws-diag"
+            ),
+            "second event must be Reconnecting(attempt=1, delay=1s), got {ev2:?}"
+        );
+
+        // The schedule_reconnect path must also enqueue a Reconnect command.
+        let cmd = tokio::time::timeout(Duration::from_secs(5), self_rx.recv())
+            .await
+            .expect("should receive Reconnect command")
+            .expect("channel should not close");
+        assert!(matches!(cmd, EndpointCommand::Reconnect));
     }
 }
