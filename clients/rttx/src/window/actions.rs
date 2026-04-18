@@ -1,4 +1,5 @@
 use super::*;
+use crate::terminal::paste_guard::{PasteGuardDecision, decide};
 
 impl Window {
     pub(super) fn setup_actions(&self, app: &adw::Application) {
@@ -318,23 +319,29 @@ impl Window {
             return;
         };
         let clipboard = display.clipboard();
+        let is_direct = matches!(terminal, TerminalHandle::Direct(_));
         let win = self.clone();
         let terminal_uuid = uuid;
         clipboard.read_text_async(None::<&gtk4::gio::Cancellable>, move |result| {
-            let text = match result {
-                Ok(Some(t)) if !t.is_empty() => t.to_string(),
-                _ => return,
+            let clipboard_text = match result {
+                Ok(Some(ref t)) if !t.is_empty() => Some(t.as_str()),
+                _ => None,
             };
 
             let threshold = crate::preferences::load().paste_guard_threshold;
-            if !crate::terminal::paste_guard::needs_confirmation(&text, threshold) {
-                if let Some(terminal) = win.terminal_handle(&terminal_uuid) {
-                    Self::execute_paste(&terminal, &win, &terminal_uuid);
+            match decide(clipboard_text, threshold, is_direct) {
+                PasteGuardDecision::Paste | PasteGuardDecision::FallThroughToVte => {
+                    if let Some(terminal) = win.terminal_handle(&terminal_uuid) {
+                        Self::execute_paste(&terminal, &win, &terminal_uuid);
+                    }
                 }
-                return;
+                PasteGuardDecision::Confirm => {
+                    if let Some(text) = clipboard_text {
+                        win.confirm_paste(&terminal_uuid, text);
+                    }
+                }
+                PasteGuardDecision::Skip => {}
             }
-
-            win.confirm_paste(&terminal_uuid, &text);
         });
     }
 
