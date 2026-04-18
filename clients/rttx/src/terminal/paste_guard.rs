@@ -50,6 +50,47 @@ pub(crate) fn flatten_to_single_line(text: &str) -> String {
     out.trim().to_string()
 }
 
+/// What the paste guard should do after reading the clipboard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PasteGuardDecision {
+    /// Paste immediately — text is below the guard threshold.
+    Paste,
+    /// Show a confirmation dialog before pasting.
+    Confirm,
+    /// No text on clipboard — let VTE handle non-text content natively.
+    FallThroughToVte,
+    /// No text on clipboard and the terminal cannot handle non-text content.
+    Skip,
+}
+
+/// Decide what to do after reading clipboard text for the paste guard.
+///
+/// `is_direct` is true for direct (VTE-backed) terminals that can handle
+/// non-text clipboard content natively, false for managed (daemon-backed)
+/// terminals that only accept byte streams.
+pub(crate) fn decide(
+    clipboard_text: Option<&str>,
+    threshold_bytes: usize,
+    is_direct: bool,
+) -> PasteGuardDecision {
+    match clipboard_text {
+        Some(text) if !text.is_empty() => {
+            if needs_confirmation(text, threshold_bytes) {
+                PasteGuardDecision::Confirm
+            } else {
+                PasteGuardDecision::Paste
+            }
+        }
+        _ => {
+            if is_direct {
+                PasteGuardDecision::FallThroughToVte
+            } else {
+                PasteGuardDecision::Skip
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +177,35 @@ mod tests {
     #[test]
     fn flatten_empty() {
         assert_eq!(flatten_to_single_line(""), "");
+    }
+
+    #[test]
+    fn decide_small_text_pastes_immediately() {
+        assert_eq!(decide(Some("hello"), 1024, true), PasteGuardDecision::Paste);
+        assert_eq!(decide(Some("hello"), 1024, false), PasteGuardDecision::Paste);
+    }
+
+    #[test]
+    fn decide_multiline_text_confirms() {
+        assert_eq!(decide(Some("a\nb"), 1024, true), PasteGuardDecision::Confirm);
+        assert_eq!(decide(Some("a\nb"), 1024, false), PasteGuardDecision::Confirm);
+    }
+
+    #[test]
+    fn decide_large_text_confirms() {
+        let big = "x".repeat(2000);
+        assert_eq!(decide(Some(&big), 1024, true), PasteGuardDecision::Confirm);
+    }
+
+    #[test]
+    fn decide_no_text_direct_falls_through_to_vte() {
+        assert_eq!(decide(None, 1024, true), PasteGuardDecision::FallThroughToVte);
+        assert_eq!(decide(Some(""), 1024, true), PasteGuardDecision::FallThroughToVte);
+    }
+
+    #[test]
+    fn decide_no_text_managed_skips() {
+        assert_eq!(decide(None, 1024, false), PasteGuardDecision::Skip);
+        assert_eq!(decide(Some(""), 1024, false), PasteGuardDecision::Skip);
     }
 }
