@@ -19,7 +19,7 @@ turning rttx into a general-purpose terminal hyperlink engine.
 The implementation lives in a shared `terminal/links.rs` module used by both `TerminalWidget`
 (direct panes) and `PersistentPaneView` (daemon-backed panes). Activation requires Ctrl+click,
 which was added post-RFC to avoid intercepting mouse events from terminal apps (vim, htop, mc).
-A Shift+right-click context menu with "Open Link" and "Copy Link" actions was also added
+A right-click context menu with "Open Link" and "Copy Link" actions was also added
 post-RFC.
 
 ---
@@ -32,7 +32,7 @@ post-RFC.
 
 ## Non-Goals
 
-- **NG1** — No hover popover in this RFC. A Shift+right-click context menu with "Open Link" and
+- **NG1** — No hover popover in this RFC. A right-click context menu with "Open Link" and
   "Copy Link" was added post-RFC as a natural extension, but no hover tooltip is shown.
 - **NG2** — No line/column handoff to editors; `:42:7` suffixes only resolve the file path
 - **NG3** — No remote path opening or SSH-aware path translation
@@ -54,7 +54,7 @@ and sysadmin workflows and open them with one click.
 
 | Audience | Impact |
 | --- | --- |
-| End users | Links and local paths in terminal output become Ctrl+clickable; Shift+right-click context menu offers "Open Link" and "Copy Link" |
+| End users | Links and local paths in terminal output become Ctrl+clickable; right-click context menu offers "Open Link" and "Copy Link" |
 | Contributors | Behavior is isolated to `terminal/links.rs`; no `window.rs` involvement |
 | Packagers | No new dependencies |
 
@@ -125,8 +125,8 @@ so that plain mouse events pass through to VTE for mouse-aware terminal apps (vi
 
 **Status: implemented** in `widget.rs` and `persistent_widget.rs` (post-RFC addition).
 
-Shift+right-click opens a context menu with "Open Link" and "Copy Link" actions. Plain
-right-click is denied so VTE receives the event for mouse-aware apps. The menu resolves the
+Plain right-click opens a context menu with "Open Link" and "Copy Link" actions.
+Shift+right-click is denied so VTE receives the event for mouse-aware apps. The menu resolves the
 link at the click position and enables/disables the link actions accordingly. "Copy Link"
 converts file URIs to filesystem paths via `display_text_for_uri()` for clipboard friendliness.
 
@@ -179,7 +179,7 @@ without spawning external applications.
 - [x] Register VTE regex matches for URLs and paths — `configure_openable_matches()` in
   `links.rs`
 - [x] Add click handling that opens matches via Gio — Ctrl+click via
-  `install_openable_link_controllers()`; Shift+right-click context menu in both widget types
+  `install_openable_link_controllers()`; right-click context menu in both widget types
 - [x] Update user-facing docs and `META/todo.md`
 - [x] Add GTK widget tests for link activation in both direct and daemon-backed panes
   (post-RFC) — `direct_terminal_plain_click_does_not_launch_url`,

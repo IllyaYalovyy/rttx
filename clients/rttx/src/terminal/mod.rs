@@ -972,7 +972,7 @@ mod pane_passive_tests {
     }
 
     /// Gesture modifier masks used by link and context menu handlers must be
-    /// distinct so Ctrl+click and Shift+right-click do not interfere with
+    /// distinct so Ctrl+click and plain right-click do not interfere with
     /// each other. Regression for #459.
     #[test]
     fn gesture_modifier_masks_are_distinct() {

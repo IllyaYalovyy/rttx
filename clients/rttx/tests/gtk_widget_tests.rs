@@ -2046,7 +2046,7 @@ fn direct_terminal_link_gesture_is_capture_phase() {
 }
 
 /// The right-click context menu gesture on a persistent pane must use
-/// capture phase. When Shift is not held, the gesture denies so VTE
+/// capture phase. When Shift is held, the gesture denies so VTE
 /// receives the right-click for mouse-aware apps. Regression for #459.
 #[test]
 #[ignore = "requires isolated GTK harness"]
