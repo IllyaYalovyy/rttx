@@ -538,10 +538,7 @@ mod tests {
         pump_events(ACTIVITY_IDLE_DELAY_MS + 100);
 
         // The weak ref should not upgrade — the row is gone.
-        assert!(
-            weak.upgrade().is_none(),
-            "SessionRow should be finalized after drop"
-        );
+        assert!(weak.upgrade().is_none(), "SessionRow should be finalized after drop");
     }
 
     /// C5 regression: `clear_activity` must cancel the pending `GLib` source

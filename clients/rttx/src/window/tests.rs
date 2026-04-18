@@ -6400,9 +6400,8 @@ fn c4_rebuild_reuses_direct_terminal_widgets() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.c4-direct-reuse-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.c4-direct-reuse-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -6414,20 +6413,16 @@ fn c4_rebuild_reuses_direct_terminal_widgets() {
     window.imp().state.borrow_mut().sessions.push(session_state.clone());
     window.build_session(&session_state, false);
 
-    let ptr_t1_before =
-        window.imp().terminals.borrow().get("t1").unwrap().as_ptr() as usize;
-    let ptr_t2_before =
-        window.imp().terminals.borrow().get("t2").unwrap().as_ptr() as usize;
+    let ptr_t1_before = window.imp().terminals.borrow().get("t1").unwrap().as_ptr() as usize;
+    let ptr_t2_before = window.imp().terminals.borrow().get("t2").unwrap().as_ptr() as usize;
 
     // Rebuild 5 times — simulates repeated split/close/reconnect cycles.
     for _ in 0..5 {
         window.rebuild_session_content(&session_state.uuid, &session_state);
     }
 
-    let ptr_t1_after =
-        window.imp().terminals.borrow().get("t1").unwrap().as_ptr() as usize;
-    let ptr_t2_after =
-        window.imp().terminals.borrow().get("t2").unwrap().as_ptr() as usize;
+    let ptr_t1_after = window.imp().terminals.borrow().get("t1").unwrap().as_ptr() as usize;
+    let ptr_t2_after = window.imp().terminals.borrow().get("t2").unwrap().as_ptr() as usize;
 
     assert_eq!(
         ptr_t1_before, ptr_t1_after,
@@ -6453,9 +6448,8 @@ fn c4_rebuild_reuses_managed_terminal_widgets() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.c4-managed-reuse-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.c4-managed-reuse-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -6543,10 +6537,7 @@ fn c4_split_preserves_child_exited_handler_identity() {
         .child_exited_handler
         .borrow()
         .is_some();
-    assert!(
-        handler_after,
-        "t1 should still have exactly one child_exited handler after split"
-    );
+    assert!(handler_after, "t1 should still have exactly one child_exited handler after split");
 
     // The widget pointer must be the same — no recreation.
     let terminal_count = window.imp().terminals.borrow().len();
