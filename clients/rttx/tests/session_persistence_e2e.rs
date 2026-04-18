@@ -90,10 +90,7 @@ fn older_format_without_sidebar_widths_loads_with_defaults() {
     assert_eq!(state.sessions.len(), 1);
     assert_eq!(state.sessions[0].name, "Legacy");
     assert_eq!(state.left_sidebar_width, 220, "missing left_sidebar_width should default to 220");
-    assert_eq!(
-        state.right_sidebar_width, 320,
-        "missing right_sidebar_width should default to 320"
-    );
+    assert_eq!(state.right_sidebar_width, 320, "missing right_sidebar_width should default to 320");
 }
 
 /// State saved before `runtime`, `color`, `zoomed_terminal_uuid`, and
@@ -169,8 +166,7 @@ fn legacy_persistent_mode_normalizes_to_runtime_metadata() {
 /// `unwrap_or_default`.
 #[test]
 fn corrupted_json_falls_back_to_default() {
-    let result: WindowState =
-        serde_json::from_str("{{{{not json at all!!!!").unwrap_or_default();
+    let result: WindowState = serde_json::from_str("{{{{not json at all!!!!").unwrap_or_default();
     assert_eq!(result.sessions.len(), 1, "corrupted JSON should produce default state");
     assert_eq!(result.sessions[0].name, "Session 1");
 }
@@ -180,10 +176,7 @@ fn corrupted_json_falls_back_to_default() {
 #[test]
 fn truncated_json_falls_back_to_default() {
     let state = WindowState {
-        sessions: vec![
-            SessionState::new("First".into()),
-            SessionState::new("Second".into()),
-        ],
+        sessions: vec![SessionState::new("First".into()), SessionState::new("Second".into())],
         active_session_index: 1,
         ..WindowState::default()
     };
@@ -235,11 +228,7 @@ fn large_layout_persists_and_restores_through_file() {
     for i in 1..16 {
         layout = hsplit(
             layout,
-            term_full(
-                &format!("t{i}"),
-                &format!("/home/user/project-{i}"),
-                &format!("shell-{i}"),
-            ),
+            term_full(&format!("t{i}"), &format!("/home/user/project-{i}"), &format!("shell-{i}")),
         );
     }
     assert_eq!(layout.terminal_count(), 16);
@@ -460,10 +449,7 @@ fn full_roundtrip_through_file_persistence() {
 
     // Split ratio preserved.
     if let LayoutNode::Split { ratio, .. } = &s1.layout {
-        assert!(
-            (*ratio - 0.35).abs() < 0.001,
-            "split ratio should be preserved, got {ratio}"
-        );
+        assert!((*ratio - 0.35).abs() < 0.001, "split ratio should be preserved, got {ratio}");
     } else {
         panic!("expected split layout");
     }
