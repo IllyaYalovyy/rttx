@@ -1113,7 +1113,9 @@ impl EndpointActor {
                         }
                         Err(ref error) => {
                             let problem = classify_connection_problem(error);
-                            tracing::warn!("Reattach {workspace_id} failed during reconnect: {error}");
+                            tracing::warn!(
+                                "Reattach {workspace_id} failed during reconnect: {error}"
+                            );
                             if matches!(problem, ConnectionProblem::SessionMissing) {
                                 self.emit_status(&workspace_id, ConnectionStatus::SessionMissing);
                             } else {
