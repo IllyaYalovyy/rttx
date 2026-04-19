@@ -2,7 +2,7 @@
 
 | Field         | Value         |
 |---------------|---------------|
-| Status        | Accepted      |
+| Status        | Implemented   |
 | Author(s)     | Illya Yalovyy |
 | Supersedes    | —             |
 | Superseded by | —             |

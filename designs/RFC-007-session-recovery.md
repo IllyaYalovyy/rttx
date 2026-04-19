@@ -2,7 +2,7 @@
 
 | Field         | Value                   |
 |---------------|-------------------------|
-| Status        | Accepted (L1–L2 implemented; L3–L4 superseded by RFC-013) |
+| Status        | Implemented (L1–L2; L3–L4 superseded by RFC-013) |
 | Author(s)     | Illya Yalovyy           |
 | Supersedes    | —                       |
 | Superseded by | —                       |
