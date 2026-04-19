@@ -3,212 +3,77 @@
 | Field         | Value                                                       |
 |---------------|-------------------------------------------------------------|
 | Status        | Review                                                      |
-| Author(s)     | jd2023                                                      |
-| Supersedes    | -                                                           |
-| Superseded by | -                                                           |
+| Author(s)     | Illya Yalovyy                                               |
+| Supersedes    | —                                                           |
+| Superseded by | —                                                           |
 
 ---
 
 ## Summary
 
-Define the next daemon protocol direction so daemon-backed workspaces can grow around stable
-runtime, endpoint, terminal, and recovery semantics instead of one-off wire fields.
+Replace the v2 daemon protocol with a clean v3 protocol built for long-term stability. v3 uses
+protobuf over the same transports (Unix socket, SSH stdio) but adds version negotiation,
+capability advertisement, request/response envelopes, typed errors, consolidated terminal mode
+state, structured paste and focus input, chunked scrollback, and explicit wire compatibility
+rules.
 
-The current v2 protocol has grown significantly since this RFC was drafted. Several of the
-motivating issues have been resolved within the v2 wire format, and the referenced RFCs (RFC-016,
-RFC-018, RFC-020) have reached Implemented status. The remaining protocol gaps — capability
-negotiation, request/response correlation, typed errors, structured terminal input events, and
-resumable snapshots — still justify a v3 evolution, but the urgency has shifted from terminal
-correctness (largely addressed) to protocol structure and evolution mechanics.
-
-Protocol v3 should keep protobuf framing and SSH/stdin transport flexibility, but add capability
-negotiation, structured command/event envelopes, resumable snapshots, typed errors, and explicit
-ownership/discovery semantics.
+This is a clean-slate replacement. There is no v2 migration path — all client and server code
+moves to v3 together. The v3 protocol is designed to be the foundation for 1.0 and must support
+backward-compatible evolution from that point forward.
 
 ---
 
 ## Goals
 
-- **G1** - Make protocol evolution deliberate through version and capability negotiation
-- **G2** - Give every daemon feature a natural protocol domain: endpoint inventory, runtime
-  lifecycle, pane lifecycle, terminal I/O, recovery, and control
-- **G3** - Make terminal interaction state first-class so VTE parity bugs are not fixed one
-  shortcut at a time
-- **G4** - Support reconnect and reattach using explicit state and revisions, not raw scrollback
+- **G1** — Make protocol evolution deliberate through version negotiation and capabilities
+- **G2** — Give every daemon feature a natural protocol domain: control, inventory, runtime
+  lifecycle, pane lifecycle, terminal I/O, and recovery
+- **G3** — Make terminal interaction state first-class via consolidated `TerminalModeState`
+- **G4** — Support reconnect and reattach using explicit revisions and resync, not raw scrollback
   replay alone
-- **G5** - Support RFC-016 host-aware creation and explicit "connect to existing" discovery
-- **G6** - Preserve the transport model: local Unix socket and remote `ssh rttx-server attach-stdio`
-  continue to speak the same logical protocol
-- **G7** - Make protocol behavior testable with daemon integration tests and a VTE parity harness
+- **G5** — Support host-aware creation and "connect to existing" discovery (RFC-016)
+- **G6** — Preserve the transport model: local Unix socket and remote
+  `ssh rttx-server attach-stdio` speak the same logical protocol
+- **G7** — Make protocol behavior testable with daemon integration tests
+- **G8** — Establish wire compatibility rules that hold from 1.0 onward
 
 ## Non-Goals
 
-- **NG1** - Implement protocol v3 in this RFC change
-- **NG2** - Add mixed-endpoint workspaces; RFC-016 keeps one workspace on one endpoint
-- **NG3** - Invest further in direct terminals beyond keeping them as a fallback path
-- **NG4** - Replace protobuf framing or require a network service beyond Unix sockets and SSH stdio
-- **NG5** - Provide forever compatibility with every pre-production protocol version
-
----
-
-## Implementation Snapshot
-
-This section documents what has been built within the v2 protocol since this RFC was drafted,
-which motivating issues have been resolved, and what protocol gaps remain.
-
-### Terminal mode state in PaneSnapshot (partial)
-
-The v2 `PaneSnapshot` message now carries five terminal interaction modes:
-
-| Field | Proto type | Tracked in ScreenPerformer |
-|-------|-----------|---------------------------|
-| `bracketed_paste_mode` | `bool` | ✅ |
-| `application_cursor_keys` | `bool` | ✅ |
-| `application_keypad` | `bool` | ✅ |
-| `mouse_tracking_mode` | `uint32` | ✅ |
-| `sgr_mouse_mode` | `bool` | ✅ |
-
-The daemon's `ScreenPerformer` also tracks `focus_event_mode` and `cursor_visible`, but these
-are not yet included in the `PaneSnapshot` protobuf message. A future protocol revision should
-add these fields so newly-attached clients can restore the correct mode state on reconnection.
-
-`alternate_screen` and `keyboard_protocol` (Kitty progressive enhancement) are not tracked.
-
-### Terminal response ownership (RFC-020 — Implemented)
-
-The daemon now answers DA1, DA2, DSR, and DECRQM queries directly in `ScreenPerformer`. The
-`strip_client_queries` function removes these sequences from client-bound output to prevent
-duplicate responses. Detached persistent sessions no longer hang waiting for a client VTE to
-generate terminal responses.
-
-### Bounded push channels (partial #362)
-
-Client push channels are now bounded (`PUSH_CHANNEL_BOUND = 4096`) with `try_send`. When a
-client falls behind, messages are dropped with a warning log. This addresses the memory growth
-concern from #362 but does not yet implement the protocol-level `StreamOverflow` resync path
-described in this RFC's Section 11.
-
-### Multi-client ownership semantics
-
-The v2 protocol includes `RuntimeAttachMode` (read-write, read-only, take-over) and
-`RuntimeClientRole` enums. `AttachBlocked` reports when a runtime cannot be attached. `SessionInfo`
-carries `has_write_owner`, `read_only_client_count`, and `current_client_role`. This partially
-addresses Section 9 (Ownership and Multi-Client Semantics) but without the explicit lease model
-or typed ownership events described there.
-
-### Input sync for daemon-backed panes (#463 — closed)
-
-Input sync now works for managed panes. The client resolves `input_sync_targets` through
-`WorkspaceState` and sends input to sibling daemon panes via the connection manager, not just
-through local VTE `feed_child`.
-
-### Diagnostics
-
-The v2 protocol includes `GetDiagnostics`/`DiagnosticsReport` messages for runtime health
-inspection, which were not anticipated in the original RFC.
-
-### Remaining v2 protocol gaps
-
-The following structural issues from the Background section remain unaddressed in v2:
-
-1. **No compatibility window** — exact `PROTOCOL_VERSION` equality is still enforced
-2. **Terminal input is untyped raw bytes** — `Input { data }` remains the only input path
-3. **Request/response correlation is implicit** — no request IDs or envelopes
-4. **Errors are ad hoc** — `Error { code, message }` lacks typed variants
-5. **Runtime/session terminology mismatch** — wire messages still use `Session*` names
-6. **Snapshots lack revisions for resync** — no `ResyncRuntime` or chunked scrollback
-7. **Endpoint inventory is basic** — `ListSessions` lacks busy/disabled/takeover metadata
+- **NG1** — Mixed-endpoint workspaces; one workspace lives on one endpoint
+- **NG2** — Replace protobuf framing or require a network service beyond Unix sockets and SSH
+- **NG3** — Full terminal emulator in the daemon (Option B, rejected)
+- **NG4** — Structured key or mouse input events (raw bytes remain the primary path; the `oneof`
+  allows adding these later if a concrete need arises)
 
 ---
 
 ## Background & Motivation
 
-The current daemon protocol is a length-prefixed protobuf stream with a flat `ClientMessage` and
-`ServerMessage` `oneof`. It uses exact `PROTOCOL_VERSION` equality during `Hello`/`HelloAck` and
-then exchanges commands and events such as `CreateSession`, `AttachSession`, `Input`, `Resize`,
-`Snapshot`, `Delta`, `PaneCreated`, and `Pong`.
+The v2 protocol is a length-prefixed protobuf stream with flat `ClientMessage`/`ServerMessage`
+`oneof` envelopes. It uses exact `PROTOCOL_VERSION` equality during handshake. This served as a
+good starting point, but has accumulated structural problems:
 
-That simple shape was a good starting point, but recent work shows several structural problems.
+1. **No compatibility window** — exact version match prevents additive rollout and mixed
+   client/server upgrades. This matters because daemons run on remote hosts that are painful to
+   update in lockstep with the GUI.
+2. **Terminal input is untyped raw bytes** — `Input { data }` cannot distinguish text, paste,
+   focus, or terminal responses. The daemon sees only bytes.
+3. **Request/response correlation is implicit** — the client reads "the next non-push message"
+   as the response, which is fragile as the protocol grows.
+4. **Errors are ad hoc** — `Error { code, message }` lacks typed variants, retryability, and
+   operation context.
+5. **Terminology mismatch** — wire messages use `Session*` names while the product uses
+   workspace/runtime/pane terminology.
+6. **Snapshots lack revisions** — no delta catch-up or chunked scrollback for large histories.
+7. **Terminal modes are scattered** — five separate booleans in `PaneSnapshot` instead of a
+   consolidated mode state; two tracked modes (`focus_event_mode`, `cursor_visible`) are not
+   on the wire at all.
+8. **Backpressure is implementation-only** — bounded push channels drop messages silently with
+   no protocol-level recovery path.
 
-### Current Protocol Limits
-
-1. **No compatibility window.**
-   The client and daemon reject each other unless their protocol versions match exactly. This is
-   safe, but it prevents additive rollout, feature probing, and mixed client/server upgrades.
-
-2. **Terminal input is untyped raw bytes.**
-   `Input { data }` cannot distinguish ordinary text, a key event, bracketed paste, mouse input,
-   focus changes, IME commits, compose output, or a terminal-generated response. The daemon sees
-   only bytes after the client has already made terminal-semantics decisions.
-
-3. **Terminal output is untyped raw bytes.** *(partially addressed)*
-   `Delta { data }` is a useful low-level stream, but it carries no revision and does not identify
-   the semantic state changes implied by the bytes. The daemon now parses output for title, cwd,
-   DSR replies, DA1, DA2, DECRQM, bracketed paste mode, cursor keys, keypad, mouse modes, focus
-   event mode, and cursor visibility. Query sequences are stripped from client-bound output via
-   `strip_client_queries`. The remaining gap is that parsed state changes are not emitted as
-   separate typed events — the client must infer mode changes from the snapshot on attach.
-
-4. **Snapshots are partially state-oriented.** *(partially addressed)*
-   `PaneSnapshot` now carries five terminal mode fields (bracketed paste, cursor keys, keypad,
-   mouse tracking, SGR mouse) in addition to scrollback bytes and pane metadata. However,
-   `focus_event_mode` and `cursor_visible` are tracked by the daemon but not yet in the proto
-   message. Snapshots still lack revisions for delta catch-up and are not chunked for large
-   scrollback.
-
-5. **Request and response correlation is implicit.**
-   Some operations expect the next non-push message to be their response while asynchronous pushes
-   are filtered around it. This works while the protocol is small, but it becomes fragile as more
-   inventory, ownership, terminal, and recovery events are added.
-
-6. **Errors are ad hoc.**
-   `Error { code, message }` lacks operation context, retryability, user-action classification,
-   affected IDs, and stable typed variants. The client must infer UI policy from numeric constants
-   and strings.
-
-7. **Runtime/session terminology leaks through the wire.**
-   The product model now uses workspace/runtime/endpoint/pane terminology. The protocol still names
-   many wire messages `Session*`. That mismatch makes new contributors translate concepts at every
-   boundary.
-
-8. **Discovery is not endpoint-aware enough.**
-   RFC-016 (now Implemented) needed explicit host selection and "connect to existing" inventory.
-   Current `SessionInfo` carries `has_write_owner`, `read_only_client_count`, and
-   `current_client_role`, which partially supports busy-session visibility. However, the protocol
-   lacks disabled reasons, takeover eligibility metadata, and endpoint-level identity.
-
-9. **Backpressure recovery is implementation-only.** *(partially addressed)*
-   Push channels are now bounded with drop-on-full semantics. However, the protocol does not
-   describe how a client should detect dropped messages or resynchronize. There is no
-   `StreamOverflow` event or `ResyncRuntime` command.
-
-10. **Terminal response ownership is split.** *(largely addressed)*
-    The daemon now answers DA1, DA2, DSR, and DECRQM queries directly and strips these from
-    client-bound output (RFC-020, Implemented). The remaining gap is that focus in/out sequences
-    are still generated by the client, and OSC color/clipboard queries depend on client attachment.
-
-### Issue Pressure
-
-The open issue list and recent terminal regression history point at the same protocol gap from
-multiple directions. Since this RFC was drafted, most of the motivating issues have been resolved
-within the v2 protocol:
-
-- #457 (closed): managed terminals used stateless key encoding instead of VTE keyboard semantics
-- #458 (closed): managed paste needed bracketed paste semantics
-- #459 (closed): managed mouse reporting could be preempted by client gestures
-- #460 (closed): reattached clients now restore terminal interaction modes from PaneSnapshot
-- #461 (closed): daemon now owns terminal response semantics (RFC-020 Implemented)
-- #462 (closed): managed terminal input now covers IME and compose
-- #463 (closed): input sync now includes daemon-backed panes
-- #464 (closed): VTE parity harness added for managed terminal input and mouse behavior
-- #478 (closed): missing daemon sessions handled gracefully (RFC-019)
-- #362 (open): push channels are now bounded, but protocol-level resync is not yet defined
-- #493 (open): RFC tracking issue for protocol v3
-
-The terminal correctness issues (#457–#464) were resolved by improving the v2 protocol and client
-implementation rather than waiting for v3. The remaining protocol gaps — version negotiation,
-request correlation, typed errors, structured input events, and resync semantics — are structural
-improvements that would make future evolution safer but are not blocking current functionality.
+Most terminal correctness issues (#457–#464) were resolved within v2. The remaining gaps are
+structural: version negotiation, correlation, typed errors, consolidated terminal state, and
+resync semantics.
 
 ---
 
@@ -216,297 +81,402 @@ improvements that would make future evolution safer but are not blocking current
 
 | Audience     | Impact |
 |--------------|--------|
-| End users    | More reliable daemon-backed terminals, clearer existing-session discovery, fewer shortcut/paste/mouse regressions, safer reconnect behavior |
-| Contributors | Clear protocol domains and evolution rules; fewer one-off protocol fields and less client/server guesswork |
-| Packagers    | No immediate packaging impact; future client/server upgrades can report clearer compatibility errors |
-
----
-
-## Considered Options
-
-### Option A - Keep v2 and add fields as needed
-
-**Pros**: Minimal immediate work. Existing code continues to compile and tests stay focused on
-individual regressions.
-
-**Cons**: Repeats the current failure mode. Every terminal behavior becomes a new special case:
-one field for bracketed paste, another for mouse, another for keyboard mode, another for focus
-tracking, another for terminal responses. Compatibility remains exact-version only.
-
-### Option B - Replace the daemon protocol with a terminal-emulator protocol
-
-The daemon would become a full terminal emulator and transmit high-level cell-grid operations to
-the client instead of raw byte deltas.
-
-**Pros**: Strong ownership of terminal state. Detached and reattached clients could be purely
-state-driven.
-
-**Cons**: Too large for the current project stage. rttx should not rewrite VTE. This would also
-increase the risk of diverging from GNOME Terminal behavior, which is the compatibility target.
-
-### Option C - Evolve protobuf into a versioned command/event protocol
-
-Keep the transport and protobuf tooling, but introduce a v3 handshake, capability negotiation,
-request/event envelopes, typed protocol domains, authoritative terminal interaction state, and
-resync semantics.
-
-**Pros**: Directly addresses the structural issues while preserving what works today. It lets v2
-and v3 coexist during migration and creates a natural home for RFC-016, RFC-018, terminal parity,
-and reconnect work.
-
-**Cons**: Requires a careful migration plan and a temporary dual-stack period.
+| End users    | More reliable reconnect, clearer session discovery, fewer terminal regressions |
+| Contributors | Clear protocol domains and evolution rules; consistent terminology |
+| Packagers    | Client/server version mismatches produce clear errors instead of silent failures |
 
 ---
 
 ## Decision
 
-**Chosen option: Option C** - evolve protobuf into a versioned command/event protocol.
-
-Rationale: The daemon architecture is the right product direction, but the wire contract is still
-too primitive. A structured v3 protocol fixes the root design gap without rewriting terminal
-emulation or inventing a new transport.
+**Clean-slate v3 protocol** using protobuf over the existing transports. No v2 compatibility
+layer — all code migrates together. The v3 wire format is designed to be the 1.0 foundation
+with additive-only evolution within major versions.
 
 ---
 
 ## Design
 
-### 1. Version And Capability Negotiation
+### 1. Version and Capability Negotiation
 
-Protocol v3 replaces exact-version equality with negotiated compatibility.
-
-Conceptual handshake:
+#### Handshake
 
 ```protobuf
 message ClientHello {
   uint32 min_protocol_version = 1;
   uint32 max_protocol_version = 2;
-  bytes client_id = 3;
-  string client_name = 4;
-  string client_version = 5;
+  bytes client_id = 3;            // 16-byte UUID
+  string client_name = 4;         // e.g. "rttx"
+  string client_version = 5;      // e.g. "0.4.0"
   repeated Capability capabilities = 6;
 }
 
 message ServerHello {
   uint32 negotiated_protocol_version = 1;
-  bytes server_id = 2;
+  bytes server_id = 2;            // 16-byte UUID
   string server_version = 3;
   repeated Capability capabilities = 4;
 }
 ```
 
-Negotiation rules:
+#### Capability type
 
-- The client sends the lowest and highest protocol versions it can speak.
-- The server selects the highest mutually supported version.
-- If there is no overlap, the server returns a typed `ProtocolMismatch` error.
-- Capabilities advertise feature support inside a negotiated major protocol.
-- Unknown capability values must be ignored unless explicitly marked required by the command.
-- Incompatible semantic changes still bump `PROTOCOL_VERSION`.
+```protobuf
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  // Core (required) — values 1–99
+  CORE_RUNTIME_LIFECYCLE = 1;
+  CORE_PANE_LIFECYCLE = 2;
+  CORE_TERMINAL_IO = 3;
+  CORE_TERMINAL_MODES = 4;
+  CORE_PASTE_INTENT = 5;
+  CORE_FOCUS_EVENTS = 6;
+  // Optional — values 100+
+  OPT_RUNTIME_INVENTORY_V2 = 100;
+  OPT_RUNTIME_TAKEOVER = 101;
+  OPT_RESYNC = 102;
+  OPT_CHUNKED_SCROLLBACK = 103;
+  OPT_DIAGNOSTICS = 104;
+}
+```
 
-Initial capabilities should include:
+Core values occupy 1–99, optional values start at 100. This leaves room for future core
+additions in a new major protocol version.
 
-- `CAP_RUNTIME_INVENTORY_V2`
-- `CAP_REQUEST_RESPONSE_IDS`
-- `CAP_TERMINAL_MODE_STATE`
-- `CAP_TERMINAL_INPUT_EVENTS`
-- `CAP_BRACKETED_PASTE_INTENT`
-- `CAP_MOUSE_INPUT_EVENTS`
-- `CAP_TERMINAL_RESPONSES`
-- `CAP_RESYNC_FROM_REVISION`
-- `CAP_BOUNDED_STREAMS`
-- `CAP_RUNTIME_TAKEOVER`
+#### Negotiation rules
+
+- Client sends the range of protocol versions it supports.
+- Server selects the highest mutually supported version.
+- If no overlap, server returns `ProtocolError` with kind `PROTOCOL_MISMATCH` and includes its
+  own supported range in the error message so the client can display actionable guidance
+  (e.g. "daemon supports v3, client requires v4 — please update the daemon").
+- After version negotiation, the effective capability set is the intersection of client and
+  daemon capabilities.
+- The client must never send a command that requires a capability the daemon did not advertise.
+
+#### Capability asymmetry
+
+The GUI client always has capabilities equal to or greater than the daemon. We do not support
+a client with fewer capabilities connecting to a daemon with more capabilities. This means the
+testing matrix is linear (N optional capabilities), not quadratic.
+
+#### Core capabilities
+
+Required by all v3 implementations. If a daemon does not advertise all core capabilities, the
+client rejects the connection.
+
+| Capability | Covers |
+|---|---|
+| `CORE_RUNTIME_LIFECYCLE` | Create, attach, detach, terminate, rename runtime |
+| `CORE_PANE_LIFECYCLE` | Create, close, resize pane; all pane events |
+| `CORE_TERMINAL_IO` | Raw byte input/output, snapshot on attach |
+| `CORE_TERMINAL_MODES` | Full `TerminalModeState` in snapshots and mode-change events |
+| `CORE_PASTE_INTENT` | Structured `PasteInput` with daemon-side bracketed paste wrapping |
+| `CORE_FOCUS_EVENTS` | Structured `FocusInput`; daemon generates focus in/out sequences |
+
+#### Optional capabilities
+
+Client degrades gracefully when absent.
+
+| Capability | Enables | Fallback when absent |
+|---|---|---|
+| `OPT_RUNTIME_INVENTORY_V2` | Rich inventory with takeover eligibility, disabled reasons | Basic inventory (name, pane count, attached status) |
+| `OPT_RUNTIME_TAKEOVER` | Explicit takeover command and lease events | "Session busy" without takeover option |
+| `OPT_RESYNC` | `StreamOverflow` event + `ResyncRuntime` command | Full detach/reattach on suspected data loss |
+| `OPT_CHUNKED_SCROLLBACK` | Paginated `GetScrollback` for large histories | Truncated snapshot tail only |
+| `OPT_DIAGNOSTICS` | `GetDiagnostics` / `DiagnosticsReport` | Diagnostics UI disabled |
+
+#### Evolution rules for capabilities
+
+- New capabilities are always optional within a major protocol version.
+- A capability may be promoted from optional to core only in a new major protocol version.
+- Within a major version, all capabilities that were optional at release remain optional forever.
 
 ### 2. Command/Event Envelopes
 
-Protocol v3 should make correlation and stream ordering explicit.
-
 ```protobuf
 message ClientEnvelope {
-  uint64 request_id = 1;
-  Command command = 2;
+  uint64 request_id = 1;       // non-zero for commands expecting a response
+  oneof command {
+    // Terminal I/O (field 2: single-byte tag for highest-frequency path)
+    TerminalInput terminal_input = 2;
+
+    // Control
+    Ping ping = 10;
+    Shutdown shutdown = 11;
+
+    // Runtime lifecycle
+    CreateRuntime create_runtime = 20;
+    AttachRuntime attach_runtime = 21;
+    DetachRuntime detach_runtime = 22;
+    TerminateRuntime terminate_runtime = 23;
+    RenameRuntime rename_runtime = 24;
+    ListRuntimes list_runtimes = 25;
+
+    // Pane lifecycle
+    CreatePane create_pane = 30;
+    ClosePane close_pane = 31;
+    ResizePane resize_pane = 32;
+    SetPaneTitle set_pane_title = 33;
+
+    // Recovery (OPT_RESYNC)
+    ResyncRuntime resync_runtime = 50;
+
+    // Scrollback (OPT_CHUNKED_SCROLLBACK)
+    GetScrollback get_scrollback = 51;
+
+    // Diagnostics (OPT_DIAGNOSTICS)
+    GetDiagnostics get_diagnostics = 60;
+  }
 }
 
 message ServerEnvelope {
-  uint64 request_id = 1;      // zero for unsolicited events
-  uint64 sequence = 2;        // monotonically increasing per connection
+  uint64 request_id = 1;       // echoed from client; zero for push events
   oneof payload {
-    CommandResult result = 3;
-    Event event = 4;
-    ProtocolError error = 5;
+    // Terminal I/O (fields 2–3: single-byte tags for highest-frequency paths)
+    OutputDelta output_delta = 2;
+    TerminalModeChanged terminal_mode_changed = 3;
+
+    // Control
+    Pong pong = 10;
+
+    // Runtime lifecycle events
+    RuntimeCreated runtime_created = 20;
+    RuntimeSnapshot runtime_snapshot = 21;
+    RuntimeDetached runtime_detached = 22;
+    RuntimeTerminated runtime_terminated = 23;
+    RuntimeRenamed runtime_renamed = 24;
+    RuntimeList runtime_list = 25;
+    AttachBlocked attach_blocked = 26;
+
+    // Pane lifecycle events
+    PaneCreated pane_created = 30;
+    PaneClosed pane_closed = 31;
+    PaneResized pane_resized = 32;
+    PaneExited pane_exited = 33;
+    TitleChanged title_changed = 34;
+    CwdChanged cwd_changed = 35;
+    Bell bell = 36;
+
+    // Recovery events (OPT_RESYNC)
+    StreamOverflow stream_overflow = 50;
+
+    // Scrollback response (OPT_CHUNKED_SCROLLBACK)
+    ScrollbackChunk scrollback_chunk = 51;
+
+    // Diagnostics response (OPT_DIAGNOSTICS)
+    DiagnosticsReport diagnostics_report = 60;
+
+    // Errors
+    ProtocolError error = 100;
   }
 }
 ```
 
-Rules:
+#### Correlation rules
 
-- Every client command that expects acknowledgement has a non-zero `request_id`.
-- Server responses echo the `request_id`.
-- Server push events use `request_id = 0`.
-- `sequence` is per connection and helps detect dropped or reordered server events.
-- Runtime and pane revisions remain domain revisions and are not replaced by connection sequence.
+- The handshake (`ClientHello`/`ServerHello`) is exchanged as bare length-prefixed protobuf
+  messages before the envelope protocol begins. All subsequent messages use
+  `ClientEnvelope`/`ServerEnvelope`.
+- If the handshake fails (e.g. version mismatch), the server sends a bare length-prefixed
+  `ProtocolError` message and closes the connection. `ProtocolError` is the only message type
+  that may appear both inside a `ServerEnvelope` and as a bare handshake-phase message.
+- Every client command that expects a response carries a non-zero `request_id`.
+- Request IDs are assigned by the client, must be unique within a connection, and must be
+  non-zero. The server does not validate ordering or monotonicity.
+- The server echoes `request_id` in the response.
+- Push events (output deltas, pane events, mode changes) use `request_id = 0`.
+- Fire-and-forget commands (`TerminalInput`, `ResizePane`, `SetPaneTitle`, `Shutdown`) do not
+  receive responses. If the target runtime or pane is invalid, the server silently drops the
+  command. This matches real terminal behavior where typing into a dead shell produces nothing.
+- The transport (TCP over Unix socket or SSH) guarantees ordered delivery. No sequence numbers
+  are needed on the envelope.
 
-This removes the current "read until the next non-push message" pattern from the client actor.
+#### Command response table
+
+| Command | Response | Notes |
+|---|---|---|
+| `Ping` | `Pong` | |
+| `Shutdown` | none | fire-and-forget |
+| `CreateRuntime` | `RuntimeCreated` or `ProtocolError` | |
+| `AttachRuntime` | `RuntimeSnapshot` or `AttachBlocked` or `ProtocolError` | |
+| `DetachRuntime` | `RuntimeDetached` or `ProtocolError` | |
+| `TerminateRuntime` | `RuntimeTerminated` or `ProtocolError` | |
+| `RenameRuntime` | `RuntimeRenamed` or `ProtocolError` | |
+| `ListRuntimes` | `RuntimeList` | |
+| `CreatePane` | `PaneCreated` or `ProtocolError` | |
+| `ClosePane` | `PaneClosed` or `ProtocolError` | |
+| `ResizePane` | none | fire-and-forget; `PaneResized` is a push event |
+| `SetPaneTitle` | none | fire-and-forget; `TitleChanged` is a push event |
+| `TerminalInput` | none | fire-and-forget |
+| `ResyncRuntime` | `RuntimeSnapshot` or `ProtocolError` | `OPT_RESYNC` |
+| `GetScrollback` | `ScrollbackChunk` or `ProtocolError` | `OPT_CHUNKED_SCROLLBACK` |
+| `GetDiagnostics` | `DiagnosticsReport` | `OPT_DIAGNOSTICS` |
 
 ### 3. Protocol Domains
 
-Commands and events should be grouped around stable domains.
+#### Control domain
 
-#### Control Domain
+Handshake (`ClientHello`/`ServerHello`), `Ping`/`Pong`, `Shutdown`, `ProtocolError`.
 
-- handshake
-- ping/pong or liveness probe
-- protocol error
-- graceful shutdown
-- capability query
+#### Runtime lifecycle domain
 
-#### Endpoint Inventory Domain
+`CreateRuntime`, `AttachRuntime`, `DetachRuntime`, `TerminateRuntime`, `RenameRuntime`,
+`ListRuntimes`. Events: `RuntimeCreated`, `RuntimeSnapshot`, `RuntimeDetached`,
+`RuntimeTerminated`, `RuntimeRenamed`, `AttachBlocked`.
 
-- list available runtimes for the selected endpoint
-- report attached/busy/read-only/takeover-eligible state
-- report endpoint metadata needed by RFC-016 dialogs
-- support explicit refresh and future subscriptions
+#### Pane lifecycle domain
 
-#### Runtime Lifecycle Domain
+`CreatePane`, `ClosePane`, `ResizePane`, `SetPaneTitle`. Events: `PaneCreated`, `PaneClosed`,
+`PaneResized`, `PaneExited`, `TitleChanged`, `CwdChanged`, `Bell`.
 
-- create runtime
-- attach runtime
-- detach runtime
-- terminate runtime
-- rename runtime
-- request takeover
-- report runtime created, attached, detached, terminated, renamed, blocked, or missing
+#### Terminal I/O domain
 
-#### Pane Lifecycle Domain
+`TerminalInput` (client → server). Events: `OutputDelta`, `TerminalModeChanged`
+(server → client).
 
-- create pane
-- close pane
-- resize pane
-- set pane title
-- report pane created, closed, resized, exited, title changed, or cwd changed
+#### Recovery domain (OPT_RESYNC)
 
-#### Terminal I/O Domain
+`ResyncRuntime`. Events: `StreamOverflow`. Server may respond with `RuntimeSnapshot` (full
+resync) or a delta catch-up.
 
-- raw output delta
-- terminal state delta
-- raw input fallback
-- key input intent
-- paste intent
-- mouse input intent
-- focus input intent
-- terminal response input
+#### Scrollback domain (OPT_CHUNKED_SCROLLBACK)
 
-#### Recovery Domain
-
-- attach snapshot
-- resync from revision
-- full snapshot fallback
-- missing runtime reconciliation
-- stream overflow or backpressure recovery
+`GetScrollback`. Response: `ScrollbackChunk`.
 
 ### 4. Terminal Input Model
-
-The existing `Input { data }` should remain as a low-level escape hatch during migration, but it
-must stop being the only terminal input path.
-
-Conceptual input command:
 
 ```protobuf
 message TerminalInput {
   bytes runtime_id = 1;
   bytes pane_id = 2;
-
+  // Fields 3–19 reserved for oneof kind variants.
+  // Top-level fields (e.g. timestamp) should use 20+.
   oneof kind {
-    bytes raw_bytes = 3;
-    KeyInput key = 4;
-    PasteInput paste = 5;
-    MouseInput mouse = 6;
-    FocusInput focus = 7;
-    TerminalResponse response = 8;
+    RawInput raw = 3;           // always available (core)
+    PasteInput paste = 4;       // CORE_PASTE_INTENT
+    FocusInput focus = 5;       // CORE_FOCUS_EVENTS
   }
+}
+
+message RawInput {
+  bytes data = 1;
+  // Wrapped in a message so zero-length data is distinguishable from
+  // "no kind set" in proto3 oneof semantics.
+}
+
+message PasteInput {
+  bytes text = 1;
+  // Daemon wraps with bracketed paste sequences when the mode is active.
+  // bytes rather than string: paste content may include non-UTF-8 data.
+}
+
+message FocusInput {
+  bool focused = 1;
+  // Daemon generates focus in/out escape sequences when focus reporting is active.
 }
 ```
 
-Semantics:
-
-- `raw_bytes` is for compatibility and intentionally low-level.
-- `key` carries enough GTK/VTE event data for the daemon/client contract to choose the correct
-  encoded bytes for the active terminal mode.
-- `paste` carries paste text plus paste policy, so bracketed paste wrapping is not lost.
-- `mouse` carries coordinates, button, modifiers, press/release/motion/wheel, and the source
-  coordinate space.
-- `focus` represents focus in/out when terminal focus reporting is active.
-- `response` is for terminal-generated replies that are intentionally fed back to the PTY.
-
-The first implementation does not need to encode every key and mouse protocol immediately. The
-important architectural change is that the wire format can distinguish intent from bytes.
+`raw` remains for keyboard input, mouse input, and any other byte-level terminal interaction.
+The `oneof` is forward-compatible — `KeyInput`, `MouseInput`, and other structured variants can
+be added in future versions without any wire break.
 
 ### 5. Terminal Interaction State
 
-The daemon must own the terminal interaction state needed to preserve behavior across detach,
-reattach, reconnect, and multiple clients. The v2 protocol already carries five mode fields in
-`PaneSnapshot`; v3 should consolidate these into a single `TerminalModeState` message and add
-the modes that the daemon tracks but does not yet expose over the wire.
-
-Conceptual state:
+A single consolidated message replaces the scattered booleans in v2 `PaneSnapshot`:
 
 ```protobuf
+enum MouseMode {
+  MOUSE_MODE_NONE = 0;       // default: no mouse tracking (also the unspecified state)
+  MOUSE_MODE_X10 = 1;
+  MOUSE_MODE_NORMAL = 2;
+  MOUSE_MODE_BUTTON = 3;
+  MOUSE_MODE_ANY = 4;
+}
+
 message TerminalModeState {
   bool bracketed_paste = 1;
   bool focus_reporting = 2;
   bool application_cursor_keys = 3;
   bool application_keypad = 4;
   bool alternate_screen = 5;
-  bool cursor_visible = 6;
+  bool cursor_hidden = 6;         // default false = cursor visible (correct terminal default)
   MouseMode mouse_mode = 7;
-  KeyboardProtocol keyboard_protocol = 8;
+  bool sgr_mouse = 8;
 }
 ```
 
-Current tracking status in the daemon's `ScreenPerformer`:
+- `PaneSnapshot` carries the full `TerminalModeState`.
+- Live mode changes are emitted as `TerminalModeChanged` events with runtime ID, pane ID,
+  `runtime_revision`, and the updated `TerminalModeState`.
+- New modes can be added as new fields — missing fields default to false/zero per protobuf
+  rules, which is the correct "mode not active" semantic.
 
-| Mode | Tracked | In PaneSnapshot |
-|------|---------|-----------------|
-| bracketed paste | ✅ | ✅ |
-| application cursor keys | ✅ | ✅ |
-| application keypad | ✅ | ✅ |
-| mouse tracking mode | ✅ | ✅ |
-| SGR mouse mode | ✅ | ✅ |
-| focus event mode | ✅ | ❌ (not in proto) |
-| cursor visible | ✅ | ❌ (not in proto) |
-| alternate screen | ❌ | ❌ |
-| keyboard protocol | ❌ | ❌ |
+```protobuf
+message TerminalModeChanged {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 runtime_revision = 3;
+  TerminalModeState modes = 4;    // full state, not a diff
+}
+```
 
-The immediate next step is adding `focus_event_mode` and `cursor_visible` to the v2 `PaneSnapshot`
-message. The full `TerminalModeState` consolidation can happen as part of v3.
+### 6. Terminal Output
 
-`PaneSnapshot` should carry the full `TerminalModeState`. Live changes should be emitted as a
-`TerminalModeChanged` event with runtime ID, pane ID, revision, and the updated mode state.
+```protobuf
+message OutputDelta {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  bytes data = 3;
+  uint64 pane_output_seq = 4;
+}
+```
 
-This is the protocol-level replacement for adding separate snapshot booleans every time a terminal
-mode bug is found.
+- Raw PTY bytes remain the primary output stream. VTE renders the terminal.
+- `pane_output_seq` is a per-pane monotonic counter incremented by every delta. Used for
+  output continuity detection (see Section 8).
+- The daemon continues to parse output for mode state, title, CWD, and terminal responses
+  (RFC-020). Parsed state changes are emitted as typed events (`TerminalModeChanged`,
+  `TitleChanged`, `CwdChanged`).
+- Terminal-generated replies (DA1, DA2, DSR, DECRQM) are synthesized by the daemon and
+  stripped from client-bound output.
 
-### 6. Terminal Output And Responses
+### 7. Revision Semantics
 
-Raw PTY bytes remain the primary output stream because VTE should continue to render the terminal.
-The daemon now parses enough output to maintain authoritative interaction state and synthesizes
-daemon-owned replies for DA1, DA2, DSR, and DECRQM queries (RFC-020, Implemented). Query sequences
-are stripped from client-bound output via `strip_client_queries` to prevent duplicate responses.
+Two distinct revision spaces, clearly named:
 
-Rules:
+#### Runtime revision (`runtime_revision: uint64`)
 
-- `OutputDelta` carries raw bytes and a pane revision or output revision.
-- Parsed semantic changes are emitted as separate typed events when they affect client state.
-- Terminal-generated replies are explicit `TerminalResponse` writes, not indistinguishable user
-  input.
-- Detached runtimes must not depend on an attached client VTE to keep terminal modes coherent.
+Bumped by structural changes to the runtime:
+- Pane created, closed, exited
+- Runtime renamed
+- Terminal mode changed
+- Client attached or detached
 
-The daemon already satisfies the last rule for DA1, DA2, DSR, and DECRQM. Focus in/out sequences
-remain client-generated since only the GUI knows focus state. OSC color and clipboard queries
-remain client-dependent and are rare enough that the current behavior is acceptable.
+Carried on all runtime-level and pane-level events. Used for inventory freshness and resync
+decisions.
 
-### 7. Snapshot, Revision, And Resync
+#### Pane output sequence (`pane_output_seq: uint64`)
 
-Snapshots should describe current runtime state, not only replay bytes.
+Per-pane monotonic counter, incremented by 1 for every `OutputDelta` message. Carried on
+`OutputDelta` messages. Used only for output continuity detection. A gap in sequence numbers
+(e.g. expected 5, received 7) indicates dropped messages.
+
+On attach, the snapshot includes the current `pane_output_seq` for each pane. Subsequent
+deltas increment from there. The server-sent `StreamOverflow` event is the primary signal
+that messages were dropped. Client-side gap detection on `pane_output_seq` is a defensive
+fallback for edge cases where the server drops a message but fails to send `StreamOverflow`
+(e.g. the overflow event itself is dropped). If the client detects a gap and has `OPT_RESYNC`,
+it requests resync.
+
+No other revision spaces exist. Inventory and diagnostics are request/response and do not
+need revisions.
+
+### 8. Snapshots and Resync
+
+#### Attach snapshot
+
+On successful attach, the server sends a `RuntimeSnapshot`:
 
 ```protobuf
 message RuntimeSnapshot {
@@ -518,145 +488,271 @@ message RuntimeSnapshot {
 
 message PaneSnapshot {
   bytes pane_id = 1;
-  uint64 pane_revision = 2;
+  uint64 pane_output_seq = 2;
   string title = 3;
   string cwd = 4;
   uint32 cols = 5;
   uint32 rows = 6;
   optional int32 exit_status = 7;
   TerminalModeState terminal_modes = 8;
-  repeated OutputChunk scrollback = 9;
+  bytes scrollback_tail = 9;           // last N bytes (e.g. 256 KB)
+  uint64 total_scrollback_bytes = 10;  // total available on daemon
+  bool scrollback_complete = 11;       // true if scrollback_tail is everything
 }
 ```
 
-Resync rules:
+The client renders immediately from `scrollback_tail`. If the user scrolls up and
+`scrollback_complete` is false, the client requests pages via `GetScrollback`
+(requires `OPT_CHUNKED_SCROLLBACK`).
 
-- Every runtime/pane mutation that can affect a reattached client has a revision.
-- Raw output deltas carry a pane output revision.
-- A client may request `ResyncRuntime { runtime_id, since_revision }`.
-- The server may return either a delta catch-up or a full snapshot.
-- Oversized scrollback is chunked instead of relying on one message below `MAX_MESSAGE_SIZE`.
-- If the daemon no longer has the runtime, it returns a typed `RuntimeMissing` result so the
-  client can apply RFC-019-style missing-session handling without breaking sibling workspaces.
-
-### 8. Endpoint Inventory And Busy Runtime Discovery
-
-RFC-016 (now Implemented) required an explicit "connect to existing" dialog for a selected host.
-The v2 protocol partially supports this through `SessionInfo` fields: `has_write_owner`,
-`read_only_client_count`, `current_client_role`, and `attached_client_count`. Protocol v3 should
-extend this into a richer inventory model.
-
-Inventory entries should include:
-
-- runtime ID
-- display name
-- policy
-- pane count
-- active pane summary
-- current lifecycle state
-- current client role for this client
-- write-owner presence
-- read-only client count
-- whether this client may attach read-write, attach read-only, or request takeover
-- disabled reason when the runtime is visible but not selectable
-- revision for freshness
-
-Busy runtimes should be visible but disabled in the UI. The protocol should return enough reason
-data for the client to explain why a runtime cannot be selected.
-
-### 9. Ownership And Multi-Client Semantics
-
-The v2 protocol already defines ownership as a partial model:
-
-- `RuntimeAttachMode` supports read-write, read-only, and take-over attach requests
-- `RuntimeClientRole` reports unattached, writer, or reader status
-- `AttachBlocked` signals when a runtime cannot be attached
-- `SessionInfo` carries `has_write_owner` and `read_only_client_count`
-
-Protocol v3 should formalize this into a first-class runtime lease model:
-
-- one writer lease per runtime
-- zero or more readers
-- same client cannot attach twice to the same runtime as separate workspaces
-- takeover is an explicit command, not a side effect of attach
-- lease loss, owner disconnect, and forced takeover are typed events
-
-This aligns with RFC-016's visible busy-session model and avoids making the client infer policy
-from `AttachBlocked` alone.
-
-### 10. Error Model
-
-Replace ad hoc numeric errors with typed protocol errors.
+#### Chunked scrollback (OPT_CHUNKED_SCROLLBACK)
 
 ```protobuf
+message GetScrollback {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 offset = 3;       // byte offset from start of scrollback
+  uint32 limit = 4;        // max bytes to return (server may cap)
+}
+
+message ScrollbackChunk {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 offset = 3;       // byte offset this chunk starts at
+  bytes data = 4;
+  bool is_last = 5;        // true if this chunk reaches the current end
+}
+```
+
+Rules:
+- `GetScrollback` is a request/response command (uses `request_id`). Not a push stream.
+- Each request returns a single `ScrollbackChunk` response. The client pages by adjusting
+  `offset`.
+- `limit` is capped by the server (e.g. 256 KB per chunk).
+- Scrollback is append-only. Already-fetched pages remain valid as new output arrives.
+- Without `OPT_CHUNKED_SCROLLBACK`, the client only has `scrollback_tail` from the snapshot.
+
+#### Resync (OPT_RESYNC)
+
+```protobuf
+message ResyncRuntime {
+  bytes runtime_id = 1;
+}
+
+message StreamOverflow {
+  bytes runtime_id = 1;
+  optional bytes pane_id = 2;  // absent if runtime-level overflow
+  uint64 dropped_count = 3;   // approximate number of dropped messages
+}
+```
+
+When the server's bounded push channel drops messages for a client, it sends `StreamOverflow`.
+The server detects overflow at the point of `try_send` failure, not through client feedback.
+The client requests `ResyncRuntime`, and the server responds with a fresh `RuntimeSnapshot`.
+
+Without `OPT_RESYNC`, the server must not silently drop push messages. If the push channel is
+full and the client does not support `OPT_RESYNC`, the server forcibly disconnects the client.
+The client's connection state machine will reconnect and receive a fresh snapshot on reattach.
+This is safe because the client already handles unexpected disconnections.
+
+### 9. Endpoint Inventory
+
+#### Inventory messages
+
+```protobuf
+message ListRuntimes {}
+
+message RuntimeList {
+  repeated RuntimeInfo runtimes = 1;
+}
+
+message RuntimeInfo {
+  // Core fields (always populated):
+  bytes id = 1;
+  string name = 2;
+  RuntimePolicy policy = 3;
+  uint32 pane_count = 4;
+  bool has_write_owner = 5;
+  uint32 read_only_client_count = 6;
+  RuntimeClientRole current_client_role = 7;
+  uint64 runtime_revision = 8;
+  bool reconstructed = 9;
+  // OPT_RUNTIME_INVENTORY_V2 fields (empty/default when capability absent):
+  string active_pane_summary = 10;
+  bool takeover_eligible = 11;
+  string disabled_reason = 12;    // empty when selectable
+  repeated PaneInfo panes = 13;
+}
+
+message PaneInfo {
+  bytes id = 1;
+  string title = 2;
+  string cwd = 3;
+  uint32 cols = 4;
+  uint32 rows = 5;
+  optional int32 exit_status = 6;
+  bool reconstructed = 7;
+}
+```
+
+Busy runtimes are visible but disabled in the UI. The `disabled_reason` field explains why a
+runtime cannot be selected (e.g. "owned by another client").
+
+### 10. Ownership and Multi-Client Semantics
+
+```protobuf
+message AttachRuntime {
+  bytes runtime_id = 1;
+  RuntimeAttachMode attach_mode = 2;
+}
+
+enum RuntimeTerminationReason {
+  RUNTIME_TERMINATION_REASON_UNSPECIFIED = 0;
+  RUNTIME_TERMINATION_REASON_EXPLICIT = 1;          // client requested termination
+  RUNTIME_TERMINATION_REASON_EPHEMERAL_DETACH = 2;  // last client detached from ephemeral runtime
+}
+
+message RuntimeTerminated {
+  bytes runtime_id = 1;
+  uint64 final_revision = 2;
+  RuntimeTerminationReason reason = 3;
+}
+
+enum RuntimeAttachMode {
+  RUNTIME_ATTACH_MODE_UNSPECIFIED = 0;
+  RUNTIME_ATTACH_MODE_READ_WRITE = 1;
+  RUNTIME_ATTACH_MODE_READ_ONLY = 2;
+}
+
+enum RuntimeClientRole {
+  RUNTIME_CLIENT_ROLE_UNSPECIFIED = 0;
+  RUNTIME_CLIENT_ROLE_UNATTACHED = 1;
+  RUNTIME_CLIENT_ROLE_WRITER = 2;
+  RUNTIME_CLIENT_ROLE_READER = 3;
+}
+
+enum RuntimePolicy {
+  RUNTIME_POLICY_UNSPECIFIED = 0;
+  RUNTIME_POLICY_PERSISTENT = 1;
+  RUNTIME_POLICY_EPHEMERAL = 2;
+}
+```
+
+Rules:
+- One writer lease per runtime, zero or more readers.
+- Takeover is an explicit command (requires `OPT_RUNTIME_TAKEOVER`), not a side effect of
+  attach.
+- `AttachBlocked` is returned when a read-write attach fails due to an existing writer.
+- Lease loss, owner disconnect, and forced takeover are typed events when
+  `OPT_RUNTIME_TAKEOVER` is active.
+
+### 11. Error Model
+
+```protobuf
+enum ErrorKind {
+  ERROR_KIND_UNSPECIFIED = 0;
+  ERROR_KIND_PROTOCOL_MISMATCH = 1;
+  ERROR_KIND_UNSUPPORTED_CAPABILITY = 2;
+  ERROR_KIND_INVALID_ARGUMENT = 3;
+  ERROR_KIND_RUNTIME_NOT_FOUND = 4;
+  ERROR_KIND_PANE_NOT_FOUND = 5;
+  ERROR_KIND_OWNERSHIP_CONFLICT = 6;
+  ERROR_KIND_TAKEOVER_REQUIRED = 7;
+  ERROR_KIND_STREAM_OVERFLOW = 8;
+  ERROR_KIND_INTERNAL = 9;
+}
+
 message ProtocolError {
   ErrorKind kind = 1;
   string message = 2;
   string operation = 3;
-  repeated ErrorTarget targets = 4;
-  bool retryable = 5;
-  bool user_action_required = 6;
+  bool retryable = 4;
+  bool user_action_required = 5;
+  uint32 retry_after_seconds = 6; // suggested backoff for retryable errors; 0 = no hint
 }
 ```
 
-Initial error kinds:
-
-- `PROTOCOL_MISMATCH`
-- `UNSUPPORTED_CAPABILITY`
-- `INVALID_ARGUMENT`
-- `AUTHENTICATION_FAILED`
-- `PERMISSION_DENIED`
-- `ENDPOINT_UNAVAILABLE`
-- `RUNTIME_NOT_FOUND`
-- `PANE_NOT_FOUND`
-- `OWNERSHIP_CONFLICT`
-- `TAKEOVER_REQUIRED`
-- `STREAM_OVERFLOW`
-- `INTERNAL`
-
-The client should map typed errors to `ConnectionProblem` and UI policy without string matching.
-
-### 11. Backpressure And Bounded Streams
-
-The daemon now uses bounded push channels (`PUSH_CHANNEL_BOUND = 4096`) with `try_send`
-drop-on-full semantics. This prevents unbounded memory growth but does not give the client a way
-to detect or recover from dropped messages.
-
-Protocol v3 should pair the existing bounded channels with an explicit recovery path:
-
-- Server push channels remain bounded (already implemented).
-- If a client falls behind and lossy dropping is unsafe, the server marks the client out of sync.
-- The client receives `StreamOverflow` or detects a missing sequence and requests resync.
-- The server sends a full snapshot if it cannot provide safe delta catch-up.
-
-This turns #362 from an implementation-only queue change into a protocol behavior with defined
-client recovery.
+Rules:
+- Error kinds are append-only after 1.0. New kinds can be added; existing kinds cannot be
+  removed or have their semantics changed.
+- Clients must handle unknown error kinds by falling back to a generic error display.
+- The client maps typed errors to `ConnectionProblem` and UI policy without string matching.
 
 ### 12. Naming
 
-New v3 messages should use product terminology:
+All v3 messages use product terminology:
 
-- endpoint
-- workspace only in client UI state, not daemon protocol identity
-- runtime
-- pane
-- place/command only in client-side host-aware UX, unless a future daemon feature owns them
+| Concept | Wire name | Notes |
+|---|---|---|
+| Daemon-owned backend | `Runtime` | Not "Session" |
+| Terminal tile | `Pane` | |
+| Local or remote daemon | Endpoint | Client-side concept; not a wire identity |
+| GUI tab | Workspace | Client-side only; never appears in daemon protocol |
 
-Existing v2 `Session*` names can remain inside compatibility code until v2 is removed.
+### 13. Wire Compatibility Rules
 
-### 13. Backward Compatibility
+These rules are binding after the initial v3 release and govern all subsequent protocol changes.
 
-During migration:
+**Additive changes (no version bump required):**
+- New fields added to existing messages (missing fields decode as zero/empty/false per protobuf
+  defaults)
+- New variants added to `oneof` fields (unknown variants are ignored by older implementations)
+- New enum values added (unknown values decode as 0/unspecified; receivers must handle unknown
+  values gracefully)
+- New optional capabilities defined
+- New message types added to the envelope `oneof`
 
-- Keep v2 support until the v3 client and server are both implemented.
-- The daemon may accept v2 and v3 on the same socket/stdio transport.
-- New v3-only behavior must be capability-gated.
-- The client should present clear protocol mismatch errors when versions cannot negotiate.
-- Because rttx is not production-stable yet, v2 removal does not require persisted protocol
-  migration once all active development builds have moved to v3.
+**Prohibited changes (require a new major protocol version):**
+- Removing or renumbering existing fields (use `reserved` for deprecated fields)
+- Removing `oneof` variants or enum values
+- Changing the semantic meaning of an existing field
+- Changing a core capability's behavior
+- Changing the framing format (4-byte little-endian length prefix)
 
-Persisted state changes caused by v3 implementation must still use the existing
-`#[serde(default)]` compatibility pattern.
+**Capability promotion:**
+- A capability may be promoted from optional to core only in a new major protocol version.
+- Within a major version, all capabilities that were optional at release remain optional.
+
+**Error kind stability:**
+- Error kinds are append-only. New kinds can be added at any time. Existing kinds cannot be
+  removed or have their semantics changed.
+- Clients must handle unknown error kinds gracefully.
+
+**Enum zero values:**
+- Every enum must have a zero value that represents the default or absent state.
+- For most enums this is `_UNSPECIFIED = 0` (meaning "not set / unknown").
+- For enums where the default state is semantically meaningful (e.g. `MouseMode` where the
+  default is "no tracking"), the zero value may carry that meaning directly
+  (e.g. `MOUSE_MODE_NONE = 0`).
+- Receivers must handle unknown enum values gracefully by treating them as the zero value.
+
+### 14. Protocol Versioning
+
+- **Major version** (the negotiated `protocol_version`): bumped only when a change cannot be
+  expressed as an additive protobuf extension, or when an optional capability is promoted to
+  core.
+- **No minor version on the wire.** Within a major version, all changes are additive and handled
+  by protobuf's native forward/backward compatibility. Capabilities serve as the
+  feature-detection mechanism.
+- **Version negotiation**: Client sends `min_protocol_version` and `max_protocol_version`.
+  Server picks the highest it supports. If no overlap, `ProtocolError` with kind
+  `PROTOCOL_MISMATCH`.
+- **Lifetime commitment**: Once a major version is released as stable, the server must support
+  it for at least 2 major versions forward. When v4 ships, v3 is still supported. When v5
+  ships, v3 can be dropped. This gives daemon operators a full major-version cycle to upgrade.
+
+### 15. Transport
+
+No changes to the transport layer. v3 uses the same framing as v2:
+
+- 4-byte little-endian length prefix followed by a protobuf-encoded `ClientEnvelope` or
+  `ServerEnvelope`.
+- `MAX_MESSAGE_SIZE` remains 16 MB.
+- Local: Unix socket at `$XDG_RUNTIME_DIR/rttx-server/rttx.sock`.
+- Remote: `ssh <host> rttx-server attach-stdio` over stdin/stdout.
+
+The socket path does not contain a protocol version — version negotiation happens inside the
+handshake, not at the transport level.
 
 ---
 
@@ -664,65 +760,51 @@ Persisted state changes caused by v3 implementation must still use the existing
 
 | Goal | How addressed |
 |------|---------------|
-| G1 | Negotiated versions and capabilities replace exact equality and one-off version bumps |
-| G2 | Protocol domains make runtime, pane, terminal, inventory, recovery, and control behavior explicit |
-| G3 | Terminal input events and `TerminalModeState` provide a stable home for VTE parity work |
-| G4 | Revisioned snapshots and resync define reconnect behavior beyond raw scrollback replay |
-| G5 | Endpoint inventory includes busy/disabled runtime discovery for RFC-016 |
-| G6 | The design keeps protobuf framing over Unix socket and SSH stdio |
-| G7 | Request IDs, typed events, and state snapshots are directly testable |
+| G1 | Version range negotiation + core/optional capabilities |
+| G2 | Six protocol domains with clear command/event boundaries |
+| G3 | Consolidated `TerminalModeState` + `TerminalModeChanged` events |
+| G4 | `runtime_revision` + `pane_output_seq` + `ResyncRuntime` + chunked scrollback |
+| G5 | `RuntimeInfo` with ownership and takeover metadata |
+| G6 | Same transports: Unix socket and SSH stdio |
+| G7 | Request IDs enable deterministic test assertions; typed events are directly matchable |
+| G8 | Wire compatibility rules section (Section 13) |
 
 ---
 
 ## Development Plan
 
-- [x] **Step 1** - Land this RFC and review the protocol domains *(prerequisite: -)*
-- [x] **Step 2** - Add a VTE parity harness for managed terminal input and mouse behavior
-  *(prerequisite: Step 1; closed #464)*
-- [ ] **Step 3** - Add v3 handshake, capability negotiation, envelopes, and typed errors while
-  preserving v2 compatibility *(prerequisite: Step 1)*
-- [ ] **Step 4** - Add revisioned runtime/pane snapshots and resync commands
-  *(prerequisite: Step 3; supports #362 resync path)*
-- [x] **Step 5** - Add `TerminalModeState` to snapshots and mode-change events
-  *(prerequisite: Step 4; closed #458 and #460)* — partially done: five modes are in
-  `PaneSnapshot`; `focus_event_mode` and `cursor_visible` are tracked but not yet in the proto
-  message; full `TerminalModeState` consolidation deferred to v3
-- [x] **Step 6** - Add terminal input intent commands for paste, key, mouse, focus, IME/compose,
-  and terminal responses *(prerequisite: Step 5; closed #457, #459, #461, and #462)* — resolved
-  within v2 by improving client-side VTE integration and daemon response ownership (RFC-020)
-  rather than adding structured input commands; the v3 `TerminalInput` design remains valid for
-  future structured input
-- [ ] **Step 7** - Add endpoint inventory v2 for host-aware "connect to existing" flows
-  *(prerequisite: Step 3; supports RFC-016)* — RFC-016 is Implemented with v2 `SessionInfo`
-  fields; richer inventory metadata deferred to v3
-- [ ] **Step 8** - Define bounded push-channel behavior and stream overflow resync
-  *(prerequisite: Step 4; supports #362)* — bounded channels implemented; protocol-level resync
-  not yet defined
-- [ ] **Step 9** - Remove v2 compatibility after the v3 client/server path is stable
-  *(prerequisite: Steps 3-8)*
+- [ ] **Step 1** — Rename all `Session*` types to `Runtime*` across codebase (do this first so
+  all new v3 code uses the correct terminology from the start)
+- [ ] **Step 2** — Define the complete `.proto` file for v3 (the envelope references many
+  messages — `CreateRuntime`, `AttachRuntime`, `PaneCreated`, `Ping`, `Pong`, etc. — that this
+  RFC defines structurally but not field-by-field; the `.proto` file is the authoritative
+  definition)
+- [ ] **Step 3** — Implement v3 handshake with version negotiation and capability advertisement
+- [ ] **Step 4** — Implement `ClientEnvelope`/`ServerEnvelope` with request/response correlation
+- [ ] **Step 5** — Implement `TerminalModeState` consolidation and `TerminalModeChanged` events
+- [ ] **Step 6** — Implement `PasteInput` and `FocusInput` as core structured input
+- [ ] **Step 7** — Implement `ProtocolError` with typed error kinds
+- [ ] **Step 8** — Implement `RuntimeSnapshot` with `scrollback_tail` and `pane_output_seq`
+- [ ] **Step 9** — Implement `OPT_CHUNKED_SCROLLBACK` (`GetScrollback`/`ScrollbackChunk`)
+- [ ] **Step 10** — Implement `OPT_RESYNC` (`StreamOverflow`/`ResyncRuntime`)
+- [ ] **Step 11** — Implement `OPT_RUNTIME_INVENTORY_V2` (rich inventory fields)
+- [ ] **Step 12** — Implement `OPT_RUNTIME_TAKEOVER` (explicit takeover and lease events)
+- [ ] **Step 13** — Implement `OPT_DIAGNOSTICS`
+- [ ] **Step 14** — Remove all v2 protocol code
+- [ ] **Step 15** — Full integration test suite for v3 protocol
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** - How much keyboard encoding should live in the daemon versus a shared
-  client/server terminal-input crate? The current implementation keeps keyboard encoding in the
-  client (VTE commit path). The v3 `TerminalInput` design would move structured key events to the
-  wire, but the practical need is reduced now that VTE parity issues (#457) are resolved.
-- [ ] **Q2** - Should terminal mode tracking remain a minimal state parser, or should we adopt
-  more of VTE's parser behavior through shared tests before adding features? The daemon's
-  `ScreenPerformer` has grown to handle DA1, DA2, DSR, DECRQM, and seven tracked modes. This
-  is already beyond "minimal" but well short of a full terminal emulator.
-- [x] **Q3** - Should read-only clients receive all terminal state deltas immediately, or only
-  after attach snapshot plus output stream subscription? **Resolved**: read-only clients receive
-  a full snapshot on attach followed by live deltas, same as write clients. The v2 implementation
-  does not distinguish delta delivery by client role.
-- [x] **Q4** - What is the exact v2 removal point for a pre-production project? **Resolved**:
-  v2 removal happens after v3 client and server are both stable (Step 9). Since rttx is
-  pre-production, there is no persisted protocol migration requirement — all active builds move
-  to v3 together.
-- [ ] **Q5** - Should remote endpoint metadata remain entirely client-owned, or should remote
-  daemons expose stable host identity for inventory and troubleshooting?
+- [ ] **Q1** — How much keyboard encoding should live in the daemon versus the client? The
+  current implementation keeps keyboard encoding in the client (VTE commit path). The `oneof`
+  in `TerminalInput` allows adding `KeyInput` later if a concrete need arises.
+- [ ] **Q2** — Should terminal mode tracking grow beyond the current `ScreenPerformer` scope?
+  `alternate_screen` and Kitty keyboard protocol are not yet tracked. They can be added as new
+  fields on `TerminalModeState` without a wire break.
+- [ ] **Q3** — Should remote daemons expose stable host identity for inventory and
+  troubleshooting, or should endpoint metadata remain entirely client-owned?
 
 ---
 
@@ -733,15 +815,5 @@ Persisted state changes caused by v3 implementation must still use the existing
 - [RFC-018: Workspace Connection State Machine](RFC-018-workspace-connection-state-machine.md) *(Implemented)*
 - [RFC-019: Missing Session Handling](RFC-019-missing-session-handling.md) *(Accepted, partially implemented)*
 - [RFC-020: Terminal Response Ownership](RFC-020-terminal-response-ownership.md) *(Implemented)*
-- [Issue #362: replace unbounded push channel with bounded channel](https://github.com/IllyaYalovyy/rttx/issues/362) *(open — bounded channels implemented, protocol-level resync not yet defined)*
-- [Issue #457: managed terminals use stateless key encoding](https://github.com/IllyaYalovyy/rttx/issues/457) *(closed)*
-- [Issue #458: managed paste ignores bracketed paste mode](https://github.com/IllyaYalovyy/rttx/issues/458) *(closed)*
-- [Issue #459: managed mouse reporting is preempted by client gestures](https://github.com/IllyaYalovyy/rttx/issues/459) *(closed)*
-- [Issue #460: reattached clients do not restore terminal interaction modes explicitly](https://github.com/IllyaYalovyy/rttx/issues/460) *(closed)*
-- [Issue #461: daemon does not own full terminal response semantics](https://github.com/IllyaYalovyy/rttx/issues/461) *(closed)*
-- [Issue #462: managed terminal input lacks explicit IME and compose coverage](https://github.com/IllyaYalovyy/rttx/issues/462) *(closed)*
-- [Issue #463: input sync does not include daemon-backed panes](https://github.com/IllyaYalovyy/rttx/issues/463) *(closed)*
-- [Issue #464: add VTE parity harness](https://github.com/IllyaYalovyy/rttx/issues/464) *(closed)*
-- [Issue #478: handle missing daemon sessions gracefully](https://github.com/IllyaYalovyy/rttx/issues/478) *(closed)*
-- [Issue #493: RFC tracking issue for client/server protocol v3](https://github.com/IllyaYalovyy/rttx/issues/493)
-- [Issue #614: review and update RFC-021](https://github.com/IllyaYalovyy/rttx/issues/614)
+- [Issue #362: bounded push channel resync](https://github.com/IllyaYalovyy/rttx/issues/362)
+- [Issue #493: RFC tracking issue for protocol v3](https://github.com/IllyaYalovyy/rttx/issues/493)

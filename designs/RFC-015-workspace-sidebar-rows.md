@@ -207,10 +207,8 @@ Color encodes connection state (changes dynamically):
 
 | Status | CSS class | Meaning |
 |--------|-----------|---------|
-| Connected (local) | `dim-label` | Normal, healthy |
-| Connected (remote) | `accent` | Active remote connection |
+| Connected / Recovered | `accent` | Healthy connection |
 | Connecting / Starting | `dim-label` | In progress |
-| Recovered | `accent` | Just reconnected |
 | Disconnected | `warning` | Lost connection |
 | Blocked | `error` | Cannot connect |
 
