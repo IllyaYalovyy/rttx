@@ -47,6 +47,9 @@ pub mod v3_scrollback;
 /// V3 resync: capability gating, builders, and overflow handling (RFC-021 Section 8, `OPT_RESYNC`).
 pub mod v3_resync;
 
+/// V3 runtime inventory: capability gating, builders, and field stripping (RFC-021 Section 9, `OPT_RUNTIME_INVENTORY_V2`).
+pub mod v3_inventory;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
