@@ -771,3 +771,112 @@ fn v3_scrollback_truncation_and_snapshot() {
     assert!(!decoded.scrollback_complete);
     assert_eq!(decoded.total_scrollback_bytes, 500_000);
 }
+
+// ── V3 chunked scrollback integration tests (OPT_CHUNKED_SCROLLBACK) ──
+
+use rttx_proto::v3_scrollback;
+
+#[test]
+fn v3_chunked_scrollback_request_response_roundtrip() {
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+    let id_gen = v3_envelope::RequestIdGenerator::new();
+
+    // Client builds and sends GetScrollback request
+    let req = v3_scrollback::build_get_scrollback(runtime_id, pane_id, 0, 65536);
+    let client_env = v3_scrollback::build_get_scrollback_envelope(&id_gen, req);
+    assert_ne!(client_env.request_id, 0);
+    let saved_request_id = client_env.request_id;
+
+    // Wire roundtrip for client envelope
+    let mut buf = BytesMut::new();
+    encode_frame(&client_env, &mut buf).unwrap();
+    let decoded_client: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_client.request_id, saved_request_id);
+    let Some(v3::client_envelope::Command::GetScrollback(gs)) = decoded_client.command else {
+        panic!("expected GetScrollback command");
+    };
+    assert_eq!(gs.runtime_id, uuid_to_bytes(runtime_id));
+    assert_eq!(gs.pane_id, uuid_to_bytes(pane_id));
+    assert_eq!(gs.offset, 0);
+    assert_eq!(gs.limit, 65536);
+
+    // Server builds ScrollbackChunk response
+    let chunk = v3_scrollback::build_scrollback_chunk(
+        runtime_id,
+        pane_id,
+        0,
+        bytes::Bytes::from_static(b"scrollback data"),
+        true,
+    );
+    let server_env = v3_scrollback::build_scrollback_chunk_response(saved_request_id, chunk);
+    assert_eq!(server_env.request_id, saved_request_id);
+    assert!(!v3_envelope::is_push_event(&server_env));
+
+    // Wire roundtrip for server envelope
+    let mut buf = BytesMut::new();
+    encode_frame(&server_env, &mut buf).unwrap();
+    let decoded_server: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_server.request_id, saved_request_id);
+    let Some(v3::server_envelope::Payload::ScrollbackChunk(sc)) = decoded_server.payload else {
+        panic!("expected ScrollbackChunk payload");
+    };
+    assert_eq!(sc.runtime_id, uuid_to_bytes(runtime_id));
+    assert_eq!(sc.pane_id, uuid_to_bytes(pane_id));
+    assert_eq!(sc.offset, 0);
+    assert_eq!(sc.data.as_ref(), b"scrollback data");
+    assert!(sc.is_last);
+}
+
+#[test]
+fn v3_chunked_scrollback_paging_with_slice() {
+    let scrollback = b"ABCDEFGHIJKLMNOP";
+    let page_size: u32 = 4;
+    let mut offset: u64 = 0;
+    let mut collected = Vec::new();
+    let mut pages = 0_u32;
+
+    loop {
+        let capped = v3_scrollback::cap_limit(page_size);
+        let (data, is_last) = v3_scrollback::slice_scrollback(scrollback, offset, capped);
+        collected.extend_from_slice(&data);
+        offset += data.len() as u64;
+        pages += 1;
+        if is_last {
+            break;
+        }
+    }
+
+    assert_eq!(collected, scrollback);
+    assert_eq!(pages, 4);
+}
+
+#[test]
+fn v3_chunked_scrollback_capability_gating() {
+    // With OPT_CHUNKED_SCROLLBACK negotiated
+    let caps_with = vec![
+        v3::Capability::CoreRuntimeLifecycle as i32,
+        v3::Capability::OptChunkedScrollback as i32,
+    ];
+    assert!(v3_scrollback::is_supported(&caps_with));
+
+    // Without OPT_CHUNKED_SCROLLBACK
+    let caps_without = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+    assert!(!v3_scrollback::is_supported(&caps_without));
+
+    // Server returns error when capability not negotiated
+    let err = rttx_proto::v3_error::build_error(
+        v3::ErrorKind::UnsupportedCapability,
+        "OPT_CHUNKED_SCROLLBACK not negotiated",
+        "GetScrollback",
+    );
+    let env = rttx_proto::v3_error::build_error_response(1, err);
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    let Some(v3::server_envelope::Payload::Error(e)) = decoded.payload else {
+        panic!("expected Error payload");
+    };
+    assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
+    assert_eq!(e.operation, "GetScrollback");
+}
