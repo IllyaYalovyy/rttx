@@ -104,6 +104,128 @@ fn v3_protocol_error_frames_as_bare_and_in_envelope() {
     };
 }
 
+// ── V3 envelope correlation integration tests ──
+
+use rttx_proto::v3_envelope;
+
+#[test]
+fn v3_envelope_request_response_correlation_roundtrip() {
+    let id_gen = v3_envelope::RequestIdGenerator::new();
+    let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
+
+    // Client sends CreateRuntime (request/response command)
+    let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        name: "correlation-test".into(),
+        policy: v3::RuntimePolicy::Persistent as i32,
+    });
+    let client_env = v3_envelope::build_client_envelope(&id_gen, cmd);
+    assert_ne!(client_env.request_id, 0);
+    let saved_request_id = client_env.request_id;
+
+    // Wire roundtrip for client envelope
+    let mut buf = BytesMut::new();
+    encode_frame(&client_env, &mut buf).unwrap();
+    let decoded_client: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_client.request_id, saved_request_id);
+
+    // Server builds response echoing request_id
+    let response = v3_envelope::build_response_envelope(
+        decoded_client.request_id,
+        v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+            runtime_id: runtime_id.clone(),
+            runtime_revision: 1,
+        }),
+    );
+    assert_eq!(response.request_id, saved_request_id);
+    assert!(!v3_envelope::is_push_event(&response));
+
+    // Wire roundtrip for server response
+    let mut buf = BytesMut::new();
+    encode_frame(&response, &mut buf).unwrap();
+    let decoded_response: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_response.request_id, saved_request_id);
+
+    // Server sends a push event (OutputDelta)
+    let push = v3_envelope::build_push_envelope(v3::server_envelope::Payload::OutputDelta(
+        v3::OutputDelta {
+            runtime_id,
+            pane_id: uuid_to_bytes(uuid::Uuid::new_v4()),
+            data: bytes::Bytes::from_static(b"hello"),
+            pane_output_seq: 1,
+        },
+    ));
+    assert!(v3_envelope::is_push_event(&push));
+
+    let mut buf = BytesMut::new();
+    encode_frame(&push, &mut buf).unwrap();
+    let decoded_push: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_push.request_id, 0);
+    assert!(v3_envelope::is_push_event(&decoded_push));
+}
+
+#[test]
+fn v3_envelope_fire_and_forget_skips_id_allocation() {
+    let id_gen = v3_envelope::RequestIdGenerator::new();
+
+    // Fire-and-forget: TerminalInput
+    let cmd = v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+        runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
+        pane_id: uuid_to_bytes(uuid::Uuid::new_v4()),
+        kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+            data: bytes::Bytes::from_static(b"ls\n"),
+        })),
+    });
+    let env = v3_envelope::build_client_envelope(&id_gen, cmd);
+    assert_eq!(env.request_id, 0);
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.request_id, 0);
+
+    // Next request/response command still gets ID 1
+    let cmd = v3::client_envelope::Command::Ping(v3::Ping { nonce: 99 });
+    let env = v3_envelope::build_client_envelope(&id_gen, cmd);
+    assert_eq!(env.request_id, 1);
+}
+
+#[test]
+fn v3_envelope_mixed_command_sequence() {
+    let id_gen = v3_envelope::RequestIdGenerator::new();
+    let rt = uuid_to_bytes(uuid::Uuid::new_v4());
+    let pn = uuid_to_bytes(uuid::Uuid::new_v4());
+
+    // Sequence: CreateRuntime(1), TerminalInput(0), Ping(2), ResizePane(0), ClosePane(3)
+    let commands: Vec<v3::client_envelope::Command> = vec![
+        v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            name: "seq".into(),
+            policy: v3::RuntimePolicy::Ephemeral as i32,
+        }),
+        v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            runtime_id: rt.clone(),
+            pane_id: pn.clone(),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"x"),
+            })),
+        }),
+        v3::client_envelope::Command::Ping(v3::Ping { nonce: 1 }),
+        v3::client_envelope::Command::ResizePane(v3::ResizePane {
+            runtime_id: rt.clone(),
+            pane_id: pn.clone(),
+            cols: 80,
+            rows: 24,
+        }),
+        v3::client_envelope::Command::ClosePane(v3::ClosePane { runtime_id: rt, pane_id: pn }),
+    ];
+    let expected_ids: Vec<u64> = vec![1, 0, 2, 0, 3];
+
+    for (cmd, expected_id) in commands.into_iter().zip(expected_ids) {
+        let env = v3_envelope::build_client_envelope(&id_gen, cmd);
+        assert_eq!(env.request_id, expected_id);
+    }
+}
+
 // ── V3 handshake integration tests ──
 
 use rttx_proto::v3_handshake;
