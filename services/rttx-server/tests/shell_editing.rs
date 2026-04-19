@@ -238,7 +238,7 @@ async fn attach_and_collect_prompt(
     pane_id: &[u8],
 ) -> String {
     let mut output = attach_snapshot_bytes(client, runtime_id, pane_id).await.to_vec();
-    if String::from_utf8_lossy(&output).contains(PROMPT) {
+    if normalize_scrollback(&output).ends_with(PROMPT) {
         return normalize_scrollback(&output);
     }
 
@@ -248,7 +248,7 @@ async fn attach_and_collect_prompt(
             && let Some(proto::server_message::Msg::Delta(delta)) = message.msg
         {
             output.extend(&delta.data);
-            if String::from_utf8_lossy(&output).contains(PROMPT) {
+            if normalize_scrollback(&output).ends_with(PROMPT) {
                 return normalize_scrollback(&output);
             }
         }

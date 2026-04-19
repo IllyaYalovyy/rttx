@@ -103,3 +103,138 @@ fn v3_protocol_error_frames_as_bare_and_in_envelope() {
         panic!("expected ProtocolError");
     };
 }
+
+// ── V3 handshake integration tests ──
+
+use rttx_proto::v3_handshake;
+
+#[test]
+fn v3_handshake_happy_path() {
+    let client_id = uuid::Uuid::new_v4();
+    let server_id = uuid::Uuid::new_v4();
+
+    let mut caps = v3_handshake::CORE_CAPABILITIES.to_vec();
+    caps.push(v3::Capability::OptDiagnostics);
+    let client_hello = v3_handshake::build_client_hello(client_id, "rttx", "0.4.0", &caps);
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&client_hello, &mut buf).unwrap();
+    let decoded_hello: v3::ClientHello = decode_frame(&mut buf).unwrap();
+
+    // Server negotiates version
+    let negotiated = v3_handshake::negotiate_version(
+        decoded_hello.min_protocol_version,
+        decoded_hello.max_protocol_version,
+        v3_handshake::V3_PROTOCOL_VERSION,
+        v3_handshake::V3_PROTOCOL_VERSION,
+    )
+    .unwrap();
+    assert_eq!(negotiated, 3);
+
+    // Server builds hello with core caps only
+    let server_hello = v3_handshake::build_server_hello(
+        server_id,
+        "0.4.0",
+        negotiated,
+        v3_handshake::CORE_CAPABILITIES,
+    );
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&server_hello, &mut buf).unwrap();
+    let decoded_server: v3::ServerHello = decode_frame(&mut buf).unwrap();
+
+    // Client validates server capabilities
+    assert!(v3_handshake::validate_server_capabilities(&decoded_server.capabilities).is_ok());
+
+    // Effective set is intersection (core only, since server has no optional)
+    let effective = v3_handshake::effective_capabilities(
+        &client_hello.capabilities,
+        &decoded_server.capabilities,
+    );
+    assert_eq!(effective.len(), 6);
+    assert!(!effective.contains(&(v3::Capability::OptDiagnostics as i32)));
+}
+
+#[test]
+fn v3_handshake_version_mismatch_sends_bare_error() {
+    let client_hello = v3_handshake::build_client_hello(
+        uuid::Uuid::new_v4(),
+        "rttx",
+        "0.5.0",
+        v3_handshake::CORE_CAPABILITIES,
+    );
+
+    // Simulate a future server that only supports v5+
+    let result = v3_handshake::negotiate_version(
+        client_hello.min_protocol_version,
+        client_hello.max_protocol_version,
+        5,
+        5,
+    );
+    let err = result.unwrap_err();
+
+    // Error frames as bare message (not in envelope)
+    let mut buf = BytesMut::new();
+    encode_frame(&err, &mut buf).unwrap();
+    let decoded: v3::ProtocolError = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.kind, v3::ErrorKind::ProtocolMismatch as i32);
+    assert!(decoded.user_action_required);
+}
+
+#[test]
+fn v3_handshake_missing_core_capability_rejected() {
+    let server_id = uuid::Uuid::new_v4();
+    // Server missing CORE_FOCUS_EVENTS
+    let incomplete_caps: Vec<v3::Capability> = v3_handshake::CORE_CAPABILITIES
+        .iter()
+        .filter(|c| **c != v3::Capability::CoreFocusEvents)
+        .copied()
+        .collect();
+    let server_hello = v3_handshake::build_server_hello(server_id, "0.3.0", 3, &incomplete_caps);
+
+    let result = v3_handshake::validate_server_capabilities(&server_hello.capabilities);
+    let missing = result.unwrap_err();
+    assert_eq!(missing, vec![v3::Capability::CoreFocusEvents]);
+
+    // Client builds error for the missing capabilities
+    let err = v3_handshake::missing_capabilities_error(&missing);
+    assert_eq!(err.kind, v3::ErrorKind::UnsupportedCapability as i32);
+    assert!(err.message.contains("CORE_FOCUS_EVENTS"));
+
+    // Error frames as bare message
+    let mut buf = BytesMut::new();
+    encode_frame(&err, &mut buf).unwrap();
+    let decoded: v3::ProtocolError = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.kind, v3::ErrorKind::UnsupportedCapability as i32);
+}
+
+#[test]
+fn v3_handshake_full_roundtrip_with_optional_capabilities() {
+    let client_id = uuid::Uuid::new_v4();
+    let server_id = uuid::Uuid::new_v4();
+
+    // Both sides advertise all core + different optional sets
+    let mut client_caps = v3_handshake::CORE_CAPABILITIES.to_vec();
+    client_caps.push(v3::Capability::OptDiagnostics);
+    client_caps.push(v3::Capability::OptResync);
+
+    let mut server_caps = v3_handshake::CORE_CAPABILITIES.to_vec();
+    server_caps.push(v3::Capability::OptResync);
+    server_caps.push(v3::Capability::OptChunkedScrollback);
+
+    let client_hello = v3_handshake::build_client_hello(client_id, "rttx", "0.4.0", &client_caps);
+    let server_hello = v3_handshake::build_server_hello(server_id, "0.4.0", 3, &server_caps);
+
+    let effective = v3_handshake::effective_capabilities(
+        &client_hello.capabilities,
+        &server_hello.capabilities,
+    );
+
+    // Should have 6 core + OPT_RESYNC (shared), not OPT_DIAGNOSTICS or OPT_CHUNKED_SCROLLBACK
+    assert_eq!(effective.len(), 7);
+    assert!(effective.contains(&(v3::Capability::OptResync as i32)));
+    assert!(!effective.contains(&(v3::Capability::OptDiagnostics as i32)));
+    assert!(!effective.contains(&(v3::Capability::OptChunkedScrollback as i32)));
+}
