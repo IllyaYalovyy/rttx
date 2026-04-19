@@ -388,8 +388,8 @@ impl WindowState {
 mod tests {
     use super::*;
     use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
-    use crate::workspace::recovery::{PaneSource, PaneTarget, StartupStep};
     use crate::test_helpers::{hsplit, term};
+    use crate::workspace::recovery::{PaneSource, PaneTarget, StartupStep};
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 

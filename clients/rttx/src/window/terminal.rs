@@ -291,8 +291,9 @@ impl Window {
             let source_cwd =
                 terminal_cwd.or_else(|| state.workspaces[idx].layout.terminal_cwd(terminal_uuid));
 
-            if let Some((mut new_layout, new_terminal_uuid)) =
-                state.workspaces[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
+            if let Some((mut new_layout, new_terminal_uuid)) = state.workspaces[idx]
+                .layout
+                .split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
                 if let Some(cwd) = &source_cwd {
                     new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd.clone()));
@@ -571,7 +572,11 @@ impl Window {
         true
     }
 
-    pub(super) fn rebuild_session_content(&self, session_uuid: &str, session_state: &WorkspaceState) {
+    pub(super) fn rebuild_session_content(
+        &self,
+        session_uuid: &str,
+        session_state: &WorkspaceState,
+    ) {
         let imp = self.imp();
 
         let saved_positions = self.save_session_scroll_positions(session_state);

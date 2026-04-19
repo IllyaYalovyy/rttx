@@ -11,8 +11,10 @@ impl Window {
 
     pub(super) fn forward_input(&self, source_uuid: &str, text: &str) {
         let state = self.imp().state.borrow();
-        let session =
-            state.workspaces.iter().find(|s| s.input_sync && s.layout.contains_terminal(source_uuid));
+        let session = state
+            .workspaces
+            .iter()
+            .find(|s| s.input_sync && s.layout.contains_terminal(source_uuid));
         let Some(session) = session else { return };
         let uuids = session.layout.terminal_uuids();
         drop(state);

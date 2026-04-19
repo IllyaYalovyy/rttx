@@ -18,14 +18,14 @@ use crate::runtime::{
     WorkspacePolicy, connection_icon, pane_description, present_connection_status,
     present_workspace_actions, workspace_connection_summary,
 };
-use crate::workspace::{
-    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, WorkspaceColor,
-    WorkspaceState, SplitOrientation, StartupStep, WindowState,
-};
 use crate::sidebar::WorkspaceRow;
 use crate::terminal::handle::TerminalHandle;
 use crate::terminal::persistent_widget::PersistentPaneView;
 use crate::terminal::widget::TerminalWidget;
+use crate::workspace::{
+    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, SplitOrientation,
+    StartupStep, WindowState, WorkspaceColor, WorkspaceState,
+};
 use crate::workspace_state::{EndpointEventTransition, WorkspacePaneRestore};
 use std::collections::HashMap;
 
@@ -364,7 +364,8 @@ impl Window {
 
     fn load_state(&self) {
         let state = workspace::load_window_state();
-        let active_index = state.active_workspace_index.min(state.workspaces.len().saturating_sub(1));
+        let active_index =
+            state.active_workspace_index.min(state.workspaces.len().saturating_sub(1));
         let is_maximized = state.is_maximized;
         let width = state.width;
         let height = state.height;
@@ -858,7 +859,8 @@ impl Window {
     fn focus_session_terminal(&self, session_uuid: &str) {
         let target = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.workspaces.iter().find(|session| session.uuid == session_uuid)
+            let Some(session) =
+                state.workspaces.iter().find(|session| session.uuid == session_uuid)
             else {
                 return;
             };

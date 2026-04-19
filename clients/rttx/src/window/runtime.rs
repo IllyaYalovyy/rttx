@@ -189,10 +189,17 @@ impl Window {
         let imp = self.imp();
         let count = imp.state.borrow().workspaces.len() + 1;
         let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
-        let name =
-            crate::workspace::state::workspace_display_name(&endpoint, initial_cwd.as_deref(), count);
-        let mut session_state =
-            WorkspaceState::new_managed_remote(name, host, WorkspacePolicy::Persistent, initial_cwd);
+        let name = crate::workspace::state::workspace_display_name(
+            &endpoint,
+            initial_cwd.as_deref(),
+            count,
+        );
+        let mut session_state = WorkspaceState::new_managed_remote(
+            name,
+            host,
+            WorkspacePolicy::Persistent,
+            initial_cwd,
+        );
         session_state.color = self.next_session_color();
         imp.state.borrow_mut().workspaces.push(session_state.clone());
         self.build_session(&session_state, false);
@@ -796,7 +803,8 @@ impl Window {
     ) {
         let terminal_uuids = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.workspaces.iter().find(|session| session.uuid == workspace_id)
+            let Some(session) =
+                state.workspaces.iter().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };
@@ -938,7 +946,8 @@ impl Window {
     pub(super) fn show_edit_workspace_connection_dialog(&self, workspace_id: &str) {
         let current_host = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.workspaces.iter().find(|session| session.uuid == workspace_id)
+            let Some(session) =
+                state.workspaces.iter().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };

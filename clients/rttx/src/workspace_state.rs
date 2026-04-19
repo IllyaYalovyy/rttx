@@ -1,6 +1,6 @@
 use crate::daemon_bridge::EndpointEvent;
 use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
-use crate::workspace::{LayoutNode, PaneRecovery, WorkspaceState, SplitOrientation, WindowState};
+use crate::workspace::{LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceState};
 use rttx_proto::proto;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -609,8 +609,8 @@ mod tests {
     use crate::runtime::ConnectionStatus;
     use crate::runtime::WorkspacePolicy;
     use crate::test_helpers::{
-        hsplit, managed_session, managed_session_with_runtime, workspace, term, term_full,
-        window_state,
+        hsplit, managed_session, managed_session_with_runtime, term, term_full, window_state,
+        workspace,
     };
 
     fn pane_snapshot(

@@ -10,12 +10,12 @@ use crate::ipc::{ClientConnection, ClientConnectionReader, ClientConnectionWrite
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
-use crate::screen::{restart_safe_scrollback, strip_client_queries};
-use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
 use crate::runtime::{
-    AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Runtime,
+    AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, Runtime, RuntimePolicy,
     TerminationReason,
 };
+use crate::screen::{restart_safe_scrollback, strip_client_queries};
+use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
 use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -325,8 +325,7 @@ impl Server {
         let Some(rt) = self.runtimes.get(&runtime_id) else {
             return Vec::new();
         };
-        rt
-            .attached_clients
+        rt.attached_clients
             .keys()
             .filter_map(|&cid| self.client_senders.get(&cid).map(|s| (cid, s.clone())))
             .collect()

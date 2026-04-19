@@ -19,7 +19,12 @@ impl Window {
     pub(super) fn confirm_close_others(&self, keep_uuid: &str) {
         let other_uuids: Vec<String> = {
             let state = self.imp().state.borrow();
-            state.workspaces.iter().filter(|s| s.uuid != keep_uuid).map(|s| s.uuid.clone()).collect()
+            state
+                .workspaces
+                .iter()
+                .filter(|s| s.uuid != keep_uuid)
+                .map(|s| s.uuid.clone())
+                .collect()
         };
         if other_uuids.is_empty() {
             return;
@@ -494,7 +499,8 @@ impl Window {
     pub(super) fn show_rename_runtime_popover(&self, row: &WorkspaceRow, session_uuid: &str) {
         let current_name = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.workspaces.iter().find(|session| session.uuid == session_uuid)
+            let Some(session) =
+                state.workspaces.iter().find(|session| session.uuid == session_uuid)
             else {
                 return;
             };

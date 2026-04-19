@@ -5,8 +5,8 @@
 use crate::color_scheme::ColorScheme;
 use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 use crate::workspace::{
-    LayoutNode, PaneRecovery, WorkspaceColor, WorkspaceMode, WorkspaceState, SplitOrientation,
-    WindowState,
+    LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceColor, WorkspaceMode,
+    WorkspaceState,
 };
 use std::path::{Path, PathBuf};
 

@@ -409,8 +409,11 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
     };
 
     // Simulate creating a new workspace (adds one session).
-    let new_session =
-        WorkspaceState::new_managed_local("New Workspace".into(), WorkspacePolicy::Persistent, None);
+    let new_session = WorkspaceState::new_managed_local(
+        "New Workspace".into(),
+        WorkspacePolicy::Persistent,
+        None,
+    );
     state.workspaces.push(new_session);
 
     assert_eq!(state.workspaces.len(), 2, "should have exactly 2 sessions after create");
@@ -454,7 +457,11 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
         1,
         "inventory recovery should find the unrelated runtime"
     );
-    assert_eq!(state.workspaces.len(), 3, "state should have 3 sessions: existing + new + recovered");
+    assert_eq!(
+        state.workspaces.len(),
+        3,
+        "state should have 3 sessions: existing + new + recovered"
+    );
 }
 
 /// Dismissed runtime IDs must persist through save/load so closed
@@ -1171,8 +1178,11 @@ fn rotate_layout_persists_through_serialization() {
     session.uuid = "s1".into();
     session.layout = layout;
 
-    let mut state =
-        WindowState { active_workspace_index: 0, workspaces: vec![session], ..WindowState::default() };
+    let mut state = WindowState {
+        active_workspace_index: 0,
+        workspaces: vec![session],
+        ..WindowState::default()
+    };
 
     state.workspaces[0].layout = state.workspaces[0].layout.rotated();
 
@@ -1207,8 +1217,11 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     session.runtime.bind_runtime_pane("pane-3", "daemon-3");
     session.sync_legacy_mode_from_runtime();
 
-    let state =
-        WindowState { active_workspace_index: 0, workspaces: vec![session], ..WindowState::default() };
+    let state = WindowState {
+        active_workspace_index: 0,
+        workspaces: vec![session],
+        ..WindowState::default()
+    };
 
     let targets = state.input_sync_targets("pane-1");
     assert_eq!(targets.len(), 2);

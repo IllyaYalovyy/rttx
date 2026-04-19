@@ -3,8 +3,8 @@
 //! Verifies that legacy, minimal, and forward-compatible JSON state
 //! loads with predictable safe defaults.
 
+use rttx_server::runtime::{PersistedRuntime, Runtime, RuntimePolicy};
 use rttx_server::serialization::{ServerState, load_state, write_state_atomic};
-use rttx_server::runtime::{PersistedRuntime, RuntimePolicy, Runtime};
 use tempfile::TempDir;
 
 fn load_json(json: &str) -> ServerState {

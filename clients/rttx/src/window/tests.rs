@@ -46,7 +46,8 @@ fn session_row_for_uuid(window: &Window, session_uuid: &str) -> WorkspaceRow {
     let list = &window.imp().sidebar_list;
     let mut idx = 0;
     while let Some(row) = list.row_at_index(idx) {
-        if let Some(session_row) = row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
+        if let Some(session_row) =
+            row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
             && session_row.uuid() == session_uuid
         {
             return session_row;
@@ -933,7 +934,12 @@ fn split_rebuild_starts_new_panes_evenly() {
 
     let t2_uuid = {
         let state = window.imp().state.borrow();
-        state.workspaces[0].layout.terminal_uuids().into_iter().find(|uuid| uuid != &t1_uuid).unwrap()
+        state.workspaces[0]
+            .layout
+            .terminal_uuids()
+            .into_iter()
+            .find(|uuid| uuid != &t1_uuid)
+            .unwrap()
     };
     window.split_terminal(&t2_uuid, SplitOrientation::Vertical);
 
@@ -1236,7 +1242,12 @@ fn save_and_restart_restores_nested_user_resized_pane_ratios() {
 
     let t2_uuid = {
         let state = first_window.imp().state.borrow();
-        state.workspaces[0].layout.terminal_uuids().into_iter().find(|uuid| uuid != &t1_uuid).unwrap()
+        state.workspaces[0]
+            .layout
+            .terminal_uuids()
+            .into_iter()
+            .find(|uuid| uuid != &t1_uuid)
+            .unwrap()
     };
 
     first_window.split_terminal(&t2_uuid, SplitOrientation::Vertical);
@@ -1612,7 +1623,12 @@ fn nested_split_preserves_root_and_unaffected_terminals() {
 
     let t2_uuid = {
         let state = window.imp().state.borrow();
-        state.workspaces[0].layout.terminal_uuids().into_iter().find(|uuid| uuid != &t1_uuid).unwrap()
+        state.workspaces[0]
+            .layout
+            .terminal_uuids()
+            .into_iter()
+            .find(|uuid| uuid != &t1_uuid)
+            .unwrap()
     };
 
     let root_before = window
@@ -1803,9 +1819,10 @@ fn split_spawns_shell_in_new_pane() {
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn background_session_detection_identifies_foreground_terminal() {
-    use crate::test_helpers::{workspace, term, window_state};
+    use crate::test_helpers::{term, window_state, workspace};
 
-    let state = window_state(vec![workspace("s1", "A", term("t1")), workspace("s2", "B", term("t2"))]);
+    let state =
+        window_state(vec![workspace("s1", "A", term("t1")), workspace("s2", "B", term("t2"))]);
 
     assert!(
         !terminal_is_in_background_session("t1", Some("s1"), &state),
@@ -1824,7 +1841,7 @@ fn background_session_detection_identifies_foreground_terminal() {
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn background_session_detection_unknown_terminal_is_background() {
-    use crate::test_helpers::{workspace, term, window_state};
+    use crate::test_helpers::{term, window_state, workspace};
 
     let state = window_state(vec![workspace("s1", "A", term("t1"))]);
 

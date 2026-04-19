@@ -90,7 +90,7 @@ fn preferences_unknown_fields_are_ignored() {
 #[test]
 fn preferences_input_sync_persists_in_session_state() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::workspace::{LayoutNode, WorkspaceColor, WorkspaceMode, WorkspaceState, WindowState};
+    use rttx::workspace::{LayoutNode, WindowState, WorkspaceColor, WorkspaceMode, WorkspaceState};
 
     let state = WindowState {
         workspaces: vec![WorkspaceState {
@@ -143,7 +143,7 @@ fn preferences_backward_compat_missing_input_sync() {
 #[test]
 fn custom_title_persists_in_layout() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::workspace::{LayoutNode, WorkspaceColor, WorkspaceMode, WorkspaceState, WindowState};
+    use rttx::workspace::{LayoutNode, WindowState, WorkspaceColor, WorkspaceMode, WorkspaceState};
 
     let state = WindowState {
         workspaces: vec![WorkspaceState {
@@ -191,7 +191,8 @@ fn custom_title_backward_compat_null() {
         "is_maximized": false
     }"#;
     let state: rttx::workspace::WindowState = serde_json::from_str(json).unwrap();
-    if let rttx::workspace::LayoutNode::Terminal { custom_title, .. } = &state.workspaces[0].layout {
+    if let rttx::workspace::LayoutNode::Terminal { custom_title, .. } = &state.workspaces[0].layout
+    {
         assert_eq!(*custom_title, None);
     }
 }

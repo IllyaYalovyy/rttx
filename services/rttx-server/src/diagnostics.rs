@@ -59,12 +59,7 @@ impl fmt::Display for DiagnosticsReport {
         if !self.runtimes.is_empty() {
             writeln!(f)?;
             for rt in &self.runtimes {
-                writeln!(
-                    f,
-                    "  Runtime \"{}\" ({}):",
-                    rt.name,
-                    &rt.id[..8.min(rt.id.len())]
-                )?;
+                writeln!(f, "  Runtime \"{}\" ({}):", rt.name, &rt.id[..8.min(rt.id.len())])?;
                 writeln!(
                     f,
                     "    Panes: {} active, {} exited",
