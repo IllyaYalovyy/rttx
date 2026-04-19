@@ -178,10 +178,7 @@ mod tests {
     fn get_diagnostics_envelope_contains_correct_command() {
         let id_gen = RequestIdGenerator::new();
         let env = build_get_diagnostics_envelope(&id_gen);
-        assert!(matches!(
-            env.command,
-            Some(v3::client_envelope::Command::GetDiagnostics(_))
-        ));
+        assert!(matches!(env.command, Some(v3::client_envelope::Command::GetDiagnostics(_))));
     }
 
     #[test]
@@ -228,8 +225,7 @@ mod tests {
         let r = rt();
         let p = pn();
         let pane = build_pane_diagnostics_info(p, 2048, 64, false);
-        let info =
-            build_runtime_diagnostics_info(r, "dev".into(), 2, 1, 10, 1, vec![pane.clone()]);
+        let info = build_runtime_diagnostics_info(r, "dev".into(), 2, 1, 10, 1, vec![pane.clone()]);
         assert_eq!(info.id, uuid_to_bytes(r));
         assert_eq!(info.name, "dev");
         assert_eq!(info.active_pane_count, 2);
@@ -249,8 +245,7 @@ mod tests {
     #[test]
     fn runtime_diagnostics_info_wire_roundtrip() {
         let pane = build_pane_diagnostics_info(pn(), 8192, 256, true);
-        let info =
-            build_runtime_diagnostics_info(rt(), "test-rt".into(), 3, 2, 5, 2, vec![pane]);
+        let info = build_runtime_diagnostics_info(rt(), "test-rt".into(), 3, 2, 5, 2, vec![pane]);
         let mut buf = BytesMut::new();
         encode_frame(&info, &mut buf).unwrap();
         let decoded: v3::RuntimeDiagnosticsInfo = decode_frame(&mut buf).unwrap();
@@ -262,8 +257,7 @@ mod tests {
     #[test]
     fn diagnostics_report_populates_all_fields() {
         let pane = build_pane_diagnostics_info(pn(), 4096, 128, false);
-        let runtime =
-            build_runtime_diagnostics_info(rt(), "ws1".into(), 1, 0, 3, 1, vec![pane]);
+        let runtime = build_runtime_diagnostics_info(rt(), "ws1".into(), 1, 0, 3, 1, vec![pane]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             runtime_count: 1,
             total_pane_count: 1,
@@ -454,10 +448,7 @@ mod tests {
         assert_ne!(saved_request_id, 0);
 
         // Verify it's a request/response command
-        assert!(matches!(
-            req_env.command,
-            Some(v3::client_envelope::Command::GetDiagnostics(_))
-        ));
+        assert!(matches!(req_env.command, Some(v3::client_envelope::Command::GetDiagnostics(_))));
 
         // 2. Server builds a report with multiple runtimes and panes
         let p1 = build_pane_diagnostics_info(pn(), 4096, 128, false);
