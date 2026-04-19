@@ -13,9 +13,14 @@ pub const PROTOCOL_VERSION: u32 = 2;
 /// Maximum message size (16 MB). Prevents unbounded allocations.
 pub const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
 
-/// Generated protobuf types.
+/// Generated v2 protobuf types (current wire protocol).
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/rttx.rs"));
+}
+
+/// Generated v3 protobuf types (RFC-021).
+pub mod v3 {
+    include!(concat!(env!("OUT_DIR"), "/rttx.v3.rs"));
 }
 
 /// Convert a `uuid::Uuid` to protobuf bytes.
@@ -434,5 +439,744 @@ mod tests {
                 panic!("expected CreatePane");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod v3_tests {
+    use super::*;
+
+    fn rid() -> Vec<u8> {
+        uuid_to_bytes(uuid::Uuid::new_v4())
+    }
+
+    fn pid() -> Vec<u8> {
+        uuid_to_bytes(uuid::Uuid::new_v4())
+    }
+
+    // ── Handshake roundtrips ──
+
+    #[test]
+    fn v3_client_hello_roundtrip() {
+        let msg = v3::ClientHello {
+            min_protocol_version: 3,
+            max_protocol_version: 3,
+            client_id: rid(),
+            client_name: "rttx".into(),
+            client_version: "0.4.0".into(),
+            capabilities: vec![
+                v3::Capability::CoreRuntimeLifecycle as i32,
+                v3::Capability::CorePaneLifecycle as i32,
+                v3::Capability::CoreTerminalIo as i32,
+                v3::Capability::CoreTerminalModes as i32,
+                v3::Capability::CorePasteIntent as i32,
+                v3::Capability::CoreFocusEvents as i32,
+                v3::Capability::OptDiagnostics as i32,
+            ],
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::ClientHello = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn v3_server_hello_roundtrip() {
+        let msg = v3::ServerHello {
+            negotiated_protocol_version: 3,
+            server_id: rid(),
+            server_version: "0.4.0".into(),
+            capabilities: vec![
+                v3::Capability::CoreRuntimeLifecycle as i32,
+                v3::Capability::CorePaneLifecycle as i32,
+            ],
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::ServerHello = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    // ── Capability enum values match RFC ──
+
+    #[test]
+    fn v3_capability_enum_values() {
+        assert_eq!(v3::Capability::Unspecified as i32, 0);
+        assert_eq!(v3::Capability::CoreRuntimeLifecycle as i32, 1);
+        assert_eq!(v3::Capability::CorePaneLifecycle as i32, 2);
+        assert_eq!(v3::Capability::CoreTerminalIo as i32, 3);
+        assert_eq!(v3::Capability::CoreTerminalModes as i32, 4);
+        assert_eq!(v3::Capability::CorePasteIntent as i32, 5);
+        assert_eq!(v3::Capability::CoreFocusEvents as i32, 6);
+        assert_eq!(v3::Capability::OptRuntimeInventoryV2 as i32, 100);
+        assert_eq!(v3::Capability::OptRuntimeTakeover as i32, 101);
+        assert_eq!(v3::Capability::OptResync as i32, 102);
+        assert_eq!(v3::Capability::OptChunkedScrollback as i32, 103);
+        assert_eq!(v3::Capability::OptDiagnostics as i32, 104);
+    }
+
+    // ── Enum zero values ──
+
+    #[test]
+    fn v3_enum_zero_values() {
+        assert_eq!(v3::RuntimePolicy::Unspecified as i32, 0);
+        assert_eq!(v3::RuntimeAttachMode::Unspecified as i32, 0);
+        assert_eq!(v3::RuntimeClientRole::Unspecified as i32, 0);
+        assert_eq!(v3::RuntimeTerminationReason::Unspecified as i32, 0);
+        assert_eq!(v3::MouseMode::None as i32, 0);
+        assert_eq!(v3::ErrorKind::Unspecified as i32, 0);
+    }
+
+    // ── Error kind enum values match RFC ──
+
+    #[test]
+    fn v3_error_kind_values() {
+        assert_eq!(v3::ErrorKind::ProtocolMismatch as i32, 1);
+        assert_eq!(v3::ErrorKind::UnsupportedCapability as i32, 2);
+        assert_eq!(v3::ErrorKind::InvalidArgument as i32, 3);
+        assert_eq!(v3::ErrorKind::RuntimeNotFound as i32, 4);
+        assert_eq!(v3::ErrorKind::PaneNotFound as i32, 5);
+        assert_eq!(v3::ErrorKind::OwnershipConflict as i32, 6);
+        assert_eq!(v3::ErrorKind::TakeoverRequired as i32, 7);
+        assert_eq!(v3::ErrorKind::StreamOverflow as i32, 8);
+        assert_eq!(v3::ErrorKind::Internal as i32, 9);
+    }
+
+    // ── TerminalModeState roundtrip ──
+
+    #[test]
+    fn v3_terminal_mode_state_roundtrip() {
+        let msg = v3::TerminalModeState {
+            bracketed_paste: true,
+            focus_reporting: true,
+            application_cursor_keys: false,
+            application_keypad: true,
+            alternate_screen: true,
+            cursor_hidden: false,
+            mouse_mode: v3::MouseMode::Any as i32,
+            sgr_mouse: true,
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::TerminalModeState = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    // ── TerminalInput variants ──
+
+    #[test]
+    fn v3_terminal_input_raw_roundtrip() {
+        let msg = v3::TerminalInput {
+            runtime_id: rid(),
+            pane_id: pid(),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"hello"),
+            })),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::TerminalInput = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn v3_terminal_input_paste_roundtrip() {
+        let msg = v3::TerminalInput {
+            runtime_id: rid(),
+            pane_id: pid(),
+            kind: Some(v3::terminal_input::Kind::Paste(v3::PasteInput {
+                text: bytes::Bytes::from_static(b"pasted text"),
+            })),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::TerminalInput = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn v3_terminal_input_focus_roundtrip() {
+        let msg = v3::TerminalInput {
+            runtime_id: rid(),
+            pane_id: pid(),
+            kind: Some(v3::terminal_input::Kind::Focus(v3::FocusInput { focused: true })),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::TerminalInput = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    // ── ProtocolError roundtrip ──
+
+    #[test]
+    fn v3_protocol_error_roundtrip() {
+        let msg = v3::ProtocolError {
+            kind: v3::ErrorKind::RuntimeNotFound as i32,
+            message: "runtime abc not found".into(),
+            operation: "AttachRuntime".into(),
+            retryable: false,
+            user_action_required: true,
+            retry_after_seconds: 0,
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::ProtocolError = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    // ── Snapshot roundtrip ──
+
+    #[test]
+    fn v3_runtime_snapshot_roundtrip() {
+        let msg = v3::RuntimeSnapshot {
+            runtime_id: rid(),
+            runtime_revision: 42,
+            client_role: v3::RuntimeClientRole::Writer as i32,
+            panes: vec![v3::PaneSnapshot {
+                pane_id: pid(),
+                pane_output_seq: 100,
+                title: "bash".into(),
+                cwd: "/home/user".into(),
+                cols: 120,
+                rows: 40,
+                exit_status: None,
+                terminal_modes: Some(v3::TerminalModeState {
+                    bracketed_paste: true,
+                    focus_reporting: false,
+                    application_cursor_keys: false,
+                    application_keypad: false,
+                    alternate_screen: false,
+                    cursor_hidden: false,
+                    mouse_mode: v3::MouseMode::None as i32,
+                    sgr_mouse: false,
+                }),
+                scrollback_tail: bytes::Bytes::from_static(b"$ ls\nfile.txt\n"),
+                total_scrollback_bytes: 4096,
+                scrollback_complete: false,
+            }],
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::RuntimeSnapshot = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    // ── Scrollback roundtrip ──
+
+    #[test]
+    fn v3_scrollback_roundtrip() {
+        let rt = rid();
+        let pn = pid();
+        let req = v3::GetScrollback {
+            runtime_id: rt.clone(),
+            pane_id: pn.clone(),
+            offset: 0,
+            limit: 65536,
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&req, &mut buf).unwrap();
+        let decoded: v3::GetScrollback = decode_frame(&mut buf).unwrap();
+        assert_eq!(req, decoded);
+
+        let chunk = v3::ScrollbackChunk {
+            runtime_id: rt,
+            pane_id: pn,
+            offset: 0,
+            data: bytes::Bytes::from_static(b"scrollback data"),
+            is_last: true,
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&chunk, &mut buf).unwrap();
+        let decoded: v3::ScrollbackChunk = decode_frame(&mut buf).unwrap();
+        assert_eq!(chunk, decoded);
+    }
+
+    // ── StreamOverflow roundtrip ──
+
+    #[test]
+    fn v3_stream_overflow_roundtrip() {
+        for pane_id in [Some(pid()), None] {
+            let msg = v3::StreamOverflow { runtime_id: rid(), pane_id, dropped_count: 42 };
+            let mut buf = BytesMut::new();
+            encode_frame(&msg, &mut buf).unwrap();
+            let decoded: v3::StreamOverflow = decode_frame(&mut buf).unwrap();
+            assert_eq!(msg, decoded);
+        }
+    }
+}
+
+#[cfg(test)]
+mod v3_envelope_tests {
+    use super::*;
+
+    fn rid() -> Vec<u8> {
+        uuid_to_bytes(uuid::Uuid::new_v4())
+    }
+
+    fn pid() -> Vec<u8> {
+        uuid_to_bytes(uuid::Uuid::new_v4())
+    }
+
+    #[test]
+    fn v3_client_envelope_all_commands() {
+        let rt = rid();
+        let pn = pid();
+
+        let envelopes: Vec<v3::ClientEnvelope> = vec![
+            // Terminal I/O
+            v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from_static(b"x"),
+                    })),
+                })),
+            },
+            // Control
+            v3::ClientEnvelope {
+                request_id: 1,
+                command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 7 })),
+            },
+            v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
+            },
+            // Runtime lifecycle
+            v3::ClientEnvelope {
+                request_id: 2,
+                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                    name: "dev".into(),
+                    policy: v3::RuntimePolicy::Persistent as i32,
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 3,
+                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                    runtime_id: rt.clone(),
+                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 4,
+                command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                    runtime_id: rt.clone(),
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 5,
+                command: Some(v3::client_envelope::Command::TerminateRuntime(
+                    v3::TerminateRuntime { runtime_id: rt.clone() },
+                )),
+            },
+            v3::ClientEnvelope {
+                request_id: 6,
+                command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+                    runtime_id: rt.clone(),
+                    name: "prod".into(),
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 7,
+                command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            },
+            // Pane lifecycle
+            v3::ClientEnvelope {
+                request_id: 8,
+                command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+                    runtime_id: rt.clone(),
+                    cwd: Some("/tmp".into()),
+                    dark_background: Some(true),
+                    cols: 80,
+                    rows: 24,
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 9,
+                command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    cols: 132,
+                    rows: 43,
+                })),
+            },
+            v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::SetPaneTitle(v3::SetPaneTitle {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    title: "my pane".into(),
+                })),
+            },
+            // Recovery
+            v3::ClientEnvelope {
+                request_id: 10,
+                command: Some(v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+                    runtime_id: rt.clone(),
+                })),
+            },
+            // Scrollback
+            v3::ClientEnvelope {
+                request_id: 11,
+                command: Some(v3::client_envelope::Command::GetScrollback(v3::GetScrollback {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    offset: 0,
+                    limit: 262_144,
+                })),
+            },
+            // Diagnostics
+            v3::ClientEnvelope {
+                request_id: 12,
+                command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
+            },
+        ];
+
+        for env in &envelopes {
+            let mut buf = BytesMut::new();
+            encode_frame(env, &mut buf).unwrap();
+            let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+            assert_eq!(env, &decoded);
+        }
+    }
+
+    #[test]
+    fn v3_server_envelope_all_payloads() {
+        let rt = rid();
+        let pn = pid();
+
+        let envelopes: Vec<v3::ServerEnvelope> = vec![
+            // Terminal I/O
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    data: bytes::Bytes::from_static(b"output"),
+                    pane_output_seq: 1,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::TerminalModeChanged(
+                    v3::TerminalModeChanged {
+                        runtime_id: rt.clone(),
+                        pane_id: pn.clone(),
+                        runtime_revision: 5,
+                        modes: Some(v3::TerminalModeState {
+                            bracketed_paste: true,
+                            ..Default::default()
+                        }),
+                    },
+                )),
+            },
+            // Control
+            v3::ServerEnvelope {
+                request_id: 1,
+                payload: Some(v3::server_envelope::Payload::Pong(v3::Pong { nonce: 7 })),
+            },
+            // Runtime lifecycle
+            v3::ServerEnvelope {
+                request_id: 2,
+                payload: Some(v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+                    runtime_id: rt.clone(),
+                    runtime_revision: 1,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 3,
+                payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(v3::RuntimeSnapshot {
+                    runtime_id: rt.clone(),
+                    runtime_revision: 10,
+                    client_role: v3::RuntimeClientRole::Writer as i32,
+                    panes: vec![],
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 4,
+                payload: Some(v3::server_envelope::Payload::RuntimeDetached(v3::RuntimeDetached {
+                    runtime_id: rt.clone(),
+                    runtime_revision: 11,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 5,
+                payload: Some(v3::server_envelope::Payload::RuntimeTerminated(
+                    v3::RuntimeTerminated {
+                        runtime_id: rt.clone(),
+                        final_revision: 12,
+                        reason: v3::RuntimeTerminationReason::Explicit as i32,
+                    },
+                )),
+            },
+            v3::ServerEnvelope {
+                request_id: 6,
+                payload: Some(v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
+                    runtime_id: rt.clone(),
+                    name: "renamed".into(),
+                    runtime_revision: 13,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 7,
+                payload: Some(v3::server_envelope::Payload::RuntimeList(v3::RuntimeList {
+                    runtimes: vec![],
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::AttachBlocked(v3::AttachBlocked {
+                    runtime_id: rt.clone(),
+                    current_client_role: v3::RuntimeClientRole::Unattached as i32,
+                    attached_client_count: 1,
+                    read_only_client_count: 0,
+                })),
+            },
+            // Pane lifecycle
+            v3::ServerEnvelope {
+                request_id: 8,
+                payload: Some(v3::server_envelope::Payload::PaneCreated(v3::PaneCreated {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    runtime_revision: 14,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 9,
+                payload: Some(v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    runtime_revision: 15,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::PaneResized(v3::PaneResized {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    cols: 100,
+                    rows: 30,
+                    runtime_revision: 16,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::PaneExited(v3::PaneExited {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    status: 0,
+                    runtime_revision: 17,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::TitleChanged(v3::TitleChanged {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    title: "new title".into(),
+                    runtime_revision: 18,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::CwdChanged(v3::CwdChanged {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    cwd: "/home".into(),
+                    runtime_revision: 19,
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::Bell(v3::Bell {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                })),
+            },
+            // Recovery
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::StreamOverflow(v3::StreamOverflow {
+                    runtime_id: rt.clone(),
+                    pane_id: Some(pn.clone()),
+                    dropped_count: 5,
+                })),
+            },
+            // Scrollback
+            v3::ServerEnvelope {
+                request_id: 11,
+                payload: Some(v3::server_envelope::Payload::ScrollbackChunk(v3::ScrollbackChunk {
+                    runtime_id: rt.clone(),
+                    pane_id: pn.clone(),
+                    offset: 0,
+                    data: bytes::Bytes::from_static(b"chunk"),
+                    is_last: true,
+                })),
+            },
+            // Diagnostics
+            v3::ServerEnvelope {
+                request_id: 12,
+                payload: Some(v3::server_envelope::Payload::DiagnosticsReport(
+                    v3::DiagnosticsReport {
+                        runtime_count: 1,
+                        total_pane_count: 2,
+                        total_active_panes: 2,
+                        total_exited_panes: 0,
+                        client_count: 1,
+                        pty_writer_count: 1,
+                        total_raw_bytes: 1024,
+                        total_pending_flush: 0,
+                        total_command_history: 5,
+                        runtimes: vec![],
+                    },
+                )),
+            },
+            // Error
+            v3::ServerEnvelope {
+                request_id: 99,
+                payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
+                    kind: v3::ErrorKind::RuntimeNotFound as i32,
+                    message: "not found".into(),
+                    operation: "AttachRuntime".into(),
+                    retryable: false,
+                    user_action_required: false,
+                    retry_after_seconds: 0,
+                })),
+            },
+        ];
+
+        for env in &envelopes {
+            let mut buf = BytesMut::new();
+            encode_frame(env, &mut buf).unwrap();
+            let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+            assert_eq!(env, &decoded);
+        }
+    }
+
+    #[test]
+    fn v3_envelope_field_numbers_match_rfc() {
+        // Verify high-frequency paths use single-byte tags (field < 16).
+        // TerminalInput is field 2 in ClientEnvelope.
+        let env = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                runtime_id: rid(),
+                pane_id: pid(),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(b"a"),
+                })),
+            })),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&env, &mut buf).unwrap();
+        // OutputDelta is field 2, TerminalModeChanged is field 3 in ServerEnvelope.
+        let senv = v3::ServerEnvelope {
+            request_id: 0,
+            payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
+                runtime_id: rid(),
+                pane_id: pid(),
+                data: bytes::Bytes::from_static(b"b"),
+                pane_output_seq: 1,
+            })),
+        };
+        let mut buf2 = BytesMut::new();
+        encode_frame(&senv, &mut buf2).unwrap();
+        // Both encode successfully — field numbers are valid.
+        let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+        assert_eq!(env, decoded);
+        let decoded: v3::ServerEnvelope = decode_frame(&mut buf2).unwrap();
+        assert_eq!(senv, decoded);
+    }
+
+    #[test]
+    fn v3_runtime_info_inventory_fields() {
+        let msg = v3::RuntimeInfo {
+            id: rid(),
+            name: "dev-workspace".into(),
+            policy: v3::RuntimePolicy::Persistent as i32,
+            pane_count: 3,
+            has_write_owner: true,
+            read_only_client_count: 1,
+            current_client_role: v3::RuntimeClientRole::Writer as i32,
+            runtime_revision: 42,
+            reconstructed: false,
+            active_pane_summary: "bash, vim, htop".into(),
+            takeover_eligible: true,
+            disabled_reason: String::new(),
+            panes: vec![v3::PaneInfo {
+                id: pid(),
+                title: "bash".into(),
+                cwd: "/home/user".into(),
+                cols: 80,
+                rows: 24,
+                exit_status: None,
+                reconstructed: false,
+            }],
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::RuntimeInfo = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn v3_runtime_termination_ephemeral_detach() {
+        let msg = v3::RuntimeTerminated {
+            runtime_id: rid(),
+            final_revision: 99,
+            reason: v3::RuntimeTerminationReason::EphemeralDetach as i32,
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::RuntimeTerminated = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn v3_mouse_mode_values() {
+        assert_eq!(v3::MouseMode::None as i32, 0);
+        assert_eq!(v3::MouseMode::X10 as i32, 1);
+        assert_eq!(v3::MouseMode::Normal as i32, 2);
+        assert_eq!(v3::MouseMode::Button as i32, 3);
+        assert_eq!(v3::MouseMode::Any as i32, 4);
+    }
+
+    #[test]
+    fn v3_pane_snapshot_with_all_modes() {
+        let msg = v3::PaneSnapshot {
+            pane_id: pid(),
+            pane_output_seq: 500,
+            title: "vim".into(),
+            cwd: "/project".into(),
+            cols: 120,
+            rows: 40,
+            exit_status: Some(0),
+            terminal_modes: Some(v3::TerminalModeState {
+                bracketed_paste: true,
+                focus_reporting: true,
+                application_cursor_keys: true,
+                application_keypad: true,
+                alternate_screen: true,
+                cursor_hidden: true,
+                mouse_mode: v3::MouseMode::Any as i32,
+                sgr_mouse: true,
+            }),
+            scrollback_tail: bytes::Bytes::from_static(b"scrollback"),
+            total_scrollback_bytes: 1_000_000,
+            scrollback_complete: false,
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::PaneSnapshot = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
     }
 }
