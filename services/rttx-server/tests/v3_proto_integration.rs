@@ -36,44 +36,40 @@ fn v3_client_hello_frames_through_shared_codec() {
 #[test]
 fn v3_envelope_roundtrip_create_runtime_and_response() {
     let request_id = 1;
+    let runtime_name = "integration-test";
     let cmd = v3::ClientEnvelope {
         request_id,
-        command: Some(v3::client_envelope::Command::CreateRuntime(
-            v3::CreateRuntime {
-                name: "integration-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
-            },
-        )),
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            name: runtime_name.into(),
+            policy: v3::RuntimePolicy::Persistent as i32,
+        })),
     };
     let mut buf = BytesMut::new();
     encode_frame(&cmd, &mut buf).unwrap();
     let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, request_id);
-    assert!(matches!(
-        decoded.command,
-        Some(v3::client_envelope::Command::CreateRuntime(_))
-    ));
+    let Some(v3::client_envelope::Command::CreateRuntime(cr)) = decoded.command else {
+        panic!("expected CreateRuntime");
+    };
+    assert_eq!(cr.name, runtime_name);
 
     let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
     let resp = v3::ServerEnvelope {
         request_id,
-        payload: Some(v3::server_envelope::Payload::RuntimeCreated(
-            v3::RuntimeCreated {
-                runtime_id: runtime_id.clone(),
-                runtime_revision: 1,
-            },
-        )),
+        payload: Some(v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+            runtime_id: runtime_id.clone(),
+            runtime_revision: 1,
+        })),
     };
     let mut buf = BytesMut::new();
     encode_frame(&resp, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, request_id);
-    if let Some(v3::server_envelope::Payload::RuntimeCreated(created)) = decoded.payload {
-        assert_eq!(created.runtime_id, runtime_id);
-        assert_eq!(created.runtime_revision, 1);
-    } else {
+    let Some(v3::server_envelope::Payload::RuntimeCreated(created)) = decoded.payload else {
         panic!("expected RuntimeCreated");
-    }
+    };
+    assert_eq!(created.runtime_id, runtime_id);
+    assert_eq!(created.runtime_revision, 1);
 }
 
 #[test]
@@ -103,8 +99,7 @@ fn v3_protocol_error_frames_as_bare_and_in_envelope() {
     encode_frame(&env, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, 42);
-    assert!(matches!(
-        decoded.payload,
-        Some(v3::server_envelope::Payload::Error(_))
-    ));
+    let Some(v3::server_envelope::Payload::Error(_)) = decoded.payload else {
+        panic!("expected ProtocolError");
+    };
 }
