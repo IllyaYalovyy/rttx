@@ -32,6 +32,9 @@ pub mod v3_envelope;
 /// V3 terminal mode state: builders and conversions (RFC-021 Section 5).
 pub mod v3_terminal_modes;
 
+/// V3 terminal input: builders and daemon-side resolution (RFC-021 Section 4).
+pub mod v3_terminal_input;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {

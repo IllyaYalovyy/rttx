@@ -425,3 +425,105 @@ fn v3_mouse_mode_conversion_covers_all_tracking_values() {
         }
     }
 }
+
+// ── V3 terminal input integration tests ──
+
+use rttx_proto::v3_terminal_input;
+
+#[test]
+fn v3_structured_input_paste_with_bracketed_paste_active() {
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+
+    let input = v3_terminal_input::build_paste_input(
+        runtime_id,
+        pane_id,
+        bytes::Bytes::from_static(b"pasted content"),
+    );
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&input, &mut buf).unwrap();
+    let decoded: v3::TerminalInput = decode_frame(&mut buf).unwrap();
+    assert_eq!(input, decoded);
+
+    // Resolve with bracketed paste active
+    let modes = v3::TerminalModeState { bracketed_paste: true, ..Default::default() };
+    let resolved = v3_terminal_input::resolve_input(decoded.kind.as_ref(), &modes);
+    assert!(resolved.starts_with(b"\x1b[200~"));
+    assert!(resolved.ends_with(b"\x1b[201~"));
+    assert!(resolved.windows(b"pasted content".len()).any(|w| w == b"pasted content"));
+}
+
+#[test]
+fn v3_structured_input_paste_without_bracketed_paste() {
+    let input = v3_terminal_input::build_paste_input(
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        bytes::Bytes::from_static(b"plain paste"),
+    );
+    let modes = v3::TerminalModeState::default();
+    let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
+    assert_eq!(resolved, b"plain paste");
+}
+
+#[test]
+fn v3_structured_input_focus_in_with_reporting_active() {
+    let input =
+        v3_terminal_input::build_focus_input(uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), true);
+    let modes = v3::TerminalModeState { focus_reporting: true, ..Default::default() };
+    let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
+    assert_eq!(resolved, b"\x1b[I");
+}
+
+#[test]
+fn v3_structured_input_focus_out_with_reporting_active() {
+    let input =
+        v3_terminal_input::build_focus_input(uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), false);
+    let modes = v3::TerminalModeState { focus_reporting: true, ..Default::default() };
+    let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
+    assert_eq!(resolved, b"\x1b[O");
+}
+
+#[test]
+fn v3_structured_input_focus_suppressed_when_reporting_inactive() {
+    let input =
+        v3_terminal_input::build_focus_input(uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), true);
+    let modes = v3::TerminalModeState::default();
+    let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
+    assert!(resolved.is_empty());
+}
+
+#[test]
+fn v3_structured_input_raw_passthrough() {
+    let input = v3_terminal_input::build_raw_input(
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        bytes::Bytes::from_static(b"\x1b[A"),
+    );
+    let modes = v3::TerminalModeState {
+        bracketed_paste: true,
+        focus_reporting: true,
+        ..Default::default()
+    };
+    let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
+    assert_eq!(resolved, b"\x1b[A");
+}
+
+#[test]
+fn v3_structured_input_envelope_fire_and_forget() {
+    let input = v3_terminal_input::build_paste_input(
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        bytes::Bytes::from_static(b"text"),
+    );
+    let env = v3_terminal_input::build_terminal_input_envelope(input);
+    assert_eq!(env.request_id, 0);
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.request_id, 0);
+    assert!(matches!(decoded.command, Some(v3::client_envelope::Command::TerminalInput(_))));
+}
