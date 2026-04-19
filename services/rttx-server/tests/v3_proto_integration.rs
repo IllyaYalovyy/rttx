@@ -639,3 +639,135 @@ fn v3_error_unknown_kind_from_newer_server() {
         ErrorClassification::Unknown
     );
 }
+
+// ── V3 snapshot integration tests ──
+
+use rttx_proto::v3_snapshot::{self, PaneSnapshotParams};
+
+#[test]
+fn v3_snapshot_attach_response_roundtrip() {
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+
+    let pane = v3_snapshot::build_pane_snapshot(PaneSnapshotParams {
+        pane_id,
+        pane_output_seq: 42,
+        title: "bash".into(),
+        cwd: "/home/user".into(),
+        cols: 120,
+        rows: 40,
+        exit_status: None,
+        terminal_modes: v3::TerminalModeState { bracketed_paste: true, ..Default::default() },
+        scrollback_tail: bytes::Bytes::from_static(b"$ ls\nfile.txt\n"),
+        total_scrollback_bytes: 4096,
+    });
+    assert!(!pane.scrollback_complete);
+
+    let snapshot = v3_snapshot::build_runtime_snapshot(
+        runtime_id,
+        10,
+        v3::RuntimeClientRole::Writer,
+        vec![pane],
+    );
+    let env = v3_snapshot::build_snapshot_response(7, snapshot);
+    assert_eq!(env.request_id, 7);
+    assert!(!v3_envelope::is_push_event(&env));
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.request_id, 7);
+
+    let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = decoded.payload else {
+        panic!("expected RuntimeSnapshot");
+    };
+    assert_eq!(snap.runtime_id, uuid_to_bytes(runtime_id));
+    assert_eq!(snap.runtime_revision, 10);
+    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.panes.len(), 1);
+    assert_eq!(snap.panes[0].pane_output_seq, 42);
+    assert_eq!(snap.panes[0].scrollback_tail.as_ref(), b"$ ls\nfile.txt\n");
+    assert!(!snap.panes[0].scrollback_complete);
+    assert!(snap.panes[0].terminal_modes.as_ref().unwrap().bracketed_paste);
+}
+
+#[test]
+fn v3_output_delta_sequence_continuity() {
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+
+    // Simulate attach snapshot with pane_output_seq = 10
+    let pane = v3_snapshot::build_pane_snapshot(PaneSnapshotParams {
+        pane_id,
+        pane_output_seq: 10,
+        title: "zsh".into(),
+        cwd: "/tmp".into(),
+        cols: 80,
+        rows: 24,
+        exit_status: None,
+        terminal_modes: v3::TerminalModeState::default(),
+        scrollback_tail: bytes::Bytes::new(),
+        total_scrollback_bytes: 0,
+    });
+    let mut expected_next = pane.pane_output_seq + 1;
+
+    // Receive contiguous deltas 11, 12, 13
+    for seq in [11, 12, 13] {
+        let env = v3_snapshot::build_output_delta_envelope(
+            runtime_id,
+            pane_id,
+            bytes::Bytes::from(format!("output-{seq}")),
+            seq,
+        );
+        assert!(v3_envelope::is_push_event(&env));
+
+        // Wire roundtrip
+        let mut buf = BytesMut::new();
+        encode_frame(&env, &mut buf).unwrap();
+        let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+        let Some(v3::server_envelope::Payload::OutputDelta(delta)) = decoded.payload else {
+            panic!("expected OutputDelta");
+        };
+
+        assert_eq!(v3_snapshot::detect_output_seq_gap(expected_next, delta.pane_output_seq), None);
+        expected_next = delta.pane_output_seq + 1;
+    }
+
+    // Gap: receive seq 16 (skipped 14, 15)
+    assert_eq!(v3_snapshot::detect_output_seq_gap(expected_next, 16), Some(2));
+}
+
+#[test]
+fn v3_scrollback_truncation_and_snapshot() {
+    let full_scrollback = vec![b'A'; 500_000];
+    let (tail, complete) = v3_snapshot::truncate_scrollback(
+        &full_scrollback,
+        v3_snapshot::DEFAULT_SCROLLBACK_TAIL_LIMIT,
+    );
+    assert!(!complete);
+    assert_eq!(tail.len(), v3_snapshot::DEFAULT_SCROLLBACK_TAIL_LIMIT);
+
+    let pane = v3_snapshot::build_pane_snapshot(PaneSnapshotParams {
+        pane_id: uuid::Uuid::new_v4(),
+        pane_output_seq: 0,
+        title: "bash".into(),
+        cwd: "/".into(),
+        cols: 80,
+        rows: 24,
+        exit_status: None,
+        terminal_modes: v3::TerminalModeState::default(),
+        scrollback_tail: tail,
+        total_scrollback_bytes: full_scrollback.len() as u64,
+    });
+    assert!(!pane.scrollback_complete);
+    assert_eq!(pane.total_scrollback_bytes, 500_000);
+
+    // Wire roundtrip preserves all fields
+    let mut buf = BytesMut::new();
+    encode_frame(&pane, &mut buf).unwrap();
+    let decoded: v3::PaneSnapshot = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.scrollback_tail.len(), v3_snapshot::DEFAULT_SCROLLBACK_TAIL_LIMIT);
+    assert!(!decoded.scrollback_complete);
+    assert_eq!(decoded.total_scrollback_bytes, 500_000);
+}
