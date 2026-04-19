@@ -43,6 +43,8 @@ struct ScreenPerformer {
     focus_event_mode: bool,
     /// Whether the cursor is visible (DECSET 25, default true).
     cursor_visible: bool,
+    /// Whether alternate screen buffer (DECSET 1049/1047) is active.
+    alternate_screen: bool,
 }
 
 impl PaneScreen {
@@ -66,6 +68,7 @@ impl PaneScreen {
                 sgr_mouse_mode: false,
                 focus_event_mode: false,
                 cursor_visible: true,
+                alternate_screen: false,
             },
         }
     }
@@ -186,6 +189,29 @@ impl PaneScreen {
     pub const fn cursor_visible(&self) -> bool {
         self.performer.cursor_visible
     }
+
+    /// Whether alternate screen buffer (DECSET 1049/1047) is active.
+    #[must_use]
+    pub const fn alternate_screen(&self) -> bool {
+        self.performer.alternate_screen
+    }
+
+    /// Build a consolidated `TerminalModeState` from the current screen state.
+    #[must_use]
+    pub fn terminal_mode_state(&self) -> rttx_proto::v3::TerminalModeState {
+        rttx_proto::v3::TerminalModeState {
+            bracketed_paste: self.performer.bracketed_paste_mode,
+            focus_reporting: self.performer.focus_event_mode,
+            application_cursor_keys: self.performer.application_cursor_keys,
+            application_keypad: self.performer.application_keypad,
+            alternate_screen: self.performer.alternate_screen,
+            cursor_hidden: !self.performer.cursor_visible,
+            mouse_mode: rttx_proto::v3_terminal_modes::mouse_mode_from_tracking_value(
+                self.performer.mouse_tracking_mode,
+            ) as i32,
+            sgr_mouse: self.performer.sgr_mouse_mode,
+        }
+    }
 }
 
 /// Return restart-safe scrollback bytes for a reconstructed pane.
@@ -282,6 +308,7 @@ impl vte::Perform for ScreenPerformer {
                     }
                     Some(1004) => self.focus_event_mode = enabled,
                     Some(1006) => self.sgr_mouse_mode = enabled,
+                    Some(1047 | 1049) => self.alternate_screen = enabled,
                     Some(2004) => self.bracketed_paste_mode = enabled,
                     _ => {}
                 }
@@ -299,6 +326,7 @@ impl vte::Perform for ScreenPerformer {
                 1000 | 1002 | 1003 => Some(self.mouse_tracking_mode == mode),
                 1004 => Some(self.focus_event_mode),
                 1006 => Some(self.sgr_mouse_mode),
+                1047 | 1049 => Some(self.alternate_screen),
                 2004 => Some(self.bracketed_paste_mode),
                 _ => None,
             };
@@ -953,6 +981,86 @@ mod tests {
         assert!(screen.cursor_visible());
     }
 
+    // --- Alternate screen (DECSET 1049/1047) ---
+
+    #[test]
+    fn alternate_screen_default_off() {
+        let screen = PaneScreen::new(1024);
+        assert!(!screen.alternate_screen());
+    }
+
+    #[test]
+    fn decset_1049_enables_alternate_screen() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1049h");
+        assert!(screen.alternate_screen());
+    }
+
+    #[test]
+    fn decrst_1049_disables_alternate_screen() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1049h");
+        screen.feed(b"\x1b[?1049l");
+        assert!(!screen.alternate_screen());
+    }
+
+    #[test]
+    fn decset_1047_enables_alternate_screen() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1047h");
+        assert!(screen.alternate_screen());
+    }
+
+    #[test]
+    fn decrst_1047_disables_alternate_screen() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1047h");
+        screen.feed(b"\x1b[?1047l");
+        assert!(!screen.alternate_screen());
+    }
+
+    // --- terminal_mode_state() consolidation ---
+
+    #[test]
+    fn terminal_mode_state_defaults() {
+        let screen = PaneScreen::new(1024);
+        let state = screen.terminal_mode_state();
+        assert_eq!(state, rttx_proto::v3::TerminalModeState::default());
+    }
+
+    #[test]
+    fn terminal_mode_state_reflects_all_modes() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?2004h"); // bracketed paste
+        screen.feed(b"\x1b[?1004h"); // focus reporting
+        screen.feed(b"\x1b[?1h"); // application cursor keys
+        screen.feed(b"\x1b="); // application keypad
+        screen.feed(b"\x1b[?1049h"); // alternate screen
+        screen.feed(b"\x1b[?25l"); // hide cursor
+        screen.feed(b"\x1b[?1003h"); // any-event mouse
+        screen.feed(b"\x1b[?1006h"); // SGR mouse
+
+        let state = screen.terminal_mode_state();
+        assert!(state.bracketed_paste);
+        assert!(state.focus_reporting);
+        assert!(state.application_cursor_keys);
+        assert!(state.application_keypad);
+        assert!(state.alternate_screen);
+        assert!(state.cursor_hidden);
+        assert_eq!(state.mouse_mode, rttx_proto::v3::MouseMode::Any as i32);
+        assert!(state.sgr_mouse);
+    }
+
+    #[test]
+    fn terminal_mode_state_cursor_hidden_inverts_cursor_visible() {
+        let mut screen = PaneScreen::new(1024);
+        assert!(!screen.terminal_mode_state().cursor_hidden);
+        screen.feed(b"\x1b[?25l");
+        assert!(screen.terminal_mode_state().cursor_hidden);
+        screen.feed(b"\x1b[?25h");
+        assert!(!screen.terminal_mode_state().cursor_hidden);
+    }
+
     // --- DECRQM (Request Mode) ---
 
     #[test]
@@ -1023,6 +1131,15 @@ mod tests {
         screen.feed(b"\x1b[?1000$p");
         let replies = screen.take_pending_replies();
         assert_eq!(replies[0], b"\x1b[?1000;2$y");
+    }
+
+    #[test]
+    fn decrqm_reports_alternate_screen() {
+        let mut screen = PaneScreen::new(1024);
+        screen.feed(b"\x1b[?1049h");
+        screen.feed(b"\x1b[?1049$p");
+        let replies = screen.take_pending_replies();
+        assert_eq!(replies[0], b"\x1b[?1049;1$y");
     }
 
     // --- Detached session scenario ---

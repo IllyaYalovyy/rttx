@@ -29,6 +29,9 @@ pub mod v3_handshake;
 /// V3 envelope: request/response correlation and command classification.
 pub mod v3_envelope;
 
+/// V3 terminal mode state: builders and conversions (RFC-021 Section 5).
+pub mod v3_terminal_modes;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
