@@ -53,8 +53,8 @@ The v2 protocol is a length-prefixed protobuf stream with flat `ClientMessage`/`
 `oneof` envelopes. It uses exact `PROTOCOL_VERSION` equality during handshake. This served as a
 good starting point, but has accumulated structural problems:
 
-1. **No compatibility window** — exact version match prevents additive rollout and mixed
-   client/server upgrades. This matters because daemons run on remote hosts that are painful to
+1. **No compatibility window** — exact version match prevents a newer GUI from connecting to
+   an older daemon. This matters because daemons run on remote hosts that are painful to
    update in lockstep with the GUI.
 2. **Terminal input is untyped raw bytes** — `Input { data }` cannot distinguish text, paste,
    focus, or terminal responses. The daemon sees only bytes.
@@ -154,11 +154,22 @@ additions in a new major protocol version.
   daemon capabilities.
 - The client must never send a command that requires a capability the daemon did not advertise.
 
-#### Capability asymmetry
+#### Compatibility model
 
-The GUI client always has capabilities equal to or greater than the daemon. We do not support
-a client with fewer capabilities connecting to a daemon with more capabilities. This means the
-testing matrix is linear (N optional capabilities), not quadratic.
+rttx supports asymmetric compatibility. The GUI is expected to be updated first and may drop
+support for older GUI behavior at any time — if the GUI is old, update it. The daemon is
+harder to update: it may be remote, embedded in long-running sessions, or protecting active
+work. A current GUI must connect to older supported daemons through version negotiation and
+optional capability fallback. Daemons must not require a newer GUI than the negotiated
+protocol/capability set.
+
+This means:
+- Protocol evolution optimizes for **new GUI → older daemon**, not old GUI → newer daemon.
+- The effective capability set is the intersection, but in practice the GUI is the newer side.
+- The daemon must never send optional events, fields, or commands that were not negotiated.
+- The GUI must never send commands requiring capabilities the daemon did not advertise.
+- The testing matrix is: latest GUI against each supported daemon capability profile, not
+  arbitrary old/new combinations.
 
 #### Core capabilities
 
@@ -709,6 +720,13 @@ These rules are binding after the initial v3 release and govern all subsequent p
 - Changing a core capability's behavior
 - Changing the framing format (4-byte little-endian length prefix)
 
+**Send discipline:**
+- The daemon must not send messages, events, or populate fields that require a capability the
+  connected client did not negotiate. Receivers should still handle unknown variants and fields
+  gracefully (ignore unknown `oneof` variants, treat unknown enum values as zero) as a
+  defensive measure, but the sender is responsible for not producing them.
+- The client must not send commands that require a capability the daemon did not advertise.
+
 **Capability promotion:**
 - A capability may be promoted from optional to core only in a new major protocol version.
 - Within a major version, all capabilities that were optional at release remain optional.
@@ -737,9 +755,11 @@ These rules are binding after the initial v3 release and govern all subsequent p
 - **Version negotiation**: Client sends `min_protocol_version` and `max_protocol_version`.
   Server picks the highest it supports. If no overlap, `ProtocolError` with kind
   `PROTOCOL_MISMATCH`.
-- **Lifetime commitment**: Once a major version is released as stable, the server must support
-  it for at least 2 major versions forward. When v4 ships, v3 is still supported. When v5
-  ships, v3 can be dropped. This gives daemon operators a full major-version cycle to upgrade.
+- **Lifetime commitment**: The lifetime commitment protects daemon operators. A current GUI
+  must connect to any daemon within the support window. Once a major version is released as
+  stable, the server must support it for at least 2 major versions forward. When v4 ships, v3
+  is still supported. When v5 ships, v3 can be dropped. Old GUIs connecting to new daemons
+  are not a supported configuration — update the GUI.
 
 ### 15. Transport
 
@@ -791,7 +811,9 @@ handshake, not at the transport level.
 - [ ] **Step 12** — Implement `OPT_RUNTIME_TAKEOVER` (explicit takeover and lease events)
 - [ ] **Step 13** — Implement `OPT_DIAGNOSTICS`
 - [ ] **Step 14** — Remove all v2 protocol code
-- [ ] **Step 15** — Full integration test suite for v3 protocol
+- [ ] **Step 15** — Full integration test suite for v3 protocol. Test matrix: latest GUI
+  against each supported daemon capability profile (all-core-only, core+individual-optional,
+  core+all-optional), not arbitrary version combinations.
 
 ---
 
