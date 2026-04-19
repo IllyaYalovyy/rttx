@@ -26,6 +26,9 @@ pub mod v3 {
 /// V3 handshake: version negotiation, capability validation, message builders.
 pub mod v3_handshake;
 
+/// V3 envelope: request/response correlation and command classification.
+pub mod v3_envelope;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
