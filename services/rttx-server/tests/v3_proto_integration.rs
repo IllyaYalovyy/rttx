@@ -469,11 +469,8 @@ fn v3_structured_input_paste_without_bracketed_paste() {
 
 #[test]
 fn v3_structured_input_focus_in_with_reporting_active() {
-    let input = v3_terminal_input::build_focus_input(
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        true,
-    );
+    let input =
+        v3_terminal_input::build_focus_input(uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), true);
     let modes = v3::TerminalModeState { focus_reporting: true, ..Default::default() };
     let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
     assert_eq!(resolved, b"\x1b[I");
@@ -481,11 +478,8 @@ fn v3_structured_input_focus_in_with_reporting_active() {
 
 #[test]
 fn v3_structured_input_focus_out_with_reporting_active() {
-    let input = v3_terminal_input::build_focus_input(
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        false,
-    );
+    let input =
+        v3_terminal_input::build_focus_input(uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), false);
     let modes = v3::TerminalModeState { focus_reporting: true, ..Default::default() };
     let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
     assert_eq!(resolved, b"\x1b[O");
@@ -493,11 +487,8 @@ fn v3_structured_input_focus_out_with_reporting_active() {
 
 #[test]
 fn v3_structured_input_focus_suppressed_when_reporting_inactive() {
-    let input = v3_terminal_input::build_focus_input(
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        true,
-    );
+    let input =
+        v3_terminal_input::build_focus_input(uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), true);
     let modes = v3::TerminalModeState::default();
     let resolved = v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
     assert!(resolved.is_empty());
@@ -534,8 +525,5 @@ fn v3_structured_input_envelope_fire_and_forget() {
     encode_frame(&env, &mut buf).unwrap();
     let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, 0);
-    assert!(matches!(
-        decoded.command,
-        Some(v3::client_envelope::Command::TerminalInput(_))
-    ));
+    assert!(matches!(decoded.command, Some(v3::client_envelope::Command::TerminalInput(_))));
 }
