@@ -289,3 +289,31 @@ fn mixed_policy_sessions_load_correctly() {
     assert_eq!(state.runtimes[0].revision, 10);
     assert_eq!(state.runtimes[1].revision, 7);
 }
+
+// ── Legacy "sessions" key loads as "runtimes" ───────────────────
+
+#[test]
+fn legacy_sessions_key_loads_into_runtimes_field() {
+    let state = load_json(
+        r#"{
+            "sessions": [{
+                "id": "00000000-0000-0000-0000-00000000000a",
+                "name": "from-old-key",
+                "panes": [],
+                "active_pane_id": null,
+                "command_history": [],
+                "policy": "persistent",
+                "revision": 3,
+                "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+                "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
+            }],
+            "serialized_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "server_version": "0.3.2"
+        }"#,
+    );
+    assert_eq!(state.runtimes.len(), 1);
+    assert_eq!(state.runtimes[0].name, "from-old-key");
+    let rt = resurrect_first(&state);
+    assert_eq!(rt.name, "from-old-key");
+    assert_eq!(rt.revision(), 3);
+}
