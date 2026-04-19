@@ -43,10 +43,7 @@ pub fn build_takeover_completed(
     runtime_id: uuid::Uuid,
     runtime_revision: u64,
 ) -> v3::TakeoverCompleted {
-    v3::TakeoverCompleted {
-        runtime_id: crate::uuid_to_bytes(runtime_id),
-        runtime_revision,
-    }
+    v3::TakeoverCompleted { runtime_id: crate::uuid_to_bytes(runtime_id), runtime_revision }
 }
 
 /// Build a `ServerEnvelope` response containing a `TakeoverCompleted`.
@@ -87,10 +84,7 @@ pub fn build_owner_disconnected(
     runtime_id: uuid::Uuid,
     runtime_revision: u64,
 ) -> v3::OwnerDisconnected {
-    v3::OwnerDisconnected {
-        runtime_id: crate::uuid_to_bytes(runtime_id),
-        runtime_revision,
-    }
+    v3::OwnerDisconnected { runtime_id: crate::uuid_to_bytes(runtime_id), runtime_revision }
 }
 
 /// Build a `ServerEnvelope` push event containing an `OwnerDisconnected`.

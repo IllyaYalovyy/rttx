@@ -872,9 +872,9 @@ mod v3_envelope_tests {
             // Takeover (OPT_RUNTIME_TAKEOVER)
             v3::ClientEnvelope {
                 request_id: 13,
-                command: Some(v3::client_envelope::Command::TakeoverRuntime(
-                    v3::TakeoverRuntime { runtime_id: rt.clone() },
-                )),
+                command: Some(v3::client_envelope::Command::TakeoverRuntime(v3::TakeoverRuntime {
+                    runtime_id: rt.clone(),
+                })),
             },
         ];
 
@@ -1093,10 +1093,7 @@ mod v3_envelope_tests {
             v3::ServerEnvelope {
                 request_id: 13,
                 payload: Some(v3::server_envelope::Payload::TakeoverCompleted(
-                    v3::TakeoverCompleted {
-                        runtime_id: rt.clone(),
-                        runtime_revision: 50,
-                    },
+                    v3::TakeoverCompleted { runtime_id: rt.clone(), runtime_revision: 50 },
                 )),
             },
             v3::ServerEnvelope {
@@ -1110,10 +1107,7 @@ mod v3_envelope_tests {
             v3::ServerEnvelope {
                 request_id: 0,
                 payload: Some(v3::server_envelope::Payload::OwnerDisconnected(
-                    v3::OwnerDisconnected {
-                        runtime_id: rt.clone(),
-                        runtime_revision: 52,
-                    },
+                    v3::OwnerDisconnected { runtime_id: rt.clone(), runtime_revision: 52 },
                 )),
             },
         ];
