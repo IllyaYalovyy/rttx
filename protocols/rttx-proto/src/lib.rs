@@ -53,6 +53,9 @@ pub mod v3_inventory;
 /// V3 runtime takeover: capability gating, builders, and lease events (RFC-021 Section 10, `OPT_RUNTIME_TAKEOVER`).
 pub mod v3_takeover;
 
+/// V3 diagnostics: capability gating, builders, and report construction (RFC-021 Section 3, `OPT_DIAGNOSTICS`).
+pub mod v3_diagnostics;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
