@@ -610,10 +610,7 @@ impl Window {
     }
 
     /// Save the VTE scroll position for every terminal in a session.
-    fn save_session_scroll_positions(
-        &self,
-        session_state: &SessionState,
-    ) -> Vec<(String, f64)> {
+    fn save_session_scroll_positions(&self, session_state: &SessionState) -> Vec<(String, f64)> {
         let mut positions = Vec::new();
         for uuid in session_state.layout.terminal_uuids() {
             if let Some(handle) = self.terminal_handle(&uuid)

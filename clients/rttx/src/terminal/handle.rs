@@ -36,7 +36,8 @@ impl TerminalHandle {
             if let Some(adj) = vte.vadjustment() {
                 // Clamp to valid range — the upper bound may have changed
                 // if the terminal was resized during the rebuild.
-                let clamped = value.clamp(adj.lower(), (adj.upper() - adj.page_size()).max(adj.lower()));
+                let clamped =
+                    value.clamp(adj.lower(), (adj.upper() - adj.page_size()).max(adj.lower()));
                 adj.set_value(clamped);
             }
         });
