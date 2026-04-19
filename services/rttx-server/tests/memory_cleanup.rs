@@ -22,11 +22,11 @@ async fn hashmap_cleanup_after_session_terminate() {
     // Create several sessions with panes, then terminate them all.
     for i in 0..5 {
         let sid =
-            create_session(&mut client, &format!("map-{i}"), proto::RuntimePolicy::Persistent)
+            create_runtime(&mut client, &format!("map-{i}"), proto::RuntimePolicy::Persistent)
                 .await;
         attach_rw(&mut client, &sid).await;
         let _pane = create_pane(&mut client, &sid).await;
-        terminate_session(&mut client, &sid).await;
+        terminate_runtime(&mut client, &sid).await;
     }
 
     // Diagnostics should show zero sessions and zero panes.
@@ -43,7 +43,7 @@ async fn hashmap_cleanup_after_session_terminate() {
         }
     };
 
-    assert_eq!(report.session_count, 0, "sessions HashMap must be empty after terminate");
+    assert_eq!(report.runtime_count, 0, "sessions HashMap must be empty after terminate");
     assert_eq!(report.total_pane_count, 0, "no panes should remain");
     assert_eq!(report.pty_writer_count, 0, "pty_writers HashMap must be empty");
 }
@@ -58,7 +58,7 @@ async fn hashmap_cleanup_after_pane_close() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_session(&mut client, "pane-cleanup", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "pane-cleanup", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     // Create and close several panes.
@@ -80,9 +80,9 @@ async fn hashmap_cleanup_after_pane_close() {
         }
     };
 
-    assert_eq!(report.session_count, 1);
-    assert_eq!(report.sessions[0].active_pane_count, 0, "all panes must be cleaned up");
-    assert_eq!(report.sessions[0].exited_pane_count, 0, "no exited panes should linger");
+    assert_eq!(report.runtime_count, 1);
+    assert_eq!(report.runtimes[0].active_pane_count, 0, "all panes must be cleaned up");
+    assert_eq!(report.runtimes[0].exited_pane_count, 0, "no exited panes should linger");
 }
 
 /// Ephemeral sessions must be fully cleaned up after the last client detaches.
@@ -96,9 +96,9 @@ async fn hashmap_cleanup_ephemeral_detach() {
 
     for i in 0..3 {
         let sid =
-            create_session(&mut client, &format!("eph-{i}"), proto::RuntimePolicy::Ephemeral).await;
+            create_runtime(&mut client, &format!("eph-{i}"), proto::RuntimePolicy::Ephemeral).await;
         attach_rw(&mut client, &sid).await;
-        detach_session(&mut client, &sid).await;
+        detach_runtime(&mut client, &sid).await;
     }
 
     client
@@ -114,7 +114,7 @@ async fn hashmap_cleanup_ephemeral_detach() {
         }
     };
 
-    assert_eq!(report.session_count, 0, "ephemeral sessions must be cleaned up on detach");
+    assert_eq!(report.runtime_count, 0, "ephemeral sessions must be cleaned up on detach");
     assert_eq!(report.total_pane_count, 0);
 }
 

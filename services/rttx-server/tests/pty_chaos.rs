@@ -14,20 +14,20 @@ use std::time::Duration;
 async fn create_and_attach(client: &mut TestClient, name: &str) -> Vec<u8> {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: name.into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -36,7 +36,7 @@ async fn create_and_attach(client: &mut TestClient, name: &str) -> Vec<u8> {
         Some(proto::server_message::Msg::Snapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
-    session_id
+    runtime_id
 }
 
 /// Drain messages until we find exactly one `PaneExited` for the given pane.
@@ -69,14 +69,14 @@ async fn immediate_exit_command_produces_pane_exited() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let session_id = create_and_attach(&mut client, "fast-exit").await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id = create_and_attach(&mut client, "fast-exit").await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Send `exit` to make the shell terminate immediately.
-    send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"exit\n").await;
 
     let pe = wait_for_pane_exited(&mut client, &pane_id).await;
-    assert_eq!(pe.session_id, session_id);
+    assert_eq!(pe.runtime_id, runtime_id);
     // Exit status varies by shell; just verify we got the notification.
 }
 
@@ -88,17 +88,17 @@ async fn close_pane_during_output_burst() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let session_id = create_and_attach(&mut client, "close-burst").await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id = create_and_attach(&mut client, "close-burst").await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Start a burst of output.
-    send_input(&mut client, &session_id, &pane_id, b"seq 1 1000\n").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"seq 1 1000\n").await;
 
     // Immediately close the pane while output is flowing.
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
             })),
         })
@@ -117,9 +117,9 @@ async fn close_pane_during_output_burst() {
     assert!(saw_closed, "must receive PaneClosed after close during burst");
 
     // Session should still exist with 0 panes.
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].pane_count, 0);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].pane_count, 0);
 }
 
 // ── Resize after pane exit ──────────────────────────────────────
@@ -130,18 +130,18 @@ async fn resize_after_pane_exit_is_silently_dropped() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let session_id = create_and_attach(&mut client, "resize-exit").await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id = create_and_attach(&mut client, "resize-exit").await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Kill the shell.
-    send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"exit\n").await;
     wait_for_pane_exited(&mut client, &pane_id).await;
 
     // Resize the dead pane — must be silently dropped, not panic or error.
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id,
                 cols: 120,
                 rows: 40,
@@ -156,8 +156,8 @@ async fn resize_after_pane_exit_is_silently_dropped() {
     );
 
     // Server must remain functional.
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
 }
 
 // ── Title change interleaved with output ────────────────────────
@@ -168,13 +168,13 @@ async fn title_change_during_output_does_not_corrupt_state() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let session_id = create_and_attach(&mut client, "title-interleave").await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id = create_and_attach(&mut client, "title-interleave").await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Send output that includes an OSC title-change sequence interleaved with data.
     let osc_title = b"\x1b]0;my-custom-title\x07";
     let mixed = [osc_title.as_slice(), b"echo after-title\n"].concat();
-    send_input(&mut client, &session_id, &pane_id, &mixed).await;
+    send_input(&mut client, &runtime_id, &pane_id, &mixed).await;
 
     // Drain Deltas until we see the echo output.
     let target = b"after-title";
@@ -195,9 +195,9 @@ async fn title_change_during_output_does_not_corrupt_state() {
     }
 
     // Server should still be responsive — list sessions as a liveness check.
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].pane_count, 1);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].pane_count, 1);
 }
 
 // ── Shell exits before first attach ─────────────────────────────
@@ -208,15 +208,15 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let session_id = create_and_attach(&mut client, "pre-attach-exit").await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id = create_and_attach(&mut client, "pre-attach-exit").await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Send exit, then detach before the shell finishes.
-    send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"exit\n").await;
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: runtime_id.clone(),
             })),
         })
         .await;
@@ -225,10 +225,10 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     // Poll inventory until the pane reports an exit status.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let sessions = list_sessions(&mut client).await;
-        if !sessions.is_empty()
-            && !sessions[0].panes.is_empty()
-            && sessions[0].panes[0].exit_status.is_some()
+        let runtimes = list_runtimes(&mut client).await;
+        if !runtimes.is_empty()
+            && !runtimes[0].panes.is_empty()
+            && runtimes[0].panes[0].exit_status.is_some()
         {
             break;
         }
@@ -240,11 +240,11 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     }
 
     // Reattach — inventory should show exit status.
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].panes.len(), 1);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].panes.len(), 1);
     assert!(
-        sessions[0].panes[0].exit_status.is_some(),
+        runtimes[0].panes[0].exit_status.is_some(),
         "pane that exited while detached must report exit status"
     );
 }
@@ -257,18 +257,18 @@ async fn no_duplicate_pane_exited_after_close_of_exited_pane() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let session_id = create_and_attach(&mut client, "no-dup-exit").await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id = create_and_attach(&mut client, "no-dup-exit").await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Exit the shell.
-    send_input(&mut client, &session_id, &pane_id, b"exit\n").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"exit\n").await;
     wait_for_pane_exited(&mut client, &pane_id).await;
 
     // Close the already-exited pane.
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
             })),
         })

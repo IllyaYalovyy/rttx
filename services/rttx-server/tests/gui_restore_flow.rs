@@ -1,10 +1,10 @@
 //! Tests that simulate the GUI's restore flow using `DaemonBridge`.
 //!
 //! These verify the exact sequence the GUI performs:
-//! 1. connect + `list_sessions`
-//! 2. `attach_session` for each → get snapshot with scrollback
+//! 1. connect + `list_runtimes`
+//! 2. `attach_runtime` for each → get snapshot with scrollback
 //! 3. disconnect
-//! 4. reconnect + `list_sessions` → same count, same IDs
+//! 4. reconnect + `list_runtimes` → same count, same IDs
 
 mod common;
 
@@ -28,20 +28,20 @@ async fn gui_restore_flow_no_duplicates() {
 
         for i in 1..=2 {
             c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                     name: format!("Session {i}"),
                     policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
             let sid = match c.recv().await.msg {
-                Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-                other => panic!("expected SessionCreated, got {other:?}"),
+                Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+                other => panic!("expected RuntimeCreated, got {other:?}"),
             };
 
             c.send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: sid.clone(),
+                    runtime_id: sid.clone(),
                     cwd: None,
                     dark_background: None,
                     cols: 0,
@@ -59,8 +59,8 @@ async fn gui_restore_flow_no_duplicates() {
             };
 
             c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                    session_id: sid.clone(),
+                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                    runtime_id: sid.clone(),
                     attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
@@ -76,7 +76,7 @@ async fn gui_restore_flow_no_duplicates() {
 
             c.send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: sid.clone(),
+                    runtime_id: sid.clone(),
                     pane_id: pid,
                     data: bytes::Bytes::from(format!("echo MARKER_{i}\n").into_bytes()),
                 })),
@@ -98,27 +98,27 @@ async fn gui_restore_flow_no_duplicates() {
         c.handshake().await;
 
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         })
         .await;
-        let sessions = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
-        assert_eq!(sessions.len(), 2, "should have exactly 2 sessions");
+        assert_eq!(runtimes.len(), 2, "should have exactly 2 sessions");
 
         // Sort by name for deterministic comparison.
-        let mut sorted_sessions = sessions.clone();
-        sorted_sessions.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut sorted_runtimes = runtimes.clone();
+        sorted_runtimes.sort_by(|a, b| a.name.cmp(&b.name));
         let sorted_ids = session_ids.clone();
         // session_ids[0] is "Session 1", session_ids[1] is "Session 2" — already sorted.
 
-        for (i, info) in sorted_sessions.iter().enumerate() {
+        for (i, info) in sorted_runtimes.iter().enumerate() {
             assert_eq!(info.id, sorted_ids[i]);
 
             c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                    session_id: info.id.clone(),
+                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                    runtime_id: info.id.clone(),
                     attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
@@ -144,15 +144,15 @@ async fn gui_restore_flow_no_duplicates() {
         c.handshake().await;
 
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         })
         .await;
-        let sessions = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
         assert_eq!(
-            sessions.len(),
+            runtimes.len(),
             2,
             "second restore should still see exactly 2 sessions, not more"
         );

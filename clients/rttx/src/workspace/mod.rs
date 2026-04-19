@@ -4,7 +4,7 @@ pub mod state;
 
 pub use layout::{Direction, LayoutNode, MAX_SPLIT_DEPTH, SplitOrientation};
 pub use recovery::{PaneRecovery, PaneSource, PaneTarget, StartupStep};
-pub use state::{SessionColor, SessionMode, SessionState, WindowState};
+pub use state::{WorkspaceColor, WorkspaceMode, WorkspaceState, WindowState};
 
 use crate::config;
 use gtk4::glib;
@@ -14,13 +14,13 @@ use std::path::PathBuf;
 
 /// Returns the path to the sessions directory in `XDG_CONFIG_HOME`.
 #[must_use]
-pub fn sessions_dir() -> Option<PathBuf> {
+pub fn workspaces_dir() -> Option<PathBuf> {
     Some(config::config_dir_path())
 }
 
 /// Save the current window state to a JSON file.
 pub fn save_window_state(state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(mut path) = sessions_dir() else {
+    let Some(mut path) = workspaces_dir() else {
         return Ok(());
     };
     fs::create_dir_all(&path)?;
@@ -33,7 +33,7 @@ pub fn save_window_state(state: &WindowState) -> Result<(), Box<dyn std::error::
 /// Load the window state from the JSON file, or return default.
 #[must_use]
 pub fn load_window_state() -> WindowState {
-    let Some(mut path) = sessions_dir() else {
+    let Some(mut path) = workspaces_dir() else {
         return WindowState::default();
     };
     path.push("sessions.json");
@@ -41,7 +41,7 @@ pub fn load_window_state() -> WindowState {
         |_| WindowState::default(),
         |json| {
             let mut state = serde_json::from_str::<WindowState>(&json).unwrap_or_default();
-            for session in &mut state.sessions {
+            for session in &mut state.workspaces {
                 session.normalize_runtime_metadata();
                 session.normalize_active_terminal();
             }
@@ -336,14 +336,14 @@ mod tests {
             cwd: None,
             custom_title: None,
         };
-        state.sessions[0].layout = root.split(SplitOrientation::Horizontal);
+        state.workspaces[0].layout = root.split(SplitOrientation::Horizontal);
 
         let path = tmp.path().join("sessions.json");
         let json = serde_json::to_string_pretty(&state).unwrap();
         fs::write(&path, json).unwrap();
 
         let loaded = load_state_from(tmp.path());
-        assert_eq!(state.sessions[0].layout, loaded.sessions[0].layout);
+        assert_eq!(state.workspaces[0].layout, loaded.workspaces[0].layout);
     }
 
     #[rstest::rstest]
@@ -352,14 +352,14 @@ mod tests {
     #[case(99)]
     fn window_state_active_index_preserved(#[case] index: usize) {
         let tmp = TempDir::new().unwrap();
-        let state = WindowState { active_session_index: index, ..WindowState::default() };
+        let state = WindowState { active_workspace_index: index, ..WindowState::default() };
 
         let path = tmp.path().join("sessions.json");
         let json = serde_json::to_string_pretty(&state).unwrap();
         fs::write(&path, json).unwrap();
 
         let loaded = load_state_from(tmp.path());
-        assert_eq!(state.active_session_index, loaded.active_session_index);
+        assert_eq!(state.active_workspace_index, loaded.active_workspace_index);
     }
 
     #[test]

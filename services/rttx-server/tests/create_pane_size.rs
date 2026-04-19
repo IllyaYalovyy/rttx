@@ -6,14 +6,14 @@ use rttx_proto::proto;
 /// Helper: create a pane with explicit cols/rows and return its `pane_id`.
 async fn create_pane_with_size(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     cols: u32,
     rows: u32,
 ) -> Vec<u8> {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.to_vec(),
+                runtime_id: runtime_id.to_vec(),
                 cwd: None,
                 dark_background: None,
                 cols,
@@ -31,27 +31,27 @@ async fn create_pane_with_size(
 }
 
 /// Helper: create a session and return its id.
-async fn create_session(client: &mut TestClient, name: &str) -> Vec<u8> {
+async fn create_runtime(client: &mut TestClient, name: &str) -> Vec<u8> {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: name.into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
     match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     }
 }
 
 /// Helper: attach and return the snapshot.
-async fn attach_and_snapshot(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
+async fn attach_and_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> proto::Snapshot {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -73,9 +73,9 @@ async fn create_pane_uses_requested_dimensions() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "size-test").await;
-    let pane_id = create_pane_with_size(&mut client, &session_id, 132, 43).await;
-    let snapshot = attach_and_snapshot(&mut client, &session_id).await;
+    let runtime_id = create_runtime(&mut client, "size-test").await;
+    let pane_id = create_pane_with_size(&mut client, &runtime_id, 132, 43).await;
+    let snapshot = attach_and_snapshot(&mut client, &runtime_id).await;
 
     let pane = snapshot
         .panes
@@ -94,9 +94,9 @@ async fn create_pane_zero_size_falls_back_to_default() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "zero-size").await;
-    let pane_id = create_pane_with_size(&mut client, &session_id, 0, 0).await;
-    let snapshot = attach_and_snapshot(&mut client, &session_id).await;
+    let runtime_id = create_runtime(&mut client, "zero-size").await;
+    let pane_id = create_pane_with_size(&mut client, &runtime_id, 0, 0).await;
+    let snapshot = attach_and_snapshot(&mut client, &runtime_id).await;
 
     let pane = snapshot
         .panes

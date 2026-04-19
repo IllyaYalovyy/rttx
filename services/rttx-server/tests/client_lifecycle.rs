@@ -19,7 +19,7 @@ async fn reconnect_restores_scrollback() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     // --- First client: create session, produce output ---
-    let session_id;
+    let runtime_id;
     let pane_id;
     {
         let mut c = TestClient::connect(&sock).await;
@@ -27,21 +27,21 @@ async fn reconnect_restores_scrollback() {
 
         // Create session.
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "lifecycle-test".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-        session_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-            other => panic!("expected SessionCreated, got {other:?}"),
+        runtime_id = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+            other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         // Create pane (spawns PTY).
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -56,8 +56,8 @@ async fn reconnect_restores_scrollback() {
 
         // Attach to receive deltas.
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -67,7 +67,7 @@ async fn reconnect_restores_scrollback() {
         // Send a command that produces recognizable output.
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 data: bytes::Bytes::from_static(b"echo LIFECYCLE_MARKER_12345\n"),
             })),
@@ -95,21 +95,21 @@ async fn reconnect_restores_scrollback() {
 
         // List sessions — should find our session.
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         })
         .await;
-        let sessions = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
-        assert_eq!(sessions.len(), 1, "should have exactly 1 session");
-        assert_eq!(sessions[0].name, "lifecycle-test");
-        assert_eq!(sessions[0].id, session_id, "session ID should match");
+        assert_eq!(runtimes.len(), 1, "should have exactly 1 session");
+        assert_eq!(runtimes[0].name, "lifecycle-test");
+        assert_eq!(runtimes[0].id, runtime_id, "session ID should match");
 
         // Attach — should get snapshot with scrollback.
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -139,7 +139,7 @@ async fn reconnect_restores_scrollback() {
 /// Verify that listing sessions after disconnect shows the correct count
 /// and that creating a second session doesn't duplicate the first.
 #[tokio::test]
-async fn session_count_stable_across_reconnects() {
+async fn runtime_count_stable_across_reconnects() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -148,13 +148,13 @@ async fn session_count_stable_across_reconnects() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "stable-test".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-        let _ = c.recv().await; // SessionCreated
+        let _ = c.recv().await; // RuntimeCreated
     }
 
     // Second client: list — should see exactly 1.
@@ -162,15 +162,15 @@ async fn session_count_stable_across_reconnects() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         })
         .await;
-        let sessions = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
-        assert_eq!(sessions.len(), 1, "should still have exactly 1 session");
-        assert_eq!(sessions[0].name, "stable-test");
+        assert_eq!(runtimes.len(), 1, "should still have exactly 1 session");
+        assert_eq!(runtimes[0].name, "stable-test");
     }
 
     // Third client: list again — still 1.
@@ -178,24 +178,24 @@ async fn session_count_stable_across_reconnects() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         })
         .await;
-        let sessions = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
-        assert_eq!(sessions.len(), 1, "reconnecting should not create new sessions");
+        assert_eq!(runtimes.len(), 1, "reconnecting should not create new sessions");
     }
 }
 
 /// Full restart cycle: create session, kill server, restart, verify
 /// session count is stable and scrollback is present.
 #[tokio::test]
-async fn restart_preserves_session_count_and_scrollback() {
+async fn restart_preserves_runtime_count_and_scrollback() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    let session_id;
+    let runtime_id;
 
     // Phase 1: create session with output.
     {
@@ -204,20 +204,20 @@ async fn restart_preserves_session_count_and_scrollback() {
         c.handshake().await;
 
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "restart-stable".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-        session_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-            other => panic!("expected SessionCreated, got {other:?}"),
+        runtime_id = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+            other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -231,8 +231,8 @@ async fn restart_preserves_session_count_and_scrollback() {
         };
 
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -241,7 +241,7 @@ async fn restart_preserves_session_count_and_scrollback() {
 
         c.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 data: bytes::Bytes::from_static(b"echo RESTART_STABLE_MARKER\n"),
             })),
@@ -267,20 +267,20 @@ async fn restart_preserves_session_count_and_scrollback() {
 
         // List — should have exactly 1 session.
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         })
         .await;
-        let sessions = match c.recv().await.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match c.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
-        assert_eq!(sessions.len(), 1, "restart should preserve exactly 1 session");
-        assert_eq!(sessions[0].id, session_id, "session ID should survive restart");
+        assert_eq!(runtimes.len(), 1, "restart should preserve exactly 1 session");
+        assert_eq!(runtimes[0].id, runtime_id, "session ID should survive restart");
 
         // Attach and check scrollback.
         c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })

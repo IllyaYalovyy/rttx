@@ -1,6 +1,6 @@
 use gtk4::glib;
 use gtk4::prelude::*;
-use rttx::session::{LayoutNode, SplitOrientation, build_layout_widget};
+use rttx::workspace::{LayoutNode, SplitOrientation, build_layout_widget};
 use rttx::terminal::widget::TerminalWidget;
 use std::cell::RefCell;
 use std::collections::HashMap;

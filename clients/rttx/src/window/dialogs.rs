@@ -19,7 +19,7 @@ impl Window {
     pub(super) fn confirm_close_others(&self, keep_uuid: &str) {
         let other_uuids: Vec<String> = {
             let state = self.imp().state.borrow();
-            state.sessions.iter().filter(|s| s.uuid != keep_uuid).map(|s| s.uuid.clone()).collect()
+            state.workspaces.iter().filter(|s| s.uuid != keep_uuid).map(|s| s.uuid.clone()).collect()
         };
         if other_uuids.is_empty() {
             return;
@@ -49,7 +49,7 @@ impl Window {
     pub(super) fn confirm_close_all(&self) {
         let all_uuids: Vec<String> = {
             let state = self.imp().state.borrow();
-            state.sessions.iter().map(|s| s.uuid.clone()).collect()
+            state.workspaces.iter().map(|s| s.uuid.clone()).collect()
         };
         if all_uuids.is_empty() {
             return;
@@ -79,7 +79,7 @@ impl Window {
     pub(super) fn confirm_close_session(&self, session_uuid: &str) {
         let should_close_immediately = {
             let state = self.imp().state.borrow();
-            state.sessions.iter().find(|s| s.uuid == session_uuid).is_some_and(|session| {
+            state.workspaces.iter().find(|s| s.uuid == session_uuid).is_some_and(|session| {
                 !session.uses_managed_runtime() && session.layout.terminal_count() <= 1
             })
         };
@@ -372,7 +372,7 @@ impl Window {
         about.present();
     }
 
-    pub(super) fn show_workspace_popover_menu(&self, row: &SessionRow, session_uuid: &str) {
+    pub(super) fn show_workspace_popover_menu(&self, row: &WorkspaceRow, session_uuid: &str) {
         // Unparent any previous popover so it doesn't leak.
         if let Some(old) = self.imp().workspace_popover.borrow_mut().take()
             && old.parent().is_some()
@@ -382,7 +382,7 @@ impl Window {
 
         let items = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|s| s.uuid == session_uuid) else {
+            let Some(session) = state.workspaces.iter().find(|s| s.uuid == session_uuid) else {
                 return;
             };
             let disconnected =
@@ -430,7 +430,7 @@ impl Window {
         let r = row.clone();
         let rename_action = gtk4::gio::SimpleAction::new("ctx-rename", None);
         rename_action.connect_activate(move |_, _| {
-            w.show_rename_session_popover(&r, &u);
+            w.show_rename_runtime_popover(&r, &u);
         });
         self.add_action(&rename_action);
 
@@ -459,7 +459,7 @@ impl Window {
             let u = session_uuid.to_string();
             let detach_action = gtk4::gio::SimpleAction::new("ctx-detach", None);
             detach_action.connect_activate(move |_, _| {
-                w.detach_session(&u);
+                w.detach_runtime(&u);
             });
             self.add_action(&detach_action);
         }
@@ -491,10 +491,10 @@ impl Window {
         popover.popup();
     }
 
-    pub(super) fn show_rename_session_popover(&self, row: &SessionRow, session_uuid: &str) {
+    pub(super) fn show_rename_runtime_popover(&self, row: &WorkspaceRow, session_uuid: &str) {
         let current_name = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid)
+            let Some(session) = state.workspaces.iter().find(|session| session.uuid == session_uuid)
             else {
                 return;
             };
@@ -505,7 +505,7 @@ impl Window {
         popover.set_has_arrow(true);
         popover.set_position(gtk4::PositionType::Bottom);
         // Parent the popover on the wrapper ListBoxRow (row's parent), not the
-        // SessionRow itself, because SessionRow is a ListBoxRow subclass that
+        // WorkspaceRow itself, because WorkspaceRow is a ListBoxRow subclass that
         // isn't directly in the ListBox — attaching to it causes GTK to fail
         // the `box != NULL` assertion when grabbing focus.
         let popover_parent = row.parent().unwrap_or_else(|| row.clone().upcast::<gtk4::Widget>());
@@ -537,7 +537,7 @@ impl Window {
         let commit = move || {
             let name = entry_for_commit.text().trim().to_string();
             if !name.is_empty() {
-                win.rename_session(&session_uuid, &name);
+                win.rename_runtime(&session_uuid, &name);
             }
             popover_for_commit.popdown();
         };
@@ -558,11 +558,11 @@ impl Window {
         entry.grab_focus();
     }
 
-    pub(crate) fn rename_session(&self, session_uuid: &str, new_name: &str) {
+    pub(crate) fn rename_runtime(&self, session_uuid: &str, new_name: &str) {
         let runtime_info = {
             let mut state = self.imp().state.borrow_mut();
             let Some(session) =
-                state.sessions.iter_mut().find(|session| session.uuid == session_uuid)
+                state.workspaces.iter_mut().find(|session| session.uuid == session_uuid)
             else {
                 return;
             };
@@ -583,10 +583,10 @@ impl Window {
         let mut idx = 0;
         while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
             if let Some(session_row) =
-                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
                 && session_row.uuid() == session_uuid
             {
-                session_row.set_session_name(new_name);
+                session_row.set_workspace_name(new_name);
                 return;
             }
             idx += 1;
@@ -599,7 +599,7 @@ impl Window {
     pub(crate) fn ssh_target_for_active_session(&self) -> Option<String> {
         let state = self.imp().state.borrow();
         let visible = self.imp().session_stack.visible_child_name()?;
-        let session = state.sessions.iter().find(|s| s.uuid == visible.as_str())?;
+        let session = state.workspaces.iter().find(|s| s.uuid == visible.as_str())?;
         match &session.runtime.endpoint {
             RuntimeEndpoint::Remote { host } if session.runtime.is_managed() => Some(host.clone()),
             _ => None,
@@ -643,7 +643,7 @@ impl Window {
             let state = self.imp().state.borrow();
             let visible = self.imp().session_stack.visible_child_name();
             visible
-                .and_then(|name| state.sessions.iter().find(|s| s.uuid == name.as_str()))
+                .and_then(|name| state.workspaces.iter().find(|s| s.uuid == name.as_str()))
                 .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
         };
 

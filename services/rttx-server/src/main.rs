@@ -32,7 +32,7 @@ enum Command {
     Stop,
     /// Show daemon status and active runtimes
     Status,
-    /// Remove all sessions with no connected clients
+    /// Remove all runtimes with no connected clients
     Clean,
     /// Serve one client over stdin/stdout (for SSH)
     AttachStdio,
@@ -120,8 +120,8 @@ fn start(foreground: bool) -> anyhow::Result<()> {
             s.load_persisted_state();
         }
 
-        // Reconstruct sessions: replay scrollback, spawn fresh shells.
-        Server::reconstruct_sessions(&server).await;
+        // Reconstruct runtimes: replay scrollback, spawn fresh shells.
+        Server::reconstruct_runtimes(&server).await;
 
         {
             let sig_server = Arc::clone(&server);
@@ -209,7 +209,7 @@ fn diagnostics() -> anyhow::Result<()> {
         };
 
         if let Some(proto::server_message::Msg::DiagnosticsReport(report)) = resp.msg {
-            println!("Sessions: {}", report.session_count);
+            println!("Runtimes: {}", report.runtime_count);
             println!(
                 "Panes: {} ({} active, {} exited)",
                 report.total_pane_count, report.total_active_panes, report.total_exited_panes
@@ -220,19 +220,19 @@ fn diagnostics() -> anyhow::Result<()> {
             println!("Total pending_flush: {} bytes", report.total_pending_flush);
             println!("Total command_history entries: {}", report.total_command_history);
 
-            if !report.sessions.is_empty() {
+            if !report.runtimes.is_empty() {
                 println!();
-                for session in &report.sessions {
-                    let id = rttx_proto::bytes_to_uuid(&session.id)
+                for rt_info in &report.runtimes {
+                    let id = rttx_proto::bytes_to_uuid(&rt_info.id)
                         .map_or_else(|_| "?".into(), |u| u.to_string());
-                    println!("  Session \"{}\" ({}):", session.name, &id[..8.min(id.len())]);
+                    println!("  Runtime \"{}\" ({}):", rt_info.name, &id[..8.min(id.len())]);
                     println!(
                         "    Panes: {} active, {} exited",
-                        session.active_pane_count, session.exited_pane_count
+                        rt_info.active_pane_count, rt_info.exited_pane_count
                     );
-                    println!("    Command history: {} entries", session.command_history_len);
-                    println!("    Attached clients: {}", session.attached_client_count);
-                    for pane in &session.panes {
+                    println!("    Command history: {} entries", rt_info.command_history_len);
+                    println!("    Attached clients: {}", rt_info.attached_client_count);
+                    for pane in &rt_info.panes {
                         let pid = rttx_proto::bytes_to_uuid(&pane.id)
                             .map_or_else(|_| "?".into(), |u| u.to_string());
                         let status = if pane.is_exited { "exited" } else { "active" };
@@ -350,16 +350,16 @@ fn status() -> anyhow::Result<()> {
             }
         }
 
-        // ListSessions.
+        // ListRuntimes.
         buf.clear();
         let list = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         };
         encode_frame(&list, &mut buf)?;
         stream.write_all(&buf).await?;
         stream.flush().await?;
 
-        // Read SessionList.
+        // Read RuntimeList.
         let resp: proto::ServerMessage = loop {
             stream.read_buf(&mut read_buf).await?;
             match decode_frame::<proto::ServerMessage>(&mut read_buf) {
@@ -369,25 +369,25 @@ fn status() -> anyhow::Result<()> {
             }
         };
 
-        if let Some(proto::server_message::Msg::SessionList(sl)) = resp.msg {
+        if let Some(proto::server_message::Msg::RuntimeList(sl)) = resp.msg {
             println!("Status: running");
-            println!("Runtimes: {}", sl.sessions.len());
+            println!("Runtimes: {}", sl.runtimes.len());
 
-            let total_panes: usize = sl.sessions.iter().map(|s| s.panes.len()).sum();
-            let total_clients: u32 = sl.sessions.iter().map(|s| s.attached_client_count).sum();
+            let total_panes: usize = sl.runtimes.iter().map(|s| s.panes.len()).sum();
+            let total_clients: u32 = sl.runtimes.iter().map(|s| s.attached_client_count).sum();
             println!("Panes: {total_panes}");
             println!("Connected clients: {total_clients}");
 
-            if !sl.sessions.is_empty() {
+            if !sl.runtimes.is_empty() {
                 println!();
                 println!(
                     "{:<38} {:<20} {:<12} {:<6} {:<8}",
                     "ID", "NAME", "POLICY", "PANES", "CLIENTS"
                 );
-                for session in &sl.sessions {
-                    let id = rttx_proto::bytes_to_uuid(&session.id)
+                for rt_info in &sl.runtimes {
+                    let id = rttx_proto::bytes_to_uuid(&rt_info.id)
                         .map_or_else(|_| "?".into(), |u| u.to_string());
-                    let policy = match proto::RuntimePolicy::try_from(session.policy) {
+                    let policy = match proto::RuntimePolicy::try_from(rt_info.policy) {
                         Ok(proto::RuntimePolicy::Persistent) => "persistent",
                         Ok(proto::RuntimePolicy::Ephemeral) => "ephemeral",
                         _ => "unknown",
@@ -395,10 +395,10 @@ fn status() -> anyhow::Result<()> {
                     println!(
                         "{:<38} {:<20} {:<12} {:<6} {:<8}",
                         id,
-                        truncate(&session.name, 20),
+                        truncate(&rt_info.name, 20),
                         policy,
-                        session.panes.len(),
-                        session.attached_client_count,
+                        rt_info.panes.len(),
+                        rt_info.attached_client_count,
                     );
                 }
             }
@@ -445,11 +445,11 @@ fn clean() -> anyhow::Result<()> {
             }
         }
 
-        // ListSessions.
+        // ListRuntimes.
         buf.clear();
         encode_frame(
             &proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+                msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
             },
             &mut buf,
         )?;
@@ -465,25 +465,25 @@ fn clean() -> anyhow::Result<()> {
             }
         };
 
-        let sessions = match resp.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
+        let runtimes = match resp.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
             _ => anyhow::bail!("unexpected response"),
         };
 
-        let unused: Vec<_> = sessions.iter().filter(|s| s.attached_client_count == 0).collect();
+        let unused: Vec<_> = runtimes.iter().filter(|s| s.attached_client_count == 0).collect();
 
         if unused.is_empty() {
-            println!("No unused sessions");
+            println!("No unused runtimes");
             return Ok(());
         }
 
         let mut cleaned = 0u32;
-        for session in &unused {
+        for rt_info in &unused {
             buf.clear();
             encode_frame(
                 &proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::TerminateSession(
-                        proto::TerminateSession { session_id: session.id.clone() },
+                    msg: Some(proto::client_message::Msg::TerminateRuntime(
+                        proto::TerminateRuntime { runtime_id: rt_info.id.clone() },
                     )),
                 },
                 &mut buf,
@@ -491,14 +491,14 @@ fn clean() -> anyhow::Result<()> {
             stream.write_all(&buf).await?;
             stream.flush().await?;
 
-            // Wait for SessionTerminated.
+            // Wait for RuntimeTerminated.
             loop {
                 stream.read_buf(&mut read_buf).await?;
                 match decode_frame::<proto::ServerMessage>(&mut read_buf) {
                     Ok(msg) => {
-                        if matches!(msg.msg, Some(proto::server_message::Msg::SessionTerminated(_)))
+                        if matches!(msg.msg, Some(proto::server_message::Msg::RuntimeTerminated(_)))
                         {
-                            let name = truncate(&session.name, 40);
+                            let name = truncate(&rt_info.name, 40);
                             println!("Removed: {name}");
                             cleaned += 1;
                             break;
@@ -510,7 +510,7 @@ fn clean() -> anyhow::Result<()> {
             }
         }
 
-        println!("Cleaned {cleaned} session{}", if cleaned == 1 { "" } else { "s" });
+        println!("Cleaned {cleaned} runtime{}", if cleaned == 1 { "" } else { "s" });
         Ok(())
     })
 }

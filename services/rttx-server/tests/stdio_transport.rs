@@ -58,7 +58,7 @@ async fn read_response(
 
 /// Spawn `rttx-server attach-stdio` against a running daemon and speak the protocol.
 #[tokio::test]
-async fn attach_stdio_hello_and_create_session() {
+async fn attach_stdio_hello_and_create_runtime() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = TempDir::new().unwrap();
     let runtime_dir = tmp.path().join("runtime");
@@ -99,7 +99,7 @@ async fn attach_stdio_hello_and_create_session() {
 
     // Create session.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "stdio-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
@@ -110,17 +110,17 @@ async fn attach_stdio_hello_and_create_session() {
     stdin.flush().await.unwrap();
 
     let resp = read_response(&mut stdout, &mut read_buf).await;
-    let session_id = match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => {
-            bytes_to_uuid(&sc.session_id).unwrap()
+    let runtime_id = match resp.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
+            bytes_to_uuid(&sc.runtime_id).unwrap()
         }
-        other => panic!("expected SessionCreated, got {other:?}"),
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
-    assert!(!session_id.is_nil());
+    assert!(!runtime_id.is_nil());
 
-    // List sessions.
+    // List runtimes.
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     buf.clear();
     encode_frame(&list, &mut buf).unwrap();
@@ -129,11 +129,11 @@ async fn attach_stdio_hello_and_create_session() {
 
     let resp = read_response(&mut stdout, &mut read_buf).await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 1);
-            assert_eq!(sl.sessions[0].name, "stdio-test");
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 1);
+            assert_eq!(sl.runtimes[0].name, "stdio-test");
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 
     // Disconnect — process should exit.

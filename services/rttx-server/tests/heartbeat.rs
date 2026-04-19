@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, attach_rw, create_session, start_test_server};
+use common::{TestClient, attach_rw, create_runtime, start_test_server};
 use rttx_proto::proto;
 
 #[test]
@@ -34,9 +34,9 @@ fn ping_roundtrip_still_works_for_attached_clients() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let session_id =
-            create_session(&mut client, "heartbeat-attach", proto::RuntimePolicy::Persistent).await;
-        let _snapshot = attach_rw(&mut client, &session_id).await;
+        let runtime_id =
+            create_runtime(&mut client, "heartbeat-attach", proto::RuntimePolicy::Persistent).await;
+        let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         client
             .send(&proto::ClientMessage {
@@ -63,18 +63,18 @@ fn ping_answered_while_mutex_held() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let session_id =
-            create_session(&mut client, "mutex-held", proto::RuntimePolicy::Persistent).await;
-        let _snapshot = attach_rw(&mut client, &session_id).await;
+        let runtime_id =
+            create_runtime(&mut client, "mutex-held", proto::RuntimePolicy::Persistent).await;
+        let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane and trigger continuous output to keep the mutex busy.
-        let pane_id = common::create_pane(&mut client, &session_id).await;
+        let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
         // Generate a burst of PTY output that keeps the server busy.
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id,
                     data: bytes::Bytes::from_static(
                         b"for i in $(seq 1 500); do echo line$i; done\n",
@@ -122,16 +122,16 @@ fn ping_answered_during_pty_output() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let session_id =
-            create_session(&mut client, "ping-during-output", proto::RuntimePolicy::Persistent)
+        let runtime_id =
+            create_runtime(&mut client, "ping-during-output", proto::RuntimePolicy::Persistent)
                 .await;
-        let _snapshot = attach_rw(&mut client, &session_id).await;
+        let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane that will produce output.
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: Some(true),
                     cols: 0,
@@ -152,7 +152,7 @@ fn ping_answered_during_pty_output() {
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id,
                     data: bytes::Bytes::from_static(b"echo hello\n"),
                 })),
@@ -203,17 +203,17 @@ fn sustained_pings_answered_during_continuous_output() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let session_id =
-            create_session(&mut client, "sustained-heartbeat", proto::RuntimePolicy::Persistent)
+        let runtime_id =
+            create_runtime(&mut client, "sustained-heartbeat", proto::RuntimePolicy::Persistent)
                 .await;
-        let _snapshot = attach_rw(&mut client, &session_id).await;
-        let pane_id = common::create_pane(&mut client, &session_id).await;
+        let _snapshot = attach_rw(&mut client, &runtime_id).await;
+        let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
         // Generate continuous output to create backpressure.
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id,
                     data: bytes::Bytes::from_static(
                         b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n",

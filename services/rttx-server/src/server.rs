@@ -1,6 +1,6 @@
 //! Top-level server loop.
 //!
-//! Accepts client connections, routes messages to sessions/panes, runs the
+//! Accepts client connections, routes messages to runtimes/panes, runs the
 //! serialization loop, and manages the PTY read loops.
 
 use crate::engine::Engine;
@@ -12,8 +12,8 @@ use crate::pane::Pane;
 use crate::protocol;
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
 use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
-use crate::session::{
-    AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Session,
+use crate::runtime::{
+    AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, RuntimePolicy, Runtime,
     TerminationReason,
 };
 use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
@@ -41,8 +41,8 @@ const RESP_CHANNEL_BOUND: usize = 256;
 
 /// Send a message to previously collected sender handles.
 ///
-/// This is the lock-free counterpart of [`Server::broadcast_to_session`]:
-/// collect handles with [`Server::collect_session_senders`] while holding
+/// This is the lock-free counterpart of [`Server::broadcast_to_runtime`]:
+/// collect handles with [`Server::collect_runtime_senders`] while holding
 /// the mutex, then call this after releasing it.
 fn send_to_collected(
     senders: &[(Uuid, mpsc::Sender<proto::ServerMessage>)],
@@ -57,8 +57,8 @@ fn send_to_collected(
 
 /// Shared mutable server state.
 pub struct Server {
-    /// All active sessions.
-    pub sessions: HashMap<Uuid, Session>,
+    /// All active runtimes.
+    pub runtimes: HashMap<Uuid, Runtime>,
     /// Server's own identity.
     pub server_id: Uuid,
     /// The engine used to spawn pane processes.
@@ -81,7 +81,7 @@ impl Server {
     pub fn new(os: Box<dyn OsInterface>) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
         Self {
-            sessions: HashMap::new(),
+            runtimes: HashMap::new(),
             server_id: Uuid::new_v4(),
             engine: Box::new(NativeEngine),
             os,
@@ -115,26 +115,26 @@ impl Server {
         self.pty_writers.len()
     }
 
-    /// Human-readable label for a session: `"name" (short_id)`.
+    /// Human-readable label for a runtime: `"name" (short_id)`.
     ///
-    /// Falls back to just the short ID when the session is not found.
+    /// Falls back to just the short ID when the runtime is not found.
     #[must_use]
-    pub fn session_label(&self, session_id: Uuid) -> String {
-        self.sessions.get(&session_id).map_or_else(
-            || format!("({})", short_id(session_id)),
-            |session| format!("\"{}\" ({})", session.name, short_id(session_id)),
+    pub fn runtime_label(&self, runtime_id: Uuid) -> String {
+        self.runtimes.get(&runtime_id).map_or_else(
+            || format!("({})", short_id(runtime_id)),
+            |rt| format!("\"{}\" ({})", rt.name, short_id(runtime_id)),
         )
     }
 
-    /// Load persisted state and resurrect sessions.
+    /// Load persisted state and resurrect runtimes.
     pub fn load_persisted_state(&mut self) {
         let state_path = default_state_path(&self.os.cache_dir());
         match load_state(&state_path) {
             Ok(Some(state)) => {
-                tracing::info!("Loaded {} persisted sessions", state.sessions.len());
-                for ps in &state.sessions {
-                    let session = Session::from_persisted(ps);
-                    self.sessions.insert(session.id, session);
+                tracing::info!("Loaded {} persisted runtimes", state.runtimes.len());
+                for ps in &state.runtimes {
+                    let rt = Runtime::from_persisted(ps);
+                    self.runtimes.insert(rt.id, rt);
                 }
             }
             Ok(None) => {
@@ -146,19 +146,19 @@ impl Server {
         }
     }
 
-    /// Reconstruct resurrected sessions: replay scrollback logs into pane
+    /// Reconstruct resurrected runtimes: replay scrollback logs into pane
     /// screens and spawn fresh shells in saved working directories.
     ///
     /// Called after `load_persisted_state` once the server is wrapped in
     /// `Arc<Mutex<>>` so we can spawn PTY read loops.
     #[allow(clippy::significant_drop_tightening)]
-    pub async fn reconstruct_sessions(server: &Arc<Mutex<Self>>) {
+    pub async fn reconstruct_runtimes(server: &Arc<Mutex<Self>>) {
         let panes_to_reconstruct: Vec<(Uuid, Uuid, String, Option<String>, u16, u16)> = {
             let mut s = server.lock().await;
 
-            for session in s.sessions.values_mut() {
-                let label = format!("\"{}\" ({})", session.name, short_id(session.id));
-                for pane in session.panes.values_mut() {
+            for rt in s.runtimes.values_mut() {
+                let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
+                for pane in rt.panes.values_mut() {
                     // Replay scrollback log into the pane screen.
                     if let Some(ref log_path) = pane.scrollback_log_path
                         && log_path.exists()
@@ -169,7 +169,7 @@ impl Server {
                                 let restart_safe = restart_safe_scrollback(&data);
                                 let clean = strip_client_queries(restart_safe);
                                 tracing::info!(
-                                    "Replaying {} bytes of scrollback for pane {pane_short} in session {label}",
+                                    "Replaying {} bytes of scrollback for pane {pane_short} in runtime {label}",
                                     clean.len(),
                                 );
                                 pane.screen.feed(&clean);
@@ -177,13 +177,13 @@ impl Server {
                                     && let Err(e) = std::fs::write(log_path, &clean)
                                 {
                                     tracing::error!(
-                                        "Failed to rewrite restart-safe scrollback for pane {pane_short} in session {label}: {e}",
+                                        "Failed to rewrite restart-safe scrollback for pane {pane_short} in runtime {label}: {e}",
                                     );
                                 }
                             }
                             Err(e) => {
                                 tracing::error!(
-                                    "Failed to read scrollback log for pane {pane_short} in session {label}: {e}",
+                                    "Failed to read scrollback log for pane {pane_short} in runtime {label}: {e}",
                                 );
                             }
                         }
@@ -192,12 +192,12 @@ impl Server {
             }
 
             // Collect panes that need fresh shells spawned.
-            s.sessions
+            s.runtimes
                 .values()
-                .flat_map(|session| {
-                    let name = session.name.clone();
-                    session.panes.values().map(move |pane| {
-                        (session.id, pane.id, name.clone(), pane.cwd.clone(), pane.cols, pane.rows)
+                .flat_map(|rt| {
+                    let name = rt.name.clone();
+                    rt.panes.values().map(move |pane| {
+                        (rt.id, pane.id, name.clone(), pane.cwd.clone(), pane.cols, pane.rows)
                     })
                 })
                 .collect()
@@ -209,12 +209,12 @@ impl Server {
 
         tracing::info!("Reconstructing {} panes", panes_to_reconstruct.len());
 
-        for (session_id, pane_id, session_name, cwd, cols, rows) in panes_to_reconstruct {
-            let session_label = format!("\"{}\" ({})", session_name, short_id(session_id));
+        for (runtime_id, pane_id, runtime_name, cwd, cols, rows) in panes_to_reconstruct {
+            let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
             let pane_short = short_id(pane_id);
             let pty_result = {
                 let s = server.lock().await;
-                let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
+                let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
                 if let Some(parent) = hist.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -236,31 +236,31 @@ impl Server {
                         s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                         s.pty_kill_senders.insert(pane_id, kill_tx);
                         // Clear exit status — fresh shell is running.
-                        if let Some(session) = s.sessions.get_mut(&session_id) {
-                            let _ = session.set_pane_exit_status(pane_id, None);
-                            if let Some(pane) = session.panes.get_mut(&pane_id) {
+                        if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
+                            let _ = rt.set_pane_exit_status(pane_id, None);
+                            if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                 pane.child_pid = child_pid;
                             }
                         }
                     }
                     spawn_pty_read_loop(
                         Arc::clone(server),
-                        session_id,
+                        runtime_id,
                         pane_id,
-                        &session_name,
+                        &runtime_name,
                         reader,
                         child,
                         kill_rx,
                     );
-                    tracing::info!("Reconstructed pane {pane_short} in session {session_label}");
+                    tracing::info!("Reconstructed pane {pane_short} in runtime {runtime_label}");
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to reconstruct pane {pane_short} in session {session_label}: {e}"
+                        "Failed to reconstruct pane {pane_short} in runtime {runtime_label}: {e}"
                     );
                     let mut s = server.lock().await;
-                    if let Some(session) = s.sessions.get_mut(&session_id) {
-                        let _ = session.set_pane_exit_status(pane_id, Some(-1));
+                    if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
+                        let _ = rt.set_pane_exit_status(pane_id, Some(-1));
                     }
                 }
             }
@@ -271,11 +271,11 @@ impl Server {
     #[must_use]
     pub fn build_snapshot(&self) -> ServerState {
         ServerState {
-            sessions: self
-                .sessions
+            runtimes: self
+                .runtimes
                 .values()
-                .filter(|session| session.policy == RuntimePolicy::Persistent)
-                .map(Session::to_persisted)
+                .filter(|rt| rt.policy == RuntimePolicy::Persistent)
+                .map(Runtime::to_persisted)
                 .collect(),
             serialized_at: std::time::SystemTime::now(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -306,42 +306,42 @@ impl Server {
         }
     }
 
-    /// Send a message to all clients attached to a session.
-    fn broadcast_to_session(&self, session_id: Uuid, msg: &proto::ServerMessage) {
-        let Some(session) = self.sessions.get(&session_id) else {
+    /// Send a message to all clients attached to a runtime.
+    fn broadcast_to_runtime(&self, runtime_id: Uuid, msg: &proto::ServerMessage) {
+        let Some(rt) = self.runtimes.get(&runtime_id) else {
             return;
         };
-        self.broadcast_to_clients(session.attached_clients.keys().copied(), None, msg);
+        self.broadcast_to_clients(rt.attached_clients.keys().copied(), None, msg);
     }
 
-    /// Collect cloned sender handles for all clients attached to a session.
+    /// Collect cloned sender handles for all clients attached to a runtime.
     ///
     /// The returned senders can be used after releasing the server mutex via
     /// [`send_to_collected`].
-    fn collect_session_senders(
+    fn collect_runtime_senders(
         &self,
-        session_id: Uuid,
+        runtime_id: Uuid,
     ) -> Vec<(Uuid, mpsc::Sender<proto::ServerMessage>)> {
-        let Some(session) = self.sessions.get(&session_id) else {
+        let Some(rt) = self.runtimes.get(&runtime_id) else {
             return Vec::new();
         };
-        session
+        rt
             .attached_clients
             .keys()
             .filter_map(|&cid| self.client_senders.get(&cid).map(|s| (cid, s.clone())))
             .collect()
     }
 
-    fn terminate_session(
+    fn terminate_runtime(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
         final_revision: u64,
         reason: TerminationReason,
         exclude_client_id: Option<Uuid>,
     ) -> Option<proto::ServerMessage> {
-        let session = self.sessions.remove(&session_id)?;
-        let attached_client_ids: Vec<_> = session.attached_clients.keys().copied().collect();
-        let pane_ids: Vec<_> = session.panes.keys().copied().collect();
+        let rt = self.runtimes.remove(&runtime_id)?;
+        let attached_client_ids: Vec<_> = rt.attached_clients.keys().copied().collect();
+        let pane_ids: Vec<_> = rt.panes.keys().copied().collect();
         for pane_id in pane_ids {
             self.pty_writers.remove(&pane_id);
             if let Some(kill_tx) = self.pty_kill_senders.remove(&pane_id) {
@@ -349,7 +349,7 @@ impl Server {
             }
         }
 
-        let msg = protocol::session_terminated(session_id, final_revision, reason);
+        let msg = protocol::runtime_terminated(runtime_id, final_revision, reason);
         self.broadcast_to_clients(attached_client_ids, exclude_client_id, &msg);
         Some(msg)
     }
@@ -383,10 +383,10 @@ impl Server {
 
             proto::client_message::Msg::Ping(ping) => Some(protocol::pong(ping.nonce)),
 
-            proto::client_message::Msg::ListSessions(_) => {
+            proto::client_message::Msg::ListRuntimes(_) => {
                 let s = server.lock().await;
-                let infos = protocol::session_inventory_for(client_id, s.sessions.values());
-                Some(protocol::session_list(infos))
+                let infos = protocol::runtime_inventory_for(client_id, s.runtimes.values());
+                Some(protocol::runtime_list(infos))
             }
 
             proto::client_message::Msg::GetDiagnostics(_) => {
@@ -394,26 +394,26 @@ impl Server {
                 Some(protocol::diagnostics_report(&s))
             }
 
-            proto::client_message::Msg::CreateSession(req) => {
+            proto::client_message::Msg::CreateRuntime(req) => {
                 let mut s = server.lock().await;
-                let session = Session::new(req.name);
-                let session_id = session.id;
+                let rt = Runtime::new(req.name);
+                let runtime_id = rt.id;
                 let policy = RuntimePolicy::from_proto(req.policy);
-                let revision = session.revision();
-                let mut session = session;
-                session.policy = policy;
-                let label = format!("\"{}\" ({})", session.name, short_id(session_id));
+                let revision = rt.revision();
+                let mut rt = rt;
+                rt.policy = policy;
+                let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 let policy_str = match policy {
                     RuntimePolicy::Persistent => "persistent",
                     RuntimePolicy::Ephemeral => "ephemeral",
                 };
-                s.sessions.insert(session_id, session);
-                tracing::info!("Session created: {label}, policy={policy_str}");
-                Some(protocol::session_created(session_id, revision))
+                s.runtimes.insert(runtime_id, rt);
+                tracing::info!("Runtime created: {label}, policy={policy_str}");
+                Some(protocol::runtime_created(runtime_id, revision))
             }
 
-            proto::client_message::Msg::AttachSession(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+            proto::client_message::Msg::AttachRuntime(req) => {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -424,13 +424,13 @@ impl Server {
                 };
                 let attach_mode = AttachMode::from_proto(req.attach_mode);
                 let mut s = server.lock().await;
-                let Some(session) = s.sessions.get_mut(&session_id) else {
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
                     return Some(protocol::error(
-                        protocol::ERR_SESSION_NOT_FOUND,
-                        "session not found".into(),
+                        protocol::ERR_RUNTIME_NOT_FOUND,
+                        "runtime not found".into(),
                     ));
                 };
-                let attach_outcome = match session.attach_client(client_id, attach_mode) {
+                let attach_outcome = match rt.attach_client(client_id, attach_mode) {
                     Ok(outcome) => outcome,
                     Err(AttachError::UnsupportedTakeOver) => {
                         return Some(protocol::error(
@@ -444,15 +444,15 @@ impl Server {
                     AttachOutcome::Attached { role, revision } => (role, revision),
                     AttachOutcome::Blocked { current_role, .. } => {
                         return Some(protocol::attach_blocked(
-                            session_id,
+                            runtime_id,
                             current_role,
-                            session.attached_client_count(),
-                            session.read_only_client_count(),
+                            rt.attached_client_count(),
+                            rt.read_only_client_count(),
                         ));
                     }
                 };
 
-                let pane_snapshots: Vec<proto::PaneSnapshot> = session
+                let pane_snapshots: Vec<proto::PaneSnapshot> = rt
                     .panes
                     .values()
                     .map(|pane| proto::PaneSnapshot {
@@ -472,16 +472,16 @@ impl Server {
                         sgr_mouse_mode: pane.screen.sgr_mouse_mode(),
                     })
                     .collect();
-                let session_label = s.session_label(session_id);
+                let runtime_label = s.runtime_label(runtime_id);
                 tracing::info!(
-                    "Client {} attached to session {session_label} as {role:?}",
+                    "Client {} attached to runtime {runtime_label} as {role:?}",
                     short_id(client_id),
                 );
-                Some(protocol::snapshot(session_id, pane_snapshots, revision, role))
+                Some(protocol::snapshot(runtime_id, pane_snapshots, revision, role))
             }
 
-            proto::client_message::Msg::DetachSession(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+            proto::client_message::Msg::DetachRuntime(req) => {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -491,41 +491,41 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(session) = s.sessions.get_mut(&session_id) else {
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
                     return Some(protocol::error(
-                        protocol::ERR_SESSION_NOT_FOUND,
-                        "session not found".into(),
+                        protocol::ERR_RUNTIME_NOT_FOUND,
+                        "runtime not found".into(),
                     ));
                 };
-                match session.detach_client(client_id, DetachReason::ExplicitRequest) {
+                match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
                     DetachOutcome::Detached { revision }
                     | DetachOutcome::NotAttached { revision } => {
-                        let session_label = s.session_label(session_id);
+                        let runtime_label = s.runtime_label(runtime_id);
                         tracing::info!(
-                            "Client {} detached from session {session_label}",
+                            "Client {} detached from runtime {runtime_label}",
                             short_id(client_id),
                         );
-                        Some(protocol::session_detached(session_id, revision))
+                        Some(protocol::runtime_detached(runtime_id, revision))
                     }
                     DetachOutcome::Terminated { final_revision, reason } => {
-                        let session_label = s.session_label(session_id);
+                        let runtime_label = s.runtime_label(runtime_id);
                         tracing::info!(
-                            "Client {} detached from session {session_label} (terminated: {reason:?})",
+                            "Client {} detached from runtime {runtime_label} (terminated: {reason:?})",
                             short_id(client_id),
                         );
-                        let _ = s.terminate_session(
-                            session_id,
+                        let _ = s.terminate_runtime(
+                            runtime_id,
                             final_revision,
                             reason,
                             Some(client_id),
                         );
-                        Some(protocol::session_terminated(session_id, final_revision, reason))
+                        Some(protocol::runtime_terminated(runtime_id, final_revision, reason))
                     }
                 }
             }
 
-            proto::client_message::Msg::TerminateSession(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+            proto::client_message::Msg::TerminateRuntime(req) => {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -535,36 +535,36 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(session) = s.sessions.get(&session_id) else {
+                let Some(rt) = s.runtimes.get(&runtime_id) else {
                     return Some(protocol::error(
-                        protocol::ERR_SESSION_NOT_FOUND,
-                        "session not found".into(),
+                        protocol::ERR_RUNTIME_NOT_FOUND,
+                        "runtime not found".into(),
                     ));
                 };
-                if session.has_write_owner() && !session.client_has_write_access(client_id) {
+                if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
                         "runtime is currently owned by another client".into(),
                     ));
                 }
-                let final_revision = session.revision().saturating_add(1);
-                let session_label = s.session_label(session_id);
-                let _ = s.terminate_session(
-                    session_id,
+                let final_revision = rt.revision().saturating_add(1);
+                let runtime_label = s.runtime_label(runtime_id);
+                let _ = s.terminate_runtime(
+                    runtime_id,
                     final_revision,
                     TerminationReason::Explicit,
                     Some(client_id),
                 );
-                tracing::info!("Session terminated: {session_label}");
-                Some(protocol::session_terminated(
-                    session_id,
+                tracing::info!("Runtime terminated: {runtime_label}");
+                Some(protocol::runtime_terminated(
+                    runtime_id,
                     final_revision,
                     TerminationReason::Explicit,
                 ))
             }
 
             proto::client_message::Msg::CreatePane(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -575,22 +575,22 @@ impl Server {
                 };
 
                 let pane_id = Uuid::new_v4();
-                let (pty_result, session_label, cols, rows) = {
+                let (pty_result, runtime_label, cols, rows) = {
                     let s = server.lock().await;
-                    let Some(session) = s.sessions.get(&session_id) else {
+                    let Some(rt) = s.runtimes.get(&runtime_id) else {
                         return Some(protocol::error(
-                            protocol::ERR_SESSION_NOT_FOUND,
-                            "session not found".into(),
+                            protocol::ERR_RUNTIME_NOT_FOUND,
+                            "runtime not found".into(),
                         ));
                     };
-                    if !session.client_has_write_access(client_id) {
+                    if !rt.client_has_write_access(client_id) {
                         return Some(protocol::error(
                             protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    let label = s.session_label(session_id);
-                    let hist = serialization::history_path(&s.os.cache_dir(), session_id, pane_id);
+                    let label = s.runtime_label(runtime_id);
+                    let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
                     if let Some(parent) = hist.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
@@ -612,20 +612,20 @@ impl Server {
                         let child_pid = pty.pid();
                         let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
-                        let (revision, session_name) = {
+                        let (revision, runtime_name) = {
                             let mut s = server.lock().await;
-                            let Some(session) = s.sessions.get_mut(&session_id) else {
+                            let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
                                 let _ = child.start_kill();
                                 return Some(protocol::error(
-                                    protocol::ERR_SESSION_NOT_FOUND,
-                                    "session not found".into(),
+                                    protocol::ERR_RUNTIME_NOT_FOUND,
+                                    "runtime not found".into(),
                                 ));
                             };
                             let mut pane = Pane::new(pane_id, cols, rows);
                             pane.child_pid = child_pid;
-                            session.add_pane(pane);
-                            let revision = session.revision();
-                            let name = session.name.clone();
+                            rt.add_pane(pane);
+                            let revision = rt.revision();
+                            let name = rt.name.clone();
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
@@ -633,24 +633,24 @@ impl Server {
                         };
                         spawn_pty_read_loop(
                             Arc::clone(server),
-                            session_id,
+                            runtime_id,
                             pane_id,
-                            &session_name,
+                            &runtime_name,
                             reader,
                             child,
                             kill_rx,
                         );
                         tracing::info!(
-                            "Pane {} created in session \"{}\" ({})",
+                            "Pane {} created in runtime \"{}\" ({})",
                             short_id(pane_id),
-                            session_name,
-                            short_id(session_id),
+                            runtime_name,
+                            short_id(runtime_id),
                         );
-                        Some(protocol::pane_created(session_id, pane_id, revision))
+                        Some(protocol::pane_created(runtime_id, pane_id, revision))
                     }
                     Err(e) => {
                         tracing::error!(
-                            "Failed to spawn PTY for pane {} in session {session_label}: {e}",
+                            "Failed to spawn PTY for pane {} in runtime {runtime_label}: {e}",
                             short_id(pane_id)
                         );
                         Some(protocol::error(
@@ -662,7 +662,7 @@ impl Server {
             }
 
             proto::client_message::Msg::ClosePane(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -681,66 +681,66 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(session) = s.sessions.get_mut(&session_id) else {
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
                     return Some(protocol::error(
-                        protocol::ERR_SESSION_NOT_FOUND,
-                        "session not found".into(),
+                        protocol::ERR_RUNTIME_NOT_FOUND,
+                        "runtime not found".into(),
                     ));
                 };
-                if !session.client_has_write_access(client_id) {
+                if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
                         "runtime is currently owned by another client".into(),
                     ));
                 }
-                let Some(_pane) = session.remove_pane(pane_id) else {
+                let Some(_pane) = rt.remove_pane(pane_id) else {
                     return Some(protocol::error(
                         protocol::ERR_PANE_NOT_FOUND,
                         "pane not found".into(),
                     ));
                 };
-                let revision = session.revision();
-                let session_label = s.session_label(session_id);
+                let revision = rt.revision();
+                let runtime_label = s.runtime_label(runtime_id);
                 s.pty_writers.remove(&pane_id);
                 if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
                     let _ = kill_tx.send(());
                 }
-                tracing::info!("Pane {} closed in session {session_label}", short_id(pane_id),);
-                Some(protocol::pane_closed(session_id, pane_id, revision))
+                tracing::info!("Pane {} closed in runtime {runtime_label}", short_id(pane_id),);
+                Some(protocol::pane_closed(runtime_id, pane_id, revision))
             }
 
             proto::client_message::Msg::Input(req) => {
-                let Ok(session_id) = bytes_to_uuid(&req.session_id) else {
+                let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
                     return None;
                 };
                 let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
                     return None;
                 };
-                let (writer, session_label) = {
+                let (writer, runtime_label) = {
                     let s = server.lock().await;
-                    let session = s.sessions.get(&session_id)?;
-                    if !session.panes.contains_key(&pane_id) {
+                    let rt = s.runtimes.get(&runtime_id)?;
+                    if !rt.panes.contains_key(&pane_id) {
                         return None;
                     }
-                    if !session.client_has_write_access(client_id) {
+                    if !rt.client_has_write_access(client_id) {
                         return Some(protocol::error(
                             protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    (s.pty_writers.get(&pane_id).cloned(), s.session_label(session_id))
+                    (s.pty_writers.get(&pane_id).cloned(), s.runtime_label(runtime_id))
                 };
                 if let Some(writer) = writer {
                     let pane_short = short_id(pane_id);
                     let mut w = writer.lock().await;
                     if let Err(e) = w.write_all(&req.data).await {
                         tracing::error!(
-                            "Failed to write to PTY {pane_short} in session {session_label}: {e}"
+                            "Failed to write to PTY {pane_short} in runtime {runtime_label}: {e}"
                         );
                     }
                     if let Err(e) = w.flush().await {
                         tracing::error!(
-                            "Failed to flush PTY {pane_short} in session {session_label}: {e}"
+                            "Failed to flush PTY {pane_short} in runtime {runtime_label}: {e}"
                         );
                     }
                 }
@@ -751,7 +751,7 @@ impl Server {
                 let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
                     return None;
                 };
-                let Ok(session_id) = bytes_to_uuid(&req.session_id) else {
+                let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
                     return None;
                 };
                 let Ok(cols) = u16::try_from(req.cols) else {
@@ -763,11 +763,11 @@ impl Server {
 
                 let writer = {
                     let s = server.lock().await;
-                    let session = s.sessions.get(&session_id)?;
-                    if !session.panes.contains_key(&pane_id) {
+                    let rt = s.runtimes.get(&runtime_id)?;
+                    if !rt.panes.contains_key(&pane_id) {
                         return None;
                     }
-                    if !session.client_has_write_access(client_id) {
+                    if !rt.client_has_write_access(client_id) {
                         return Some(protocol::error(
                             protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
@@ -783,9 +783,9 @@ impl Server {
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
                         let s = server.lock().await;
                         tracing::error!(
-                            "Failed to resize PTY {} in session {}: {e}",
+                            "Failed to resize PTY {} in runtime {}: {e}",
                             short_id(pane_id),
-                            s.session_label(session_id),
+                            s.runtime_label(runtime_id),
                         );
                         return None;
                     }
@@ -793,15 +793,15 @@ impl Server {
 
                 let revision = {
                     let mut s = server.lock().await;
-                    let session = s.sessions.get_mut(&session_id)?;
-                    session.resize_pane(pane_id, cols, rows)?
+                    let rt = s.runtimes.get_mut(&runtime_id)?;
+                    rt.resize_pane(pane_id, cols, rows)?
                 };
 
-                Some(protocol::pane_resized(session_id, pane_id, cols, rows, revision))
+                Some(protocol::pane_resized(runtime_id, pane_id, cols, rows, revision))
             }
 
             proto::client_message::Msg::SetPaneTitle(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -820,29 +820,29 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(session) = s.sessions.get_mut(&session_id) else {
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
                     return Some(protocol::error(
-                        protocol::ERR_SESSION_NOT_FOUND,
-                        "session not found".into(),
+                        protocol::ERR_RUNTIME_NOT_FOUND,
+                        "runtime not found".into(),
                     ));
                 };
-                if !session.client_has_write_access(client_id) {
+                if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
                         "runtime is currently owned by another client".into(),
                     ));
                 }
-                let Some(revision) = session.set_pane_title(pane_id, req.title.clone()) else {
+                let Some(revision) = rt.set_pane_title(pane_id, req.title.clone()) else {
                     return Some(protocol::error(
                         protocol::ERR_PANE_NOT_FOUND,
                         "pane not found".into(),
                     ));
                 };
-                Some(protocol::title_changed(session_id, pane_id, req.title, revision))
+                Some(protocol::title_changed(runtime_id, pane_id, req.title, revision))
             }
 
-            proto::client_message::Msg::RenameSession(req) => {
-                let session_id = match bytes_to_uuid(&req.session_id) {
+            proto::client_message::Msg::RenameRuntime(req) => {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return Some(protocol::error(
@@ -852,27 +852,27 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(session) = s.sessions.get_mut(&session_id) else {
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
                     return Some(protocol::error(
-                        protocol::ERR_SESSION_NOT_FOUND,
-                        "session not found".into(),
+                        protocol::ERR_RUNTIME_NOT_FOUND,
+                        "runtime not found".into(),
                     ));
                 };
-                if !session.client_has_write_access(client_id) {
+                if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
                         "runtime is currently owned by another client".into(),
                     ));
                 }
-                let old_name = session.name.clone();
-                let revision = session.rename(req.name.clone());
+                let old_name = rt.name.clone();
+                let revision = rt.rename(req.name.clone());
                 tracing::info!(
-                    "Session renamed: \"{}\" -> \"{}\" ({})",
+                    "Runtime renamed: \"{}\" -> \"{}\" ({})",
                     old_name,
                     req.name,
-                    short_id(session_id),
+                    short_id(runtime_id),
                 );
-                Some(protocol::session_renamed(session_id, req.name, revision))
+                Some(protocol::runtime_renamed(runtime_id, req.name, revision))
             }
 
             proto::client_message::Msg::Shutdown(_) => None,
@@ -892,14 +892,14 @@ pub const MUTEX_HOLD_WARN_THRESHOLD: Duration = Duration::from_millis(10);
 /// Spawn a background task that reads PTY output and broadcasts Deltas.
 fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
-    session_id: Uuid,
+    runtime_id: Uuid,
     pane_id: Uuid,
-    session_name: &str,
+    runtime_name: &str,
     mut reader: pty_process::OwnedReadPty,
     mut child: tokio::process::Child,
     mut kill_rx: oneshot::Receiver<()>,
 ) {
-    let session_label = format!("\"{}\" ({})", session_name, short_id(session_id));
+    let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
     let pane_short = short_id(pane_id);
     tokio::spawn(async move {
         let mut buf = [0u8; 4096];
@@ -933,16 +933,16 @@ fn spawn_pty_read_loop(
                             let (new_cwd, new_title, pending_replies, pty_writer, senders) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut s = server.lock().await;
-                                let (new_cwd, new_title, pending_replies) = if let Some(session) = s.sessions.get_mut(&session_id)
-                                    && let Some(pane) = session.panes.get_mut(&pane_id)
+                                let (new_cwd, new_title, pending_replies) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
+                                    && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
                                     let result = pane.feed_output(&data);
                                     let cwd = result.new_cwd.and_then(|cwd| {
-                                        let rev = session.set_pane_cwd(pane_id, &cwd)?;
+                                        let rev = rt.set_pane_cwd(pane_id, &cwd)?;
                                         Some((cwd, rev))
                                     });
                                     let title = result.new_title.and_then(|title| {
-                                        let rev = session.set_pane_title(pane_id, title.clone())?;
+                                        let rev = rt.set_pane_title(pane_id, title.clone())?;
                                         Some((title, rev))
                                     });
                                     (cwd, title, result.pending_replies)
@@ -954,14 +954,14 @@ fn spawn_pty_read_loop(
                                 } else {
                                     s.pty_writers.get(&pane_id).cloned()
                                 };
-                                let senders = s.collect_session_senders(session_id);
+                                let senders = s.collect_runtime_senders(runtime_id);
                                 drop(s);
                                 let hold = lock_start.elapsed();
                                 if hold > MUTEX_HOLD_WARN_THRESHOLD {
                                     tracing::warn!(
                                         hold_ms = hold.as_millis() as u64,
                                         pane = %pane_short,
-                                        session = %session_label,
+                                        runtime = %runtime_label,
                                         "server mutex held too long in PTY read loop",
                                     );
                                 }
@@ -975,13 +975,13 @@ fn spawn_pty_read_loop(
                                 for reply in &pending_replies {
                                     if let Err(e) = w.write_all(reply).await {
                                         tracing::error!(
-                                            "Failed to write DSR reply to PTY {pane_short} in session {session_label}: {e}"
+                                            "Failed to write DSR reply to PTY {pane_short} in runtime {runtime_label}: {e}"
                                         );
                                     }
                                 }
                                 if let Err(e) = w.flush().await {
                                     tracing::error!(
-                                        "Failed to flush DSR reply to PTY {pane_short} in session {session_label}: {e}"
+                                        "Failed to flush DSR reply to PTY {pane_short} in runtime {runtime_label}: {e}"
                                     );
                                 }
                             }
@@ -992,27 +992,27 @@ fn spawn_pty_read_loop(
                             // generate duplicate responses that leak as visible garbage.
                             let client_data = crate::screen::strip_client_queries(&data);
                             if !client_data.is_empty() {
-                                let msg = protocol::delta(session_id, pane_id, bytes::Bytes::from(client_data));
+                                let msg = protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data));
                                 send_to_collected(&senders, &msg);
                             }
                             if let Some((cwd, revision)) = new_cwd {
-                                let msg = protocol::cwd_changed(session_id, pane_id, cwd, revision);
+                                let msg = protocol::cwd_changed(runtime_id, pane_id, cwd, revision);
                                 send_to_collected(&senders, &msg);
                             }
                             if let Some((title, revision)) = new_title {
-                                let msg = protocol::title_changed(session_id, pane_id, title, revision);
+                                let msg = protocol::title_changed(runtime_id, pane_id, title, revision);
                                 send_to_collected(&senders, &msg);
                             }
                         }
                         Err(e) => {
-                            tracing::error!("PTY read error for pane {pane_short} in session {session_label}: {e}");
+                            tracing::error!("PTY read error for pane {pane_short} in runtime {runtime_label}: {e}");
                             break;
                         }
                     }
                 }
                 _ = &mut kill_rx => {
                     let _ = child.start_kill();
-                    tracing::info!("PTY read loop cancelled for pane {pane_short} in session {session_label}");
+                    tracing::info!("PTY read loop cancelled for pane {pane_short} in runtime {runtime_label}");
                     return;
                 }
             }
@@ -1023,18 +1023,18 @@ fn spawn_pty_read_loop(
             Ok(s) => s.code().unwrap_or(-1),
             Err(e) => {
                 tracing::error!(
-                    "Failed to wait on child for pane {pane_short} in session {session_label}: {e}"
+                    "Failed to wait on child for pane {pane_short} in runtime {runtime_label}: {e}"
                 );
                 -1
             }
         };
 
         let mut s = server.lock().await;
-        let exit_msg = if let Some(session) = s.sessions.get_mut(&session_id) {
-            let msg = session
+        let exit_msg = if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
+            let msg = rt
                 .set_pane_exit_status(pane_id, Some(status))
-                .map(|revision| protocol::pane_exited(session_id, pane_id, status, revision));
-            if let Some(pane) = session.panes.get_mut(&pane_id) {
+                .map(|revision| protocol::pane_exited(runtime_id, pane_id, status, revision));
+            if let Some(pane) = rt.panes.get_mut(&pane_id) {
                 pane.release_scrollback();
             }
             msg
@@ -1042,14 +1042,14 @@ fn spawn_pty_read_loop(
             None
         };
         if let Some(msg) = exit_msg {
-            s.broadcast_to_session(session_id, &msg);
+            s.broadcast_to_runtime(runtime_id, &msg);
         }
         s.pty_writers.remove(&pane_id);
         s.pty_kill_senders.remove(&pane_id);
         drop(s);
 
         tracing::info!(
-            "PTY exited for pane {pane_short} in session {session_label}, status {status}"
+            "PTY exited for pane {pane_short} in runtime {runtime_label}, status {status}"
         );
     });
 }
@@ -1076,14 +1076,14 @@ pub async fn serialization_loop(
         let mut s = server.lock().await;
         let cache_dir = s.os.cache_dir();
 
-        let session_ids: Vec<_> = s.sessions.keys().copied().collect();
-        for session_id in session_ids {
-            if let Some(session) = s.sessions.get_mut(&session_id) {
-                let label = format!("\"{}\" ({})", session.name, short_id(session_id));
-                for pane in session.panes.values_mut() {
-                    if let Err(e) = pane.flush_scrollback(&cache_dir, session_id) {
+        let runtime_ids: Vec<_> = s.runtimes.keys().copied().collect();
+        for runtime_id in runtime_ids {
+            if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
+                let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                for pane in rt.panes.values_mut() {
+                    if let Err(e) = pane.flush_scrollback(&cache_dir, runtime_id) {
                         tracing::error!(
-                            "Failed to flush scrollback for pane {} in session {label}: {e}",
+                            "Failed to flush scrollback for pane {} in runtime {label}: {e}",
                             short_id(pane.id)
                         );
                     }
@@ -1112,12 +1112,12 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut s = server.lock().await;
     let cache_dir = s.os.cache_dir();
 
-    for session in s.sessions.values_mut() {
-        let label = format!("\"{}\" ({})", session.name, short_id(session.id));
-        for pane in session.panes.values_mut() {
-            if let Err(e) = pane.flush_scrollback(&cache_dir, session.id) {
+    for rt in s.runtimes.values_mut() {
+        let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
+        for pane in rt.panes.values_mut() {
+            if let Err(e) = pane.flush_scrollback(&cache_dir, rt.id) {
                 tracing::error!(
-                    "Failed to flush scrollback for pane {} in session {label}: {e}",
+                    "Failed to flush scrollback for pane {} in runtime {label}: {e}",
                     short_id(pane.id)
                 );
             }
@@ -1179,7 +1179,7 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
 /// Handle a single stdio client (for `attach-stdio` SSH tunneling).
 ///
 /// Serves one client over stdin/stdout using the same protocol as the
-/// Unix socket path. The server must already be running (sessions loaded,
+/// Unix socket path. The server must already be running (runtimes loaded,
 /// PTYs reconstructed).
 pub async fn handle_stdio_client(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     let stream = crate::ipc::StdioStream::new();
@@ -1200,7 +1200,7 @@ where
 
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     // Channel for responses that the reader task needs to send back to the
-    // client (e.g. pong replies, session snapshots). The writer task drains
+    // client (e.g. pong replies, runtime snapshots). The writer task drains
     // this alongside the push channel so writes never block reads.
     let (resp_tx, resp_rx) = mpsc::channel::<proto::ServerMessage>(RESP_CHANNEL_BOUND);
     {
@@ -1216,13 +1216,13 @@ where
     let (result, handshake_completed) =
         client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await;
 
-    // Cleanup: remove sender and detach from all sessions.
+    // Cleanup: remove sender and detach from all runtimes.
     {
         let mut s = server.lock().await;
         s.client_senders.remove(&client_id);
         if handshake_completed {
-            for session in s.sessions.values_mut() {
-                let _ = session.detach_client(client_id, DetachReason::Disconnect);
+            for rt in s.runtimes.values_mut() {
+                let _ = rt.detach_client(client_id, DetachReason::Disconnect);
             }
         }
     }
@@ -1278,7 +1278,7 @@ async fn client_reader(
         }
 
         // Fast-path: respond to Ping without acquiring the server mutex.
-        // The heartbeat must never stall behind PTY I/O or session work.
+        // The heartbeat must never stall behind PTY I/O or runtime work.
         if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
             if resp_tx.send(protocol::pong(ping.nonce)).await.is_err() {
                 return (Ok(()), handshake_completed);

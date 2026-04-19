@@ -3,7 +3,7 @@
 //! Convenience functions for constructing server response messages.
 
 use crate::pane::Pane;
-use crate::session::{ClientRole, Session, TerminationReason};
+use crate::runtime::{ClientRole, Runtime, TerminationReason};
 use rttx_proto::{proto, uuid_to_bytes};
 use uuid::Uuid;
 
@@ -13,11 +13,11 @@ pub const ERR_EMPTY_MESSAGE: u32 = 1;
 pub const ERR_VERSION_MISMATCH: u32 = 2;
 /// A UUID or numeric parameter could not be parsed.
 pub const ERR_INVALID_PARAMETER: u32 = 3;
-/// The referenced session/runtime does not exist.
-pub const ERR_SESSION_NOT_FOUND: u32 = 4;
+/// The referenced runtime does not exist.
+pub const ERR_RUNTIME_NOT_FOUND: u32 = 4;
 /// Failed to spawn a PTY process for a new pane.
 pub const ERR_SPAWN_FAILED: u32 = 5;
-/// The referenced pane does not exist in the session.
+/// The referenced pane does not exist in the runtime.
 pub const ERR_PANE_NOT_FOUND: u32 = 6;
 /// The pane exists but has no running PTY.
 pub const ERR_PANE_NOT_RUNNING: u32 = 7;
@@ -43,56 +43,56 @@ pub const fn pong(nonce: u64) -> proto::ServerMessage {
     proto::ServerMessage { msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce })) }
 }
 
-/// Build a `SessionList` response.
+/// Build a `RuntimeList` response.
 #[must_use]
-pub const fn session_list(sessions: Vec<proto::SessionInfo>) -> proto::ServerMessage {
+pub const fn runtime_list(runtimes: Vec<proto::RuntimeInfo>) -> proto::ServerMessage {
     proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::SessionList(proto::SessionList { sessions })),
+        msg: Some(proto::server_message::Msg::RuntimeList(proto::RuntimeList { runtimes })),
     }
 }
 
-/// Build a deterministic runtime inventory payload for `ListSessions`.
+/// Build a deterministic runtime inventory payload for `ListRuntimes`.
 #[must_use]
-pub fn session_inventory<'a, I>(sessions: I) -> Vec<proto::SessionInfo>
+pub fn runtime_inventory<'a, I>(runtimes: I) -> Vec<proto::RuntimeInfo>
 where
-    I: IntoIterator<Item = &'a Session>,
+    I: IntoIterator<Item = &'a Runtime>,
 {
-    session_inventory_for(Uuid::nil(), sessions)
+    runtime_inventory_for(Uuid::nil(), runtimes)
 }
 
-/// Build a deterministic runtime inventory payload for `ListSessions` tailored to one client.
+/// Build a deterministic runtime inventory payload for `ListRuntimes` tailored to one client.
 #[must_use]
-pub fn session_inventory_for<'a, I>(client_id: Uuid, sessions: I) -> Vec<proto::SessionInfo>
+pub fn runtime_inventory_for<'a, I>(client_id: Uuid, runtimes: I) -> Vec<proto::RuntimeInfo>
 where
-    I: IntoIterator<Item = &'a Session>,
+    I: IntoIterator<Item = &'a Runtime>,
 {
     let mut inventory: Vec<_> =
-        sessions.into_iter().map(|session| session_info(client_id, session)).collect();
+        runtimes.into_iter().map(|rt| runtime_info_for(client_id, rt)).collect();
     inventory.sort_by(|left, right| left.id.cmp(&right.id));
     inventory
 }
 
-fn session_info(client_id: Uuid, session: &Session) -> proto::SessionInfo {
-    let mut panes: Vec<_> = session.panes.values().map(pane_info).collect();
+fn runtime_info_for(client_id: Uuid, rt: &Runtime) -> proto::RuntimeInfo {
+    let mut panes: Vec<_> = rt.panes.values().map(pane_info).collect();
     panes.sort_by(|left, right| left.id.cmp(&right.id));
 
-    proto::SessionInfo {
-        id: uuid_to_bytes(session.id),
-        name: session.name.clone(),
-        pane_count: u32::try_from(session.panes.len()).unwrap_or(u32::MAX),
-        has_attached_client: session.has_attached_clients(),
-        active_pane_id: session.active_pane_id.map(uuid_to_bytes),
+    proto::RuntimeInfo {
+        id: uuid_to_bytes(rt.id),
+        name: rt.name.clone(),
+        pane_count: u32::try_from(rt.panes.len()).unwrap_or(u32::MAX),
+        has_attached_client: rt.has_attached_clients(),
+        active_pane_id: rt.active_pane_id.map(uuid_to_bytes),
         panes,
-        policy: session.policy.as_proto() as i32,
-        attached_client_count: u32::try_from(session.attached_client_count()).unwrap_or(u32::MAX),
-        reconstructed: session.reconstructed,
-        revision: session.revision(),
-        current_client_role: session
+        policy: rt.policy.as_proto() as i32,
+        attached_client_count: u32::try_from(rt.attached_client_count()).unwrap_or(u32::MAX),
+        reconstructed: rt.reconstructed,
+        revision: rt.revision(),
+        current_client_role: rt
             .client_role(client_id)
             .map_or(proto::RuntimeClientRole::Unattached, ClientRole::as_proto)
             as i32,
-        has_write_owner: session.has_write_owner(),
-        read_only_client_count: u32::try_from(session.read_only_client_count()).unwrap_or(u32::MAX),
+        has_write_owner: rt.has_write_owner(),
+        read_only_client_count: u32::try_from(rt.read_only_client_count()).unwrap_or(u32::MAX),
     }
 }
 
@@ -108,38 +108,38 @@ fn pane_info(pane: &Pane) -> proto::PaneInfo {
     }
 }
 
-/// Build a `SessionCreated` response.
+/// Build a `RuntimeCreated` response.
 #[must_use]
-pub fn session_created(session_id: Uuid, revision: u64) -> proto::ServerMessage {
+pub fn runtime_created(runtime_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::server_message::Msg::RuntimeCreated(proto::RuntimeCreated {
+            runtime_id: uuid_to_bytes(runtime_id),
             revision,
         })),
     }
 }
 
-/// Build a `SessionDetached` response.
+/// Build a `RuntimeDetached` response.
 #[must_use]
-pub fn session_detached(session_id: Uuid, revision: u64) -> proto::ServerMessage {
+pub fn runtime_detached(runtime_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::SessionDetached(proto::SessionDetached {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::server_message::Msg::RuntimeDetached(proto::RuntimeDetached {
+            runtime_id: uuid_to_bytes(runtime_id),
             revision,
         })),
     }
 }
 
-/// Build a `SessionTerminated` response.
+/// Build a `RuntimeTerminated` response.
 #[must_use]
-pub fn session_terminated(
-    session_id: Uuid,
+pub fn runtime_terminated(
+    runtime_id: Uuid,
     final_revision: u64,
     reason: TerminationReason,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::SessionTerminated(proto::SessionTerminated {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::server_message::Msg::RuntimeTerminated(proto::RuntimeTerminated {
+            runtime_id: uuid_to_bytes(runtime_id),
             final_revision,
             reason: reason.as_proto() as i32,
         })),
@@ -149,14 +149,14 @@ pub fn session_terminated(
 /// Build a `Snapshot` response.
 #[must_use]
 pub fn snapshot(
-    session_id: Uuid,
+    runtime_id: Uuid,
     panes: Vec<proto::PaneSnapshot>,
     revision: u64,
     current_client_role: ClientRole,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             panes,
             revision,
             current_client_role: current_client_role.as_proto() as i32,
@@ -166,10 +166,10 @@ pub fn snapshot(
 
 /// Build a `Delta` message.
 #[must_use]
-pub fn delta(session_id: Uuid, pane_id: Uuid, data: bytes::Bytes) -> proto::ServerMessage {
+pub fn delta(runtime_id: Uuid, pane_id: Uuid, data: bytes::Bytes) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             data,
         })),
@@ -178,10 +178,10 @@ pub fn delta(session_id: Uuid, pane_id: Uuid, data: bytes::Bytes) -> proto::Serv
 
 /// Build a `PaneCreated` message.
 #[must_use]
-pub fn pane_created(session_id: Uuid, pane_id: Uuid, revision: u64) -> proto::ServerMessage {
+pub fn pane_created(runtime_id: Uuid, pane_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneCreated(proto::PaneCreated {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             revision,
         })),
@@ -190,10 +190,10 @@ pub fn pane_created(session_id: Uuid, pane_id: Uuid, revision: u64) -> proto::Se
 
 /// Build a `PaneClosed` message.
 #[must_use]
-pub fn pane_closed(session_id: Uuid, pane_id: Uuid, revision: u64) -> proto::ServerMessage {
+pub fn pane_closed(runtime_id: Uuid, pane_id: Uuid, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneClosed(proto::PaneClosed {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             revision,
         })),
@@ -203,7 +203,7 @@ pub fn pane_closed(session_id: Uuid, pane_id: Uuid, revision: u64) -> proto::Ser
 /// Build a `PaneResized` acknowledgement.
 #[must_use]
 pub fn pane_resized(
-    session_id: Uuid,
+    runtime_id: Uuid,
     pane_id: Uuid,
     cols: u16,
     rows: u16,
@@ -211,7 +211,7 @@ pub fn pane_resized(
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneResized(proto::PaneResized {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cols: u32::from(cols),
             rows: u32::from(rows),
@@ -223,14 +223,14 @@ pub fn pane_resized(
 /// Build a `PaneExited` message.
 #[must_use]
 pub fn pane_exited(
-    session_id: Uuid,
+    runtime_id: Uuid,
     pane_id: Uuid,
     status: i32,
     revision: u64,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::PaneExited(proto::PaneExited {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             status,
             revision,
@@ -241,14 +241,14 @@ pub fn pane_exited(
 /// Build a `TitleChanged` message.
 #[must_use]
 pub fn title_changed(
-    session_id: Uuid,
+    runtime_id: Uuid,
     pane_id: Uuid,
     title: String,
     revision: u64,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::TitleChanged(proto::TitleChanged {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             title,
             revision,
@@ -259,14 +259,14 @@ pub fn title_changed(
 /// Build a `CwdChanged` message.
 #[must_use]
 pub fn cwd_changed(
-    session_id: Uuid,
+    runtime_id: Uuid,
     pane_id: Uuid,
     cwd: String,
     revision: u64,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::CwdChanged(proto::CwdChanged {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cwd,
             revision,
@@ -277,14 +277,14 @@ pub fn cwd_changed(
 /// Build an `AttachBlocked` response.
 #[must_use]
 pub fn attach_blocked(
-    session_id: Uuid,
+    runtime_id: Uuid,
     current_client_role: Option<ClientRole>,
     attached_client_count: usize,
     read_only_client_count: usize,
 ) -> proto::ServerMessage {
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             current_client_role: current_client_role
                 .map_or(proto::RuntimeClientRole::Unattached, ClientRole::as_proto)
                 as i32,
@@ -306,8 +306,8 @@ pub const fn error(code: u32, message: String) -> proto::ServerMessage {
 #[must_use]
 pub fn diagnostics_report(server: &crate::server::Server) -> proto::ServerMessage {
     let report = server.diagnostics();
-    let sessions = report
-        .sessions
+    let runtimes = report
+        .runtimes
         .iter()
         .map(|s| {
             let panes = s
@@ -324,7 +324,7 @@ pub fn diagnostics_report(server: &crate::server::Server) -> proto::ServerMessag
                 })
                 .collect();
             let id = uuid::Uuid::parse_str(&s.id).map(uuid_to_bytes).unwrap_or_default();
-            proto::SessionDiagnosticsInfo {
+            proto::RuntimeDiagnosticsInfo {
                 id,
                 name: s.name.clone(),
                 active_pane_count: s.active_pane_count as u32,
@@ -337,7 +337,7 @@ pub fn diagnostics_report(server: &crate::server::Server) -> proto::ServerMessag
         .collect();
     proto::ServerMessage {
         msg: Some(proto::server_message::Msg::DiagnosticsReport(proto::DiagnosticsReport {
-            session_count: report.session_count as u32,
+            runtime_count: report.runtime_count as u32,
             total_pane_count: report.total_pane_count as u32,
             total_active_panes: report.total_active_panes as u32,
             total_exited_panes: report.total_exited_panes as u32,
@@ -346,17 +346,17 @@ pub fn diagnostics_report(server: &crate::server::Server) -> proto::ServerMessag
             total_raw_bytes: report.total_raw_bytes as u64,
             total_pending_flush: report.total_pending_flush as u64,
             total_command_history: report.total_command_history as u32,
-            sessions,
+            runtimes,
         })),
     }
 }
 
-/// Build a `SessionRenamed` response.
+/// Build a `RuntimeRenamed` response.
 #[must_use]
-pub fn session_renamed(session_id: Uuid, name: String, revision: u64) -> proto::ServerMessage {
+pub fn runtime_renamed(runtime_id: Uuid, name: String, revision: u64) -> proto::ServerMessage {
     proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::SessionRenamed(proto::SessionRenamed {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::server_message::Msg::RuntimeRenamed(proto::RuntimeRenamed {
+            runtime_id: uuid_to_bytes(runtime_id),
             name,
             revision,
         })),
@@ -366,7 +366,7 @@ pub fn session_renamed(session_id: Uuid, name: String, revision: u64) -> proto::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::RuntimePolicy;
+    use crate::runtime::RuntimePolicy;
 
     #[test]
     fn error_codes_are_distinct_and_nonzero() {
@@ -374,7 +374,7 @@ mod tests {
             ERR_EMPTY_MESSAGE,
             ERR_VERSION_MISMATCH,
             ERR_INVALID_PARAMETER,
-            ERR_SESSION_NOT_FOUND,
+            ERR_RUNTIME_NOT_FOUND,
             ERR_SPAWN_FAILED,
             ERR_PANE_NOT_FOUND,
             ERR_PANE_NOT_RUNNING,
@@ -391,15 +391,15 @@ mod tests {
     }
 
     #[test]
-    fn session_inventory_maps_runtime_metadata() {
-        let mut session = Session::new("inventory".into());
-        session.id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
-        session.policy = RuntimePolicy::Ephemeral;
-        session.reconstructed = true;
+    fn runtime_inventory_maps_runtime_metadata() {
+        let mut rt = Runtime::new("inventory".into());
+        rt.id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        rt.policy = RuntimePolicy::Ephemeral;
+        rt.reconstructed = true;
         let writer = Uuid::new_v4();
         let reader = Uuid::new_v4();
-        let _ = session.attach_client(writer, crate::session::AttachMode::ReadWrite);
-        let _ = session.attach_client(reader, crate::session::AttachMode::ReadOnly);
+        let _ = rt.attach_client(writer, crate::runtime::AttachMode::ReadWrite);
+        let _ = rt.attach_client(reader, crate::runtime::AttachMode::ReadOnly);
 
         let mut pane =
             Pane::new(Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(), 120, 40);
@@ -408,10 +408,10 @@ mod tests {
         pane.exit_status = Some(7);
         pane.reconstructed = true;
         let pane_id = pane.id;
-        session.add_pane(pane);
-        session.active_pane_id = Some(pane_id);
+        rt.add_pane(pane);
+        rt.active_pane_id = Some(pane_id);
 
-        let inventory = session_inventory_for(writer, [&session]);
+        let inventory = runtime_inventory_for(writer, [&rt]);
         assert_eq!(inventory.len(), 1);
 
         let info = &inventory[0];
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(info.active_pane_id.as_deref(), Some(pane_id.as_bytes().as_slice()));
         assert_eq!(info.policy, proto::RuntimePolicy::Ephemeral as i32);
         assert!(info.reconstructed);
-        assert_eq!(info.revision, session.revision());
+        assert_eq!(info.revision, rt.revision());
         assert_eq!(info.current_client_role, proto::RuntimeClientRole::Writer as i32);
         assert!(info.has_write_owner);
         assert_eq!(info.read_only_client_count, 1);
@@ -437,8 +437,8 @@ mod tests {
     }
 
     #[test]
-    fn session_inventory_is_sorted_by_session_and_pane_id() {
-        let mut later = Session::new("later".into());
+    fn runtime_inventory_is_sorted_by_runtime_and_pane_id() {
+        let mut later = Runtime::new("later".into());
         later.id = Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap();
         later.add_pane(Pane::new(
             Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
@@ -451,7 +451,7 @@ mod tests {
             24,
         ));
 
-        let mut earlier = Session::new("earlier".into());
+        let mut earlier = Runtime::new("earlier".into());
         earlier.id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         earlier.add_pane(Pane::new(
             Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
@@ -459,7 +459,7 @@ mod tests {
             24,
         ));
 
-        let inventory = session_inventory([&later, &earlier]);
+        let inventory = runtime_inventory([&later, &earlier]);
         assert_eq!(inventory[0].name, "earlier");
         assert_eq!(inventory[1].name, "later");
         assert_eq!(
@@ -487,7 +487,7 @@ mod tests {
         };
         assert_eq!(inner.cwd, "/home/user");
         assert_eq!(inner.revision, 42);
-        assert_eq!(inner.session_id, sid.as_bytes().to_vec());
+        assert_eq!(inner.runtime_id, sid.as_bytes().to_vec());
         assert_eq!(inner.pane_id, pid.as_bytes().to_vec());
     }
 }

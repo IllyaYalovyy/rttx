@@ -31,15 +31,15 @@ async fn startup_with_corrupt_state_file_starts_fresh() {
 
     // Server should have zero sessions (started fresh).
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 0, "corrupt state must not produce phantom sessions");
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 0, "corrupt state must not produce phantom sessions");
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
@@ -62,15 +62,15 @@ async fn startup_with_truncated_state_file_starts_fresh() {
     client.handshake().await;
 
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 0);
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 0);
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
@@ -87,15 +87,15 @@ async fn startup_with_empty_state_file_starts_fresh() {
     client.handshake().await;
 
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 0);
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 0);
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
@@ -112,15 +112,15 @@ async fn startup_ignores_leftover_tmp_file() {
     client.handshake().await;
 
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 0);
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 0);
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
@@ -131,14 +131,14 @@ async fn reconstruction_with_missing_scrollback_log() {
     let cache_dir = tmp.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let session_id = uuid::Uuid::new_v4();
+    let runtime_id = uuid::Uuid::new_v4();
     let pane_id = uuid::Uuid::new_v4();
 
     // Write valid state referencing a scrollback log that doesn't exist.
     let state_json = format!(
         r#"{{
             "sessions": [{{
-                "id": "{session_id}",
+                "id": "{runtime_id}",
                 "name": "ghost-scrollback",
                 "panes": [{{
                     "id": "{pane_id}",
@@ -168,16 +168,16 @@ async fn reconstruction_with_missing_scrollback_log() {
 
     // Session should still be restored (just without scrollback content).
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 1, "session must survive missing scrollback");
-            assert_eq!(sl.sessions[0].name, "ghost-scrollback");
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 1, "session must survive missing scrollback");
+            assert_eq!(sl.runtimes[0].name, "ghost-scrollback");
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
@@ -187,11 +187,11 @@ async fn reconstruction_with_corrupt_scrollback_log() {
     let tmp = tempfile::tempdir().unwrap();
     let cache_dir = tmp.path().join("cache");
 
-    let session_id = uuid::Uuid::new_v4();
+    let runtime_id = uuid::Uuid::new_v4();
     let pane_id = uuid::Uuid::new_v4();
 
     // Create a scrollback log with garbage bytes.
-    let scrollback_dir = cache_dir.join("scrollback").join(session_id.to_string());
+    let scrollback_dir = cache_dir.join("scrollback").join(runtime_id.to_string());
     std::fs::create_dir_all(&scrollback_dir).unwrap();
     let log_path = scrollback_dir.join(format!("{pane_id}.log"));
     std::fs::write(&log_path, b"\xff\xfe\x00\x01 corrupt terminal bytes").unwrap();
@@ -199,7 +199,7 @@ async fn reconstruction_with_corrupt_scrollback_log() {
     let state_json = format!(
         r#"{{
             "sessions": [{{
-                "id": "{session_id}",
+                "id": "{runtime_id}",
                 "name": "corrupt-scrollback",
                 "panes": [{{
                     "id": "{pane_id}",
@@ -229,15 +229,15 @@ async fn reconstruction_with_corrupt_scrollback_log() {
     client.handshake().await;
 
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 1, "session must survive corrupt scrollback");
-            assert_eq!(sl.sessions[0].name, "corrupt-scrollback");
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 1, "session must survive corrupt scrollback");
+            assert_eq!(sl.runtimes[0].name, "corrupt-scrollback");
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }

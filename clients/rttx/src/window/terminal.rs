@@ -3,7 +3,7 @@ use super::*;
 impl Window {
     pub(super) fn materialize_terminal(
         &self,
-        session_state: &SessionState,
+        session_state: &WorkspaceState,
         uuid: &str,
         cwd: Option<&str>,
         custom_title: Option<&str>,
@@ -41,7 +41,7 @@ impl Window {
     /// Create a `PersistentPaneView` for a daemon-backed session.
     fn materialize_persistent_terminal(
         &self,
-        session_state: &SessionState,
+        session_state: &WorkspaceState,
         uuid: &str,
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
@@ -60,8 +60,8 @@ impl Window {
             return existing.upcast();
         }
 
-        let daemon_session_id = session_state.runtime.runtime_id.as_deref().unwrap_or_default();
-        let pane_view = PersistentPaneView::new(uuid, daemon_session_id);
+        let daemon_runtime_id = session_state.runtime.runtime_id.as_deref().unwrap_or_default();
+        let pane_view = PersistentPaneView::new(uuid, daemon_runtime_id);
         if let Some(title) = custom_title {
             pane_view.set_custom_title(Some(title));
         }
@@ -75,7 +75,7 @@ impl Window {
     fn initialize_terminal_recovery(
         &self,
         term: &TerminalWidget,
-        session_state: &SessionState,
+        session_state: &WorkspaceState,
         terminal_uuid: &str,
     ) {
         let Some(recovery) = session_state.recovery_for(terminal_uuid) else {
@@ -115,7 +115,7 @@ impl Window {
             let session_uuid = {
                 let mut state = win.imp().state.borrow_mut();
                 let session = state
-                    .sessions
+                    .workspaces
                     .iter_mut()
                     .find(|session| session.layout.contains_terminal(&uuid));
                 if let Some(session) = session {
@@ -257,7 +257,7 @@ impl Window {
         {
             let state = self.imp().state.borrow();
             if let Some(session) =
-                state.sessions.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
+                state.workspaces.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
                 && session.is_zoomed()
             {
                 drop(state);
@@ -272,11 +272,11 @@ impl Window {
 
         let mut state = imp.state.borrow_mut();
 
-        let session_idx =
-            state.sessions.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
+        let workspace_idx =
+            state.workspaces.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
 
-        if let Some(idx) = session_idx {
-            let at_limit = state.sessions[idx]
+        if let Some(idx) = workspace_idx {
+            let at_limit = state.workspaces[idx]
                 .layout
                 .depth_of_terminal(terminal_uuid)
                 .is_some_and(|d| d >= MAX_SPLIT_DEPTH);
@@ -289,21 +289,21 @@ impl Window {
 
             // Fall back to the layout node's CWD when the terminal widget has none.
             let source_cwd =
-                terminal_cwd.or_else(|| state.sessions[idx].layout.terminal_cwd(terminal_uuid));
+                terminal_cwd.or_else(|| state.workspaces[idx].layout.terminal_cwd(terminal_uuid));
 
             if let Some((mut new_layout, new_terminal_uuid)) =
-                state.sessions[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
+                state.workspaces[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)
             {
                 if let Some(cwd) = &source_cwd {
                     new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd.clone()));
                 }
-                state.sessions[idx].layout = new_layout;
-                state.sessions[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
-                let layout_terminal_uuids = state.sessions[idx].layout.terminal_uuids();
-                state.sessions[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
-                state.sessions[idx].normalize_active_terminal();
-                let session_uuid = state.sessions[idx].uuid.clone();
-                let session_state = state.sessions[idx].clone();
+                state.workspaces[idx].layout = new_layout;
+                state.workspaces[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
+                let layout_terminal_uuids = state.workspaces[idx].layout.terminal_uuids();
+                state.workspaces[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
+                state.workspaces[idx].normalize_active_terminal();
+                let session_uuid = state.workspaces[idx].uuid.clone();
+                let session_state = state.workspaces[idx].clone();
                 drop(state);
                 if self.split_terminal_in_place(
                     &session_uuid,
@@ -341,14 +341,14 @@ impl Window {
         #[allow(clippy::large_enum_variant)]
         enum Action {
             CloseSession(String),
-            Rebuild { session_uuid: String, session_state: SessionState },
+            Rebuild { session_uuid: String, session_state: WorkspaceState },
         }
 
         // Unzoom before closing so the full layout is visible for removal.
         {
             let state = self.imp().state.borrow();
             if let Some(session) =
-                state.sessions.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
+                state.workspaces.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
                 && session.is_zoomed()
             {
                 drop(state);
@@ -360,19 +360,19 @@ impl Window {
 
         let action = {
             let mut state = imp.state.borrow_mut();
-            let session_idx =
-                state.sessions.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
-            let Some(idx) = session_idx else { return };
+            let workspace_idx =
+                state.workspaces.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
+            let Some(idx) = workspace_idx else { return };
 
-            if state.sessions[idx].uses_managed_runtime()
-                && state.sessions[idx].layout.terminal_count() > 1
-                && let Some(runtime_id) = state.sessions[idx].runtime.runtime_id.clone()
+            if state.workspaces[idx].uses_managed_runtime()
+                && state.workspaces[idx].layout.terminal_count() > 1
+                && let Some(runtime_id) = state.workspaces[idx].runtime.runtime_id.clone()
                 && let Some(runtime_pane_id) =
-                    state.sessions[idx].runtime.pane_bindings.get(terminal_uuid).cloned()
+                    state.workspaces[idx].runtime.pane_bindings.get(terminal_uuid).cloned()
                 && runtime_pane_id != terminal_uuid
             {
-                let workspace_id = state.sessions[idx].uuid.clone();
-                let endpoint = state.sessions[idx].runtime.endpoint.clone();
+                let workspace_id = state.workspaces[idx].uuid.clone();
+                let endpoint = state.workspaces[idx].runtime.endpoint.clone();
                 drop(state);
                 if let Some(manager) = imp.connection_manager.borrow().as_ref() {
                     manager.close_pane(
@@ -386,18 +386,18 @@ impl Window {
                 return;
             }
 
-            if state.sessions[idx].layout.terminal_count() <= 1 {
-                Action::CloseSession(state.sessions[idx].uuid.clone())
+            if state.workspaces[idx].layout.terminal_count() <= 1 {
+                Action::CloseSession(state.workspaces[idx].uuid.clone())
             } else if let Some(new_layout) =
-                state.sessions[idx].layout.remove_terminal(terminal_uuid)
+                state.workspaces[idx].layout.remove_terminal(terminal_uuid)
             {
-                state.sessions[idx].layout = new_layout;
-                let layout_terminal_uuids = state.sessions[idx].layout.terminal_uuids();
-                state.sessions[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
-                state.sessions[idx].normalize_active_terminal();
+                state.workspaces[idx].layout = new_layout;
+                let layout_terminal_uuids = state.workspaces[idx].layout.terminal_uuids();
+                state.workspaces[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
+                state.workspaces[idx].normalize_active_terminal();
                 Action::Rebuild {
-                    session_uuid: state.sessions[idx].uuid.clone(),
-                    session_state: state.sessions[idx].clone(),
+                    session_uuid: state.workspaces[idx].uuid.clone(),
+                    session_state: state.workspaces[idx].clone(),
                 }
             } else {
                 return;
@@ -478,7 +478,7 @@ impl Window {
 
         let build_branch = move || {
             if win_weak.upgrade().is_some() {
-                session::build_layout_widget(&branch_layout_clone, &|spec| {
+                workspace::build_layout_widget(&branch_layout_clone, &|spec| {
                     if spec.uuid == target_uuid_str {
                         target_clone.clone().upcast()
                     } else if spec.uuid == new_terminal_uuid_str {
@@ -520,7 +520,7 @@ impl Window {
             }
             stack.add_named(&branch, Some(session_uuid));
             stack.set_visible_child_name(session_uuid);
-            session::schedule_initial_paned_ratios(&branch, &branch_layout);
+            workspace::schedule_initial_paned_ratios(&branch, &branch_layout);
             if let Some(term) = imp.terminals.borrow().get(new_terminal_uuid) {
                 term.ensure_shell_spawned_when_ready();
             }
@@ -563,7 +563,7 @@ impl Window {
         } else {
             paned.set_end_child(Some(&branch));
         }
-        session::schedule_initial_paned_ratios(&branch, &branch_layout);
+        workspace::schedule_initial_paned_ratios(&branch, &branch_layout);
         if let Some(term) = imp.terminals.borrow().get(new_terminal_uuid) {
             term.ensure_shell_spawned_when_ready();
         }
@@ -571,7 +571,7 @@ impl Window {
         true
     }
 
-    pub(super) fn rebuild_session_content(&self, session_uuid: &str, session_state: &SessionState) {
+    pub(super) fn rebuild_session_content(&self, session_uuid: &str, session_state: &WorkspaceState) {
         let imp = self.imp();
 
         let saved_positions = self.save_session_scroll_positions(session_state);
@@ -599,7 +599,7 @@ impl Window {
             .unwrap_or(session_uuid);
         imp.session_stack.set_visible_child_name(visible_after_rebuild);
         if !session_state.is_zoomed() {
-            session::schedule_initial_paned_ratios(&content, &session_state.layout);
+            workspace::schedule_initial_paned_ratios(&content, &session_state.layout);
         }
 
         self.restore_scroll_positions(&saved_positions);
@@ -610,7 +610,7 @@ impl Window {
     }
 
     /// Save the VTE scroll position for every terminal in a session.
-    fn save_session_scroll_positions(&self, session_state: &SessionState) -> Vec<(String, f64)> {
+    fn save_session_scroll_positions(&self, session_state: &WorkspaceState) -> Vec<(String, f64)> {
         let mut positions = Vec::new();
         for uuid in session_state.layout.terminal_uuids() {
             if let Some(handle) = self.terminal_handle(&uuid)
@@ -634,7 +634,7 @@ impl Window {
     /// Remove terminal map entries that no longer belong to any workspace layout.
     fn remove_stale_terminal_map_entries(&self, imp: &imp::Window) {
         let live_uuids: std::collections::HashSet<String> =
-            imp.state.borrow().sessions.iter().flat_map(|s| s.layout.terminal_uuids()).collect();
+            imp.state.borrow().workspaces.iter().flat_map(|s| s.layout.terminal_uuids()).collect();
 
         imp.terminals.borrow_mut().retain(|uuid, _| live_uuids.contains(uuid));
         imp.persistent_terminals.borrow_mut().retain(|uuid, _| live_uuids.contains(uuid));
@@ -704,7 +704,7 @@ impl Window {
     pub(super) fn set_terminal_recovery(&self, terminal_uuid: &str, recovery: PaneRecovery) {
         let mut state = self.imp().state.borrow_mut();
         if let Some(session) = state
-            .sessions
+            .workspaces
             .iter_mut()
             .find(|session| session.layout.contains_terminal(terminal_uuid))
         {
@@ -714,7 +714,7 @@ impl Window {
 
     fn recovery_for_terminal(&self, terminal_uuid: &str) -> Option<PaneRecovery> {
         let state = self.imp().state.borrow();
-        state.sessions.iter().find_map(|session| {
+        state.workspaces.iter().find_map(|session| {
             if session.layout.contains_terminal(terminal_uuid) {
                 session.recovery_for(terminal_uuid).cloned()
             } else {

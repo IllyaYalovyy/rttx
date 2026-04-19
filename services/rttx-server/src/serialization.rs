@@ -1,9 +1,9 @@
 //! Periodic state serialization to disk.
 //!
 //! Writes the full server state atomically (write-to-tmp then rename) every
-//! tick. On startup, loads persisted state to resurrect sessions.
+//! tick. On startup, loads persisted state to resurrect runtimes.
 
-use crate::session::PersistedSession;
+use crate::runtime::PersistedRuntime;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -11,8 +11,9 @@ use std::time::SystemTime;
 /// Top-level persisted server state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerState {
-    /// All persisted sessions.
-    pub sessions: Vec<PersistedSession>,
+    /// All persisted runtimes.
+    #[serde(alias = "sessions")]
+    pub runtimes: Vec<PersistedRuntime>,
     /// When this snapshot was taken.
     pub serialized_at: SystemTime,
     /// Server version that wrote this state.
@@ -24,7 +25,7 @@ impl ServerState {
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            sessions: Vec::new(),
+            runtimes: Vec::new(),
             serialized_at: SystemTime::now(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
         }
@@ -66,36 +67,36 @@ pub fn default_state_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("state.json")
 }
 
-/// Return the scrollback log directory for a session/pane.
+/// Return the scrollback log directory for a runtime/pane.
 #[must_use]
 pub fn scrollback_log_path(
     cache_dir: &Path,
-    session_id: uuid::Uuid,
+    runtime_id: uuid::Uuid,
     pane_id: uuid::Uuid,
 ) -> PathBuf {
-    cache_dir.join("scrollback").join(session_id.to_string()).join(format!("{pane_id}.log"))
+    cache_dir.join("scrollback").join(runtime_id.to_string()).join(format!("{pane_id}.log"))
 }
 
 /// Return the shell history file path for a pane.
 #[must_use]
-pub fn history_path(cache_dir: &Path, session_id: uuid::Uuid, pane_id: uuid::Uuid) -> PathBuf {
-    cache_dir.join("history").join(session_id.to_string()).join(format!("{pane_id}.hist"))
+pub fn history_path(cache_dir: &Path, runtime_id: uuid::Uuid, pane_id: uuid::Uuid) -> PathBuf {
+    cache_dir.join("history").join(runtime_id.to_string()).join(format!("{pane_id}.hist"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pane::PersistedPane;
-    use crate::session::{PersistedSession, RuntimePolicy};
+    use crate::runtime::{PersistedRuntime, RuntimePolicy};
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     fn sample_state() -> ServerState {
         ServerState {
-            sessions: vec![PersistedSession {
+            runtimes: vec![PersistedRuntime {
                 id: Uuid::new_v4(),
-                name: "test-session".into(),
+                name: "test-runtime".into(),
                 panes: vec![PersistedPane {
                     id: Uuid::new_v4(),
                     cwd: Some("/home/user".into()),
@@ -126,10 +127,10 @@ mod tests {
         write_state_atomic(&state, &path).unwrap();
         let loaded = load_state(&path).unwrap().unwrap();
 
-        assert_eq!(loaded.sessions.len(), 1);
-        assert_eq!(loaded.sessions[0].name, "test-session");
-        assert_eq!(loaded.sessions[0].panes.len(), 1);
-        assert_eq!(loaded.sessions[0].panes[0].cols, 80);
+        assert_eq!(loaded.runtimes.len(), 1);
+        assert_eq!(loaded.runtimes[0].name, "test-runtime");
+        assert_eq!(loaded.runtimes[0].panes.len(), 1);
+        assert_eq!(loaded.runtimes[0].panes[0].cols, 80);
     }
 
     #[test]
@@ -154,7 +155,7 @@ mod tests {
         let state = ServerState::empty();
         let json = serde_json::to_string(&state).unwrap();
         let recovered: ServerState = serde_json::from_str(&json).unwrap();
-        assert!(recovered.sessions.is_empty());
+        assert!(recovered.runtimes.is_empty());
     }
 
     #[test]
@@ -223,7 +224,7 @@ mod tests {
         }"#;
         std::fs::write(&path, json).unwrap();
         let loaded = load_state(&path).unwrap().unwrap();
-        assert!(loaded.sessions.is_empty());
+        assert!(loaded.runtimes.is_empty());
     }
 
     #[test]
@@ -267,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn history_path_is_per_session_and_pane() {
+    fn history_path_is_per_runtime_and_pane() {
         let cache = std::path::Path::new("/cache");
         let s1 = uuid::Uuid::new_v4();
         let p1 = uuid::Uuid::new_v4();
@@ -277,5 +278,31 @@ mod tests {
         assert_ne!(h1, h2, "different panes must have different history files");
         assert!(h1.to_string_lossy().contains(&p1.to_string()));
         assert!(h1.to_string_lossy().ends_with(".hist"));
+    }
+
+    #[test]
+    fn load_legacy_state_with_sessions_key() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+        let json = r#"{
+            "sessions": [{
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "name": "legacy-runtime",
+                "panes": [],
+                "active_pane_id": null,
+                "command_history": [],
+                "policy": "persistent",
+                "revision": 5,
+                "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+                "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
+            }],
+            "serialized_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "server_version": "0.3.2"
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let loaded = load_state(&path).unwrap().unwrap();
+        assert_eq!(loaded.runtimes.len(), 1);
+        assert_eq!(loaded.runtimes[0].name, "legacy-runtime");
+        assert_eq!(loaded.runtimes[0].revision, 5);
     }
 }

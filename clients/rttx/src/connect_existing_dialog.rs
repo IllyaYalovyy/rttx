@@ -8,7 +8,7 @@ use crate::window::Window;
 
 /// Classification of a daemon session for the Connect to Existing dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionAvailability {
+pub enum RuntimeAvailability {
     /// Can be attached by this client.
     Available,
     /// Already open in this client window.
@@ -19,43 +19,43 @@ pub enum SessionAvailability {
 
 /// A session entry for display in the dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionEntry {
+pub struct RuntimeEntry {
     pub id: String,
     pub name: String,
     pub pane_count: u32,
-    pub availability: SessionAvailability,
+    pub availability: RuntimeAvailability,
     pub status_label: String,
 }
 
-/// Classify daemon sessions into available/busy entries.
+/// Classify daemon runtimes into available/busy entries.
 ///
 /// `open_runtime_ids` contains runtime IDs already attached by this client.
 #[must_use]
-pub fn classify_sessions(
-    sessions: &[proto::SessionInfo],
+pub fn classify_runtimes(
+    runtimes: &[proto::RuntimeInfo],
     open_runtime_ids: &[String],
-) -> Vec<SessionEntry> {
-    sessions
+) -> Vec<RuntimeEntry> {
+    runtimes
         .iter()
         .filter_map(|info| {
             let id = rttx_proto::bytes_to_uuid(&info.id).ok()?.to_string();
             let availability = if open_runtime_ids.contains(&id) {
-                SessionAvailability::AlreadyOpen
+                RuntimeAvailability::AlreadyOpen
             } else if info.has_write_owner {
-                SessionAvailability::BusyElsewhere
+                RuntimeAvailability::BusyElsewhere
             } else {
-                SessionAvailability::Available
+                RuntimeAvailability::Available
             };
             let status_label = match &availability {
-                SessionAvailability::Available => format!(
+                RuntimeAvailability::Available => format!(
                     "{} {}",
                     info.pane_count,
                     if info.pane_count == 1 { "pane" } else { "panes" }
                 ),
-                SessionAvailability::AlreadyOpen => "Already open".into(),
-                SessionAvailability::BusyElsewhere => "Connected elsewhere".into(),
+                RuntimeAvailability::AlreadyOpen => "Already open".into(),
+                RuntimeAvailability::BusyElsewhere => "Connected elsewhere".into(),
             };
-            Some(SessionEntry {
+            Some(RuntimeEntry {
                 id,
                 name: info.name.clone(),
                 pane_count: info.pane_count,
@@ -68,7 +68,7 @@ pub fn classify_sessions(
 
 /// Whether a session entry matches a search query (case-insensitive).
 #[must_use]
-pub fn matches_query(entry: &SessionEntry, query: &str) -> bool {
+pub fn matches_query(entry: &RuntimeEntry, query: &str) -> bool {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return true;
@@ -77,14 +77,14 @@ pub fn matches_query(entry: &SessionEntry, query: &str) -> bool {
 }
 
 /// Show the Connect to Existing dialog for a specific host.
-pub fn show(window: &Window, host: &Host, sessions: &[proto::SessionInfo]) {
+pub fn show(window: &Window, host: &Host, runtimes: &[proto::RuntimeInfo]) {
     let title = format!("Connect to Existing: {}", host.name);
     let dialog = adw::Dialog::builder().title(&title).content_width(400).build();
 
     let header = adw::HeaderBar::new();
 
     let search_entry = gtk4::SearchEntry::new();
-    search_entry.set_placeholder_text(Some("Search sessions…"));
+    search_entry.set_placeholder_text(Some("Search runtimes…"));
     search_entry.set_margin_start(18);
     search_entry.set_margin_end(18);
     search_entry.set_margin_top(12);
@@ -113,16 +113,16 @@ pub fn show(window: &Window, host: &Host, sessions: &[proto::SessionInfo]) {
     dialog.set_child(Some(&toolbar_view));
 
     let open_runtime_ids = window.open_runtime_ids_for_endpoint(host);
-    let entries = classify_sessions(sessions, &open_runtime_ids);
+    let entries = classify_runtimes(runtimes, &open_runtime_ids);
 
-    populate_sessions(&list_box, &entries, "", window, host, &dialog);
+    populate_runtimes(&list_box, &entries, "", window, host, &dialog);
 
     let win_for_search = window.clone();
     let host_for_search = host.clone();
     let dialog_for_search = dialog.clone();
     search_entry.connect_changed(move |entry| {
         let query = entry.text().to_string();
-        populate_sessions(
+        populate_runtimes(
             &list_box,
             &entries,
             &query,
@@ -136,9 +136,9 @@ pub fn show(window: &Window, host: &Host, sessions: &[proto::SessionInfo]) {
     search_entry.grab_focus();
 }
 
-fn populate_sessions(
+fn populate_runtimes(
     container: &gtk4::Box,
-    entries: &[SessionEntry],
+    entries: &[RuntimeEntry],
     query: &str,
     window: &Window,
     host: &Host,
@@ -156,7 +156,7 @@ fn populate_sessions(
             continue;
         }
 
-        let is_available = entry.availability == SessionAvailability::Available;
+        let is_available = entry.availability == RuntimeAvailability::Available;
         if is_available && !has_available {
             has_available = true;
             append_section_label(container, "Available");
@@ -244,8 +244,8 @@ mod tests {
         name: &str,
         pane_count: u32,
         has_write_owner: bool,
-    ) -> proto::SessionInfo {
-        proto::SessionInfo {
+    ) -> proto::RuntimeInfo {
+        proto::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(id),
             name: name.into(),
             pane_count,
@@ -265,11 +265,11 @@ mod tests {
     #[test]
     fn classify_available_session() {
         let id = uuid::Uuid::new_v4();
-        let sessions = vec![make_session_info(id, "workspace-1", 2, false)];
-        let entries = classify_sessions(&sessions, &[]);
+        let workspaces = vec![make_session_info(id, "workspace-1", 2, false)];
+        let entries = classify_runtimes(&workspaces, &[]);
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].availability, SessionAvailability::Available);
+        assert_eq!(entries[0].availability, RuntimeAvailability::Available);
         assert_eq!(entries[0].name, "workspace-1");
         assert_eq!(entries[0].pane_count, 2);
         assert_eq!(entries[0].status_label, "2 panes");
@@ -278,32 +278,32 @@ mod tests {
     #[test]
     fn classify_busy_session_with_write_owner() {
         let id = uuid::Uuid::new_v4();
-        let sessions = vec![make_session_info(id, "busy-ws", 1, true)];
-        let entries = classify_sessions(&sessions, &[]);
+        let workspaces = vec![make_session_info(id, "busy-ws", 1, true)];
+        let entries = classify_runtimes(&workspaces, &[]);
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].availability, SessionAvailability::BusyElsewhere);
+        assert_eq!(entries[0].availability, RuntimeAvailability::BusyElsewhere);
         assert_eq!(entries[0].status_label, "Connected elsewhere");
     }
 
     #[test]
     fn classify_already_open_session() {
         let id = uuid::Uuid::new_v4();
-        let sessions = vec![make_session_info(id, "open-ws", 3, false)];
-        let entries = classify_sessions(&sessions, &[id.to_string()]);
+        let workspaces = vec![make_session_info(id, "open-ws", 3, false)];
+        let entries = classify_runtimes(&workspaces, &[id.to_string()]);
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].availability, SessionAvailability::AlreadyOpen);
+        assert_eq!(entries[0].availability, RuntimeAvailability::AlreadyOpen);
         assert_eq!(entries[0].status_label, "Already open");
     }
 
     #[test]
     fn classify_already_open_takes_precedence_over_busy() {
         let id = uuid::Uuid::new_v4();
-        let sessions = vec![make_session_info(id, "mine", 1, true)];
-        let entries = classify_sessions(&sessions, &[id.to_string()]);
+        let workspaces = vec![make_session_info(id, "mine", 1, true)];
+        let entries = classify_runtimes(&workspaces, &[id.to_string()]);
 
-        assert_eq!(entries[0].availability, SessionAvailability::AlreadyOpen);
+        assert_eq!(entries[0].availability, RuntimeAvailability::AlreadyOpen);
     }
 
     #[test]
@@ -311,40 +311,40 @@ mod tests {
         let avail_id = uuid::Uuid::new_v4();
         let busy_id = uuid::Uuid::new_v4();
         let open_id = uuid::Uuid::new_v4();
-        let sessions = vec![
+        let workspaces = vec![
             make_session_info(avail_id, "avail", 1, false),
             make_session_info(busy_id, "busy", 2, true),
             make_session_info(open_id, "open", 1, false),
         ];
-        let entries = classify_sessions(&sessions, &[open_id.to_string()]);
+        let entries = classify_runtimes(&workspaces, &[open_id.to_string()]);
 
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].availability, SessionAvailability::Available);
-        assert_eq!(entries[1].availability, SessionAvailability::BusyElsewhere);
-        assert_eq!(entries[2].availability, SessionAvailability::AlreadyOpen);
+        assert_eq!(entries[0].availability, RuntimeAvailability::Available);
+        assert_eq!(entries[1].availability, RuntimeAvailability::BusyElsewhere);
+        assert_eq!(entries[2].availability, RuntimeAvailability::AlreadyOpen);
     }
 
     #[test]
     fn classify_empty_sessions() {
-        let entries = classify_sessions(&[], &[]);
+        let entries = classify_runtimes(&[], &[]);
         assert!(entries.is_empty());
     }
 
     #[test]
     fn single_pane_label_is_singular() {
         let id = uuid::Uuid::new_v4();
-        let sessions = vec![make_session_info(id, "ws", 1, false)];
-        let entries = classify_sessions(&sessions, &[]);
+        let workspaces = vec![make_session_info(id, "ws", 1, false)];
+        let entries = classify_runtimes(&workspaces, &[]);
         assert_eq!(entries[0].status_label, "1 pane");
     }
 
     #[test]
     fn matches_query_empty_matches_all() {
-        let entry = SessionEntry {
+        let entry = RuntimeEntry {
             id: "id".into(),
             name: "anything".into(),
             pane_count: 1,
-            availability: SessionAvailability::Available,
+            availability: RuntimeAvailability::Available,
             status_label: "1 pane".into(),
         };
         assert!(matches_query(&entry, ""));
@@ -353,11 +353,11 @@ mod tests {
 
     #[test]
     fn matches_query_case_insensitive() {
-        let entry = SessionEntry {
+        let entry = RuntimeEntry {
             id: "id".into(),
             name: "My Workspace".into(),
             pane_count: 1,
-            availability: SessionAvailability::Available,
+            availability: RuntimeAvailability::Available,
             status_label: "1 pane".into(),
         };
         assert!(matches_query(&entry, "my"));
@@ -367,11 +367,11 @@ mod tests {
 
     #[test]
     fn matches_query_no_match() {
-        let entry = SessionEntry {
+        let entry = RuntimeEntry {
             id: "id".into(),
             name: "rttx".into(),
             pane_count: 1,
-            availability: SessionAvailability::Available,
+            availability: RuntimeAvailability::Available,
             status_label: "1 pane".into(),
         };
         assert!(!matches_query(&entry, "redis"));

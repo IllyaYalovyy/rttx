@@ -18,7 +18,7 @@ impl Window {
         let host_key = {
             let state = self.imp().state.borrow();
             state
-                .sessions
+                .workspaces
                 .iter()
                 .find(|s| s.uuid == session_uuid)
                 .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
@@ -44,7 +44,7 @@ impl Window {
                 keys.push(h.key.clone());
             }
         }
-        for s in &state.sessions {
+        for s in &state.workspaces {
             let k = s.runtime.endpoint.host_key();
             if !keys.contains(&k) {
                 keys.push(k);
@@ -443,7 +443,7 @@ impl Window {
             return;
         }
         let session_uuid = state
-            .sessions
+            .workspaces
             .iter()
             .find(|s| s.layout.contains_terminal(terminal_uuid))
             .map(|s| s.uuid.clone());
@@ -452,7 +452,7 @@ impl Window {
         let list = &imp.sidebar_list;
         let mut idx = 0;
         while let Some(row) = list.row_at_index(idx) {
-            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<WorkspaceRow>().ok())
                 && session_row.uuid() == session_uuid
             {
                 session_row.mark_activity();
@@ -496,7 +496,7 @@ impl Window {
         let imp = self.imp();
         let subtitle = {
             let state = imp.state.borrow();
-            let Some(session) = state.sessions.iter().find(|s| s.uuid == session_uuid) else {
+            let Some(session) = state.workspaces.iter().find(|s| s.uuid == session_uuid) else {
                 return;
             };
             let endpoint = &session.runtime.endpoint;
@@ -509,7 +509,7 @@ impl Window {
         };
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<WorkspaceRow>().ok())
                 && session_row.uuid() == session_uuid
             {
                 session_row.set_subtitle(&subtitle);
@@ -523,7 +523,7 @@ impl Window {
         let session_uuid = {
             let state = self.imp().state.borrow();
             state
-                .sessions
+                .workspaces
                 .iter()
                 .find(|s| s.active_terminal_uuid.as_deref() == Some(terminal_uuid))
                 .map(|s| s.uuid.clone())

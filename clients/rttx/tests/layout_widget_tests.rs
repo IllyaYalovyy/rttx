@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use rttx::session::{self, *};
+use rttx::workspace::{self, *};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Once;
@@ -217,7 +217,7 @@ fn test_capture_paned_ratios_reads_position() {
     paned.set_position(240); // 240/800 = 0.3
 
     let mut updated = layout;
-    session::capture_paned_ratios(&mut updated, &widget);
+    workspace::capture_paned_ratios(&mut updated, &widget);
 
     let LayoutNode::Split { ratio, .. } = updated else {
         panic!("Expected Split layout node");
@@ -272,7 +272,7 @@ fn test_capture_paned_ratios_nested() {
     inner.set_position(100); // 100/400 = 0.25
 
     let mut updated = layout;
-    session::capture_paned_ratios(&mut updated, &widget);
+    workspace::capture_paned_ratios(&mut updated, &widget);
 
     let LayoutNode::Split { ratio: outer_ratio, first, .. } = updated else {
         panic!("Expected outer Split");
@@ -318,7 +318,7 @@ fn test_apply_paned_ratios_sets_position() {
     paned.allocate(800, 600, -1, None);
 
     // Now apply_paned_ratios should read width=800 and set position=400.
-    session::apply_paned_ratios(&layout, &widget);
+    workspace::apply_paned_ratios(&layout, &widget);
 
     let pos = paned.position();
     assert!(
@@ -350,7 +350,7 @@ fn test_scheduled_initial_paned_ratios_apply_once_widget_has_size() {
     };
 
     let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
-    session::schedule_initial_paned_ratios(&widget, &layout);
+    workspace::schedule_initial_paned_ratios(&widget, &layout);
 
     let window = gtk4::Window::new();
     window.set_default_size(800, 600);
@@ -396,7 +396,7 @@ fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
     };
 
     let widget = build_layout_widget(&layout, &|spec| gtk4::Label::new(Some(spec.uuid)).upcast());
-    session::schedule_initial_paned_ratios(&widget, &layout);
+    workspace::schedule_initial_paned_ratios(&widget, &layout);
 
     let window = gtk4::Window::new();
     window.set_default_size(800, 600);
@@ -413,7 +413,7 @@ fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
     pump_events(50);
 
     let mut updated = layout;
-    session::capture_paned_ratios(&mut updated, &widget);
+    workspace::capture_paned_ratios(&mut updated, &widget);
 
     let LayoutNode::Split { ratio, .. } = updated else {
         panic!("Expected Split layout node");
@@ -490,7 +490,7 @@ fn split_layout_propagates_source_cwd_to_new_terminal_widget() {
     let received_cwds: Rc<RefCell<Vec<_>>> = Rc::default();
     let captured = received_cwds.clone();
 
-    let _widget = session::build_layout_widget(&new_layout, &|spec| {
+    let _widget = workspace::build_layout_widget(&new_layout, &|spec| {
         captured.borrow_mut().push((spec.uuid.to_string(), spec.cwd.map(str::to_string)));
         gtk4::Label::new(Some(spec.uuid)).upcast()
     });

@@ -23,21 +23,21 @@ async fn ten_runtimes_listed_in_stable_order() {
     client.handshake().await;
 
     for i in 0..10 {
-        create_session(&mut client, &format!("session-{i}"), proto::RuntimePolicy::Persistent)
+        create_runtime(&mut client, &format!("session-{i}"), proto::RuntimePolicy::Persistent)
             .await;
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 10);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 10);
 
     // Inventory must be sorted by session ID (server contract).
-    let listed_ids: Vec<&[u8]> = sessions.iter().map(|s| s.id.as_slice()).collect();
+    let listed_ids: Vec<&[u8]> = runtimes.iter().map(|s| s.id.as_slice()).collect();
     let mut sorted_ids = listed_ids.clone();
     sorted_ids.sort();
     assert_eq!(listed_ids, sorted_ids, "inventory must be sorted by session ID");
 
     // List again — order must be stable.
-    let sessions2 = list_sessions(&mut client).await;
+    let sessions2 = list_runtimes(&mut client).await;
     let listed_ids2: Vec<&[u8]> = sessions2.iter().map(|s| s.id.as_slice()).collect();
     assert_eq!(listed_ids, listed_ids2, "inventory order must be stable across calls");
 }
@@ -52,17 +52,17 @@ async fn five_panes_in_one_runtime() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let session_id =
-        create_session(&mut client, "multi-pane", proto::RuntimePolicy::Persistent).await;
-    attach_rw(&mut client, &session_id).await;
+    let runtime_id =
+        create_runtime(&mut client, "multi-pane", proto::RuntimePolicy::Persistent).await;
+    attach_rw(&mut client, &runtime_id).await;
 
     let mut pane_ids = Vec::new();
     for _ in 0..5 {
-        pane_ids.push(create_pane(&mut client, &session_id).await);
+        pane_ids.push(create_pane(&mut client, &runtime_id).await);
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions[0].pane_count, 5);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes[0].pane_count, 5);
 
     // All pane IDs must be unique.
     let mut sorted = pane_ids.clone();
@@ -81,14 +81,14 @@ async fn large_scrollback_survives_detach_and_reattach() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let session_id =
-        create_session(&mut client, "scrollback", proto::RuntimePolicy::Persistent).await;
-    attach_rw(&mut client, &session_id).await;
-    let pane_id = create_pane(&mut client, &session_id).await;
+    let runtime_id =
+        create_runtime(&mut client, "scrollback", proto::RuntimePolicy::Persistent).await;
+    attach_rw(&mut client, &runtime_id).await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Send a burst of input to generate scrollback.
     for i in 0..20 {
-        send_input(&mut client, &session_id, &pane_id, format!("echo line-{i}\n").as_bytes()).await;
+        send_input(&mut client, &runtime_id, &pane_id, format!("echo line-{i}\n").as_bytes()).await;
     }
 
     // Drain Deltas until we see output from the last echo command.
@@ -112,15 +112,15 @@ async fn large_scrollback_survives_detach_and_reattach() {
     // Detach.
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: runtime_id.clone(),
             })),
         })
         .await;
     client.drain(Duration::from_millis(500)).await;
 
     // Reattach — snapshot should contain scrollback.
-    let snap = attach_rw(&mut client, &session_id).await;
+    let snap = attach_rw(&mut client, &runtime_id).await;
     assert!(!snap.panes.is_empty());
 
     let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback.len()).sum();
@@ -133,22 +133,22 @@ async fn large_scrollback_survives_detach_and_reattach() {
 async fn scrollback_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
 
-    let session_id;
+    let runtime_id;
     let pane_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        session_id =
-            create_session(&mut client, "restart-scroll", proto::RuntimePolicy::Persistent).await;
-        attach_rw(&mut client, &session_id).await;
-        pane_id = create_pane(&mut client, &session_id).await;
+        runtime_id =
+            create_runtime(&mut client, "restart-scroll", proto::RuntimePolicy::Persistent).await;
+        attach_rw(&mut client, &runtime_id).await;
+        pane_id = create_pane(&mut client, &runtime_id).await;
 
         for i in 0..20 {
             send_input(
                 &mut client,
-                &session_id,
+                &runtime_id,
                 &pane_id,
                 format!("echo restart-line-{i}\n").as_bytes(),
             )
@@ -182,11 +182,11 @@ async fn scrollback_survives_restart() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
-    assert!(sessions[0].reconstructed);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
+    assert!(runtimes[0].reconstructed);
 
-    let snap = attach_rw(&mut client, &session_id).await;
+    let snap = attach_rw(&mut client, &runtime_id).await;
     let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback.len()).sum();
     assert!(total_bytes > 0, "scrollback must survive restart");
 }
@@ -202,17 +202,17 @@ async fn repeated_list_under_load_is_consistent() {
     client.handshake().await;
 
     for i in 0..5 {
-        create_session(&mut client, &format!("load-{i}"), proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut client, &format!("load-{i}"), proto::RuntimePolicy::Persistent).await;
     }
 
     // List 10 times — count and order must be stable.
-    let baseline = list_sessions(&mut client).await;
+    let baseline = list_runtimes(&mut client).await;
     assert_eq!(baseline.len(), 5);
 
     for round in 0..10 {
-        let sessions = list_sessions(&mut client).await;
-        assert_eq!(sessions.len(), 5, "round {round}: session count changed");
-        let ids: Vec<&[u8]> = sessions.iter().map(|s| s.id.as_slice()).collect();
+        let runtimes = list_runtimes(&mut client).await;
+        assert_eq!(runtimes.len(), 5, "round {round}: session count changed");
+        let ids: Vec<&[u8]> = runtimes.iter().map(|s| s.id.as_slice()).collect();
         let baseline_ids: Vec<&[u8]> = baseline.iter().map(|s| s.id.as_slice()).collect();
         assert_eq!(ids, baseline_ids, "round {round}: inventory order changed");
     }

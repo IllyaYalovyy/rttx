@@ -4,8 +4,8 @@
 /// directory fixtures, and GTK initialization helpers.
 use crate::color_scheme::ColorScheme;
 use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
-use crate::session::{
-    LayoutNode, PaneRecovery, SessionColor, SessionMode, SessionState, SplitOrientation,
+use crate::workspace::{
+    LayoutNode, PaneRecovery, WorkspaceColor, WorkspaceMode, WorkspaceState, SplitOrientation,
     WindowState,
 };
 use std::path::{Path, PathBuf};
@@ -64,17 +64,17 @@ pub fn split_ratio(
 
 /// Build a session with a given layout.
 #[must_use]
-pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
-    SessionState {
+pub fn workspace(id: &str, name: &str, layout: LayoutNode) -> WorkspaceState {
+    WorkspaceState {
         uuid: id.to_string(),
         name: name.to_string(),
         layout,
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: None,
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
     }
@@ -82,7 +82,7 @@ pub fn session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
 
 /// Build a managed session with default local persistent runtime metadata.
 #[must_use]
-pub fn managed_session(id: &str, name: &str, layout: LayoutNode) -> SessionState {
+pub fn managed_session(id: &str, name: &str, layout: LayoutNode) -> WorkspaceState {
     managed_session_with_runtime(
         id,
         name,
@@ -102,7 +102,7 @@ pub fn managed_session_with_runtime(
     endpoint: RuntimeEndpoint,
     policy: WorkspacePolicy,
     runtime_id: Option<&str>,
-) -> SessionState {
+) -> WorkspaceState {
     let terminal_uuids = layout.terminal_uuids();
     let terminal_recovery = terminal_uuids
         .iter()
@@ -110,14 +110,14 @@ pub fn managed_session_with_runtime(
         .map(|terminal_uuid| (terminal_uuid, PaneRecovery::empty_shell()))
         .collect();
     let active_terminal_uuid = terminal_uuids.first().cloned();
-    let mut session = SessionState {
+    let mut session = WorkspaceState {
         uuid: id.to_string(),
         name: name.to_string(),
         layout,
         terminal_recovery,
         active_terminal_uuid,
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime {
             managed: true,
             endpoint,
@@ -126,7 +126,7 @@ pub fn managed_session_with_runtime(
             pane_bindings: std::collections::BTreeMap::default(),
             pending_layout_panes: std::collections::BTreeSet::default(),
         },
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
     };
@@ -135,10 +135,10 @@ pub fn managed_session_with_runtime(
     session
 }
 
-/// Build a window state from sessions.
+/// Build a window state from workspaces.
 #[must_use]
-pub fn window_state(sessions: Vec<SessionState>) -> WindowState {
-    WindowState { active_session_index: 0, sessions, ..WindowState::default() }
+pub fn window_state(workspaces: Vec<WorkspaceState>) -> WindowState {
+    WindowState { active_workspace_index: 0, workspaces, ..WindowState::default() }
 }
 
 // ── Color scheme builder ─────────────────────────────────────────
@@ -241,9 +241,9 @@ pub fn remove_env(key: &str) {
 
 /// Save a window state to a temp directory (bypasses glib config dir).
 pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
-    let sessions_dir = dir.join(crate::config::CONFIG_DIR).join("sessions");
-    std::fs::create_dir_all(&sessions_dir)?;
-    let path = sessions_dir.join("window-state.json");
+    let workspaces_dir = dir.join(crate::config::CONFIG_DIR).join("sessions");
+    std::fs::create_dir_all(&workspaces_dir)?;
+    let path = workspaces_dir.join("window-state.json");
     let json = serde_json::to_string_pretty(state)?;
     std::fs::write(path, json)?;
     Ok(())

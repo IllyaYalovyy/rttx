@@ -25,7 +25,7 @@ mod imp {
     #[derive(Debug)]
     pub struct PersistentPaneView {
         pub uuid: RefCell<String>,
-        pub session_id: RefCell<String>,
+        pub runtime_id: RefCell<String>,
         pub custom_title: RefCell<Option<String>>,
         pub daemon_title: RefCell<Option<String>>,
         pub current_directory: RefCell<Option<String>>,
@@ -59,7 +59,7 @@ mod imp {
         fn default() -> Self {
             Self {
                 uuid: RefCell::default(),
-                session_id: RefCell::default(),
+                runtime_id: RefCell::default(),
                 custom_title: RefCell::default(),
                 daemon_title: RefCell::default(),
                 current_directory: RefCell::default(),
@@ -331,10 +331,10 @@ glib::wrapper! {
 impl PersistentPaneView {
     /// Create a new persistent pane view.
     #[must_use]
-    pub fn new(uuid: &str, session_id: &str) -> Self {
+    pub fn new(uuid: &str, runtime_id: &str) -> Self {
         let obj: Self = glib::Object::builder().build();
         obj.imp().uuid.replace(uuid.to_string());
-        obj.imp().session_id.replace(session_id.to_string());
+        obj.imp().runtime_id.replace(runtime_id.to_string());
         obj.connect_search();
         obj
     }
@@ -352,13 +352,13 @@ impl PersistentPaneView {
 
     /// The daemon session UUID this pane belongs to.
     #[must_use]
-    pub fn session_id(&self) -> String {
-        self.imp().session_id.borrow().clone()
+    pub fn runtime_id(&self) -> String {
+        self.imp().runtime_id.borrow().clone()
     }
 
     /// Update the runtime UUID this pane currently belongs to.
-    pub fn set_session_id(&self, session_id: &str) {
-        self.imp().session_id.replace(session_id.to_string());
+    pub fn set_runtime_id(&self, runtime_id: &str) {
+        self.imp().runtime_id.replace(runtime_id.to_string());
     }
 
     /// The underlying VTE terminal widget.

@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn frame_roundtrip_all_client_messages() {
-        let session_id = uuid_to_bytes(uuid::Uuid::new_v4());
+        let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
         let pane_id = uuid_to_bytes(uuid::Uuid::new_v4());
 
         let messages: Vec<proto::ClientMessage> = vec![
@@ -141,33 +141,33 @@ mod tests {
                 })),
             },
             proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+                msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
             },
             proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                     name: "test".into(),
                     policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             },
             proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                    session_id: session_id.clone(),
+                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                    runtime_id: runtime_id.clone(),
                     attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             },
             proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                    session_id: session_id.clone(),
+                msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                    runtime_id: runtime_id.clone(),
                 })),
             },
             proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-                    session_id: session_id.clone(),
+                msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+                    runtime_id: runtime_id.clone(),
                 })),
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: None,
                     cols: 0,
@@ -176,20 +176,20 @@ mod tests {
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                 })),
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     data: bytes::Bytes::from_static(b"hello"),
                 })),
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     cols: 80,
                     rows: 24,
@@ -197,7 +197,7 @@ mod tests {
             },
             proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     title: "pane-title".into(),
                 })),
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn frame_roundtrip_server_messages() {
-        let session_id = uuid_to_bytes(uuid::Uuid::new_v4());
+        let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
         let pane_id = uuid_to_bytes(uuid::Uuid::new_v4());
 
         let messages: Vec<proto::ServerMessage> = vec![
@@ -231,9 +231,9 @@ mod tests {
                 })),
             },
             proto::ServerMessage {
-                msg: Some(proto::server_message::Msg::SessionList(proto::SessionList {
-                    sessions: vec![proto::SessionInfo {
-                        id: session_id.clone(),
+                msg: Some(proto::server_message::Msg::RuntimeList(proto::RuntimeList {
+                    runtimes: vec![proto::RuntimeInfo {
+                        id: runtime_id.clone(),
                         name: "inventory-test".into(),
                         pane_count: 1,
                         has_attached_client: true,
@@ -258,21 +258,21 @@ mod tests {
                 })),
             },
             proto::ServerMessage {
-                msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
-                    session_id: session_id.clone(),
+                msg: Some(proto::server_message::Msg::RuntimeCreated(proto::RuntimeCreated {
+                    runtime_id: runtime_id.clone(),
                     revision: 1,
                 })),
             },
             proto::ServerMessage {
-                msg: Some(proto::server_message::Msg::SessionDetached(proto::SessionDetached {
-                    session_id: session_id.clone(),
+                msg: Some(proto::server_message::Msg::RuntimeDetached(proto::RuntimeDetached {
+                    runtime_id: runtime_id.clone(),
                     revision: 8,
                 })),
             },
             proto::ServerMessage {
-                msg: Some(proto::server_message::Msg::SessionTerminated(
-                    proto::SessionTerminated {
-                        session_id: session_id.clone(),
+                msg: Some(proto::server_message::Msg::RuntimeTerminated(
+                    proto::RuntimeTerminated {
+                        runtime_id: runtime_id.clone(),
                         final_revision: 9,
                         reason: proto::RuntimeTerminationReason::Explicit as i32,
                     },
@@ -280,7 +280,7 @@ mod tests {
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     panes: vec![proto::PaneSnapshot {
                         pane_id: pane_id.clone(),
                         title: "pane-title".into(),
@@ -301,28 +301,28 @@ mod tests {
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     data: bytes::Bytes::from_static(b"output"),
                 })),
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::PaneCreated(proto::PaneCreated {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     revision: 11,
                 })),
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::PaneClosed(proto::PaneClosed {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     revision: 12,
                 })),
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::PaneResized(proto::PaneResized {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     cols: 100,
                     rows: 30,
@@ -331,7 +331,7 @@ mod tests {
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::PaneExited(proto::PaneExited {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     status: 0,
                     revision: 14,
@@ -339,7 +339,7 @@ mod tests {
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::TitleChanged(proto::TitleChanged {
-                    session_id,
+                    runtime_id,
                     pane_id,
                     title: "pane-title".into(),
                     revision: 15,
@@ -347,7 +347,7 @@ mod tests {
             },
             proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
-                    session_id: uuid_to_bytes(uuid::Uuid::new_v4()),
+                    runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
                     current_client_role: proto::RuntimeClientRole::Unattached as i32,
                     attached_client_count: 2,
                     read_only_client_count: 1,
@@ -387,12 +387,12 @@ mod tests {
 
     #[test]
     fn create_pane_dark_background_roundtrip() {
-        let session_id = uuid_to_bytes(uuid::Uuid::new_v4());
+        let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
 
         for dark in [Some(true), Some(false), None] {
             let msg = proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     cwd: Some("/tmp".into()),
                     dark_background: dark,
                     cols: 0,
@@ -412,12 +412,12 @@ mod tests {
 
     #[test]
     fn create_pane_cols_rows_roundtrip() {
-        let session_id = uuid_to_bytes(uuid::Uuid::new_v4());
+        let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
 
         for (cols, rows) in [(0, 0), (80, 24), (132, 43), (300, 100)] {
             let msg = proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: None,
                     cols,

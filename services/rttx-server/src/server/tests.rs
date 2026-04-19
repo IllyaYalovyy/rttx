@@ -20,16 +20,16 @@ fn new_server() -> Arc<Mutex<Server>> {
     Arc::new(Mutex::new(Server::new(Box::new(StubOs))))
 }
 
-/// Insert a session with a pane and attach a client as writer.
-async fn setup_session_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -> (Uuid, Uuid) {
-    let mut session = Session::new("test".into());
-    let session_id = session.id;
+/// Insert a runtime with a pane and attach a client as writer.
+async fn setup_runtime_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -> (Uuid, Uuid) {
+    let mut rt = Runtime::new("test".into());
+    let runtime_id = rt.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
     let pane_id = pane.id;
-    session.add_pane(pane);
-    let _ = session.attach_client(client_id, AttachMode::ReadWrite);
-    server.lock().await.sessions.insert(session_id, session);
-    (session_id, pane_id)
+    rt.add_pane(pane);
+    let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
+    server.lock().await.runtimes.insert(runtime_id, rt);
+    (runtime_id, pane_id)
 }
 
 // ── Existing tests (migrated) ───────────────────────────────────
@@ -41,35 +41,35 @@ fn short_id_returns_first_eight_characters() {
 }
 
 #[test]
-fn session_label_includes_name_and_short_id() {
+fn runtime_label_includes_name_and_short_id() {
     let mut server = Server::new(Box::new(StubOs));
-    let session = Session::new("my-workspace".into());
-    let session_id = session.id;
-    server.sessions.insert(session_id, session);
+    let rt = Runtime::new("my-workspace".into());
+    let runtime_id = rt.id;
+    server.runtimes.insert(runtime_id, rt);
 
-    let label = server.session_label(session_id);
+    let label = server.runtime_label(runtime_id);
     assert!(label.starts_with("\"my-workspace\" ("), "got: {label}");
     assert!(label.ends_with(')'), "got: {label}");
     assert_eq!(label.len(), "\"my-workspace\" (12345678)".len());
 }
 
 #[test]
-fn session_label_falls_back_for_unknown_session() {
+fn runtime_label_falls_back_for_unknown_runtime() {
     let server = Server::new(Box::new(StubOs));
     let unknown_id = Uuid::new_v4();
-    let label = server.session_label(unknown_id);
+    let label = server.runtime_label(unknown_id);
     assert!(label.starts_with('('), "got: {label}");
     assert!(label.ends_with(')'), "got: {label}");
     assert_eq!(label.len(), "(12345678)".len());
 }
 
 #[tokio::test]
-async fn input_to_missing_session_returns_none() {
+async fn input_to_missing_runtime_returns_none() {
     let server = new_server();
     let client_id = Uuid::new_v4();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             data: bytes::Bytes::from_static(b"hello"),
         })),
@@ -78,12 +78,12 @@ async fn input_to_missing_session_returns_none() {
 }
 
 #[tokio::test]
-async fn resize_missing_session_returns_none() {
+async fn resize_missing_runtime_returns_none() {
     let server = new_server();
     let client_id = Uuid::new_v4();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             cols: 80,
             rows: 24,
@@ -181,69 +181,69 @@ async fn ping_fast_path_responds_without_handle_message() {
     }
 }
 
-// ── CreateSession ───────────────────────────────────────────────
+// ── CreateRuntime ───────────────────────────────────────────────
 
 #[tokio::test]
-async fn create_session_returns_session_created() {
+async fn create_runtime_returns_runtime_created() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "workspace-1".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => {
-            assert!(!sc.session_id.is_empty());
-            let id = bytes_to_uuid(&sc.session_id).unwrap();
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
+            assert!(!sc.runtime_id.is_empty());
+            let id = bytes_to_uuid(&sc.runtime_id).unwrap();
             let s = server.lock().await;
-            assert_eq!(s.sessions[&id].name, "workspace-1");
-            assert_eq!(s.sessions[&id].policy, RuntimePolicy::Persistent);
+            assert_eq!(s.runtimes[&id].name, "workspace-1");
+            assert_eq!(s.runtimes[&id].policy, RuntimePolicy::Persistent);
             drop(s);
         }
-        other => panic!("expected SessionCreated, got {other:?}"),
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     }
 }
 
-// ── ListSessions ────────────────────────────────────────────────
+// ── ListRuntimes ────────────────────────────────────────────────
 
 #[tokio::test]
-async fn list_sessions_returns_all_sessions() {
+async fn list_runtimes_returns_all_runtimes() {
     let server = new_server();
     let client_id = Uuid::new_v4();
     {
         let mut s = server.lock().await;
-        s.sessions.insert(Uuid::new_v4(), Session::new("a".into()));
-        s.sessions.insert(Uuid::new_v4(), Session::new("b".into()));
+        s.runtimes.insert(Uuid::new_v4(), Runtime::new("a".into()));
+        s.runtimes.insert(Uuid::new_v4(), Runtime::new("b".into()));
     }
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 2);
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 2);
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
-// ── AttachSession ───────────────────────────────────────────────
+// ── AttachRuntime ───────────────────────────────────────────────
 
 #[tokio::test]
-async fn attach_nonexistent_session_returns_session_not_found() {
+async fn attach_nonexistent_runtime_returns_runtime_not_found() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+            assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -253,8 +253,8 @@ async fn attach_nonexistent_session_returns_session_not_found() {
 async fn attach_with_invalid_uuid_returns_invalid_parameter() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: vec![0u8; 4],
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: vec![0u8; 4],
             attach_mode: 0,
         })),
     };
@@ -271,20 +271,20 @@ async fn attach_with_invalid_uuid_returns_invalid_parameter() {
 async fn attach_returns_snapshot_with_pane_data() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     // Detach first so we can re-attach cleanly.
     server
         .lock()
         .await
-        .sessions
-        .get_mut(&session_id)
+        .runtimes
+        .get_mut(&runtime_id)
         .unwrap()
         .detach_client(client_id, DetachReason::ExplicitRequest);
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -298,20 +298,20 @@ async fn attach_returns_snapshot_with_pane_data() {
     }
 }
 
-// ── DetachSession ───────────────────────────────────────────────
+// ── DetachRuntime ───────────────────────────────────────────────
 
 #[tokio::test]
-async fn detach_nonexistent_session_returns_session_not_found() {
+async fn detach_nonexistent_runtime_returns_runtime_not_found() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+            assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -321,8 +321,8 @@ async fn detach_nonexistent_session_returns_session_not_found() {
 async fn detach_with_invalid_uuid_returns_invalid_parameter() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: vec![0u8; 2],
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: vec![0u8; 2],
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
@@ -334,20 +334,20 @@ async fn detach_with_invalid_uuid_returns_invalid_parameter() {
     }
 }
 
-// ── TerminateSession ────────────────────────────────────────────
+// ── TerminateRuntime ────────────────────────────────────────────
 
 #[tokio::test]
-async fn terminate_nonexistent_session_returns_session_not_found() {
+async fn terminate_nonexistent_runtime_returns_runtime_not_found() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+            assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -358,11 +358,11 @@ async fn terminate_owned_by_other_client_returns_ownership_conflict() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let other = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, owner).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     let resp = Server::handle_message(&server, other, msg).await.unwrap();
@@ -375,36 +375,36 @@ async fn terminate_owned_by_other_client_returns_ownership_conflict() {
 }
 
 #[tokio::test]
-async fn terminate_removes_session_from_state() {
+async fn terminate_removes_runtime_from_state() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::SessionTerminated(_))));
-    assert!(!server.lock().await.sessions.contains_key(&session_id));
+    assert!(matches!(resp.msg, Some(proto::server_message::Msg::RuntimeTerminated(_))));
+    assert!(!server.lock().await.runtimes.contains_key(&runtime_id));
 }
 
 // ── ClosePane ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn close_pane_nonexistent_session_returns_session_not_found() {
+async fn close_pane_nonexistent_runtime_returns_runtime_not_found() {
     let server = new_server();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+            assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -414,11 +414,11 @@ async fn close_pane_nonexistent_session_returns_session_not_found() {
 async fn close_pane_nonexistent_pane_returns_pane_not_found() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
@@ -436,11 +436,11 @@ async fn close_pane_ownership_violation_returns_error() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let other = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, owner).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
         })),
     };
@@ -459,11 +459,11 @@ async fn close_pane_ownership_violation_returns_error() {
 async fn set_pane_title_returns_title_changed() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             title: "new-title".into(),
         })),
@@ -481,11 +481,11 @@ async fn set_pane_title_returns_title_changed() {
 async fn set_pane_title_nonexistent_pane_returns_pane_not_found() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             title: "x".into(),
         })),
@@ -504,11 +504,11 @@ async fn set_pane_title_ownership_violation_returns_error() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let other = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, owner).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             title: "hijack".into(),
         })),
@@ -522,57 +522,57 @@ async fn set_pane_title_ownership_violation_returns_error() {
     }
 }
 
-// ── RenameSession ───────────────────────────────────────────────
+// ── RenameRuntime ───────────────────────────────────────────────
 
 #[tokio::test]
-async fn rename_session_returns_session_renamed() {
+async fn rename_runtime_returns_runtime_renamed() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             name: "renamed".into(),
         })),
     };
     let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
     match resp.msg {
-        Some(proto::server_message::Msg::SessionRenamed(sr)) => {
+        Some(proto::server_message::Msg::RuntimeRenamed(sr)) => {
             assert_eq!(sr.name, "renamed");
         }
-        other => panic!("expected SessionRenamed, got {other:?}"),
+        other => panic!("expected RuntimeRenamed, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn rename_nonexistent_session_returns_session_not_found() {
+async fn rename_nonexistent_runtime_returns_runtime_not_found() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+        msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             name: "x".into(),
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+            assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn rename_session_ownership_violation_returns_error() {
+async fn rename_runtime_ownership_violation_returns_error() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let other = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, owner).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             name: "hijack".into(),
         })),
     };
@@ -592,18 +592,18 @@ async fn input_to_existing_pane_without_write_access_returns_ownership_error() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let reader = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, owner).await;
     let _ = server
         .lock()
         .await
-        .sessions
-        .get_mut(&session_id)
+        .runtimes
+        .get_mut(&runtime_id)
         .unwrap()
         .attach_client(reader, AttachMode::ReadOnly);
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             data: bytes::Bytes::from_static(b"hello"),
         })),
@@ -624,18 +624,18 @@ async fn resize_without_write_access_returns_ownership_error() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let reader = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, owner).await;
     let _ = server
         .lock()
         .await
-        .sessions
-        .get_mut(&session_id)
+        .runtimes
+        .get_mut(&runtime_id)
         .unwrap()
         .attach_client(reader, AttachMode::ReadOnly);
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cols: 120,
             rows: 40,
@@ -653,33 +653,33 @@ async fn resize_without_write_access_returns_ownership_error() {
 // ── build_snapshot ──────────────────────────────────────────────
 
 #[test]
-fn build_snapshot_only_includes_persistent_sessions() {
+fn build_snapshot_only_includes_persistent_runtimes() {
     let mut server = Server::new(Box::new(StubOs));
 
-    let mut persistent = Session::new("keep".into());
+    let mut persistent = Runtime::new("keep".into());
     persistent.policy = RuntimePolicy::Persistent;
-    server.sessions.insert(persistent.id, persistent);
+    server.runtimes.insert(persistent.id, persistent);
 
-    let mut ephemeral = Session::new("discard".into());
+    let mut ephemeral = Runtime::new("discard".into());
     ephemeral.policy = RuntimePolicy::Ephemeral;
-    server.sessions.insert(ephemeral.id, ephemeral);
+    server.runtimes.insert(ephemeral.id, ephemeral);
 
     let snapshot = server.build_snapshot();
-    assert_eq!(snapshot.sessions.len(), 1);
-    assert_eq!(snapshot.sessions[0].name, "keep");
+    assert_eq!(snapshot.runtimes.len(), 1);
+    assert_eq!(snapshot.runtimes[0].name, "keep");
 }
 
-// ── Input to nonexistent pane in existing session ───────────────
+// ── Input to nonexistent pane in existing runtime ───────────────
 
 #[tokio::test]
-async fn input_to_nonexistent_pane_in_existing_session_returns_none() {
+async fn input_to_nonexistent_pane_in_existing_runtime_returns_none() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             data: bytes::Bytes::from_static(b"hello"),
         })),
@@ -694,7 +694,7 @@ async fn resize_with_overflow_cols_returns_none() {
     let server = new_server();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             cols: u32::from(u16::MAX) + 1,
             rows: 24,
@@ -708,7 +708,7 @@ async fn resize_with_overflow_rows_returns_none() {
     let server = new_server();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             cols: 80,
             rows: u32::from(u16::MAX) + 1,
@@ -717,17 +717,17 @@ async fn resize_with_overflow_rows_returns_none() {
     assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
 }
 
-// ── Resize nonexistent pane in existing session ─────────────────
+// ── Resize nonexistent pane in existing runtime ─────────────────
 
 #[tokio::test]
-async fn resize_nonexistent_pane_in_existing_session_returns_none() {
+async fn resize_nonexistent_pane_in_existing_runtime_returns_none() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             cols: 120,
             rows: 40,
@@ -736,87 +736,87 @@ async fn resize_nonexistent_pane_in_existing_session_returns_none() {
     assert!(Server::handle_message(&server, client_id, msg).await.is_none());
 }
 
-// ── DetachSession success ───────────────────────────────────────
+// ── DetachRuntime success ───────────────────────────────────────
 
 #[tokio::test]
-async fn detach_attached_client_returns_session_detached() {
+async fn detach_attached_client_returns_runtime_detached() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
     match resp.msg {
-        Some(proto::server_message::Msg::SessionDetached(sd)) => {
-            assert_eq!(bytes_to_uuid(&sd.session_id).unwrap(), session_id);
+        Some(proto::server_message::Msg::RuntimeDetached(sd)) => {
+            assert_eq!(bytes_to_uuid(&sd.runtime_id).unwrap(), runtime_id);
         }
-        other => panic!("expected SessionDetached, got {other:?}"),
+        other => panic!("expected RuntimeDetached, got {other:?}"),
     }
     // Session still exists after detach (persistent policy).
-    assert!(server.lock().await.sessions.contains_key(&session_id));
+    assert!(server.lock().await.runtimes.contains_key(&runtime_id));
 }
 
-// ── Ephemeral last-detach terminates session ────────────────────
+// ── Ephemeral last-detach terminates runtime ────────────────────
 
 #[tokio::test]
 async fn detach_last_client_from_ephemeral_session_terminates() {
     let server = new_server();
     let client_id = Uuid::new_v4();
 
-    // Create an ephemeral session manually.
-    let mut session = Session::new("ephemeral".into());
-    session.policy = RuntimePolicy::Ephemeral;
-    let session_id = session.id;
+    // Create an ephemeral runtime manually.
+    let mut rt = Runtime::new("ephemeral".into());
+    rt.policy = RuntimePolicy::Ephemeral;
+    let runtime_id = rt.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
-    session.add_pane(pane);
-    let _ = session.attach_client(client_id, AttachMode::ReadWrite);
-    server.lock().await.sessions.insert(session_id, session);
+    rt.add_pane(pane);
+    let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
+    server.lock().await.runtimes.insert(runtime_id, rt);
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
     match resp.msg {
-        Some(proto::server_message::Msg::SessionTerminated(st)) => {
-            assert_eq!(bytes_to_uuid(&st.session_id).unwrap(), session_id);
+        Some(proto::server_message::Msg::RuntimeTerminated(st)) => {
+            assert_eq!(bytes_to_uuid(&st.runtime_id).unwrap(), runtime_id);
             assert_eq!(st.reason, proto::RuntimeTerminationReason::EphemeralLastDetach as i32);
         }
-        other => panic!("expected SessionTerminated, got {other:?}"),
+        other => panic!("expected RuntimeTerminated, got {other:?}"),
     }
-    // Session removed after ephemeral last-detach.
-    assert!(!server.lock().await.sessions.contains_key(&session_id));
+    // Runtime removed after ephemeral last-detach.
+    assert!(!server.lock().await.runtimes.contains_key(&runtime_id));
 }
 
 // ── ClosePane success ───────────────────────────────────────────
 
 #[tokio::test]
-async fn close_pane_removes_pane_from_session() {
+async fn close_pane_removes_pane_from_runtime() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
         })),
     };
     let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::PaneClosed(pc)) => {
-            assert_eq!(bytes_to_uuid(&pc.session_id).unwrap(), session_id);
+            assert_eq!(bytes_to_uuid(&pc.runtime_id).unwrap(), runtime_id);
             assert_eq!(bytes_to_uuid(&pc.pane_id).unwrap(), pane_id);
         }
         other => panic!("expected PaneClosed, got {other:?}"),
     }
     let s = server.lock().await;
-    assert!(!s.sessions[&session_id].panes.contains_key(&pane_id));
+    assert!(!s.runtimes[&runtime_id].panes.contains_key(&pane_id));
     drop(s);
 }
 
@@ -826,11 +826,11 @@ async fn close_pane_removes_pane_from_session() {
 async fn close_pane_with_invalid_pane_uuid_returns_invalid_parameter() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: vec![0u8; 3],
         })),
     };
@@ -849,8 +849,8 @@ async fn close_pane_with_invalid_pane_uuid_returns_invalid_parameter() {
 async fn terminate_with_invalid_uuid_returns_invalid_parameter() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-            session_id: vec![0u8; 5],
+        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+            runtime_id: vec![0u8; 5],
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
@@ -867,7 +867,7 @@ async fn set_pane_title_with_invalid_session_uuid_returns_invalid_parameter() {
     let server = new_server();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-            session_id: vec![0u8; 1],
+            runtime_id: vec![0u8; 1],
             pane_id: uuid_to_bytes(Uuid::new_v4()),
             title: "x".into(),
         })),
@@ -885,11 +885,11 @@ async fn set_pane_title_with_invalid_session_uuid_returns_invalid_parameter() {
 async fn set_pane_title_with_invalid_pane_uuid_returns_invalid_parameter() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: vec![0u8; 7],
             title: "x".into(),
         })),
@@ -904,11 +904,11 @@ async fn set_pane_title_with_invalid_pane_uuid_returns_invalid_parameter() {
 }
 
 #[tokio::test]
-async fn rename_session_with_invalid_uuid_returns_invalid_parameter() {
+async fn rename_runtime_with_invalid_uuid_returns_invalid_parameter() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-            session_id: vec![0u8; 6],
+        msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+            runtime_id: vec![0u8; 6],
             name: "x".into(),
         })),
     };
@@ -926,7 +926,7 @@ async fn create_pane_with_invalid_uuid_returns_invalid_parameter() {
     let server = new_server();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: vec![0u8; 3],
+            runtime_id: vec![0u8; 3],
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -949,18 +949,18 @@ async fn create_pane_without_write_access_returns_ownership_error() {
     let server = new_server();
     let owner = Uuid::new_v4();
     let reader = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, owner).await;
     let _ = server
         .lock()
         .await
-        .sessions
-        .get_mut(&session_id)
+        .runtimes
+        .get_mut(&runtime_id)
         .unwrap()
         .attach_client(reader, AttachMode::ReadOnly);
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -976,14 +976,14 @@ async fn create_pane_without_write_access_returns_ownership_error() {
     }
 }
 
-// ── CreatePane nonexistent session ──────────────────────────────
+// ── CreatePane nonexistent runtime ──────────────────────────────
 
 #[tokio::test]
-async fn create_pane_nonexistent_session_returns_session_not_found() {
+async fn create_pane_nonexistent_runtime_returns_runtime_not_found() {
     let server = new_server();
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: uuid_to_bytes(Uuid::new_v4()),
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -993,7 +993,7 @@ async fn create_pane_nonexistent_session_returns_session_not_found() {
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, protocol::ERR_SESSION_NOT_FOUND);
+            assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -1005,11 +1005,11 @@ async fn create_pane_nonexistent_session_returns_session_not_found() {
 async fn attach_with_takeover_returns_unsupported() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             attach_mode: proto::RuntimeAttachMode::TakeOver as i32,
         })),
     };
@@ -1028,43 +1028,43 @@ async fn attach_with_takeover_returns_unsupported() {
 async fn second_writer_attach_returns_attach_blocked() {
     let server = new_server();
     let owner = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, owner).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, owner).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::AttachBlocked(ab)) => {
-            assert_eq!(bytes_to_uuid(&ab.session_id).unwrap(), session_id);
+            assert_eq!(bytes_to_uuid(&ab.runtime_id).unwrap(), runtime_id);
         }
         other => panic!("expected AttachBlocked, got {other:?}"),
     }
 }
 
-// ── CreateSession with ephemeral policy ─────────────────────────
+// ── CreateRuntime with ephemeral policy ─────────────────────────
 
 #[tokio::test]
-async fn create_session_with_ephemeral_policy() {
+async fn create_runtime_with_ephemeral_policy() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "ephemeral-ws".into(),
             policy: proto::RuntimePolicy::Ephemeral as i32,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
     match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => {
-            let id = bytes_to_uuid(&sc.session_id).unwrap();
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
+            let id = bytes_to_uuid(&sc.runtime_id).unwrap();
             let s = server.lock().await;
-            assert_eq!(s.sessions[&id].policy, RuntimePolicy::Ephemeral);
+            assert_eq!(s.runtimes[&id].policy, RuntimePolicy::Ephemeral);
             drop(s);
         }
-        other => panic!("expected SessionCreated, got {other:?}"),
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     }
 }
 
@@ -1082,24 +1082,24 @@ async fn shutdown_message_returns_none() {
 // ── Terminate cleans up PTY state ───────────────────────────────
 
 #[tokio::test]
-async fn terminate_session_cleans_up_pty_writers() {
+async fn terminate_runtime_cleans_up_pty_writers() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     // Simulate PTY state by inserting a kill sender.
     let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
     server.lock().await.pty_kill_senders.insert(pane_id, kill_tx);
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     Server::handle_message(&server, client_id, msg).await.unwrap();
 
     let s = server.lock().await;
-    assert!(!s.sessions.contains_key(&session_id));
+    assert!(!s.runtimes.contains_key(&runtime_id));
     assert!(!s.pty_kill_senders.contains_key(&pane_id));
     drop(s);
 }
@@ -1108,82 +1108,82 @@ async fn terminate_session_cleans_up_pty_writers() {
 
 #[tokio::test]
 #[traced_test]
-async fn create_session_logs_lifecycle_event() {
+async fn create_runtime_logs_lifecycle_event() {
     let server = new_server();
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "log-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
 
-    assert!(logs_contain("Session created"));
+    assert!(logs_contain("Runtime created"));
     assert!(logs_contain("log-test"));
     assert!(logs_contain("persistent"));
 }
 
 #[tokio::test]
 #[traced_test]
-async fn attach_session_logs_lifecycle_event() {
+async fn attach_runtime_logs_lifecycle_event() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     // Detach first so we can re-attach.
     server
         .lock()
         .await
-        .sessions
-        .get_mut(&session_id)
+        .runtimes
+        .get_mut(&runtime_id)
         .unwrap()
         .detach_client(client_id, DetachReason::ExplicitRequest);
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     Server::handle_message(&server, client_id, msg).await.unwrap();
 
     assert!(logs_contain("Client"));
-    assert!(logs_contain("attached to session"));
+    assert!(logs_contain("attached to runtime"));
 }
 
 #[tokio::test]
 #[traced_test]
-async fn detach_session_logs_lifecycle_event() {
+async fn detach_runtime_logs_lifecycle_event() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     Server::handle_message(&server, client_id, msg).await.unwrap();
 
     assert!(logs_contain("Client"));
-    assert!(logs_contain("detached from session"));
+    assert!(logs_contain("detached from runtime"));
 }
 
 #[tokio::test]
 #[traced_test]
-async fn terminate_session_logs_lifecycle_event() {
+async fn terminate_runtime_logs_lifecycle_event() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     Server::handle_message(&server, client_id, msg).await.unwrap();
 
-    assert!(logs_contain("Session terminated"));
+    assert!(logs_contain("Runtime terminated"));
 }
 
 #[tokio::test]
@@ -1191,36 +1191,36 @@ async fn terminate_session_logs_lifecycle_event() {
 async fn close_pane_logs_lifecycle_event() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: uuid_to_bytes(session_id),
+            runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
         })),
     };
     Server::handle_message(&server, client_id, msg).await.unwrap();
 
     assert!(logs_contain("Pane"));
-    assert!(logs_contain("closed in session"));
+    assert!(logs_contain("closed in runtime"));
 }
 
 #[tokio::test]
 #[traced_test]
-async fn rename_session_logs_lifecycle_event() {
+async fn rename_runtime_logs_lifecycle_event() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-            session_id: uuid_to_bytes(session_id),
+        msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
             name: "new-name".into(),
         })),
     };
     Server::handle_message(&server, client_id, msg).await.unwrap();
 
-    assert!(logs_contain("Session renamed"));
+    assert!(logs_contain("Runtime renamed"));
     assert!(logs_contain("new-name"));
 }
 
@@ -1231,20 +1231,20 @@ async fn rename_session_logs_lifecycle_event() {
 async fn broadcast_drops_messages_when_client_channel_is_full() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     // Register the client sender (bounded channel).
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     server.lock().await.client_senders.insert(client_id, tx);
 
     // Fill the channel to capacity.
-    let msg = protocol::delta(session_id, Uuid::new_v4(), bytes::Bytes::from(vec![0u8; 64]));
+    let msg = protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from(vec![0u8; 64]));
     for _ in 0..PUSH_CHANNEL_BOUND {
-        server.lock().await.broadcast_to_session(session_id, &msg);
+        server.lock().await.broadcast_to_runtime(runtime_id, &msg);
     }
 
     // Next broadcast should drop the message instead of blocking.
-    server.lock().await.broadcast_to_session(session_id, &msg);
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
 
     // Channel should still have exactly PUSH_CHANNEL_BOUND messages.
     drop(server);
@@ -1271,16 +1271,16 @@ async fn client_senders_use_bounded_channel() {
 async fn delta_broadcast_shares_bytes_across_clients() {
     let server = new_server();
     let client_id_a = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_id_a).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id_a).await;
 
     let client_id_b = Uuid::new_v4();
     {
         let mut s = server.lock().await;
-        s.sessions
-            .get_mut(&session_id)
+        s.runtimes
+            .get_mut(&runtime_id)
             .unwrap()
             .attached_clients
-            .insert(client_id_b, crate::session::ClientRole::Writer);
+            .insert(client_id_b, crate::runtime::ClientRole::Writer);
     }
 
     let (tx_a, mut rx_a) = mpsc::channel(16);
@@ -1292,8 +1292,8 @@ async fn delta_broadcast_shares_bytes_across_clients() {
     }
 
     let data = bytes::Bytes::from(vec![b'X'; 4096]);
-    let msg = protocol::delta(session_id, Uuid::new_v4(), data.clone());
-    server.lock().await.broadcast_to_session(session_id, &msg);
+    let msg = protocol::delta(runtime_id, Uuid::new_v4(), data.clone());
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
 
     let msg_a = rx_a.try_recv().unwrap();
     let msg_b = rx_b.try_recv().unwrap();
@@ -1318,20 +1318,20 @@ async fn delta_broadcast_shares_bytes_across_clients() {
 async fn exited_pane_scrollback_is_released() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (session_id, pane_id) = setup_session_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     let mut s = server.lock().await;
-    let session = s.sessions.get_mut(&session_id).unwrap();
+    let rt = s.runtimes.get_mut(&runtime_id).unwrap();
 
     // Feed output to build up scrollback.
-    let pane = session.panes.get_mut(&pane_id).unwrap();
+    let pane = rt.panes.get_mut(&pane_id).unwrap();
     pane.feed_output(&vec![b'A'; 1024]);
     assert!(!pane.screen.raw_bytes().is_empty());
     assert!(pane.has_pending_flush());
 
     // Simulate PTY exit: set exit status and release scrollback.
-    session.set_pane_exit_status(pane_id, Some(0));
-    let pane = session.panes.get_mut(&pane_id).unwrap();
+    rt.set_pane_exit_status(pane_id, Some(0));
+    let pane = rt.panes.get_mut(&pane_id).unwrap();
     pane.release_scrollback();
 
     // Verify scrollback is released but pane still exists.
@@ -1402,20 +1402,20 @@ async fn client_writer_prioritizes_resp_over_push() {
 // ── Lock-free broadcast via collected senders ───────────────────
 
 #[tokio::test]
-async fn collect_session_senders_returns_attached_client_senders() {
+async fn collect_runtime_senders_returns_attached_client_senders() {
     let server = new_server();
     let client_a = Uuid::new_v4();
     let client_b = Uuid::new_v4();
-    let (session_id, _) = setup_session_with_pane(&server, client_a).await;
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_a).await;
 
     // Attach a second client.
     {
         let mut s = server.lock().await;
-        s.sessions
-            .get_mut(&session_id)
+        s.runtimes
+            .get_mut(&runtime_id)
             .unwrap()
             .attached_clients
-            .insert(client_b, crate::session::ClientRole::Writer);
+            .insert(client_b, crate::runtime::ClientRole::Writer);
     }
 
     let (tx_a, _rx_a) = mpsc::channel(16);
@@ -1426,7 +1426,7 @@ async fn collect_session_senders_returns_attached_client_senders() {
         s.client_senders.insert(client_b, tx_b);
     }
 
-    let senders = server.lock().await.collect_session_senders(session_id);
+    let senders = server.lock().await.collect_runtime_senders(runtime_id);
     let ids: std::collections::HashSet<Uuid> = senders.iter().map(|(id, _)| *id).collect();
     assert!(ids.contains(&client_a));
     assert!(ids.contains(&client_b));
@@ -1434,9 +1434,9 @@ async fn collect_session_senders_returns_attached_client_senders() {
 }
 
 #[tokio::test]
-async fn collect_session_senders_returns_empty_for_unknown_session() {
+async fn collect_runtime_senders_returns_empty_for_unknown_runtime() {
     let server = new_server();
-    let senders = server.lock().await.collect_session_senders(Uuid::new_v4());
+    let senders = server.lock().await.collect_runtime_senders(Uuid::new_v4());
     assert!(senders.is_empty());
 }
 

@@ -1,6 +1,6 @@
-//! Session management.
+//! Runtime management.
 //!
-//! A session is a named collection of panes with a layout tree. Sessions
+//! A runtime is a named collection of panes with a layout tree. Runtimes
 //! persist across GUI disconnects and can be serialized to disk.
 
 use crate::pane::{HistoryEntry, Pane, PersistedPane};
@@ -10,10 +10,10 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use uuid::Uuid;
 
-/// Maximum number of entries retained in per-session command history.
+/// Maximum number of entries retained in per-runtime command history.
 pub const MAX_COMMAND_HISTORY: usize = 1000;
 
-/// Runtime retention policy for a session.
+/// Runtime retention policy for a runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimePolicy {
@@ -143,38 +143,38 @@ pub enum DetachOutcome {
     Terminated { final_revision: u64, reason: TerminationReason },
 }
 
-const fn default_session_revision() -> u64 {
+const fn default_runtime_revision() -> u64 {
     1
 }
 
-/// Runtime state of a single session.
-pub struct Session {
-    /// Unique session identifier.
+/// Runtime state of a single runtime.
+pub struct Runtime {
+    /// Unique runtime identifier.
     pub id: Uuid,
-    /// Human-readable session name.
+    /// Human-readable runtime name.
     pub name: String,
-    /// Panes in this session, keyed by pane ID.
+    /// Panes in this runtime, keyed by pane ID.
     pub panes: HashMap<Uuid, Pane>,
     /// The currently focused pane.
     pub active_pane_id: Option<Uuid>,
-    /// Per-session command history.
+    /// Per-runtime command history.
     pub command_history: Vec<HistoryEntry>,
     /// Runtime retention policy.
     pub policy: RuntimePolicy,
-    /// Whether this session was resurrected from persisted state.
+    /// Whether this runtime was resurrected from persisted state.
     pub reconstructed: bool,
     /// Monotonic revision for meaningful runtime mutations.
     pub revision: u64,
-    /// When this session was created.
+    /// When this runtime was created.
     pub created_at: SystemTime,
-    /// When this session was last active.
+    /// When this runtime was last active.
     pub last_active_at: SystemTime,
-    /// Client roles currently attached to this session.
+    /// Client roles currently attached to this runtime.
     pub attached_clients: HashMap<Uuid, ClientRole>,
 }
 
-impl Session {
-    /// Create a new empty session.
+impl Runtime {
+    /// Create a new empty runtime.
     #[must_use]
     pub fn new(name: String) -> Self {
         let now = SystemTime::now();
@@ -186,16 +186,16 @@ impl Session {
             command_history: Vec::new(),
             policy: RuntimePolicy::Persistent,
             reconstructed: false,
-            revision: default_session_revision(),
+            revision: default_runtime_revision(),
             created_at: now,
             last_active_at: now,
             attached_clients: HashMap::new(),
         }
     }
 
-    /// Create a session from persisted state (resurrection).
+    /// Create a runtime from persisted state (resurrection).
     #[must_use]
-    pub fn from_persisted(persisted: &PersistedSession) -> Self {
+    pub fn from_persisted(persisted: &PersistedRuntime) -> Self {
         let panes: HashMap<Uuid, Pane> = persisted
             .panes
             .iter()
@@ -224,7 +224,7 @@ impl Session {
             command_history,
             policy: persisted.policy,
             reconstructed: true,
-            revision: persisted.revision.max(default_session_revision()),
+            revision: persisted.revision.max(default_runtime_revision()),
             created_at: persisted.created_at,
             last_active_at: persisted.last_active_at,
             attached_clients: HashMap::new(),
@@ -242,7 +242,7 @@ impl Session {
         self.revision
     }
 
-    /// Add a pane to this session.
+    /// Add a pane to this runtime.
     pub fn add_pane(&mut self, pane: Pane) {
         let id = pane.id;
         self.panes.insert(id, pane);
@@ -252,7 +252,7 @@ impl Session {
         self.bump_revision();
     }
 
-    /// Remove a pane from this session.
+    /// Remove a pane from this runtime.
     pub fn remove_pane(&mut self, pane_id: Uuid) -> Option<Pane> {
         let pane = self.panes.remove(&pane_id);
         if pane.is_some() {
@@ -306,7 +306,7 @@ impl Session {
         }
     }
 
-    /// Attach a client to this session.
+    /// Attach a client to this runtime.
     pub fn attach_client(
         &mut self,
         client_id: Uuid,
@@ -344,7 +344,7 @@ impl Session {
         }
     }
 
-    /// Detach a client from this session.
+    /// Detach a client from this runtime.
     pub fn detach_client(&mut self, client_id: Uuid, reason: DetachReason) -> DetachOutcome {
         let Some(_role) = self.attached_clients.remove(&client_id) else {
             return DetachOutcome::NotAttached { revision: self.revision() };
@@ -364,7 +364,7 @@ impl Session {
         DetachOutcome::Detached { revision: self.revision() }
     }
 
-    /// Rename this session and return the resulting revision.
+    /// Rename this runtime and return the resulting revision.
     pub fn rename(&mut self, name: String) -> u64 {
         if self.name != name {
             self.name = name;
@@ -373,7 +373,7 @@ impl Session {
         self.revision()
     }
 
-    /// Update a pane's size and return the resulting session revision.
+    /// Update a pane's size and return the resulting runtime revision.
     pub fn resize_pane(&mut self, pane_id: Uuid, cols: u16, rows: u16) -> Option<u64> {
         let changed = {
             let pane = self.panes.get_mut(&pane_id)?;
@@ -388,7 +388,7 @@ impl Session {
         Some(self.revision())
     }
 
-    /// Update a pane's title and return the resulting session revision.
+    /// Update a pane's title and return the resulting runtime revision.
     pub fn set_pane_title(&mut self, pane_id: Uuid, title: String) -> Option<u64> {
         let changed = {
             let pane = self.panes.get_mut(&pane_id)?;
@@ -418,7 +418,7 @@ impl Session {
         }
     }
 
-    /// Update a pane's exit status and return the resulting session revision.
+    /// Update a pane's exit status and return the resulting runtime revision.
     pub fn set_pane_exit_status(&mut self, pane_id: Uuid, status: Option<i32>) -> Option<u64> {
         let changed = {
             let pane = self.panes.get_mut(&pane_id)?;
@@ -438,10 +438,10 @@ impl Session {
         !self.attached_clients.is_empty()
     }
 
-    /// Build a persistable snapshot of this session.
+    /// Build a persistable snapshot of this runtime.
     #[must_use]
-    pub fn to_persisted(&self) -> PersistedSession {
-        PersistedSession {
+    pub fn to_persisted(&self) -> PersistedRuntime {
+        PersistedRuntime {
             id: self.id,
             name: self.name.clone(),
             panes: self.panes.values().map(Pane::to_persisted).collect(),
@@ -455,28 +455,28 @@ impl Session {
     }
 }
 
-/// Serializable session state for disk persistence.
+/// Serializable runtime state for disk persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedSession {
-    /// Unique session identifier.
+pub struct PersistedRuntime {
+    /// Unique runtime identifier.
     pub id: Uuid,
-    /// Session name.
+    /// Runtime name.
     pub name: String,
     /// Persisted pane states.
     pub panes: Vec<PersistedPane>,
     /// Active pane ID.
     pub active_pane_id: Option<Uuid>,
-    /// Per-session command history.
+    /// Per-runtime command history.
     pub command_history: Vec<HistoryEntry>,
     /// Runtime retention policy.
     #[serde(default)]
     pub policy: RuntimePolicy,
     /// Monotonic runtime revision.
-    #[serde(default = "default_session_revision")]
+    #[serde(default = "default_runtime_revision")]
     pub revision: u64,
-    /// When the session was created.
+    /// When the runtime was created.
     pub created_at: SystemTime,
-    /// When the session was last active.
+    /// When the runtime was last active.
     pub last_active_at: SystemTime,
 }
 
@@ -485,84 +485,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_session_has_no_panes() {
-        let session = Session::new("test".into());
-        assert!(session.panes.is_empty());
-        assert!(session.active_pane_id.is_none());
-        assert_eq!(session.policy, RuntimePolicy::Persistent);
-        assert!(!session.reconstructed);
-        assert_eq!(session.revision(), 1);
+    fn new_runtime_has_no_panes() {
+        let runtime = Runtime::new("test".into());
+        assert!(runtime.panes.is_empty());
+        assert!(runtime.active_pane_id.is_none());
+        assert_eq!(runtime.policy, RuntimePolicy::Persistent);
+        assert!(!runtime.reconstructed);
+        assert_eq!(runtime.revision(), 1);
     }
 
     #[test]
     fn add_pane_sets_active() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let pane = Pane::new(Uuid::new_v4(), 80, 24);
         let pane_id = pane.id;
-        session.add_pane(pane);
-        assert_eq!(session.active_pane_id, Some(pane_id));
-        assert_eq!(session.panes.len(), 1);
-        assert_eq!(session.revision(), 2);
+        runtime.add_pane(pane);
+        assert_eq!(runtime.active_pane_id, Some(pane_id));
+        assert_eq!(runtime.panes.len(), 1);
+        assert_eq!(runtime.revision(), 2);
     }
 
     #[test]
     fn remove_pane_updates_active() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let p1 = Pane::new(Uuid::new_v4(), 80, 24);
         let p2 = Pane::new(Uuid::new_v4(), 80, 24);
         let id1 = p1.id;
         let id2 = p2.id;
-        session.add_pane(p1);
-        session.add_pane(p2);
-        session.active_pane_id = Some(id1);
-        session.remove_pane(id1);
-        assert_eq!(session.active_pane_id, Some(id2));
-        assert_eq!(session.revision(), 4);
+        runtime.add_pane(p1);
+        runtime.add_pane(p2);
+        runtime.active_pane_id = Some(id1);
+        runtime.remove_pane(id1);
+        assert_eq!(runtime.active_pane_id, Some(id2));
+        assert_eq!(runtime.revision(), 4);
     }
 
     #[test]
     fn attach_detach_client() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let client = Uuid::new_v4();
         assert_eq!(
-            session.attach_client(client, AttachMode::ReadWrite),
+            runtime.attach_client(client, AttachMode::ReadWrite),
             Ok(AttachOutcome::Attached { role: ClientRole::Writer, revision: 2 })
         );
-        assert!(session.has_attached_clients());
-        assert_eq!(session.revision(), 2);
+        assert!(runtime.has_attached_clients());
+        assert_eq!(runtime.revision(), 2);
         assert_eq!(
-            session.detach_client(client, DetachReason::ExplicitRequest),
+            runtime.detach_client(client, DetachReason::ExplicitRequest),
             DetachOutcome::Detached { revision: 3 }
         );
-        assert!(!session.has_attached_clients());
-        assert_eq!(session.revision(), 3);
+        assert!(!runtime.has_attached_clients());
+        assert_eq!(runtime.revision(), 3);
     }
 
     #[test]
     fn persisted_roundtrip() {
-        let mut session = Session::new("test".into());
-        session.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        let persisted = session.to_persisted();
+        let mut runtime = Runtime::new("test".into());
+        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        let persisted = runtime.to_persisted();
         let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedSession = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovered.id, session.id);
+        let recovered: PersistedRuntime = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered.id, runtime.id);
         assert_eq!(recovered.name, "test");
         assert_eq!(recovered.panes.len(), 1);
     }
 
     #[test]
     fn from_persisted_restores_panes() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let pane = Pane::new(Uuid::new_v4(), 120, 40);
         let pane_id = pane.id;
-        session.add_pane(pane);
-        let persisted = session.to_persisted();
+        runtime.add_pane(pane);
+        let persisted = runtime.to_persisted();
 
-        let restored = Session::from_persisted(&persisted);
-        assert_eq!(restored.id, session.id);
+        let restored = Runtime::from_persisted(&persisted);
+        assert_eq!(restored.id, runtime.id);
         assert_eq!(restored.policy, RuntimePolicy::Persistent);
         assert!(restored.reconstructed);
-        assert_eq!(restored.revision(), session.revision());
+        assert_eq!(restored.revision(), runtime.revision());
         assert!(restored.panes.contains_key(&pane_id));
         assert_eq!(restored.panes[&pane_id].cols, 120);
         assert!(restored.panes[&pane_id].reconstructed);
@@ -570,27 +570,27 @@ mod tests {
 
     #[test]
     fn duplicate_attach_is_idempotent() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let client = Uuid::new_v4();
-        let _ = session.attach_client(client, AttachMode::ReadWrite);
-        let _ = session.attach_client(client, AttachMode::ReadWrite);
-        assert_eq!(session.attached_client_count(), 1);
-        assert_eq!(session.revision(), 2);
+        let _ = runtime.attach_client(client, AttachMode::ReadWrite);
+        let _ = runtime.attach_client(client, AttachMode::ReadWrite);
+        assert_eq!(runtime.attached_client_count(), 1);
+        assert_eq!(runtime.revision(), 2);
     }
 
     #[test]
     fn persisted_policy_roundtrip() {
-        let mut session = Session::new("test".into());
-        session.policy = RuntimePolicy::Ephemeral;
-        let persisted = session.to_persisted();
+        let mut runtime = Runtime::new("test".into());
+        runtime.policy = RuntimePolicy::Ephemeral;
+        let persisted = runtime.to_persisted();
         let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedSession = serde_json::from_str(&json).unwrap();
+        let recovered: PersistedRuntime = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered.policy, RuntimePolicy::Ephemeral);
     }
 
     #[test]
-    fn persisted_session_defaults_policy_for_legacy_state() {
-        let persisted: PersistedSession = serde_json::from_str(
+    fn persisted_runtime_defaults_policy_for_legacy_state() {
+        let persisted: PersistedRuntime = serde_json::from_str(
             r#"{
                 "id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 "name":"legacy",
@@ -609,85 +609,85 @@ mod tests {
 
     #[test]
     fn resize_title_and_exit_only_bump_revision_on_change() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let pane = Pane::new(Uuid::new_v4(), 80, 24);
         let pane_id = pane.id;
-        session.add_pane(pane);
-        assert_eq!(session.revision(), 2);
+        runtime.add_pane(pane);
+        assert_eq!(runtime.revision(), 2);
 
-        assert_eq!(session.resize_pane(pane_id, 80, 24), Some(2));
-        assert_eq!(session.resize_pane(pane_id, 100, 30), Some(3));
-        assert_eq!(session.set_pane_title(pane_id, "shell".into()), Some(4));
-        assert_eq!(session.set_pane_title(pane_id, "shell".into()), Some(4));
-        assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
-        assert_eq!(session.set_pane_exit_status(pane_id, Some(7)), Some(5));
-        assert_eq!(session.set_pane_exit_status(pane_id, None), Some(6));
-        assert_eq!(session.set_pane_cwd(pane_id, "/tmp"), Some(7));
-        assert_eq!(session.rename("test".into()), 7);
-        assert_eq!(session.rename("renamed".into()), 8);
+        assert_eq!(runtime.resize_pane(pane_id, 80, 24), Some(2));
+        assert_eq!(runtime.resize_pane(pane_id, 100, 30), Some(3));
+        assert_eq!(runtime.set_pane_title(pane_id, "shell".into()), Some(4));
+        assert_eq!(runtime.set_pane_title(pane_id, "shell".into()), Some(4));
+        assert_eq!(runtime.set_pane_exit_status(pane_id, Some(7)), Some(5));
+        assert_eq!(runtime.set_pane_exit_status(pane_id, Some(7)), Some(5));
+        assert_eq!(runtime.set_pane_exit_status(pane_id, None), Some(6));
+        assert_eq!(runtime.set_pane_cwd(pane_id, "/tmp"), Some(7));
+        assert_eq!(runtime.rename("test".into()), 7);
+        assert_eq!(runtime.rename("renamed".into()), 8);
     }
 
     #[test]
     fn rename_updates_name_and_persists() {
-        let mut session = Session::new("original".into());
-        assert_eq!(session.name, "original");
+        let mut runtime = Runtime::new("original".into());
+        assert_eq!(runtime.name, "original");
 
-        session.rename("updated".into());
-        assert_eq!(session.name, "updated");
+        runtime.rename("updated".into());
+        assert_eq!(runtime.name, "updated");
 
-        let persisted = session.to_persisted();
+        let persisted = runtime.to_persisted();
         assert_eq!(persisted.name, "updated");
     }
 
     #[test]
     fn persisted_revision_roundtrip() {
-        let mut session = Session::new("test".into());
-        session.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        let persisted = session.to_persisted();
+        let mut runtime = Runtime::new("test".into());
+        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        let persisted = runtime.to_persisted();
         let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedSession = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovered.revision, session.revision());
+        let recovered: PersistedRuntime = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered.revision, runtime.revision());
     }
 
     #[test]
     fn read_only_attach_tracks_counts_and_role() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let reader = Uuid::new_v4();
 
         assert_eq!(
-            session.attach_client(reader, AttachMode::ReadOnly),
+            runtime.attach_client(reader, AttachMode::ReadOnly),
             Ok(AttachOutcome::Attached { role: ClientRole::Reader, revision: 2 })
         );
-        assert_eq!(session.client_role(reader), Some(ClientRole::Reader));
-        assert_eq!(session.read_only_client_count(), 1);
-        assert_eq!(session.attached_client_count(), 1);
-        assert!(!session.client_has_write_access(reader));
+        assert_eq!(runtime.client_role(reader), Some(ClientRole::Reader));
+        assert_eq!(runtime.read_only_client_count(), 1);
+        assert_eq!(runtime.attached_client_count(), 1);
+        assert!(!runtime.client_has_write_access(reader));
     }
 
     #[test]
     fn second_writer_attach_is_blocked() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
 
-        let _ = session.attach_client(first, AttachMode::ReadWrite);
+        let _ = runtime.attach_client(first, AttachMode::ReadWrite);
         assert_eq!(
-            session.attach_client(second, AttachMode::ReadWrite),
+            runtime.attach_client(second, AttachMode::ReadWrite),
             Ok(AttachOutcome::Blocked { current_role: None, revision: 2 })
         );
-        assert_eq!(session.writer_client_id(), Some(first));
-        assert_eq!(session.revision(), 2);
+        assert_eq!(runtime.writer_client_id(), Some(first));
+        assert_eq!(runtime.revision(), 2);
     }
 
     #[test]
     fn explicit_last_detach_terminates_ephemeral_runtime() {
-        let mut session = Session::new("test".into());
-        session.policy = RuntimePolicy::Ephemeral;
+        let mut runtime = Runtime::new("test".into());
+        runtime.policy = RuntimePolicy::Ephemeral;
         let client = Uuid::new_v4();
-        let _ = session.attach_client(client, AttachMode::ReadWrite);
+        let _ = runtime.attach_client(client, AttachMode::ReadWrite);
 
         assert_eq!(
-            session.detach_client(client, DetachReason::ExplicitRequest),
+            runtime.detach_client(client, DetachReason::ExplicitRequest),
             DetachOutcome::Terminated {
                 final_revision: 3,
                 reason: TerminationReason::EphemeralLastDetach,
@@ -697,27 +697,27 @@ mod tests {
 
     #[test]
     fn disconnect_does_not_terminate_ephemeral_runtime() {
-        let mut session = Session::new("test".into());
-        session.policy = RuntimePolicy::Ephemeral;
+        let mut runtime = Runtime::new("test".into());
+        runtime.policy = RuntimePolicy::Ephemeral;
         let client = Uuid::new_v4();
-        let _ = session.attach_client(client, AttachMode::ReadWrite);
+        let _ = runtime.attach_client(client, AttachMode::ReadWrite);
 
         assert_eq!(
-            session.detach_client(client, DetachReason::Disconnect),
+            runtime.detach_client(client, DetachReason::Disconnect),
             DetachOutcome::Detached { revision: 3 }
         );
-        assert!(!session.has_attached_clients());
+        assert!(!runtime.has_attached_clients());
     }
 
     #[test]
     fn take_over_attach_is_reserved_for_future_work() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         let client = Uuid::new_v4();
         assert_eq!(
-            session.attach_client(client, AttachMode::TakeOver),
+            runtime.attach_client(client, AttachMode::TakeOver),
             Err(AttachError::UnsupportedTakeOver)
         );
-        assert_eq!(session.revision(), 1);
+        assert_eq!(runtime.revision(), 1);
     }
 
     fn make_history_entry(i: usize) -> HistoryEntry {
@@ -731,23 +731,23 @@ mod tests {
 
     #[test]
     fn add_history_entry_caps_at_max() {
-        let mut session = Session::new("test".into());
+        let mut runtime = Runtime::new("test".into());
         for i in 0..MAX_COMMAND_HISTORY + 50 {
-            session.add_history_entry(make_history_entry(i));
+            runtime.add_history_entry(make_history_entry(i));
         }
-        assert_eq!(session.command_history.len(), MAX_COMMAND_HISTORY);
+        assert_eq!(runtime.command_history.len(), MAX_COMMAND_HISTORY);
         assert_eq!(
-            session.command_history[0].command, "cmd-50",
+            runtime.command_history[0].command, "cmd-50",
             "oldest entries should be evicted"
         );
     }
 
     #[test]
     fn from_persisted_truncates_oversized_history() {
-        let mut session = Session::new("test".into());
-        session.command_history = (0..MAX_COMMAND_HISTORY + 200).map(make_history_entry).collect();
-        let persisted = session.to_persisted();
-        let restored = Session::from_persisted(&persisted);
+        let mut runtime = Runtime::new("test".into());
+        runtime.command_history = (0..MAX_COMMAND_HISTORY + 200).map(make_history_entry).collect();
+        let persisted = runtime.to_persisted();
+        let restored = Runtime::from_persisted(&persisted);
         assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
         assert_eq!(
             restored.command_history[0].command, "cmd-200",

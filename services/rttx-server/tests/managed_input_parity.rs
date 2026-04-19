@@ -75,21 +75,21 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "parity-test".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -104,8 +104,8 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -115,7 +115,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    (session_id, pane_id)
+    (runtime_id, pane_id)
 }
 
 async fn wait_for_prompt(client: &mut TestClient) {
@@ -134,11 +134,11 @@ async fn wait_for_prompt(client: &mut TestClient) {
     panic!("shell prompt did not arrive within 30 seconds");
 }
 
-async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], data: &[u8]) {
+async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.to_vec(),
+                runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
                 data: bytes::Bytes::copy_from_slice(data),
             })),
@@ -174,28 +174,28 @@ async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
 
 async fn reattach_snapshot_text(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     pane_id: &[u8],
 ) -> String {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: runtime_id.to_vec(),
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -340,23 +340,23 @@ async fn snapshot_includes_bracketed_paste_mode() {
     // Bash enables bracketed paste by default. Detach and reattach to get a snapshot.
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: sid.clone(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: sid.clone(),
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: sid.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: sid.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -454,26 +454,26 @@ async fn fkey_bytes_reach_pty_application() {
 
 // ── Mode restoration across reattach ────────────────────────────
 
-async fn reattach_snapshot(client: &mut TestClient, session_id: &[u8]) -> proto::Snapshot {
+async fn reattach_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> proto::Snapshot {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: runtime_id.to_vec(),
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })

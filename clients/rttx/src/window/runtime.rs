@@ -15,15 +15,15 @@ impl Window {
 
     pub(crate) fn add_direct_session(&self) {
         let imp = self.imp();
-        let count = imp.state.borrow().sessions.len() + 1;
+        let count = imp.state.borrow().workspaces.len() + 1;
         let initial_cwd = self.resolve_default_session_folder();
         let name = format!("Direct {count}");
-        let mut session_state = SessionState::new_with_initial_cwd(name, initial_cwd);
+        let mut session_state = WorkspaceState::new_with_initial_cwd(name, initial_cwd);
         session_state.color = self.next_session_color();
-        imp.state.borrow_mut().sessions.push(session_state.clone());
+        imp.state.borrow_mut().workspaces.push(session_state.clone());
         self.build_session(&session_state, false);
 
-        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        let index = imp.state.borrow().workspaces.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
         }
@@ -151,7 +151,7 @@ impl Window {
         };
         let state = self.imp().state.borrow();
         state
-            .sessions
+            .workspaces
             .iter()
             .filter(|s| s.uses_managed_runtime() && s.runtime.endpoint == endpoint)
             .filter_map(|s| s.runtime.runtime_id.clone())
@@ -162,23 +162,23 @@ impl Window {
     /// bound to that runtime ID.
     pub(crate) fn attach_to_existing_runtime(&self, host: &crate::host::Host, runtime_id: &str) {
         let imp = self.imp();
-        let count = imp.state.borrow().sessions.len() + 1;
+        let count = imp.state.borrow().workspaces.len() + 1;
         let name = format!("Workspace {count}");
 
         let mut session_state = if host.is_local() {
-            SessionState::new_managed_local(name, WorkspacePolicy::Persistent, None)
+            WorkspaceState::new_managed_local(name, WorkspacePolicy::Persistent, None)
         } else {
             let ssh_target = host.ssh_target.as_deref().unwrap_or(&host.key);
-            SessionState::new_managed_remote(name, ssh_target, WorkspacePolicy::Persistent, None)
+            WorkspaceState::new_managed_remote(name, ssh_target, WorkspacePolicy::Persistent, None)
         };
         session_state.runtime.runtime_id = Some(runtime_id.to_string());
         session_state.color = self.next_session_color();
-        imp.state.borrow_mut().sessions.push(session_state.clone());
+        imp.state.borrow_mut().workspaces.push(session_state.clone());
         self.build_session(&session_state, false);
         self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
         self.connect_managed_workspace(&session_state);
 
-        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        let index = imp.state.borrow().workspaces.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
         }
@@ -187,19 +187,19 @@ impl Window {
     /// Create a new remote managed workspace at a specific path.
     pub(crate) fn add_remote_managed_session_at(&self, host: &str, initial_cwd: Option<String>) {
         let imp = self.imp();
-        let count = imp.state.borrow().sessions.len() + 1;
+        let count = imp.state.borrow().workspaces.len() + 1;
         let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
         let name =
-            crate::session::state::workspace_display_name(&endpoint, initial_cwd.as_deref(), count);
+            crate::workspace::state::workspace_display_name(&endpoint, initial_cwd.as_deref(), count);
         let mut session_state =
-            SessionState::new_managed_remote(name, host, WorkspacePolicy::Persistent, initial_cwd);
+            WorkspaceState::new_managed_remote(name, host, WorkspacePolicy::Persistent, initial_cwd);
         session_state.color = self.next_session_color();
-        imp.state.borrow_mut().sessions.push(session_state.clone());
+        imp.state.borrow_mut().workspaces.push(session_state.clone());
         self.build_session(&session_state, false);
         self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
         self.connect_managed_workspace(&session_state);
 
-        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        let index = imp.state.borrow().workspaces.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
         }
@@ -220,20 +220,20 @@ impl Window {
         initial_cwd: Option<String>,
     ) {
         let imp = self.imp();
-        let count = imp.state.borrow().sessions.len() + 1;
-        let name = crate::session::state::workspace_display_name(
+        let count = imp.state.borrow().workspaces.len() + 1;
+        let name = crate::workspace::state::workspace_display_name(
             &RuntimeEndpoint::Local,
             initial_cwd.as_deref(),
             count,
         );
-        let mut session_state = SessionState::new_managed_local(name, policy, initial_cwd);
+        let mut session_state = WorkspaceState::new_managed_local(name, policy, initial_cwd);
         session_state.color = self.next_session_color();
-        imp.state.borrow_mut().sessions.push(session_state.clone());
+        imp.state.borrow_mut().workspaces.push(session_state.clone());
         self.build_session(&session_state, false);
         self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
         self.connect_managed_workspace(&session_state);
 
-        let index = imp.state.borrow().sessions.len() as i32 - 1;
+        let index = imp.state.borrow().workspaces.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
             imp.sidebar_list.select_row(Some(&row));
         }
@@ -262,7 +262,7 @@ impl Window {
         }
     }
 
-    pub(super) fn connect_managed_workspace(&self, session_state: &SessionState) {
+    pub(super) fn connect_managed_workspace(&self, session_state: &WorkspaceState) {
         if !session_state.uses_managed_runtime() || !self.ensure_connection_manager() {
             return;
         }
@@ -286,7 +286,7 @@ impl Window {
 
     pub(super) fn connect_managed_pane(
         &self,
-        session_state: &SessionState,
+        session_state: &WorkspaceState,
         pane_view: &PersistentPaneView,
     ) {
         let terminal_uuid = pane_view.uuid();
@@ -348,7 +348,7 @@ impl Window {
             let session_uuid = {
                 let mut state = win.imp().state.borrow_mut();
                 let session = state
-                    .sessions
+                    .workspaces
                     .iter_mut()
                     .find(|session| session.layout.contains_terminal(&focus_uuid));
                 if let Some(session) = session {
@@ -404,7 +404,7 @@ impl Window {
     pub(super) fn retry_workspace_connection(&self, workspace_id: &str) {
         let session_state = {
             let state = self.imp().state.borrow();
-            state.sessions.iter().find(|session| session.uuid == workspace_id).cloned()
+            state.workspaces.iter().find(|session| session.uuid == workspace_id).cloned()
         };
         let Some(session_state) = session_state else {
             return;
@@ -529,7 +529,7 @@ impl Window {
                     self.show_toast(&detail);
                 }
             }
-            EndpointEvent::InventoryLoaded { endpoint, sessions }
+            EndpointEvent::InventoryLoaded { endpoint, runtimes }
                 if self.imp().pending_connect_existing.borrow().is_some() =>
             {
                 let host = self.imp().pending_connect_existing.take().unwrap();
@@ -539,7 +539,7 @@ impl Window {
                     RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
                 };
                 if endpoint == expected_endpoint {
-                    crate::connect_existing_dialog::show(self, &host, &sessions);
+                    crate::connect_existing_dialog::show(self, &host, &runtimes);
                 } else {
                     // Wrong endpoint — put the pending request back and
                     // let the event go through normal reconciliation.
@@ -548,7 +548,7 @@ impl Window {
                         let mut state = self.imp().state.borrow_mut();
                         state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
                             endpoint,
-                            sessions,
+                            runtimes,
                         })
                     };
                     self.apply_endpoint_event_transition(&transition);
@@ -767,7 +767,7 @@ impl Window {
         self.refresh_sidebar_subtitle(workspace_id);
 
         let state = self.imp().state.borrow();
-        let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
+        let Some(session) = state.workspaces.iter().find(|session| session.uuid == workspace_id)
         else {
             return;
         };
@@ -779,7 +779,7 @@ impl Window {
         let mut idx = 0;
         while let Some(row) = list.row_at_index(idx) {
             if let Some(session_row) =
-                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
                 && session_row.uuid() == workspace_id
             {
                 session_row.set_connection_icon(&icon);
@@ -796,7 +796,7 @@ impl Window {
     ) {
         let terminal_uuids = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
+            let Some(session) = state.workspaces.iter().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };
@@ -828,8 +828,8 @@ impl Window {
             return;
         }
 
-        if let Msg::SessionTerminated(terminated) = inner {
-            let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id) else {
+        if let Msg::RuntimeTerminated(terminated) = inner {
+            let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id) else {
                 return;
             };
             let runtime_id = runtime_id.to_string();
@@ -880,7 +880,7 @@ impl Window {
                 {
                     let mut state = self.imp().state.borrow_mut();
                     if let Some(session) =
-                        state.sessions.iter_mut().find(|s| s.uuid == workspace_id)
+                        state.workspaces.iter_mut().find(|s| s.uuid == workspace_id)
                     {
                         session
                             .layout
@@ -909,13 +909,13 @@ impl Window {
             | Msg::PaneCreated(_)
             | Msg::PaneClosed(_)
             | Msg::HelloAck(_)
-            | Msg::SessionList(_)
-            | Msg::SessionCreated(_)
+            | Msg::RuntimeList(_)
+            | Msg::RuntimeCreated(_)
             | Msg::Snapshot(_)
             | Msg::AttachBlocked(_)
-            | Msg::SessionDetached(_)
-            | Msg::SessionTerminated(_)
-            | Msg::SessionRenamed(_)
+            | Msg::RuntimeDetached(_)
+            | Msg::RuntimeTerminated(_)
+            | Msg::RuntimeRenamed(_)
             | Msg::Pong(_)
             | Msg::Error(_)
             | Msg::DiagnosticsReport(_) => {}
@@ -929,7 +929,7 @@ impl Window {
         session_uuid: &str,
     ) -> Option<WorkspaceActionPresentation> {
         let state = self.imp().state.borrow();
-        let session = state.sessions.iter().find(|s| s.uuid == session_uuid)?;
+        let session = state.workspaces.iter().find(|s| s.uuid == session_uuid)?;
         let policy = session.uses_managed_runtime().then_some(session.runtime.policy);
         let runtime_attached = session.runtime.runtime_id.is_some();
         Some(present_workspace_actions(policy, runtime_attached, session.layout.terminal_count()))
@@ -938,7 +938,7 @@ impl Window {
     pub(super) fn show_edit_workspace_connection_dialog(&self, workspace_id: &str) {
         let current_host = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| session.uuid == workspace_id)
+            let Some(session) = state.workspaces.iter().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };
@@ -997,7 +997,7 @@ impl Window {
         let (session_state, previous_endpoint) = {
             let mut state = self.imp().state.borrow_mut();
             let Some(session) =
-                state.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+                state.workspaces.iter_mut().find(|session| session.uuid == workspace_id)
             else {
                 return;
             };
@@ -1017,14 +1017,14 @@ impl Window {
 
     pub(super) fn maybe_auto_rename_workspace(&self, workspace_id: &str, cwd: Option<&str>) {
         let mut state = self.imp().state.borrow_mut();
-        let Some(session) = state.sessions.iter_mut().find(|s| s.uuid == workspace_id) else {
+        let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == workspace_id) else {
             return;
         };
         if session.user_renamed {
             return;
         }
         let Some(new_name) =
-            crate::session::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
+            crate::workspace::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
         else {
             return;
         };
@@ -1040,10 +1040,10 @@ impl Window {
         let mut idx = 0;
         while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
             if let Some(session_row) =
-                row.child().and_then(|child| child.downcast::<SessionRow>().ok())
+                row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
                 && session_row.uuid() == session_uuid
             {
-                session_row.set_session_name(name);
+                session_row.set_workspace_name(name);
                 return;
             }
             idx += 1;

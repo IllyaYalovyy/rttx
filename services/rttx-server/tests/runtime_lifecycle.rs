@@ -7,7 +7,7 @@ use rttx_proto::proto;
 use std::time::Duration;
 
 #[tokio::test]
-async fn create_session_and_list() {
+async fn create_runtime_and_list() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -16,36 +16,36 @@ async fn create_session_and_list() {
 
     // Create a session.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "test-session".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
-    let session_id = match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match resp.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
-    assert_eq!(session_id.len(), 16);
+    assert_eq!(runtime_id.len(), 16);
 
-    // List sessions.
+    // List runtimes.
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 1);
-            assert_eq!(sl.sessions[0].name, "test-session");
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 1);
+            assert_eq!(sl.runtimes[0].name, "test-session");
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn attach_and_detach_session() {
+async fn attach_and_detach_runtime() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -54,22 +54,22 @@ async fn attach_and_detach_session() {
 
     // Create session.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "attach-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
-    let session_id = match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match resp.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Attach.
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -77,41 +77,41 @@ async fn attach_and_detach_session() {
     let resp = client.recv().await;
     match resp.msg {
         Some(proto::server_message::Msg::Snapshot(snap)) => {
-            assert_eq!(snap.session_id, session_id);
+            assert_eq!(snap.runtime_id, runtime_id);
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
     // Detach.
     let detach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: runtime_id.clone(),
         })),
     };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(
                 proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
             ) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     // Verify session still exists after detach.
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv().await;
     match resp.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => {
-            assert_eq!(sl.sessions.len(), 1);
+        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+            assert_eq!(sl.runtimes.len(), 1);
         }
-        other => panic!("expected SessionList, got {other:?}"),
+        other => panic!("expected RuntimeList, got {other:?}"),
     }
 }
 
@@ -125,22 +125,22 @@ async fn create_and_close_pane() {
 
     // Create session.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "pane-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
-    let session_id = match resp.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match resp.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Create pane.
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -157,7 +157,7 @@ async fn create_and_close_pane() {
     // Close pane.
     let close_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id,
         })),
     };
@@ -167,70 +167,70 @@ async fn create_and_close_pane() {
 }
 
 #[tokio::test]
-async fn rename_session_updates_name_and_inventory() {
+async fn rename_runtime_updates_name_and_inventory() {
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, _handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id =
-        common::create_session(&mut client, "original", proto::RuntimePolicy::Persistent).await;
-    common::attach_rw(&mut client, &session_id).await;
+    let runtime_id =
+        common::create_runtime(&mut client, "original", proto::RuntimePolicy::Persistent).await;
+    common::attach_rw(&mut client, &runtime_id).await;
 
     // Rename the session.
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+                runtime_id: runtime_id.clone(),
                 name: "renamed".into(),
             })),
         })
         .await;
 
-    // Expect SessionRenamed response.
+    // Expect RuntimeRenamed response.
     loop {
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionRenamed(renamed)) => {
-                assert_eq!(renamed.session_id, session_id);
+            Some(proto::server_message::Msg::RuntimeRenamed(renamed)) => {
+                assert_eq!(renamed.runtime_id, runtime_id);
                 assert_eq!(renamed.name, "renamed");
                 break;
             }
             Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionRenamed, got {other:?}"),
+            other => panic!("expected RuntimeRenamed, got {other:?}"),
         }
     }
 
     // Verify inventory reflects the new name.
-    let sessions = common::list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].name, "renamed");
+    let runtimes = common::list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].name, "renamed");
 }
 
 #[tokio::test]
-async fn rename_session_persists_across_restart() {
+async fn rename_runtime_persists_across_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id =
-        common::create_session(&mut client, "before", proto::RuntimePolicy::Persistent).await;
-    common::attach_rw(&mut client, &session_id).await;
+    let runtime_id =
+        common::create_runtime(&mut client, "before", proto::RuntimePolicy::Persistent).await;
+    common::attach_rw(&mut client, &runtime_id).await;
 
     // Rename.
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+                runtime_id: runtime_id.clone(),
                 name: "after".into(),
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionRenamed(_)) => break,
+            Some(proto::server_message::Msg::RuntimeRenamed(_)) => break,
             Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionRenamed, got {other:?}"),
+            other => panic!("expected RuntimeRenamed, got {other:?}"),
         }
     }
 
@@ -250,7 +250,7 @@ async fn rename_session_persists_across_restart() {
     let mut client2 = TestClient::connect(&socket_path2).await;
     client2.handshake().await;
 
-    let sessions = common::list_sessions(&mut client2).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].name, "after");
+    let runtimes = common::list_runtimes(&mut client2).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].name, "after");
 }

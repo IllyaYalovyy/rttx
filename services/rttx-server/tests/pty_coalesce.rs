@@ -10,11 +10,11 @@ use std::time::Duration;
 /// Helper: create a session, create a pane, attach, and return IDs.
 async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
-    let session_id =
-        common::create_session(client, "coalesce-test", proto::RuntimePolicy::Persistent).await;
-    let pane_id = common::create_pane(client, &session_id).await;
-    common::attach_rw(client, &session_id).await;
-    (session_id, pane_id)
+    let runtime_id =
+        common::create_runtime(client, "coalesce-test", proto::RuntimePolicy::Persistent).await;
+    let pane_id = common::create_pane(client, &runtime_id).await;
+    common::attach_rw(client, &runtime_id).await;
+    (runtime_id, pane_id)
 }
 
 /// Burst output (e.g. `seq 1 5000`) should arrive as fewer Delta messages
@@ -26,13 +26,13 @@ async fn burst_output_produces_coalesced_deltas() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // Drain shell startup output.
     client.drain(Duration::from_millis(500)).await;
 
     // Generate ~50KB of output (seq 1 5000 produces ~5 digits * 5000 ≈ 34KB).
-    common::send_input(&mut client, &session_id, &pane_id, b"seq 1 5000\n").await;
+    common::send_input(&mut client, &runtime_id, &pane_id, b"seq 1 5000\n").await;
 
     // Collect all Delta messages for this pane.
     let msgs = client.drain(Duration::from_secs(5)).await;
@@ -76,11 +76,11 @@ async fn coalesced_deltas_preserve_all_output_bytes() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     client.drain(Duration::from_millis(500)).await;
 
     // Use a deterministic marker range.
-    common::send_input(&mut client, &session_id, &pane_id, b"seq 1 100\n").await;
+    common::send_input(&mut client, &runtime_id, &pane_id, b"seq 1 100\n").await;
 
     let msgs = client.drain(Duration::from_secs(5)).await;
     let output: Vec<u8> = msgs
@@ -114,17 +114,17 @@ async fn coalesced_deltas_identical_across_clients() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client_a = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client_a).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client_a).await;
     client_a.drain(Duration::from_millis(500)).await;
 
     // Second client attaches read-only.
     let mut client_b = TestClient::connect(&sock).await;
     client_b.handshake().await;
-    common::attach_ro(&mut client_b, &session_id).await;
+    common::attach_ro(&mut client_b, &runtime_id).await;
     client_b.drain(Duration::from_millis(300)).await;
 
     let marker = "COALESCE_MULTI_CLIENT_42";
-    common::send_input(&mut client_a, &session_id, &pane_id, format!("echo {marker}\n").as_bytes())
+    common::send_input(&mut client_a, &runtime_id, &pane_id, format!("echo {marker}\n").as_bytes())
         .await;
 
     let collect = |msgs: &[proto::ServerMessage]| -> Vec<u8> {

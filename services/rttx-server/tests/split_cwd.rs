@@ -13,15 +13,15 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     client.handshake().await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "cwd-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let target_dir = std::env::temp_dir();
@@ -29,12 +29,12 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
         std::fs::canonicalize(&target_dir).unwrap_or_else(|_| target_dir.clone());
     let target_str = canonical_target.to_string_lossy().to_string();
 
-    let pane_id = create_pane_with_cwd(&mut client, &session_id, Some(target_str.clone())).await;
+    let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some(target_str.clone())).await;
 
     // Attach to receive output.
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -52,7 +52,7 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     // Send `pwd` and read output.
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"pwd\n"),
         })),
@@ -86,19 +86,19 @@ async fn create_pane_without_cwd_uses_default() {
     client.handshake().await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "no-cwd-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Should not panic — None CWD is valid.
-    let _pane_id = create_pane_with_cwd(&mut client, &session_id, None).await;
+    let _pane_id = create_pane_with_cwd(&mut client, &runtime_id, None).await;
 }
 
 /// Pane created without CWD starts in the user's home directory, not the
@@ -111,22 +111,22 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
     client.handshake().await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "home-cwd-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
-    let pane_id = create_pane_with_cwd(&mut client, &session_id, None).await;
+    let pane_id = create_pane_with_cwd(&mut client, &runtime_id, None).await;
 
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -141,7 +141,7 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
 
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"pwd\n"),
         })),

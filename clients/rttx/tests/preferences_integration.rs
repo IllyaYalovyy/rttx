@@ -90,19 +90,19 @@ fn preferences_unknown_fields_are_ignored() {
 #[test]
 fn preferences_input_sync_persists_in_session_state() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::session::{LayoutNode, SessionColor, SessionMode, SessionState, WindowState};
+    use rttx::workspace::{LayoutNode, WorkspaceColor, WorkspaceMode, WorkspaceState, WindowState};
 
     let state = WindowState {
-        sessions: vec![SessionState {
+        workspaces: vec![WorkspaceState {
             uuid: "s1".into(),
             name: "Synced".into(),
             layout: LayoutNode::new_terminal(),
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         }],
@@ -111,13 +111,13 @@ fn preferences_input_sync_persists_in_session_state() {
 
     let json = serde_json::to_string(&state).unwrap();
     let loaded: WindowState = serde_json::from_str(&json).unwrap();
-    assert!(!loaded.sessions[0].input_sync);
+    assert!(!loaded.workspaces[0].input_sync);
 
     let mut state2 = state;
-    state2.sessions[0].input_sync = true;
+    state2.workspaces[0].input_sync = true;
     let json2 = serde_json::to_string(&state2).unwrap();
     let loaded2: WindowState = serde_json::from_str(&json2).unwrap();
-    assert!(loaded2.sessions[0].input_sync);
+    assert!(loaded2.workspaces[0].input_sync);
 }
 
 #[test]
@@ -129,24 +129,24 @@ fn preferences_backward_compat_missing_input_sync() {
             "name": "Test",
             "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}}
         }],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false
     }"#;
 
-    let state: rttx::session::WindowState = serde_json::from_str(json).unwrap();
-    assert!(!state.sessions[0].input_sync);
-    assert!(state.sessions[0].active_terminal_uuid.is_none());
+    let state: rttx::workspace::WindowState = serde_json::from_str(json).unwrap();
+    assert!(!state.workspaces[0].input_sync);
+    assert!(state.workspaces[0].active_terminal_uuid.is_none());
 }
 
 #[test]
 fn custom_title_persists_in_layout() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::session::{LayoutNode, SessionColor, SessionMode, SessionState, WindowState};
+    use rttx::workspace::{LayoutNode, WorkspaceColor, WorkspaceMode, WorkspaceState, WindowState};
 
     let state = WindowState {
-        sessions: vec![SessionState {
+        workspaces: vec![WorkspaceState {
             uuid: "s1".into(),
             name: "Dev".into(),
             layout: LayoutNode::Terminal {
@@ -158,9 +158,9 @@ fn custom_title_persists_in_layout() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         }],
@@ -169,7 +169,7 @@ fn custom_title_persists_in_layout() {
 
     let json = serde_json::to_string(&state).unwrap();
     let loaded: WindowState = serde_json::from_str(&json).unwrap();
-    if let LayoutNode::Terminal { custom_title, .. } = &loaded.sessions[0].layout {
+    if let LayoutNode::Terminal { custom_title, .. } = &loaded.workspaces[0].layout {
         assert_eq!(custom_title.as_deref(), Some("my editor"));
     } else {
         panic!("Expected Terminal node");
@@ -185,13 +185,13 @@ fn custom_title_backward_compat_null() {
             "name": "Test",
             "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}}
         }],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false
     }"#;
-    let state: rttx::session::WindowState = serde_json::from_str(json).unwrap();
-    if let rttx::session::LayoutNode::Terminal { custom_title, .. } = &state.sessions[0].layout {
+    let state: rttx::workspace::WindowState = serde_json::from_str(json).unwrap();
+    if let rttx::workspace::LayoutNode::Terminal { custom_title, .. } = &state.workspaces[0].layout {
         assert_eq!(*custom_title, None);
     }
 }

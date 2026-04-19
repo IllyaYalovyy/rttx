@@ -1,6 +1,6 @@
 //! Runtime memory diagnostics.
 //!
-//! Collects per-session and per-pane memory metrics from the server state
+//! Collects per-runtime and per-pane memory metrics from the server state
 //! for the `rttx-server diagnostics` CLI command and periodic debug logging.
 
 use crate::server::Server;
@@ -15,9 +15,9 @@ pub struct PaneDiagnostics {
     pub is_exited: bool,
 }
 
-/// Per-session memory metrics.
+/// Per-runtime memory metrics.
 #[derive(Debug, Clone)]
-pub struct SessionDiagnostics {
+pub struct RuntimeDiagnostics {
     pub id: String,
     pub name: String,
     pub active_pane_count: usize,
@@ -30,7 +30,7 @@ pub struct SessionDiagnostics {
 /// Server-wide diagnostics report.
 #[derive(Debug, Clone)]
 pub struct DiagnosticsReport {
-    pub session_count: usize,
+    pub runtime_count: usize,
     pub total_pane_count: usize,
     pub total_active_panes: usize,
     pub total_exited_panes: usize,
@@ -39,12 +39,12 @@ pub struct DiagnosticsReport {
     pub total_raw_bytes: usize,
     pub total_pending_flush: usize,
     pub total_command_history: usize,
-    pub sessions: Vec<SessionDiagnostics>,
+    pub runtimes: Vec<RuntimeDiagnostics>,
 }
 
 impl fmt::Display for DiagnosticsReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Sessions: {}", self.session_count)?;
+        writeln!(f, "Runtimes: {}", self.runtime_count)?;
         writeln!(
             f,
             "Panes: {} ({} active, {} exited)",
@@ -56,23 +56,23 @@ impl fmt::Display for DiagnosticsReport {
         writeln!(f, "Total pending_flush: {} bytes", self.total_pending_flush)?;
         writeln!(f, "Total command_history entries: {}", self.total_command_history)?;
 
-        if !self.sessions.is_empty() {
+        if !self.runtimes.is_empty() {
             writeln!(f)?;
-            for session in &self.sessions {
+            for rt in &self.runtimes {
                 writeln!(
                     f,
-                    "  Session \"{}\" ({}):",
-                    session.name,
-                    &session.id[..8.min(session.id.len())]
+                    "  Runtime \"{}\" ({}):",
+                    rt.name,
+                    &rt.id[..8.min(rt.id.len())]
                 )?;
                 writeln!(
                     f,
                     "    Panes: {} active, {} exited",
-                    session.active_pane_count, session.exited_pane_count
+                    rt.active_pane_count, rt.exited_pane_count
                 )?;
-                writeln!(f, "    Command history: {} entries", session.command_history_len)?;
-                writeln!(f, "    Attached clients: {}", session.attached_client_count)?;
-                for pane in &session.panes {
+                writeln!(f, "    Command history: {} entries", rt.command_history_len)?;
+                writeln!(f, "    Attached clients: {}", rt.attached_client_count)?;
+                for pane in &rt.panes {
                     let status = if pane.is_exited { "exited" } else { "active" };
                     writeln!(
                         f,
@@ -94,19 +94,19 @@ impl Server {
     /// Collect a diagnostics report from the current server state.
     #[must_use]
     pub fn diagnostics(&self) -> DiagnosticsReport {
-        let mut sessions = Vec::with_capacity(self.sessions.len());
+        let mut runtimes = Vec::with_capacity(self.runtimes.len());
         let mut total_raw_bytes = 0usize;
         let mut total_pending_flush = 0usize;
         let mut total_command_history = 0usize;
         let mut total_active_panes = 0usize;
         let mut total_exited_panes = 0usize;
 
-        for session in self.sessions.values() {
-            let mut panes = Vec::with_capacity(session.panes.len());
+        for rt in self.runtimes.values() {
+            let mut panes = Vec::with_capacity(rt.panes.len());
             let mut active = 0usize;
             let mut exited = 0usize;
 
-            for pane in session.panes.values() {
+            for pane in rt.panes.values() {
                 let raw_bytes_len = pane.screen.raw_bytes().len();
                 let pending_flush_len = pane.pending_flush_len();
                 total_raw_bytes += raw_bytes_len;
@@ -128,21 +128,21 @@ impl Server {
 
             total_active_panes += active;
             total_exited_panes += exited;
-            total_command_history += session.command_history.len();
+            total_command_history += rt.command_history.len();
 
-            sessions.push(SessionDiagnostics {
-                id: session.id.to_string(),
-                name: session.name.clone(),
+            runtimes.push(RuntimeDiagnostics {
+                id: rt.id.to_string(),
+                name: rt.name.clone(),
                 active_pane_count: active,
                 exited_pane_count: exited,
-                command_history_len: session.command_history.len(),
-                attached_client_count: session.attached_client_count(),
+                command_history_len: rt.command_history.len(),
+                attached_client_count: rt.attached_client_count(),
                 panes,
             });
         }
 
         DiagnosticsReport {
-            session_count: self.sessions.len(),
+            runtime_count: self.runtimes.len(),
             total_pane_count: total_active_panes + total_exited_panes,
             total_active_panes,
             total_exited_panes,
@@ -151,7 +151,7 @@ impl Server {
             total_raw_bytes,
             total_pending_flush,
             total_command_history,
-            sessions,
+            runtimes,
         }
     }
 
@@ -159,7 +159,7 @@ impl Server {
     pub fn log_diagnostics(&self) {
         let report = self.diagnostics();
         tracing::debug!(
-            sessions = report.session_count,
+            runtimes = report.runtime_count,
             panes = report.total_pane_count,
             active_panes = report.total_active_panes,
             exited_panes = report.total_exited_panes,
@@ -177,7 +177,7 @@ impl Server {
 mod tests {
     use super::*;
     use crate::pane::Pane;
-    use crate::session::{RuntimePolicy, Session};
+    use crate::runtime::{Runtime, RuntimePolicy};
     use uuid::Uuid;
 
     fn test_server() -> Server {
@@ -201,7 +201,7 @@ mod tests {
     fn empty_server_diagnostics() {
         let server = test_server();
         let report = server.diagnostics();
-        assert_eq!(report.session_count, 0);
+        assert_eq!(report.runtime_count, 0);
         assert_eq!(report.total_pane_count, 0);
         assert_eq!(report.total_active_panes, 0);
         assert_eq!(report.total_exited_panes, 0);
@@ -213,23 +213,23 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_counts_sessions_and_panes() {
+    fn diagnostics_counts_runtimes_and_panes() {
         let mut server = test_server();
-        let mut session = Session::new("test".into());
-        session.policy = RuntimePolicy::Persistent;
+        let mut rt = Runtime::new("test".into());
+        rt.policy = RuntimePolicy::Persistent;
 
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         pane.feed_output(b"hello world");
-        session.add_pane(pane);
+        rt.add_pane(pane);
 
         let mut exited_pane = Pane::new(Uuid::new_v4(), 80, 24);
         exited_pane.set_exited(0);
-        session.add_pane(exited_pane);
+        rt.add_pane(exited_pane);
 
-        server.sessions.insert(session.id, session);
+        server.runtimes.insert(rt.id, rt);
 
         let report = server.diagnostics();
-        assert_eq!(report.session_count, 1);
+        assert_eq!(report.runtime_count, 1);
         assert_eq!(report.total_pane_count, 2);
         assert_eq!(report.total_active_panes, 1);
         assert_eq!(report.total_exited_panes, 1);
@@ -239,14 +239,14 @@ mod tests {
     #[test]
     fn diagnostics_counts_command_history() {
         let mut server = test_server();
-        let mut session = Session::new("test".into());
-        session.command_history.push(crate::pane::HistoryEntry {
+        let mut rt = Runtime::new("test".into());
+        rt.command_history.push(crate::pane::HistoryEntry {
             command: "ls".into(),
             cwd: "/tmp".into(),
             timestamp: std::time::SystemTime::now(),
             pane_id: Uuid::new_v4(),
         });
-        server.sessions.insert(session.id, session);
+        server.runtimes.insert(rt.id, rt);
 
         let report = server.diagnostics();
         assert_eq!(report.total_command_history, 1);
@@ -257,23 +257,23 @@ mod tests {
         let server = test_server();
         let report = server.diagnostics();
         let output = report.to_string();
-        assert!(output.contains("Sessions: 0"));
+        assert!(output.contains("Runtimes: 0"));
         assert!(output.contains("Connected clients: 0"));
     }
 
     #[test]
-    fn diagnostics_after_session_removal_returns_to_zero() {
+    fn diagnostics_after_runtime_removal_returns_to_zero() {
         let mut server = test_server();
-        let mut session = Session::new("temp".into());
-        let sid = session.id;
-        session.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        server.sessions.insert(sid, session);
+        let mut rt = Runtime::new("temp".into());
+        let sid = rt.id;
+        rt.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        server.runtimes.insert(sid, rt);
 
-        assert_eq!(server.diagnostics().session_count, 1);
+        assert_eq!(server.diagnostics().runtime_count, 1);
 
-        server.sessions.remove(&sid);
+        server.runtimes.remove(&sid);
         let report = server.diagnostics();
-        assert_eq!(report.session_count, 0);
+        assert_eq!(report.runtime_count, 0);
         assert_eq!(report.total_pane_count, 0);
     }
 }

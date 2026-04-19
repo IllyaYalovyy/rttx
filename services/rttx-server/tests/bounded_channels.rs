@@ -4,7 +4,7 @@
 mod common;
 
 use common::TestClient;
-use common::{attach_rw, create_session, start_test_server};
+use common::{attach_rw, create_runtime, start_test_server};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -21,15 +21,15 @@ async fn slow_client_does_not_block_server() {
     let mut fast = TestClient::connect(&sock).await;
     fast.handshake().await;
 
-    let session_id =
-        create_session(&mut fast, "bounded-test", proto::RuntimePolicy::Persistent).await;
-    let snapshot = attach_rw(&mut fast, &session_id).await;
+    let runtime_id =
+        create_runtime(&mut fast, "bounded-test", proto::RuntimePolicy::Persistent).await;
+    let snapshot = attach_rw(&mut fast, &runtime_id).await;
     assert!(snapshot.panes.is_empty());
 
     // Create a pane that will produce output.
     fast.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -46,8 +46,8 @@ async fn slow_client_does_not_block_server() {
     let mut slow = TestClient::connect(&sock).await;
     slow.handshake().await;
     slow.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
         })),
     })
@@ -59,7 +59,7 @@ async fn slow_client_does_not_block_server() {
     // receive Deltas even if the slow client's channel fills up.
     fast.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"echo bounded-channel-test\n"),
         })),
