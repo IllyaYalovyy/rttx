@@ -3,7 +3,7 @@
 
 use rttx::daemon_bridge::EndpointEvent;
 use rttx::runtime::{WorkspacePolicy, WorkspaceRuntime};
-use rttx::session::*;
+use rttx::workspace::*;
 use rttx::workspace_state::EndpointEventTransition;
 
 fn term(id: &str) -> LayoutNode {
@@ -41,16 +41,16 @@ fn snapshot(
     panes: Vec<rttx_proto::proto::PaneSnapshot>,
 ) -> rttx_proto::proto::Snapshot {
     rttx_proto::proto::Snapshot {
-        session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
+        runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
         panes,
         revision: 1,
         current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
     }
 }
 
-fn managed_session(layout: LayoutNode, runtime_id: &str) -> SessionState {
+fn managed_session(layout: LayoutNode, runtime_id: &str) -> WorkspaceState {
     let mut session =
-        SessionState::new_managed_local("Test".into(), WorkspacePolicy::Persistent, None);
+        WorkspaceState::new_managed_local("Test".into(), WorkspacePolicy::Persistent, None);
     session.uuid = "ws-1".into();
     session.layout = layout;
     session.runtime = WorkspaceRuntime::managed_local(
@@ -63,7 +63,7 @@ fn managed_session(layout: LayoutNode, runtime_id: &str) -> SessionState {
 }
 
 fn live_terminal_uuids(state: &WindowState) -> Vec<String> {
-    state.sessions.iter().flat_map(|s| s.layout.terminal_uuids()).collect()
+    state.workspaces.iter().flat_map(|s| s.layout.terminal_uuids()).collect()
 }
 
 /// Collect all terminal UUIDs that the transition would remove from the
@@ -81,13 +81,13 @@ fn reconnect_cycles_never_leak_terminal_uuids() {
     let initial_pane = uuid::Uuid::new_v4().to_string();
 
     let session = managed_session(term("initial"), runtime_id);
-    let mut state = WindowState { sessions: vec![session], ..WindowState::default() };
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
     // Bind the initial terminal to a runtime pane.
-    state.sessions[0].runtime.bind_runtime_pane("initial", &initial_pane);
+    state.workspaces[0].runtime.bind_runtime_pane("initial", &initial_pane);
 
     let mut all_ever_created: std::collections::BTreeSet<String> =
-        state.sessions[0].layout.terminal_uuids().into_iter().collect();
+        state.workspaces[0].layout.terminal_uuids().into_iter().collect();
     let mut all_removed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for _cycle in 0..5 {
@@ -140,7 +140,7 @@ fn workspace_opened_transition_accounts_for_all_previous_terminals() {
     let mut session = managed_session(hsplit(term("left"), term("right")), runtime_id);
     session.runtime.bind_runtime_pane("left", pane_a);
     session.runtime.bind_runtime_pane("right", pane_b);
-    let mut state = WindowState { sessions: vec![session], ..WindowState::default() };
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
         workspace_id: "ws-1".into(),
@@ -176,7 +176,7 @@ fn pane_closed_then_workspace_opened_does_not_double_remove() {
     let mut session = managed_session(hsplit(term("left"), term("right")), runtime_id);
     session.runtime.bind_runtime_pane("left", pane_a);
     session.runtime.bind_runtime_pane("right", pane_b);
-    let mut state = WindowState { sessions: vec![session], ..WindowState::default() };
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
     // Close "left" pane.
     let close_transition = state.reconcile_endpoint_event(&EndpointEvent::PaneClosed {

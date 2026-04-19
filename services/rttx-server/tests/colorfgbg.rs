@@ -7,13 +7,13 @@ use std::time::Duration;
 /// Helper: create a pane with explicit `dark_background`, return `pane_id`.
 async fn create_pane_with_appearance(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     dark_background: Option<bool>,
 ) -> Vec<u8> {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.to_vec(),
+                runtime_id: runtime_id.to_vec(),
                 cwd: None,
                 dark_background,
                 cols: 0,
@@ -48,11 +48,11 @@ async fn read_until(client: &mut TestClient, needle: &str, timeout: Duration) ->
 }
 
 /// Send input and drain snapshot first.
-async fn attach_and_send(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], input: &[u8]) {
+async fn attach_and_send(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], input: &[u8]) {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -67,7 +67,7 @@ async fn attach_and_send(client: &mut TestClient, session_id: &[u8], pane_id: &[
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.to_vec(),
+                runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
                 data: bytes::Bytes::copy_from_slice(input),
             })),
@@ -83,11 +83,11 @@ async fn create_pane_dark_sets_colorfgbg() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id =
-        common::create_session(&mut client, "dark-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        common::create_runtime(&mut client, "dark-test", proto::RuntimePolicy::Persistent).await;
 
-    let pane_id = create_pane_with_appearance(&mut client, &session_id, Some(true)).await;
-    attach_and_send(&mut client, &session_id, &pane_id, b"echo $COLORFGBG\n").await;
+    let pane_id = create_pane_with_appearance(&mut client, &runtime_id, Some(true)).await;
+    attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
 
     let output = read_until(&mut client, "15;0", Duration::from_secs(5)).await;
     assert!(output.contains("15;0"), "dark pane must have COLORFGBG=15;0, got: {output}");
@@ -101,11 +101,11 @@ async fn create_pane_light_sets_colorfgbg() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id =
-        common::create_session(&mut client, "light-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        common::create_runtime(&mut client, "light-test", proto::RuntimePolicy::Persistent).await;
 
-    let pane_id = create_pane_with_appearance(&mut client, &session_id, Some(false)).await;
-    attach_and_send(&mut client, &session_id, &pane_id, b"echo $COLORFGBG\n").await;
+    let pane_id = create_pane_with_appearance(&mut client, &runtime_id, Some(false)).await;
+    attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
 
     let output = read_until(&mut client, "0;15", Duration::from_secs(5)).await;
     assert!(output.contains("0;15"), "light pane must have COLORFGBG=0;15, got: {output}");
@@ -119,11 +119,11 @@ async fn create_pane_default_assumes_dark() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id =
-        common::create_session(&mut client, "default-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        common::create_runtime(&mut client, "default-test", proto::RuntimePolicy::Persistent).await;
 
-    let pane_id = create_pane_with_appearance(&mut client, &session_id, None).await;
-    attach_and_send(&mut client, &session_id, &pane_id, b"echo $COLORFGBG\n").await;
+    let pane_id = create_pane_with_appearance(&mut client, &runtime_id, None).await;
+    attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
 
     let output = read_until(&mut client, "15;0", Duration::from_secs(5)).await;
     assert!(

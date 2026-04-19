@@ -1,8 +1,8 @@
 //! Integration tests for state serialization and resurrection.
 
 use rttx_server::pane::PersistedPane;
+use rttx_server::runtime::{PersistedRuntime, Runtime, RuntimePolicy};
 use rttx_server::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
-use rttx_server::session::{PersistedSession, RuntimePolicy, Session};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
@@ -14,7 +14,7 @@ fn serialize_and_resurrect_session() {
 
     // Build state with one session and one pane.
     let state = ServerState {
-        sessions: vec![PersistedSession {
+        runtimes: vec![PersistedRuntime {
             id: Uuid::new_v4(),
             name: "persist-test".into(),
             panes: vec![PersistedPane {
@@ -42,9 +42,9 @@ fn serialize_and_resurrect_session() {
 
     // Load and resurrect.
     let loaded = load_state(&state_path).unwrap().unwrap();
-    assert_eq!(loaded.sessions.len(), 1);
+    assert_eq!(loaded.runtimes.len(), 1);
 
-    let session = Session::from_persisted(&loaded.sessions[0]);
+    let session = Runtime::from_persisted(&loaded.runtimes[0]);
     assert_eq!(session.name, "persist-test");
     assert_eq!(session.panes.len(), 1);
     assert_eq!(session.revision(), 4);
@@ -72,7 +72,7 @@ fn corrupt_state_file_returns_error() {
 #[test]
 fn oversized_command_history_truncated_on_resurrection() {
     use rttx_server::pane::HistoryEntry;
-    use rttx_server::session::MAX_COMMAND_HISTORY;
+    use rttx_server::runtime::MAX_COMMAND_HISTORY;
 
     let tmp = tempfile::TempDir::new().unwrap();
     let state_path = default_state_path(tmp.path());
@@ -87,7 +87,7 @@ fn oversized_command_history_truncated_on_resurrection() {
         .collect();
 
     let state = ServerState {
-        sessions: vec![PersistedSession {
+        runtimes: vec![PersistedRuntime {
             id: Uuid::new_v4(),
             name: "history-cap".into(),
             panes: vec![],
@@ -104,7 +104,7 @@ fn oversized_command_history_truncated_on_resurrection() {
 
     write_state_atomic(&state, &state_path).unwrap();
     let loaded = load_state(&state_path).unwrap().unwrap();
-    let session = Session::from_persisted(&loaded.sessions[0]);
+    let session = Runtime::from_persisted(&loaded.runtimes[0]);
 
     assert_eq!(
         session.command_history.len(),

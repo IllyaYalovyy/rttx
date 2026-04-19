@@ -17,7 +17,7 @@
 /// 3. State machine contracts (valid operation sequences)
 /// 4. Data integrity contracts (what crosses the Rust/C boundary)
 use pretty_assertions::assert_eq;
-use rttx::session::*;
+use rttx::workspace::*;
 
 fn term(id: &str) -> LayoutNode {
     LayoutNode::Terminal { uuid: id.into(), profile: None, cwd: None, custom_title: None }
@@ -154,7 +154,7 @@ fn contract_any_constructible_state_roundtrips() {
         WindowState::default(),
         // Empty session name
         WindowState {
-            sessions: vec![SessionState {
+            workspaces: vec![WorkspaceState {
                 uuid: "s".into(),
                 name: String::new(),
                 layout: term("t"),
@@ -173,7 +173,7 @@ fn contract_any_constructible_state_roundtrips() {
         },
         // Unicode in names
         WindowState {
-            sessions: vec![SessionState {
+            workspaces: vec![WorkspaceState {
                 uuid: "s".into(),
                 name: "日本語セッション".into(),
                 layout: term_full("t", "/home/用户", "编辑器"),
@@ -195,7 +195,7 @@ fn contract_any_constructible_state_roundtrips() {
                 l = hsplit(l, term(&format!("t{i}")));
             }
             WindowState {
-                sessions: vec![SessionState {
+                workspaces: vec![WorkspaceState {
                     uuid: "s".into(),
                     name: "Deep".into(),
                     layout: l,
@@ -213,8 +213,8 @@ fn contract_any_constructible_state_roundtrips() {
         },
         // Many sessions
         {
-            let sessions: Vec<_> = (0..50)
-                .map(|i| SessionState {
+            let workspaces: Vec<_> = (0..50)
+                .map(|i| WorkspaceState {
                     uuid: format!("s{i}"),
                     name: format!("Session {i}"),
                     layout: term(&format!("t{i}")),
@@ -229,8 +229,8 @@ fn contract_any_constructible_state_roundtrips() {
                 })
                 .collect();
             WindowState {
-                sessions,
-                active_session_index: 25,
+                workspaces,
+                active_workspace_index: 25,
                 width: 1920,
                 height: 1080,
                 is_maximized: true,
@@ -263,13 +263,13 @@ fn contract_forward_compat_missing_fields() {
                 "second": {"Terminal": {"uuid": "t2", "profile": null, "cwd": null, "custom_title": null}}
             }}
         }],
-        "active_session_index": 0, "width": 800, "height": 600, "is_maximized": false
+        "active_workspace_index": 0, "width": 800, "height": 600, "is_maximized": false
     }"#;
 
     let state: WindowState =
         serde_json::from_str(old_json).expect("Must load old format without error");
-    assert_eq!(state.sessions[0].layout.terminal_count(), 2);
-    assert!(!state.sessions[0].input_sync); // default
+    assert_eq!(state.workspaces[0].layout.terminal_count(), 2);
+    assert!(!state.workspaces[0].input_sync); // default
 }
 
 /// Contract: state with extra unknown fields must load without error.
@@ -285,13 +285,13 @@ fn contract_backward_compat_extra_fields() {
             "future_field": "should be ignored",
             "another_future": 42
         }],
-        "active_session_index": 0, "width": 800, "height": 600, "is_maximized": false,
+        "active_workspace_index": 0, "width": 800, "height": 600, "is_maximized": false,
         "future_window_field": true
     }"#;
 
     let state: WindowState =
         serde_json::from_str(future_json).expect("Must tolerate unknown fields");
-    assert_eq!(state.sessions[0].name, "Future");
+    assert_eq!(state.workspaces[0].name, "Future");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -610,20 +610,20 @@ fn contract_borrow_released_before_signal_does_not_panic() {
 // ═══════════════════════════════════════════════════════════════════
 // 7. INDEX BOUNDS CONTRACTS
 //
-// active_session_index is an unchecked index into sessions[]. If it
-// is out of bounds, window.rs panics when accessing state.sessions[idx].
+// active_workspace_index is an unchecked index into sessions[]. If it
+// is out of bounds, window.rs panics when accessing state.workspaces[idx].
 // ═══════════════════════════════════════════════════════════════════
 
-/// Contract: a state file with active_session_index pointing past the
+/// Contract: a state file with active_workspace_index pointing past the
 /// end of sessions must be handled without a panic.
 /// Callers must clamp: idx.min(sessions.len().saturating_sub(1))
 #[test]
-fn contract_active_session_index_out_of_bounds_is_clamped_safely() {
+fn contract_active_workspace_index_out_of_bounds_is_clamped_safely() {
     let json = r#"{
         "sessions": [
             {"uuid":"s1","name":"Only","layout":{"Terminal":{"uuid":"t1","profile":null,"cwd":null,"custom_title":null}},"input_sync":false}
         ],
-        "active_session_index": 99,
+        "active_workspace_index": 99,
         "width": 800, "height": 600, "is_maximized": false
     }"#;
 
@@ -631,13 +631,13 @@ fn contract_active_session_index_out_of_bounds_is_clamped_safely() {
         serde_json::from_str(json).expect("Must deserialize even with out-of-bounds index");
 
     // Prove the raw value is out of bounds
-    assert!(loaded.active_session_index >= loaded.sessions.len());
+    assert!(loaded.active_workspace_index >= loaded.workspaces.len());
 
     // Prove the correct clamping produces a valid index
-    let safe = loaded.active_session_index.min(loaded.sessions.len().saturating_sub(1));
-    assert!(safe < loaded.sessions.len(), "Clamped index {safe} is still out of bounds");
+    let safe = loaded.active_workspace_index.min(loaded.workspaces.len().saturating_sub(1));
+    assert!(safe < loaded.workspaces.len(), "Clamped index {safe} is still out of bounds");
     // Must be accessible without panic
-    let _ = &loaded.sessions[safe];
+    let _ = &loaded.workspaces[safe];
 }
 
 /// Contract: an empty sessions vec must never cause a panic on index access.
@@ -647,23 +647,23 @@ fn contract_active_session_index_out_of_bounds_is_clamped_safely() {
 fn contract_empty_sessions_is_handled_without_panic() {
     let json = r#"{
         "sessions": [],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800, "height": 600, "is_maximized": false
     }"#;
 
     let loaded: WindowState =
         serde_json::from_str(json).expect("Must deserialize empty sessions list");
 
-    assert_eq!(loaded.sessions.len(), 0);
+    assert_eq!(loaded.workspaces.len(), 0);
 
     // Safe access pattern: get() returns None instead of panicking
     assert!(
-        loaded.sessions.get(loaded.active_session_index).is_none(),
+        loaded.workspaces.get(loaded.active_workspace_index).is_none(),
         "sessions.get() must return None for empty vec, not panic"
     );
 
     // Direct index would panic — callers must use get() or guard on len()
-    assert!(loaded.sessions.is_empty());
+    assert!(loaded.workspaces.is_empty());
 }
 
 // ── Zoom state contracts ────────────────────────────────────────
@@ -672,11 +672,11 @@ fn contract_empty_sessions_is_handled_without_panic() {
 #[test]
 fn zoom_state_survives_serialization_roundtrip() {
     let state = WindowState {
-        active_session_index: 0,
+        active_workspace_index: 0,
         width: 800,
         height: 600,
         is_maximized: false,
-        sessions: vec![SessionState {
+        workspaces: vec![WorkspaceState {
             uuid: "s1".into(),
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
@@ -693,7 +693,7 @@ fn zoom_state_survives_serialization_roundtrip() {
     };
     let json = serde_json::to_string(&state).unwrap();
     let restored: WindowState = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored.sessions[0].zoomed_terminal_uuid.as_deref(), Some("t1"));
+    assert_eq!(restored.workspaces[0].zoomed_terminal_uuid.as_deref(), Some("t1"));
 }
 
 /// Old persisted state without zoom field must deserialize with zoom = None.
@@ -705,13 +705,13 @@ fn old_state_without_zoom_field_deserializes_cleanly() {
             "name": "Work",
             "layout": {"Terminal": {"uuid": "t1"}}
         }],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false
     }"#;
     let state: WindowState = serde_json::from_str(json).unwrap();
-    assert!(state.sessions[0].zoomed_terminal_uuid.is_none());
+    assert!(state.workspaces[0].zoomed_terminal_uuid.is_none());
 }
 
 /// Contract: workspace_connection_summary shows just pane info for local,

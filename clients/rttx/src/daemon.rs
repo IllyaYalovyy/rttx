@@ -85,8 +85,8 @@ pub enum DaemonError {
 /// Successful detach outcome from the daemon.
 #[derive(Debug, Clone)]
 pub enum DetachResponse {
-    Detached(proto::SessionDetached),
-    Terminated(proto::SessionTerminated),
+    Detached(proto::RuntimeDetached),
+    Terminated(proto::RuntimeTerminated),
 }
 
 /// A connection to a running `rttx-server` instance (pre-split).
@@ -221,15 +221,15 @@ impl DaemonConnection {
     }
 
     /// List all sessions on the daemon.
-    pub async fn list_sessions(&mut self) -> Result<Vec<proto::SessionInfo>, DaemonError> {
+    pub async fn list_runtimes(&mut self) -> Result<Vec<proto::RuntimeInfo>, DaemonError> {
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         };
         self.send(&msg).await?;
 
         let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
         match response.msg {
-            Some(proto::server_message::Msg::SessionList(list)) => Ok(list.sessions),
+            Some(proto::server_message::Msg::RuntimeList(list)) => Ok(list.runtimes),
             Some(proto::server_message::Msg::Error(e)) => {
                 Err(DaemonError::ServerError { code: e.code, message: e.message })
             }
@@ -238,13 +238,13 @@ impl DaemonConnection {
     }
 
     /// Create a new session and return its UUID.
-    pub async fn create_session(
+    pub async fn create_runtime(
         &mut self,
         name: &str,
         policy: WorkspacePolicy,
     ) -> Result<Uuid, DaemonError> {
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: name.to_string(),
                 policy: policy.as_proto(),
             })),
@@ -253,8 +253,8 @@ impl DaemonConnection {
 
         let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
         match response.msg {
-            Some(proto::server_message::Msg::SessionCreated(created)) => {
-                bytes_to_uuid(&created.session_id).map_err(DaemonError::Frame)
+            Some(proto::server_message::Msg::RuntimeCreated(created)) => {
+                bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
             Some(proto::server_message::Msg::Error(e)) => {
                 Err(DaemonError::ServerError { code: e.code, message: e.message })
@@ -264,14 +264,14 @@ impl DaemonConnection {
     }
 
     /// Attach to a session and receive the initial snapshot.
-    pub async fn attach_session(
+    pub async fn attach_runtime(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
         attach_mode: proto::RuntimeAttachMode,
     ) -> Result<proto::Snapshot, DaemonError> {
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: uuid_to_bytes(session_id),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: uuid_to_bytes(runtime_id),
                 attach_mode: attach_mode as i32,
             })),
         };
@@ -293,7 +293,7 @@ impl DaemonConnection {
     /// Create a pane in a session and return the new pane UUID.
     pub async fn create_pane(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
         cwd: Option<String>,
         dark_background: Option<bool>,
         cols: u32,
@@ -301,7 +301,7 @@ impl DaemonConnection {
     ) -> Result<Uuid, DaemonError> {
         let msg = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: uuid_to_bytes(session_id),
+                runtime_id: uuid_to_bytes(runtime_id),
                 cwd,
                 dark_background,
                 cols,
@@ -325,12 +325,12 @@ impl DaemonConnection {
     /// Close a pane in a session and return the acknowledgement.
     pub async fn close_pane(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
         pane_id: Uuid,
     ) -> Result<proto::PaneClosed, DaemonError> {
         let msg = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                session_id: uuid_to_bytes(session_id),
+                runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
             })),
         };
@@ -347,23 +347,23 @@ impl DaemonConnection {
     }
 
     /// Detach from a runtime explicitly.
-    pub async fn detach_session(
+    pub async fn detach_runtime(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
     ) -> Result<DetachResponse, DaemonError> {
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: uuid_to_bytes(session_id),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: uuid_to_bytes(runtime_id),
             })),
         };
         self.send(&msg).await?;
 
         let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
         match response.msg {
-            Some(proto::server_message::Msg::SessionDetached(detached)) => {
+            Some(proto::server_message::Msg::RuntimeDetached(detached)) => {
                 Ok(DetachResponse::Detached(detached))
             }
-            Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
+            Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
                 Ok(DetachResponse::Terminated(terminated))
             }
             Some(proto::server_message::Msg::Error(e)) => {
@@ -374,20 +374,20 @@ impl DaemonConnection {
     }
 
     /// Terminate a runtime explicitly.
-    pub async fn terminate_session(
+    pub async fn terminate_runtime(
         &mut self,
-        session_id: Uuid,
-    ) -> Result<proto::SessionTerminated, DaemonError> {
+        runtime_id: Uuid,
+    ) -> Result<proto::RuntimeTerminated, DaemonError> {
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::TerminateSession(proto::TerminateSession {
-                session_id: uuid_to_bytes(session_id),
+            msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+                runtime_id: uuid_to_bytes(runtime_id),
             })),
         };
         self.send(&msg).await?;
 
         let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
         match response.msg {
-            Some(proto::server_message::Msg::SessionTerminated(terminated)) => Ok(terminated),
+            Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => Ok(terminated),
             Some(proto::server_message::Msg::Error(e)) => {
                 Err(DaemonError::ServerError { code: e.code, message: e.message })
             }
@@ -439,13 +439,13 @@ impl DaemonWriter {
     /// Send keyboard input to a pane.
     pub async fn send_input(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
         pane_id: Uuid,
         data: &[u8],
     ) -> Result<(), DaemonError> {
         self.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: uuid_to_bytes(session_id),
+                runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
                 data: bytes::Bytes::copy_from_slice(data),
             })),
@@ -456,14 +456,14 @@ impl DaemonWriter {
     /// Notify the daemon of a pane resize.
     pub async fn send_resize(
         &mut self,
-        session_id: Uuid,
+        runtime_id: Uuid,
         pane_id: Uuid,
         cols: u16,
         rows: u16,
     ) -> Result<(), DaemonError> {
         self.send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                session_id: uuid_to_bytes(session_id),
+                runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
                 cols: u32::from(cols),
                 rows: u32::from(rows),
@@ -481,10 +481,10 @@ impl DaemonWriter {
     }
 
     /// Detach from a session without killing it.
-    pub async fn detach_session(&mut self, session_id: Uuid) -> Result<(), DaemonError> {
+    pub async fn detach_runtime(&mut self, runtime_id: Uuid) -> Result<(), DaemonError> {
         self.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: uuid_to_bytes(session_id),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: uuid_to_bytes(runtime_id),
             })),
         })
         .await
@@ -558,13 +558,13 @@ pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
         Msg::PaneResized(m) => &m.pane_id,
         Msg::HelloAck(_)
         | Msg::Pong(_)
-        | Msg::SessionList(_)
-        | Msg::SessionCreated(_)
+        | Msg::RuntimeList(_)
+        | Msg::RuntimeCreated(_)
         | Msg::Snapshot(_)
         | Msg::AttachBlocked(_)
-        | Msg::SessionDetached(_)
-        | Msg::SessionTerminated(_)
-        | Msg::SessionRenamed(_)
+        | Msg::RuntimeDetached(_)
+        | Msg::RuntimeTerminated(_)
+        | Msg::RuntimeRenamed(_)
         | Msg::Error(_)
         | Msg::DiagnosticsReport(_) => return None,
     };
@@ -739,7 +739,7 @@ mod tests {
         let sock = tmp.path().join("test.sock");
         let listener = UnixListener::bind(&sock).unwrap();
 
-        let session_id = Uuid::new_v4();
+        let runtime_id = Uuid::new_v4();
         let pane_id = Uuid::new_v4();
 
         let client_task = tokio::spawn({
@@ -747,7 +747,7 @@ mod tests {
             async move {
                 let conn = DaemonConnection::connect(&sock).await.unwrap();
                 let (_reader, mut writer) = conn.into_split();
-                writer.send_input(session_id, pane_id, b"hello").await.unwrap();
+                writer.send_input(runtime_id, pane_id, b"hello").await.unwrap();
             }
         });
 
@@ -762,7 +762,7 @@ mod tests {
                 match msg.msg {
                     Some(proto::client_message::Msg::Input(input)) => {
                         assert_eq!(input.data, &b"hello"[..]);
-                        assert_eq!(bytes_to_uuid(&input.session_id).unwrap(), session_id);
+                        assert_eq!(bytes_to_uuid(&input.runtime_id).unwrap(), runtime_id);
                         assert_eq!(bytes_to_uuid(&input.pane_id).unwrap(), pane_id);
                     }
                     other => panic!("expected Input, got {other:?}"),
@@ -780,7 +780,7 @@ mod tests {
         let sock = tmp.path().join("test.sock");
         let listener = UnixListener::bind(&sock).unwrap();
 
-        let session_id = Uuid::new_v4();
+        let runtime_id = Uuid::new_v4();
         let pane_id = Uuid::new_v4();
 
         let client_task = tokio::spawn({
@@ -788,7 +788,7 @@ mod tests {
             async move {
                 let conn = DaemonConnection::connect(&sock).await.unwrap();
                 let (_reader, mut writer) = conn.into_split();
-                writer.send_resize(session_id, pane_id, 120, 40).await.unwrap();
+                writer.send_resize(runtime_id, pane_id, 120, 40).await.unwrap();
             }
         });
 
@@ -853,7 +853,7 @@ mod tests {
         let pane_id = Uuid::new_v4();
         let msg = proto::ServerMessage {
             msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-                session_id: uuid_to_bytes(Uuid::new_v4()),
+                runtime_id: uuid_to_bytes(Uuid::new_v4()),
                 pane_id: uuid_to_bytes(pane_id),
                 data: bytes::Bytes::new(),
             })),

@@ -18,22 +18,22 @@ async fn make_pane_persistent_flow() {
 
     // 1. Create session.
     c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "pane-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
-    let session_id = match c.recv().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match c.recv().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
-    let _session_uuid = bytes_to_uuid(&session_id).unwrap();
+    let _session_uuid = bytes_to_uuid(&runtime_id).unwrap();
 
     // 2. Attach session.
     c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     })
@@ -50,7 +50,7 @@ async fn make_pane_persistent_flow() {
     // 3. Create pane.
     c.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -70,7 +70,7 @@ async fn make_pane_persistent_flow() {
     // 4. Send input (cd to a directory).
     c.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"echo PERSIST_OK\n"),
         })),
@@ -99,7 +99,7 @@ async fn make_pane_persistent_flow() {
     // 6. Verify we can send resize.
     c.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             cols: 120,
             rows: 40,
@@ -115,20 +115,20 @@ async fn make_pane_persistent_flow() {
     c2.handshake().await;
 
     c2.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     })
     .await;
-    let sessions = match c2.recv().await.msg {
-        Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-        other => panic!("expected SessionList, got {other:?}"),
+    let runtimes = match c2.recv().await.msg {
+        Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+        other => panic!("expected RuntimeList, got {other:?}"),
     };
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].pane_count, 1);
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].pane_count, 1);
 
     // 8. Re-attach and verify scrollback.
     c2.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     })

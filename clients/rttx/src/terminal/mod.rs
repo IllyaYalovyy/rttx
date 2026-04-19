@@ -1118,8 +1118,8 @@ mod search_tests {
     #[test]
     fn legacy_bookmark_pane_source_deserializes_after_removal() {
         let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":null,"startup":[]}"#;
-        let recovery: crate::session::PaneRecovery = serde_json::from_str(json).unwrap();
-        assert_eq!(recovery.source, crate::session::PaneSource::Manual);
+        let recovery: crate::workspace::PaneRecovery = serde_json::from_str(json).unwrap();
+        assert_eq!(recovery.source, crate::workspace::PaneSource::Manual);
     }
 
     #[test]

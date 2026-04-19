@@ -1,6 +1,6 @@
 use crate::daemon_bridge::EndpointEvent;
 use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
-use crate::session::{LayoutNode, PaneRecovery, SessionState, SplitOrientation, WindowState};
+use crate::workspace::{LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceState};
 use rttx_proto::proto;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,7 +32,7 @@ pub struct WorkspacePaneRestore {
 /// Pure result of reconciling a workspace against a runtime snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedWorkspaceOpenResult {
-    pub session_state: SessionState,
+    pub session_state: WorkspaceState,
     pub panes_to_create: Vec<String>,
     pub snapshot_restores: Vec<WorkspacePaneRestore>,
     pub skipped_runtime_panes: Vec<String>,
@@ -50,7 +50,7 @@ pub struct ConnectionStatusUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedWorkspaceRebuild {
     pub workspace_id: String,
-    pub session_state: SessionState,
+    pub session_state: WorkspaceState,
 }
 
 /// Pure request to create a missing daemon pane for a layout terminal.
@@ -66,7 +66,7 @@ pub struct ManagedPaneCreateRequest {
 /// Pure outcome of reconciling a daemon endpoint event against app state.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EndpointEventTransition {
-    pub recovered_workspaces: Vec<SessionState>,
+    pub recovered_workspaces: Vec<WorkspaceState>,
     pub rebuilt_workspaces: Vec<ManagedWorkspaceRebuild>,
     pub pane_create_requests: Vec<ManagedPaneCreateRequest>,
     pub pane_snapshot_restores: Vec<WorkspacePaneRestore>,
@@ -88,7 +88,7 @@ impl WindowState {
     #[must_use]
     pub fn needs_inventory_bootstrap(&self, endpoint: &RuntimeEndpoint) -> bool {
         !self
-            .sessions
+            .workspaces
             .iter()
             .any(|session| session.uses_managed_runtime() && &session.runtime.endpoint == endpoint)
     }
@@ -187,7 +187,7 @@ impl WindowState {
             }
             EndpointEvent::RuntimeTerminated { workspace_id, .. } => {
                 if let Some(session) =
-                    self.sessions.iter_mut().find(|session| session.uuid == *workspace_id)
+                    self.workspaces.iter_mut().find(|session| session.uuid == *workspace_id)
                 {
                     session.runtime.runtime_id = None;
                     session.sync_legacy_mode_from_runtime();
@@ -197,14 +197,14 @@ impl WindowState {
                     status: ConnectionStatus::Disconnected,
                 });
             }
-            EndpointEvent::InventoryLoaded { endpoint, sessions } => {
-                let inventory_ids: std::collections::BTreeSet<String> = sessions
+            EndpointEvent::InventoryLoaded { endpoint, runtimes } => {
+                let inventory_ids: std::collections::BTreeSet<String> = runtimes
                     .iter()
                     .filter_map(|s| rttx_proto::bytes_to_uuid(&s.id).ok().map(|u| u.to_string()))
                     .collect();
                 self.dismissed_runtime_ids.retain(|id| inventory_ids.contains(id));
 
-                let recovered = self.recover_managed_workspaces_from_inventory(endpoint, sessions);
+                let recovered = self.recover_managed_workspaces_from_inventory(endpoint, runtimes);
                 if recovered.is_empty() {
                     return transition;
                 }
@@ -228,10 +228,10 @@ impl WindowState {
     pub fn recover_managed_workspaces_from_inventory(
         &mut self,
         endpoint: &RuntimeEndpoint,
-        sessions: &[proto::SessionInfo],
-    ) -> Vec<SessionState> {
+        runtimes: &[proto::RuntimeInfo],
+    ) -> Vec<WorkspaceState> {
         let mut known_runtime_ids = self
-            .sessions
+            .workspaces
             .iter()
             .filter(|session| {
                 session.uses_managed_runtime() && &session.runtime.endpoint == endpoint
@@ -240,8 +240,8 @@ impl WindowState {
             .collect::<BTreeSet<_>>();
         let mut recovered = Vec::new();
 
-        for session_info in sessions {
-            let Some(session) = recovered_managed_workspace(endpoint, session_info) else {
+        for rt_info in runtimes {
+            let Some(session) = recovered_managed_workspace(endpoint, rt_info) else {
                 continue;
             };
             let Some(runtime_id) = session.runtime.runtime_id.clone() else {
@@ -253,7 +253,7 @@ impl WindowState {
             if !known_runtime_ids.insert(runtime_id) {
                 continue;
             }
-            self.sessions.push(session.clone());
+            self.workspaces.push(session.clone());
             recovered.push(session);
         }
 
@@ -263,7 +263,7 @@ impl WindowState {
     /// Resolve a layout terminal to its managed runtime binding.
     #[must_use]
     pub fn managed_terminal_binding(&self, terminal_uuid: &str) -> Option<ManagedTerminalBinding> {
-        let session = self.sessions.iter().find(|session| {
+        let session = self.workspaces.iter().find(|session| {
             session.uses_managed_runtime() && session.layout.contains_terminal(terminal_uuid)
         })?;
         let runtime_id = session.runtime.runtime_id.clone()?;
@@ -285,7 +285,7 @@ impl WindowState {
     /// managed, or the source terminal has no routable binding.
     #[must_use]
     pub fn input_sync_targets(&self, source_uuid: &str) -> Vec<ManagedTerminalBinding> {
-        let session = self.sessions.iter().find(|s| {
+        let session = self.workspaces.iter().find(|s| {
             s.input_sync && s.uses_managed_runtime() && s.layout.contains_terminal(source_uuid)
         });
         let Some(session) = session else {
@@ -321,7 +321,7 @@ impl WindowState {
         endpoint: &RuntimeEndpoint,
         runtime_id: &str,
     ) -> Option<String> {
-        self.sessions
+        self.workspaces
             .iter()
             .find(|session| {
                 session.uses_managed_runtime()
@@ -338,7 +338,7 @@ impl WindowState {
         endpoint: &RuntimeEndpoint,
         runtime_pane_id: &str,
     ) -> Option<(String, String)> {
-        let session = self.sessions.iter().find(|session| {
+        let session = self.workspaces.iter().find(|session| {
             session.uses_managed_runtime()
                 && &session.runtime.endpoint == endpoint
                 && session
@@ -363,7 +363,7 @@ impl WindowState {
         runtime_id: &str,
         runtime_pane_id: &str,
     ) -> bool {
-        let Some(session) = self.sessions.iter_mut().find(|session| session.uuid == workspace_id)
+        let Some(session) = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)
         else {
             return false;
         };
@@ -382,8 +382,8 @@ impl WindowState {
         &mut self,
         workspace_id: &str,
         layout_terminal_uuid: &str,
-    ) -> Option<SessionState> {
-        let session = self.sessions.iter_mut().find(|session| session.uuid == workspace_id)?;
+    ) -> Option<WorkspaceState> {
+        let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
         session.runtime.pane_bindings.remove(layout_terminal_uuid);
         let new_layout = session.layout.remove_terminal(layout_terminal_uuid)?;
         session.layout = new_layout;
@@ -401,7 +401,7 @@ impl WindowState {
         runtime_id: &str,
         snapshot: &proto::Snapshot,
     ) -> Option<ManagedWorkspaceOpenResult> {
-        let session = self.sessions.iter_mut().find(|session| session.uuid == workspace_id)?;
+        let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
 
         let had_runtime_id = session.runtime.runtime_id.is_some();
         session.runtime.runtime_id = Some(runtime_id.to_string());
@@ -532,28 +532,28 @@ impl WindowState {
 
 fn recovered_managed_workspace(
     endpoint: &RuntimeEndpoint,
-    session_info: &proto::SessionInfo,
-) -> Option<SessionState> {
-    let runtime_id = rttx_proto::bytes_to_uuid(&session_info.id).ok()?.to_string();
-    let policy = match proto::RuntimePolicy::try_from(session_info.policy).ok() {
+    rt_info: &proto::RuntimeInfo,
+) -> Option<WorkspaceState> {
+    let runtime_id = rttx_proto::bytes_to_uuid(&rt_info.id).ok()?.to_string();
+    let policy = match proto::RuntimePolicy::try_from(rt_info.policy).ok() {
         Some(proto::RuntimePolicy::Ephemeral) => WorkspacePolicy::Ephemeral,
         _ => WorkspacePolicy::Persistent,
     };
 
-    let mut session = SessionState::new_managed_local(session_info.name.clone(), policy, None);
+    let mut session = WorkspaceState::new_managed_local(rt_info.name.clone(), policy, None);
     session.uuid = inventory_workspace_id(endpoint, &runtime_id);
     session.runtime.endpoint = endpoint.clone();
     session.runtime.runtime_id = Some(runtime_id);
 
-    if !session_info.panes.is_empty() {
-        session.layout = layout_from_inventory_panes(&session_info.panes);
+    if !rt_info.panes.is_empty() {
+        session.layout = layout_from_inventory_panes(&rt_info.panes);
         let pane_ids = session.layout.terminal_uuids();
         session.terminal_recovery = pane_ids
             .iter()
             .cloned()
             .map(|pane_id| (pane_id, PaneRecovery::empty_shell()))
             .collect();
-        session.active_terminal_uuid = session_info
+        session.active_terminal_uuid = rt_info
             .active_pane_id
             .as_ref()
             .and_then(|pane_id| rttx_proto::bytes_to_uuid(pane_id).ok().map(|id| id.to_string()))
@@ -609,8 +609,8 @@ mod tests {
     use crate::runtime::ConnectionStatus;
     use crate::runtime::WorkspacePolicy;
     use crate::test_helpers::{
-        hsplit, managed_session, managed_session_with_runtime, session, term, term_full,
-        window_state,
+        hsplit, managed_session, managed_session_with_runtime, term, term_full, window_state,
+        workspace,
     };
 
     fn pane_snapshot(
@@ -637,7 +637,7 @@ mod tests {
 
     fn snapshot(runtime_id: &str, panes: Vec<proto::PaneSnapshot>) -> proto::Snapshot {
         proto::Snapshot {
-            session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
+            runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             panes,
             revision: 7,
             current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
@@ -656,14 +656,14 @@ mod tests {
         }
     }
 
-    fn session_info(
+    fn rt_info(
         runtime_id: &str,
         name: &str,
         policy: proto::RuntimePolicy,
         panes: Vec<proto::PaneInfo>,
         active_pane_id: Option<&str>,
-    ) -> proto::SessionInfo {
-        proto::SessionInfo {
+    ) -> proto::RuntimeInfo {
+        proto::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             name: name.to_string(),
             pane_count: panes.len() as u32,
@@ -701,7 +701,7 @@ mod tests {
         );
 
         session.runtime.bind_runtime_pane("pane-1", &runtime_pane_id);
-        state.sessions[0] = session;
+        state.workspaces[0] = session;
 
         let binding = state
             .managed_terminal_binding("pane-1")
@@ -748,7 +748,7 @@ mod tests {
             "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
         ));
 
-        let session = &state.sessions[0];
+        let session = &state.workspaces[0];
         assert_eq!(
             session.runtime.runtime_id.as_deref(),
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
@@ -758,7 +758,7 @@ mod tests {
             Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
         );
         assert!(!session.runtime.is_layout_pane_pending("pane-1"));
-        assert_eq!(session.mode.daemon_session_id(), Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),);
+        assert_eq!(session.mode.daemon_runtime_id(), Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),);
     }
 
     #[test]
@@ -888,7 +888,7 @@ mod tests {
 
         let recovered = state.recover_managed_workspaces_from_inventory(
             &RuntimeEndpoint::Local,
-            &[session_info(
+            &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
                 proto::RuntimePolicy::Persistent,
@@ -901,7 +901,7 @@ mod tests {
         );
 
         assert_eq!(recovered.len(), 1);
-        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.workspaces.len(), 1);
         let session = &recovered[0];
         assert_eq!(session.uuid, "inventory:local:d7d04564-b2bf-4302-9495-e65c4df12ac6");
         assert_eq!(session.name, "Recovered Workspace");
@@ -954,7 +954,7 @@ mod tests {
 
         let recovered = state.recover_managed_workspaces_from_inventory(
             &RuntimeEndpoint::Local,
-            &[session_info(
+            &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
                 proto::RuntimePolicy::Persistent,
@@ -964,8 +964,8 @@ mod tests {
         );
 
         assert!(recovered.is_empty());
-        assert_eq!(state.sessions.len(), 1);
-        assert_eq!(state.sessions[0].uuid, "workspace-1");
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.workspaces[0].uuid, "workspace-1");
     }
 
     #[test]
@@ -975,7 +975,7 @@ mod tests {
 
         let recovered = state.recover_managed_workspaces_from_inventory(
             &RuntimeEndpoint::Local,
-            &[session_info(
+            &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
                 proto::RuntimePolicy::Persistent,
@@ -1026,7 +1026,7 @@ mod tests {
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: RuntimeEndpoint::Local,
-            sessions: vec![session_info(
+            runtimes: vec![rt_info(
                 &runtime_id,
                 "Recovered Workspace",
                 proto::RuntimePolicy::Persistent,
@@ -1046,7 +1046,7 @@ mod tests {
         );
         assert!(
             state
-                .sessions
+                .workspaces
                 .iter()
                 .any(|session| session.uuid == format!("inventory:local:{runtime_id}"))
         );
@@ -1054,7 +1054,7 @@ mod tests {
 
     #[test]
     fn needs_inventory_bootstrap_when_no_managed_workspace_uses_endpoint() {
-        let state = window_state(vec![session("session-1", "Session 1", term("pane-1"))]);
+        let state = window_state(vec![workspace("session-1", "Session 1", term("pane-1"))]);
 
         assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::Local));
         assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
@@ -1123,7 +1123,7 @@ mod tests {
             transition.rebuilt_workspaces,
             vec![ManagedWorkspaceRebuild {
                 workspace_id: "workspace-1".into(),
-                session_state: state.sessions[0].clone(),
+                session_state: state.workspaces[0].clone(),
             }],
         );
         assert_eq!(
@@ -1152,7 +1152,7 @@ mod tests {
                 sgr_mouse_mode: false,
             }],
         );
-        assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(state.workspaces[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
     }
 
     #[test]
@@ -1206,7 +1206,7 @@ mod tests {
             }],
         );
         assert_eq!(
-            state.sessions[0].runtime.pane_bindings.get("pane-1").map(String::as_str),
+            state.workspaces[0].runtime.pane_bindings.get("pane-1").map(String::as_str),
             Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
         );
     }
@@ -1234,7 +1234,7 @@ mod tests {
 
         assert_eq!(transition.removed_layout_terminals, vec!["right".to_string()]);
         assert_eq!(transition.rebuilt_workspaces.len(), 1);
-        assert_eq!(state.sessions[0].layout.terminal_uuids(), vec!["left".to_string()]);
+        assert_eq!(state.workspaces[0].layout.terminal_uuids(), vec!["left".to_string()]);
     }
 
     #[test]
@@ -1254,7 +1254,7 @@ mod tests {
             runtime_id: runtime_id.clone(),
         });
 
-        assert_eq!(state.sessions[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(state.workspaces[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
         assert_eq!(
             transition.connection_status_updates,
             vec![ConnectionStatusUpdate {
@@ -1281,7 +1281,7 @@ mod tests {
             reason: proto::RuntimeTerminationReason::Explicit,
         });
 
-        assert_eq!(state.sessions[0].runtime.runtime_id, None);
+        assert_eq!(state.workspaces[0].runtime.runtime_id, None);
         assert_eq!(
             transition.connection_status_updates,
             vec![ConnectionStatusUpdate {
@@ -1292,12 +1292,12 @@ mod tests {
     }
 
     /// After the layout/state/recovery module split, session types imported
-    /// through `crate::session::*` must still compose correctly in workspace
+    /// through `crate::workspace::*` must still compose correctly in workspace
     /// state operations.
     #[test]
     fn session_types_compose_after_module_split() {
-        let mut state = window_state(vec![session("s1", "Work", term("t1"))]);
-        let ws = &mut state.sessions[0];
+        let mut state = window_state(vec![workspace("s1", "Work", term("t1"))]);
+        let ws = &mut state.workspaces[0];
         ws.set_recovery("t1", PaneRecovery::empty_shell());
         assert!(ws.recovery_for("t1").is_some());
         ws.prune_recovery();
@@ -1316,7 +1316,7 @@ mod tests {
         // Inventory refresh reports the runtime still exists on the daemon.
         let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: RuntimeEndpoint::Local,
-            sessions: vec![session_info(
+            runtimes: vec![rt_info(
                 &runtime_id,
                 "Should Not Resurrect",
                 proto::RuntimePolicy::Persistent,
@@ -1330,7 +1330,7 @@ mod tests {
             "dismissed runtime must not be resurrected by inventory"
         );
         assert!(
-            !state.sessions.iter().any(|s| s.runtime.runtime_id.as_deref() == Some(&runtime_id)),
+            !state.workspaces.iter().any(|s| s.runtime.runtime_id.as_deref() == Some(&runtime_id)),
             "dismissed runtime must not appear in session state"
         );
     }
@@ -1348,7 +1348,7 @@ mod tests {
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: endpoint.clone(),
-            sessions: vec![session_info(
+            runtimes: vec![rt_info(
                 &runtime_id,
                 "Remote Work",
                 proto::RuntimePolicy::Persistent,
@@ -1388,7 +1388,7 @@ mod tests {
 
             let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
                 endpoint: RuntimeEndpoint::Local,
-                sessions: vec![session_info(
+                runtimes: vec![rt_info(
                     &runtime_id,
                     &format!("Dismissed {i}"),
                     proto::RuntimePolicy::Persistent,
@@ -1414,12 +1414,12 @@ mod tests {
     fn close_workspace_without_runtime_id_removes_cleanly() {
         let mut state = window_state(vec![managed_session("ws-1", "Disconnected", term("t1"))]);
         // No runtime_id — workspace was never connected.
-        state.sessions[0].runtime.runtime_id = None;
+        state.workspaces[0].runtime.runtime_id = None;
 
         // Dismiss with empty string (no runtime to track).
-        assert_eq!(state.sessions.len(), 1);
-        state.sessions.retain(|s| s.uuid != "ws-1");
-        assert!(state.sessions.is_empty());
+        assert_eq!(state.workspaces.len(), 1);
+        state.workspaces.retain(|s| s.uuid != "ws-1");
+        assert!(state.workspaces.is_empty());
     }
 
     #[test]
@@ -1434,13 +1434,13 @@ mod tests {
             WorkspacePolicy::Persistent,
             Some(&runtime_id),
         )]);
-        state.sessions[0].layout.set_terminal_cwd("t1", Some("/old/path".into()));
+        state.workspaces[0].layout.set_terminal_cwd("t1", Some("/old/path".into()));
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "ws-1".into(),
             runtime_id: runtime_id.clone(),
             snapshot: proto::Snapshot {
-                session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
+                runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
                 panes: vec![proto::PaneSnapshot {
                     pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
                     title: "bash".into(),
@@ -1464,7 +1464,7 @@ mod tests {
         assert_eq!(transition.pane_snapshot_restores[0].cwd, "/new/project");
 
         // The layout CWD must also be updated from the snapshot.
-        let session = state.sessions.iter().find(|s| s.uuid == "ws-1").unwrap();
+        let session = state.workspaces.iter().find(|s| s.uuid == "ws-1").unwrap();
         let layout_uuid = &transition.pane_snapshot_restores[0].layout_terminal_uuid;
         assert_eq!(
             session.layout.terminal_cwd(layout_uuid).as_deref(),
@@ -1685,7 +1685,7 @@ mod tests {
 
     #[test]
     fn input_sync_targets_empty_for_direct_workspace() {
-        let mut session = session("s1", "Direct", hsplit(term("pane-1"), term("pane-2")));
+        let mut session = workspace("s1", "Direct", hsplit(term("pane-1"), term("pane-2")));
         session.input_sync = true;
         let state = window_state(vec![session]);
 
@@ -1903,7 +1903,7 @@ mod tests {
         // Inventory only contains live_id — stale_id was already removed by daemon.
         let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: RuntimeEndpoint::Local,
-            sessions: vec![session_info(
+            runtimes: vec![rt_info(
                 &live_id,
                 "Still Running",
                 proto::RuntimePolicy::Persistent,

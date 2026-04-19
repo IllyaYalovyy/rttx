@@ -1,12 +1,12 @@
 //! Integration tests for session lifecycle scenarios.
 //!
 //! These tests verify that the session model correctly handles
-//! real-world workflows: creating sessions, splitting terminals,
+//! real-world workflows: creating workspaces, splitting terminals,
 //! closing terminals, persisting state, and restoring it.
 
 use pretty_assertions::assert_eq;
 use rttx::runtime::WorkspaceRuntime;
-use rttx::session::*;
+use rttx::workspace::*;
 // ── Helpers (can't use test_helpers from lib, so inline) ─────────
 
 fn term(id: &str) -> LayoutNode {
@@ -63,51 +63,51 @@ fn workflow_split_split_close_close() {
 #[test]
 fn workflow_multi_session_state() {
     // Simulate a window with 3 sessions
-    let sessions = vec![
-        SessionState {
+    let workspaces = vec![
+        WorkspaceState {
             uuid: "s1".into(),
             name: "Editor".into(),
             layout: hsplit(term("editor-main"), vsplit(term("editor-side"), term("editor-term"))),
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         },
-        SessionState {
+        WorkspaceState {
             uuid: "s2".into(),
             name: "Build".into(),
             layout: vsplit(term("build-output"), term("build-logs")),
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         },
-        SessionState {
+        WorkspaceState {
             uuid: "s3".into(),
             name: "Monitoring".into(),
             layout: term("htop"),
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         },
     ];
 
     let state = WindowState {
-        sessions,
-        active_session_index: 1,
+        workspaces,
+        active_workspace_index: 1,
         width: 1920,
         height: 1080,
         is_maximized: true,
@@ -115,9 +115,9 @@ fn workflow_multi_session_state() {
     };
 
     // Verify structure
-    assert_eq!(state.sessions[0].layout.terminal_count(), 3);
-    assert_eq!(state.sessions[1].layout.terminal_count(), 2);
-    assert_eq!(state.sessions[2].layout.terminal_count(), 1);
+    assert_eq!(state.workspaces[0].layout.terminal_count(), 3);
+    assert_eq!(state.workspaces[1].layout.terminal_count(), 2);
+    assert_eq!(state.workspaces[2].layout.terminal_count(), 1);
 
     // Serialize and restore
     let json = serde_json::to_string_pretty(&state).unwrap();
@@ -125,18 +125,18 @@ fn workflow_multi_session_state() {
     assert_eq!(state, restored);
 
     // Verify active session survived
-    assert_eq!(restored.active_session_index, 1);
-    assert_eq!(restored.sessions[1].name, "Build");
+    assert_eq!(restored.active_workspace_index, 1);
+    assert_eq!(restored.workspaces[1].name, "Build");
 }
 
 #[test]
 fn workflow_persist_and_restore_with_cwds() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let sessions_dir = tmp.path().join("rttx").join("sessions");
-    std::fs::create_dir_all(&sessions_dir).unwrap();
+    let workspaces_dir = tmp.path().join("rttx").join("sessions");
+    std::fs::create_dir_all(&workspaces_dir).unwrap();
 
     let state = WindowState {
-        sessions: vec![SessionState {
+        workspaces: vec![WorkspaceState {
             uuid: "s1".into(),
             name: "Dev".into(),
             layout: hsplit(
@@ -156,20 +156,20 @@ fn workflow_persist_and_restore_with_cwds() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         }],
-        active_session_index: 0,
+        active_workspace_index: 0,
         width: 1200,
         height: 800,
         is_maximized: false,
         ..WindowState::default()
     };
 
-    let path = sessions_dir.join("window-state.json");
+    let path = workspaces_dir.join("window-state.json");
     let json = serde_json::to_string_pretty(&state).unwrap();
     std::fs::write(&path, &json).unwrap();
 
@@ -177,9 +177,9 @@ fn workflow_persist_and_restore_with_cwds() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
     // CWDs survived
-    if let LayoutNode::Terminal { cwd: _, custom_title: _, .. } = &loaded.sessions[0].layout {
+    if let LayoutNode::Terminal { cwd: _, custom_title: _, .. } = &loaded.workspaces[0].layout {
         panic!("Expected Split at root, got Terminal");
-    } else if let LayoutNode::Split { first, second, .. } = &loaded.sessions[0].layout {
+    } else if let LayoutNode::Split { first, second, .. } = &loaded.workspaces[0].layout {
         if let LayoutNode::Terminal { cwd, custom_title, .. } = first.as_ref() {
             assert_eq!(cwd.as_deref(), Some("/home/user/project/src"));
             assert_eq!(custom_title.as_deref(), Some("vim"));
@@ -236,84 +236,84 @@ fn deeply_nested_layout_serializes() {
 }
 
 #[test]
-fn empty_session_name_is_valid() {
-    let session = SessionState {
+fn empty_workspace_name_is_valid() {
+    let session = WorkspaceState {
         uuid: "s1".into(),
         name: String::new(),
         layout: term("t1"),
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: None,
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
     };
     let json = serde_json::to_string(&session).unwrap();
-    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
     assert_eq!(session, restored);
 }
 
 #[test]
 fn session_order_persists_through_serialization() {
     let state = WindowState {
-        sessions: vec![
-            SessionState {
+        workspaces: vec![
+            WorkspaceState {
                 uuid: "s3".into(),
                 name: "Third".into(),
                 layout: term("t3"),
                 terminal_recovery: std::collections::BTreeMap::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: SessionMode::default(),
+                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
-                color: SessionColor::default(),
+                color: WorkspaceColor::default(),
                 zoomed_terminal_uuid: None,
                 user_renamed: false,
             },
-            SessionState {
+            WorkspaceState {
                 uuid: "s1".into(),
                 name: "First".into(),
                 layout: term("t1"),
                 terminal_recovery: std::collections::BTreeMap::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: SessionMode::default(),
+                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
-                color: SessionColor::default(),
+                color: WorkspaceColor::default(),
                 zoomed_terminal_uuid: None,
                 user_renamed: false,
             },
-            SessionState {
+            WorkspaceState {
                 uuid: "s2".into(),
                 name: "Second".into(),
                 layout: term("t2"),
                 terminal_recovery: std::collections::BTreeMap::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: SessionMode::default(),
+                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
-                color: SessionColor::default(),
+                color: WorkspaceColor::default(),
                 zoomed_terminal_uuid: None,
                 user_renamed: false,
             },
         ],
-        active_session_index: 1,
+        active_workspace_index: 1,
         ..WindowState::default()
     };
 
     let json = serde_json::to_string_pretty(&state).unwrap();
     let restored: WindowState = serde_json::from_str(&json).unwrap();
 
-    let uuids: Vec<&str> = restored.sessions.iter().map(|s| s.uuid.as_str()).collect();
+    let uuids: Vec<&str> = restored.workspaces.iter().map(|s| s.uuid.as_str()).collect();
     assert_eq!(uuids, vec!["s3", "s1", "s2"], "session order must be preserved");
-    assert_eq!(restored.active_session_index, 1);
+    assert_eq!(restored.active_workspace_index, 1);
 }
 
 /// Verify that the session module re-exports work correctly after the
 /// layout/state/recovery split — types from all three submodules are
-/// accessible through `rttx::session::*`.
+/// accessible through `rttx::workspace::*`.
 #[test]
 fn module_split_reexports_are_complete() {
     // Layout types
@@ -325,11 +325,11 @@ fn module_split_reexports_are_complete() {
     assert_eq!(recovery.source, PaneSource::EmptyShell);
 
     // State types
-    let session = SessionState::new("reexport-test".into());
-    assert_eq!(session.mode, SessionMode::Direct);
+    let session = WorkspaceState::new("reexport-test".into());
+    assert_eq!(session.mode, WorkspaceMode::Direct);
 
     let state = WindowState::default();
-    assert!(!state.sessions.is_empty());
+    assert!(!state.workspaces.is_empty());
 }
 
 /// Closing a managed workspace must dismiss the runtime so inventory
@@ -341,26 +341,26 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
 
     let runtime_id = uuid::Uuid::new_v4().to_string();
     let mut state = WindowState {
-        sessions: vec![
-            SessionState::new("Direct".into()),
-            SessionState::new_managed_local("Managed".into(), WorkspacePolicy::Persistent, None),
+        workspaces: vec![
+            WorkspaceState::new("Direct".into()),
+            WorkspaceState::new_managed_local("Managed".into(), WorkspacePolicy::Persistent, None),
         ],
-        active_session_index: 0,
+        active_workspace_index: 0,
         ..WindowState::default()
     };
 
     // Assign a runtime ID to the managed session.
-    state.sessions[1].runtime.runtime_id = Some(runtime_id.clone());
+    state.workspaces[1].runtime.runtime_id = Some(runtime_id.clone());
 
     // Simulate close: remove session and dismiss runtime.
     state.dismiss_runtime(&RuntimeEndpoint::Local, &runtime_id);
-    state.sessions.retain(|s| s.runtime.runtime_id.as_deref() != Some(&runtime_id));
+    state.workspaces.retain(|s| s.runtime.runtime_id.as_deref() != Some(&runtime_id));
 
     // Inventory reports the runtime still exists.
     let pane_id = uuid::Uuid::new_v4().to_string();
     let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        sessions: vec![rttx_proto::proto::SessionInfo {
+        runtimes: vec![rttx_proto::proto::RuntimeInfo {
             id: uuid::Uuid::parse_str(&runtime_id).unwrap().as_bytes().to_vec(),
             name: "Should Not Resurrect".into(),
             pane_count: 1,
@@ -399,28 +399,31 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
 
     let mut state = WindowState {
-        sessions: vec![SessionState::new_managed_local(
+        workspaces: vec![WorkspaceState::new_managed_local(
             "Existing".into(),
             WorkspacePolicy::Persistent,
             None,
         )],
-        active_session_index: 0,
+        active_workspace_index: 0,
         ..WindowState::default()
     };
 
     // Simulate creating a new workspace (adds one session).
-    let new_session =
-        SessionState::new_managed_local("New Workspace".into(), WorkspacePolicy::Persistent, None);
-    state.sessions.push(new_session);
+    let new_session = WorkspaceState::new_managed_local(
+        "New Workspace".into(),
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    state.workspaces.push(new_session);
 
-    assert_eq!(state.sessions.len(), 2, "should have exactly 2 sessions after create");
+    assert_eq!(state.workspaces.len(), 2, "should have exactly 2 sessions after create");
 
     // An inventory refresh reports an unrelated runtime.
     let unrelated_runtime_id = uuid::Uuid::new_v4().to_string();
     let pane_id = uuid::Uuid::new_v4().to_string();
     let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        sessions: vec![rttx_proto::proto::SessionInfo {
+        runtimes: vec![rttx_proto::proto::RuntimeInfo {
             id: uuid::Uuid::parse_str(&unrelated_runtime_id).unwrap().as_bytes().to_vec(),
             name: "Unrelated Runtime".into(),
             pane_count: 1,
@@ -454,7 +457,11 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
         1,
         "inventory recovery should find the unrelated runtime"
     );
-    assert_eq!(state.sessions.len(), 3, "state should have 3 sessions: existing + new + recovered");
+    assert_eq!(
+        state.workspaces.len(),
+        3,
+        "state should have 3 sessions: existing + new + recovered"
+    );
 }
 
 /// Dismissed runtime IDs must persist through save/load so closed
@@ -480,7 +487,7 @@ fn dismissed_runtime_ids_persist_through_save_load() {
 #[test]
 fn save_state_preserves_layout_cwd_when_widget_reports_none() {
     let mut state = WindowState::default();
-    let session = &mut state.sessions[0];
+    let session = &mut state.workspaces[0];
     let uuid = session.layout.terminal_uuids()[0].clone();
     session.layout.set_terminal_cwd(&uuid, Some("/important/project".into()));
 
@@ -488,7 +495,7 @@ fn save_state_preserves_layout_cwd_when_widget_reports_none() {
     let restored: WindowState = serde_json::from_str(&json).unwrap();
 
     assert_eq!(
-        restored.sessions[0].layout.terminal_cwd(&uuid).as_deref(),
+        restored.workspaces[0].layout.terminal_cwd(&uuid).as_deref(),
         Some("/important/project"),
         "layout CWD must survive serialization"
     );
@@ -497,8 +504,8 @@ fn save_state_preserves_layout_cwd_when_widget_reports_none() {
 /// Regression test for #235: layout CWD must survive daemon restart cycle.
 #[test]
 fn layout_cwd_survives_reconnect_cycle() {
-    use rttx::session::SessionState;
-    let mut session = SessionState::new("test".into());
+    use rttx::workspace::WorkspaceState;
+    let mut session = WorkspaceState::new("test".into());
     let uuid = session.layout.terminal_uuids()[0].clone();
     session.layout.set_terminal_cwd(&uuid, Some("/project/dir".into()));
 
@@ -510,9 +517,9 @@ fn layout_cwd_survives_reconnect_cycle() {
 #[test]
 fn new_managed_remote_produces_remote_persistent_session() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::SessionState;
+    use rttx::workspace::WorkspaceState;
 
-    let session = SessionState::new_managed_remote(
+    let session = WorkspaceState::new_managed_remote(
         "Remote Work".into(),
         "dev-box.internal",
         WorkspacePolicy::Persistent,
@@ -532,9 +539,9 @@ fn new_managed_remote_produces_remote_persistent_session() {
 #[test]
 fn remote_managed_session_persists_and_restores() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::{SessionMode, SessionState};
+    use rttx::workspace::{WorkspaceMode, WorkspaceState};
 
-    let session = SessionState::new_managed_remote(
+    let session = WorkspaceState::new_managed_remote(
         "Remote Work".into(),
         "dev@build-host",
         WorkspacePolicy::Persistent,
@@ -542,14 +549,14 @@ fn remote_managed_session_persists_and_restores() {
     );
 
     let json = serde_json::to_string(&session).unwrap();
-    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
 
     assert!(restored.runtime.is_managed());
     assert_eq!(
         restored.runtime.endpoint,
         RuntimeEndpoint::Remote { host: "dev@build-host".into() }
     );
-    assert!(matches!(restored.mode, SessionMode::RemotePersistent { .. }));
+    assert!(matches!(restored.mode, WorkspaceMode::RemotePersistent { .. }));
     assert_eq!(
         restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
         Some("/home/dev/project")
@@ -561,9 +568,9 @@ fn remote_managed_session_persists_and_restores() {
 #[test]
 fn remote_host_creates_managed_remote_session() {
     use rttx::runtime::RuntimeEndpoint;
-    use rttx::session::SessionState;
+    use rttx::workspace::WorkspaceState;
 
-    let session = SessionState::new_managed_remote(
+    let session = WorkspaceState::new_managed_remote(
         "Prod Server".into(),
         "deploy@example.com",
         rttx::runtime::WorkspacePolicy::Persistent,
@@ -581,9 +588,9 @@ fn remote_host_creates_managed_remote_session() {
 #[test]
 fn update_remote_endpoint_changes_host_and_mode() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::{SessionMode, SessionState};
+    use rttx::workspace::{WorkspaceMode, WorkspaceState};
 
-    let mut session = SessionState::new_managed_remote(
+    let mut session = WorkspaceState::new_managed_remote(
         "Remote".into(),
         "old-host.example.com",
         WorkspacePolicy::Persistent,
@@ -599,7 +606,7 @@ fn update_remote_endpoint_changes_host_and_mode() {
     );
     assert!(matches!(
         session.mode,
-        SessionMode::RemotePersistent { ref host, .. } if host == "new-host.example.com"
+        WorkspaceMode::RemotePersistent { ref host, .. } if host == "new-host.example.com"
     ));
 }
 
@@ -608,10 +615,10 @@ fn update_remote_endpoint_changes_host_and_mode() {
 #[test]
 fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::layout::SplitOrientation;
-    use rttx::session::{PaneRecovery, SessionState};
+    use rttx::workspace::layout::SplitOrientation;
+    use rttx::workspace::{PaneRecovery, WorkspaceState};
 
-    let mut session = SessionState::new_managed_remote(
+    let mut session = WorkspaceState::new_managed_remote(
         "Remote".into(),
         "build-host.internal",
         WorkspacePolicy::Persistent,
@@ -650,10 +657,10 @@ fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
 #[test]
 fn double_split_remote_session_keeps_all_panes_pending() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::layout::SplitOrientation;
-    use rttx::session::{PaneRecovery, SessionState};
+    use rttx::workspace::layout::SplitOrientation;
+    use rttx::workspace::{PaneRecovery, WorkspaceState};
 
-    let mut session = SessionState::new_managed_remote(
+    let mut session = WorkspaceState::new_managed_remote(
         "Remote".into(),
         "gpu-box",
         WorkspacePolicy::Persistent,
@@ -685,8 +692,8 @@ fn double_split_remote_session_keeps_all_panes_pending() {
 #[test]
 fn close_remote_workspace_prevents_resurrection_on_reconnect() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::SessionState;
-    use rttx::session::state::WindowState;
+    use rttx::workspace::WorkspaceState;
+    use rttx::workspace::state::WindowState;
 
     let runtime_id = uuid::Uuid::new_v4().to_string();
     let endpoint = RuntimeEndpoint::Remote { host: "prod-server".into() };
@@ -694,17 +701,17 @@ fn close_remote_workspace_prevents_resurrection_on_reconnect() {
     let mut state = WindowState::default();
 
     // Create a remote workspace with a known runtime_id.
-    let session = SessionState::new_managed_remote(
+    let session = WorkspaceState::new_managed_remote(
         "Prod".into(),
         "prod-server",
         WorkspacePolicy::Persistent,
         None,
     );
-    state.sessions.push(session);
-    state.sessions.last_mut().unwrap().runtime.runtime_id = Some(runtime_id.clone());
+    state.workspaces.push(session);
+    state.workspaces.last_mut().unwrap().runtime.runtime_id = Some(runtime_id.clone());
 
     // Simulate close: remove session and dismiss runtime.
-    state.sessions.clear();
+    state.workspaces.clear();
     state.dismiss_runtime(&endpoint, &runtime_id);
 
     // Verify dismissed_runtime_ids survives serialization (persistence).
@@ -715,7 +722,7 @@ fn close_remote_workspace_prevents_resurrection_on_reconnect() {
         restored.dismissed_runtime_ids.contains(&runtime_id),
         "dismissed runtime ID must survive persistence"
     );
-    assert!(restored.sessions.is_empty());
+    assert!(restored.workspaces.is_empty());
 }
 
 /// Remote managed session must be ready for inventory binding after
@@ -723,39 +730,39 @@ fn close_remote_workspace_prevents_resurrection_on_reconnect() {
 #[test]
 fn remote_managed_session_is_ready_for_inventory_binding() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::session::state::WindowState;
+    use rttx::workspace::state::WindowState;
 
     let endpoint = RuntimeEndpoint::Remote { host: "gpu-box".into() };
 
     let mut state = WindowState::default();
-    state.sessions.clear();
-    let session = rttx::session::SessionState::new_managed_remote(
+    state.workspaces.clear();
+    let session = rttx::workspace::WorkspaceState::new_managed_remote(
         "ML Training".into(),
         "gpu-box",
         WorkspacePolicy::Persistent,
         None,
     );
-    state.sessions.push(session);
+    state.workspaces.push(session);
 
-    let remote_session = &state.sessions[0];
+    let remote_session = &state.workspaces[0];
     assert!(remote_session.runtime.is_managed());
     assert_eq!(remote_session.runtime.endpoint, endpoint);
     assert!(remote_session.runtime.runtime_id.is_none());
     assert!(!remote_session.runtime.pending_layout_panes.is_empty());
 }
 
-/// `active_session_index` must be clamped to valid range on restore.
+/// `active_workspace_index` must be clamped to valid range on restore.
 /// Regression test for #179.
 #[test]
-fn active_session_index_clamped_on_restore() {
-    use rttx::session::state::WindowState;
+fn active_workspace_index_clamped_on_restore() {
+    use rttx::workspace::state::WindowState;
 
-    let state = WindowState { active_session_index: 999, ..WindowState::default() };
+    let state = WindowState { active_workspace_index: 999, ..WindowState::default() };
 
     let json = serde_json::to_string(&state).unwrap();
     let restored: WindowState = serde_json::from_str(&json).unwrap();
 
-    let clamped = restored.active_session_index.min(restored.sessions.len().saturating_sub(1));
+    let clamped = restored.active_workspace_index.min(restored.workspaces.len().saturating_sub(1));
     assert_eq!(clamped, 0, "out-of-bounds index must clamp to 0");
 }
 
@@ -763,25 +770,25 @@ fn active_session_index_clamped_on_restore() {
 #[test]
 fn connection_status_survives_session_reorder() {
     use rttx::runtime::WorkspacePolicy;
-    use rttx::session::SessionState;
-    use rttx::session::state::WindowState;
+    use rttx::workspace::WorkspaceState;
+    use rttx::workspace::state::WindowState;
 
     let mut state = WindowState::default();
-    state.sessions.clear();
-    let s1 = SessionState::new_managed_local("A".into(), WorkspacePolicy::Persistent, None);
-    let s2 = SessionState::new_managed_local("B".into(), WorkspacePolicy::Persistent, None);
+    state.workspaces.clear();
+    let s1 = WorkspaceState::new_managed_local("A".into(), WorkspacePolicy::Persistent, None);
+    let s2 = WorkspaceState::new_managed_local("B".into(), WorkspacePolicy::Persistent, None);
     let uuid1 = s1.uuid.clone();
     let uuid2 = s2.uuid.clone();
-    state.sessions.push(s1);
-    state.sessions.push(s2);
+    state.workspaces.push(s1);
+    state.workspaces.push(s2);
 
     // Simulate reorder: swap positions.
-    let session = state.sessions.remove(0);
-    state.sessions.insert(1, session);
+    let session = state.workspaces.remove(0);
+    state.workspaces.insert(1, session);
 
     // Sessions are reordered but both still exist.
-    assert_eq!(state.sessions[0].uuid, uuid2);
-    assert_eq!(state.sessions[1].uuid, uuid1);
+    assert_eq!(state.workspaces[0].uuid, uuid2);
+    assert_eq!(state.workspaces[1].uuid, uuid1);
     // The connection status HashMap (stored on Window, not WindowState)
     // is not affected by session reorder — it's keyed by UUID.
 }
@@ -836,24 +843,24 @@ fn connection_status_lifecycle_is_deterministic() {
 fn session_missing_does_not_affect_sibling_workspaces() {
     use rttx::daemon_bridge::EndpointEvent;
     use rttx::runtime::{ConnectionStatus, WorkspacePolicy};
-    use rttx::session::SessionState;
+    use rttx::workspace::WorkspaceState;
     use rttx::workspace_state::ConnectionStatusUpdate;
 
     let runtime_a = uuid::Uuid::new_v4().to_string();
     let runtime_b = uuid::Uuid::new_v4().to_string();
 
     let mut session_a =
-        SessionState::new_managed_local("Workspace A".into(), WorkspacePolicy::Persistent, None);
+        WorkspaceState::new_managed_local("Workspace A".into(), WorkspacePolicy::Persistent, None);
     session_a.runtime.runtime_id = Some(runtime_a);
 
     let mut session_b =
-        SessionState::new_managed_local("Workspace B".into(), WorkspacePolicy::Persistent, None);
+        WorkspaceState::new_managed_local("Workspace B".into(), WorkspacePolicy::Persistent, None);
     session_b.runtime.runtime_id = Some(runtime_b.clone());
 
     let ws_a_id = session_a.uuid.clone();
     let ws_b_id = session_b.uuid.clone();
 
-    let mut state = WindowState { sessions: vec![session_a, session_b], ..Default::default() };
+    let mut state = WindowState { workspaces: vec![session_a, session_b], ..Default::default() };
 
     // Workspace A gets SessionMissing — workspace B must not be affected.
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceConnectionChanged {
@@ -868,7 +875,7 @@ fn session_missing_does_not_affect_sibling_workspaces() {
     );
 
     // Workspace B's runtime_id is untouched.
-    let session_b = state.sessions.iter().find(|s| s.uuid == ws_b_id).unwrap();
+    let session_b = state.workspaces.iter().find(|s| s.uuid == ws_b_id).unwrap();
     assert_eq!(session_b.runtime.runtime_id.as_deref(), Some(runtime_b.as_str()));
 }
 
@@ -914,7 +921,7 @@ fn ctrl_arrow_encodes_with_modifier_param() {
 fn split_pane_cwd_propagates_through_reconciliation_create_request() {
     use rttx::daemon_bridge::EndpointEvent;
     use rttx::runtime::WorkspacePolicy;
-    use rttx::session::*;
+    use rttx::workspace::*;
 
     let first_uuid = uuid::Uuid::new_v4().to_string();
     let second_uuid = uuid::Uuid::new_v4().to_string();
@@ -939,17 +946,17 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
     };
 
     let mut session =
-        SessionState::new_managed_local("Workspace".into(), WorkspacePolicy::Persistent, None);
+        WorkspaceState::new_managed_local("Workspace".into(), WorkspacePolicy::Persistent, None);
     session.layout = layout;
 
-    let mut state = WindowState { sessions: vec![session], ..Default::default() };
+    let mut state = WindowState { workspaces: vec![session], ..Default::default() };
 
     // Simulate daemon reporting only the first pane exists.
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
-        workspace_id: state.sessions[0].uuid.clone(),
+        workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: runtime_id.clone(),
         snapshot: rttx_proto::proto::Snapshot {
-            session_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
+            runtime_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
             panes: vec![rttx_proto::proto::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(first_uuid.parse().unwrap()),
                 title: "Shell".into(),
@@ -982,16 +989,16 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
 
 #[test]
 fn zoom_toggle_sets_and_clears_zoomed_terminal() {
-    let mut session = SessionState {
+    let mut session = WorkspaceState {
         uuid: "s1".into(),
         name: "Work".into(),
         layout: hsplit(term("t1"), term("t2")),
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t1".into()),
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
     };
@@ -1011,16 +1018,16 @@ fn zoom_toggle_sets_and_clears_zoomed_terminal() {
 
 #[test]
 fn zoom_state_not_persisted_when_cleared_before_save() {
-    let mut session = SessionState {
+    let mut session = WorkspaceState {
         uuid: "s1".into(),
         name: "Work".into(),
         layout: hsplit(term("t1"), term("t2")),
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t1".into()),
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: Some("t1".into()),
         user_renamed: false,
     };
@@ -1028,23 +1035,23 @@ fn zoom_state_not_persisted_when_cleared_before_save() {
     // Simulate save_state clearing zoom
     session.zoomed_terminal_uuid = None;
     let json = serde_json::to_string(&session).unwrap();
-    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
     assert!(!restored.is_zoomed());
     assert_eq!(restored.layout.terminal_count(), 2);
 }
 
 #[test]
 fn zoom_on_single_pane_session_is_noop() {
-    let session = SessionState {
+    let session = WorkspaceState {
         uuid: "s1".into(),
         name: "Work".into(),
         layout: term("t1"),
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t1".into()),
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
     };
@@ -1057,16 +1064,16 @@ fn zoom_on_single_pane_session_is_noop() {
 #[test]
 fn zoom_preserves_layout_tree_integrity() {
     let layout = hsplit(vsplit(term("t1"), term("t2")), term("t3"));
-    let mut session = SessionState {
+    let mut session = WorkspaceState {
         uuid: "s1".into(),
         name: "Work".into(),
         layout: layout.clone(),
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t2".into()),
         input_sync: false,
-        mode: SessionMode::default(),
+        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
-        color: SessionColor::default(),
+        color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
     };
@@ -1093,25 +1100,25 @@ fn zoom_preserves_layout_tree_integrity() {
 fn workspace_opened_with_new_runtime_id_updates_session_state() {
     use rttx::daemon_bridge::EndpointEvent;
     use rttx::runtime::WorkspacePolicy;
-    use rttx::session::SessionState;
+    use rttx::workspace::WorkspaceState;
 
     let stale_runtime = uuid::Uuid::new_v4().to_string();
     let new_runtime = uuid::Uuid::new_v4();
     let pane_id = uuid::Uuid::new_v4();
 
     let mut session =
-        SessionState::new_managed_local("Retry Test".into(), WorkspacePolicy::Ephemeral, None);
+        WorkspaceState::new_managed_local("Retry Test".into(), WorkspacePolicy::Ephemeral, None);
     session.runtime.runtime_id = Some(stale_runtime);
 
-    let mut state = WindowState { sessions: vec![session], ..Default::default() };
+    let mut state = WindowState { workspaces: vec![session], ..Default::default() };
 
     // Simulate the daemon responding with a different runtime id
     // (the stale one was gone, so a new runtime was created).
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
-        workspace_id: state.sessions[0].uuid.clone(),
+        workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: new_runtime.to_string(),
         snapshot: rttx_proto::proto::Snapshot {
-            session_id: rttx_proto::uuid_to_bytes(new_runtime),
+            runtime_id: rttx_proto::uuid_to_bytes(new_runtime),
             panes: vec![rttx_proto::proto::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
                 title: "shell".into(),
@@ -1133,19 +1140,19 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
 
     // The session should have the new runtime id.
     assert_eq!(
-        state.sessions[0].runtime.runtime_id.as_deref(),
+        state.workspaces[0].runtime.runtime_id.as_deref(),
         Some(new_runtime.to_string().as_str()),
         "runtime_id should be updated to the new runtime"
     );
 
     // The workspace should be rebuilt.
     assert_eq!(transition.rebuilt_workspaces.len(), 1);
-    assert_eq!(transition.rebuilt_workspaces[0].workspace_id, state.sessions[0].uuid);
+    assert_eq!(transition.rebuilt_workspaces[0].workspace_id, state.workspaces[0].uuid);
 }
 
 #[test]
 fn rename_sets_user_renamed_and_persists_name() {
-    let mut session = SessionState::new_managed_local(
+    let mut session = WorkspaceState::new_managed_local(
         "Original".into(),
         rttx::runtime::WorkspacePolicy::Ephemeral,
         None,
@@ -1157,7 +1164,7 @@ fn rename_sets_user_renamed_and_persists_name() {
     session.user_renamed = true;
 
     let json = serde_json::to_string(&session).unwrap();
-    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.name, "Renamed");
     assert!(restored.user_renamed);
     assert!(restored.runtime.runtime_id.is_some());
@@ -1167,20 +1174,23 @@ fn rename_sets_user_renamed_and_persists_name() {
 fn rotate_layout_persists_through_serialization() {
     let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
     let original_uuids = layout.terminal_uuids();
-    let mut session = SessionState::new("test".into());
+    let mut session = WorkspaceState::new("test".into());
     session.uuid = "s1".into();
     session.layout = layout;
 
-    let mut state =
-        WindowState { active_session_index: 0, sessions: vec![session], ..WindowState::default() };
+    let mut state = WindowState {
+        active_workspace_index: 0,
+        workspaces: vec![session],
+        ..WindowState::default()
+    };
 
-    state.sessions[0].layout = state.sessions[0].layout.rotated();
+    state.workspaces[0].layout = state.workspaces[0].layout.rotated();
 
     let json = serde_json::to_string(&state).unwrap();
     let restored: WindowState = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(restored.sessions[0].layout, vsplit(term("t1"), hsplit(term("t2"), term("t3"))));
-    assert_eq!(restored.sessions[0].layout.terminal_uuids(), original_uuids);
+    assert_eq!(restored.workspaces[0].layout, vsplit(term("t1"), hsplit(term("t2"), term("t3"))));
+    assert_eq!(restored.workspaces[0].layout.terminal_uuids(), original_uuids);
 }
 
 #[test]
@@ -1189,7 +1199,7 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
 
     let layout = hsplit(term("pane-1"), hsplit(term("pane-2"), term("pane-3")));
     let terminal_uuids = layout.terminal_uuids();
-    let mut session = SessionState::new("Sync test".into());
+    let mut session = WorkspaceState::new("Sync test".into());
     session.uuid = "ws-sync".into();
     session.layout = layout;
     session.input_sync = true;
@@ -1207,8 +1217,11 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     session.runtime.bind_runtime_pane("pane-3", "daemon-3");
     session.sync_legacy_mode_from_runtime();
 
-    let state =
-        WindowState { active_session_index: 0, sessions: vec![session], ..WindowState::default() };
+    let state = WindowState {
+        active_workspace_index: 0,
+        workspaces: vec![session],
+        ..WindowState::default()
+    };
 
     let targets = state.input_sync_targets("pane-1");
     assert_eq!(targets.len(), 2);
@@ -1218,13 +1231,13 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
 
     // Verify no targets when input sync is off.
     let mut state_off = state.clone();
-    state_off.sessions[0].input_sync = false;
+    state_off.workspaces[0].input_sync = false;
     assert!(state_off.input_sync_targets("pane-1").is_empty());
 
     // Verify serialization roundtrip preserves input_sync.
     let json = serde_json::to_string(&state).unwrap();
     let restored: WindowState = serde_json::from_str(&json).unwrap();
-    assert!(restored.sessions[0].input_sync);
+    assert!(restored.workspaces[0].input_sync);
     assert_eq!(restored.input_sync_targets("pane-1").len(), 2);
 }
 
@@ -1232,11 +1245,11 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
 /// without error after the Bookmark variant was removed from `PaneSource`.
 #[test]
 fn legacy_bookmark_sourced_pane_loads_after_removal() {
-    use rttx::session::PaneSource;
-    use rttx::session::state::WindowState;
+    use rttx::workspace::PaneSource;
+    use rttx::workspace::state::WindowState;
 
     let json = r#"{
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false,
@@ -1255,8 +1268,8 @@ fn legacy_bookmark_sourced_pane_loads_after_removal() {
     }"#;
 
     let state: WindowState = serde_json::from_str(json).unwrap();
-    assert_eq!(state.sessions.len(), 1);
-    let recovery = &state.sessions[0].terminal_recovery["t1"];
+    assert_eq!(state.workspaces.len(), 1);
+    let recovery = &state.workspaces[0].terminal_recovery["t1"];
     assert_eq!(recovery.source, PaneSource::Manual);
 }
 
@@ -1279,7 +1292,7 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
     // Inventory contains only `live` — `stale` was already cleaned up by daemon.
     let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        sessions: vec![rttx_proto::proto::SessionInfo {
+        runtimes: vec![rttx_proto::proto::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&live).unwrap()),
             name: "Live".into(),
             pane_count: 1,
@@ -1310,7 +1323,7 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
 
 #[test]
 fn default_window_state_has_reasonable_sidebar_widths() {
-    let state = rttx::session::WindowState::default();
+    let state = rttx::workspace::WindowState::default();
     assert!(
         state.left_sidebar_width >= 150,
         "left sidebar should be at least 150px for workspace names"

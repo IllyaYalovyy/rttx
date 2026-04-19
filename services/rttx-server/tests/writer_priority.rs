@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{TestClient, attach_rw, create_pane, create_session, start_test_server};
+use common::{TestClient, attach_rw, create_pane, create_runtime, start_test_server};
 use rttx_proto::proto;
 
 #[test]
@@ -17,16 +17,16 @@ fn pong_arrives_promptly_during_burst_output() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let session_id =
-            create_session(&mut client, "pong-priority", proto::RuntimePolicy::Persistent).await;
-        let _snapshot = attach_rw(&mut client, &session_id).await;
-        let pane_id = create_pane(&mut client, &session_id).await;
+        let runtime_id =
+            create_runtime(&mut client, "pong-priority", proto::RuntimePolicy::Persistent).await;
+        let _snapshot = attach_rw(&mut client, &runtime_id).await;
+        let pane_id = create_pane(&mut client, &runtime_id).await;
 
         // Generate a burst of PTY output to fill the push channel with Deltas.
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id,
                     data: bytes::Bytes::from_static(
                         b"for i in $(seq 1 1000); do echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA$i; done\n",

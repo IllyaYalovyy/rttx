@@ -270,8 +270,8 @@ fn paned_has_zero_size_before_allocation() {
 fn build_layout_widget_sets_position_after_allocation() {
     require_display!();
 
-    use rttx::session::build_layout_widget;
-    use rttx::session::*;
+    use rttx::workspace::build_layout_widget;
+    use rttx::workspace::*;
 
     // (t1 / t2) | t3 — nested split
     let layout = LayoutNode::Split {
@@ -324,8 +324,8 @@ fn build_layout_widget_sets_position_after_allocation() {
 fn triple_nested_split_all_paneds_nonzero() {
     require_display!();
 
-    use rttx::session::build_layout_widget;
-    use rttx::session::*;
+    use rttx::workspace::build_layout_widget;
+    use rttx::workspace::*;
 
     // ((t1 | t2) | t3) | t4
     let layout = LayoutNode::Split {
@@ -598,8 +598,8 @@ fn gtk_signal_after_released_borrow_does_not_panic() {
 fn build_layout_widget_calls_make_terminal_exactly_once_per_uuid() {
     require_display!();
 
-    use rttx::session::build_layout_widget;
-    use rttx::session::*;
+    use rttx::workspace::build_layout_widget;
+    use rttx::workspace::*;
     use std::collections::HashMap;
 
     let layout = LayoutNode::Split {
@@ -790,8 +790,8 @@ fn signal_closure_with_weak_ref_skips_safely_after_drop() {
 fn paned_extreme_but_valid_ratios_produce_nonzero_positions() {
     require_display!();
 
-    use rttx::session::build_layout_widget;
-    use rttx::session::*;
+    use rttx::workspace::build_layout_widget;
+    use rttx::workspace::*;
 
     // Test ratios near both ends of the valid (0, 1) range
     for &ratio in &[0.1f64, 0.2, 0.5, 0.8, 0.9] {
@@ -1222,12 +1222,12 @@ fn persistent_terminal_plain_click_does_not_launch_url() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn persistent_pane_view_stores_uuid_and_session_id() {
+fn persistent_pane_view_stores_uuid_and_runtime_id() {
     require_display!();
 
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("pane-1", "session-1");
     assert_eq!(pane.uuid(), "pane-1");
-    assert_eq!(pane.session_id(), "session-1");
+    assert_eq!(pane.runtime_id(), "session-1");
 }
 
 #[test]
@@ -1643,7 +1643,7 @@ fn window_has_new_remote_workspace_action() {
 fn paned_ratio_applied_on_realize_not_just_idle() {
     require_display!();
 
-    use rttx::session::{
+    use rttx::workspace::{
         LayoutNode, SplitOrientation, build_layout_widget, schedule_initial_paned_ratios,
     };
 
@@ -1897,7 +1897,7 @@ fn connect_existing_dialog_classifies_available_session() {
     require_display!();
 
     let id = uuid::Uuid::new_v4();
-    let sessions = vec![rttx_proto::proto::SessionInfo {
+    let workspaces = vec![rttx_proto::proto::RuntimeInfo {
         id: rttx_proto::uuid_to_bytes(id),
         name: "workspace-1".into(),
         pane_count: 2,
@@ -1912,12 +1912,12 @@ fn connect_existing_dialog_classifies_available_session() {
         has_write_owner: false,
         read_only_client_count: 0,
     }];
-    let entries = rttx::connect_existing_dialog::classify_sessions(&sessions, &[]);
+    let entries = rttx::connect_existing_dialog::classify_runtimes(&workspaces, &[]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].availability,
-        rttx::connect_existing_dialog::SessionAvailability::Available
+        rttx::connect_existing_dialog::RuntimeAvailability::Available
     );
     assert_eq!(entries[0].status_label, "2 panes");
 }
@@ -1928,7 +1928,7 @@ fn connect_existing_dialog_classifies_busy_session() {
     require_display!();
 
     let id = uuid::Uuid::new_v4();
-    let sessions = vec![rttx_proto::proto::SessionInfo {
+    let workspaces = vec![rttx_proto::proto::RuntimeInfo {
         id: rttx_proto::uuid_to_bytes(id),
         name: "busy-ws".into(),
         pane_count: 1,
@@ -1943,12 +1943,12 @@ fn connect_existing_dialog_classifies_busy_session() {
         has_write_owner: true,
         read_only_client_count: 0,
     }];
-    let entries = rttx::connect_existing_dialog::classify_sessions(&sessions, &[]);
+    let entries = rttx::connect_existing_dialog::classify_runtimes(&workspaces, &[]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].availability,
-        rttx::connect_existing_dialog::SessionAvailability::BusyElsewhere
+        rttx::connect_existing_dialog::RuntimeAvailability::BusyElsewhere
     );
     assert_eq!(entries[0].status_label, "Connected elsewhere");
 }
@@ -1959,7 +1959,7 @@ fn connect_existing_dialog_classifies_already_open_session() {
     require_display!();
 
     let id = uuid::Uuid::new_v4();
-    let sessions = vec![rttx_proto::proto::SessionInfo {
+    let workspaces = vec![rttx_proto::proto::RuntimeInfo {
         id: rttx_proto::uuid_to_bytes(id),
         name: "open-ws".into(),
         pane_count: 3,
@@ -1974,12 +1974,12 @@ fn connect_existing_dialog_classifies_already_open_session() {
         has_write_owner: false,
         read_only_client_count: 0,
     }];
-    let entries = rttx::connect_existing_dialog::classify_sessions(&sessions, &[id.to_string()]);
+    let entries = rttx::connect_existing_dialog::classify_runtimes(&workspaces, &[id.to_string()]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].availability,
-        rttx::connect_existing_dialog::SessionAvailability::AlreadyOpen
+        rttx::connect_existing_dialog::RuntimeAvailability::AlreadyOpen
     );
     assert_eq!(entries[0].status_label, "Already open");
 }
@@ -1990,18 +1990,18 @@ fn connect_existing_dialog_search_filters_sessions() {
     require_display!();
 
     let entries = [
-        rttx::connect_existing_dialog::SessionEntry {
+        rttx::connect_existing_dialog::RuntimeEntry {
             id: "a".into(),
             name: "rttx project".into(),
             pane_count: 2,
-            availability: rttx::connect_existing_dialog::SessionAvailability::Available,
+            availability: rttx::connect_existing_dialog::RuntimeAvailability::Available,
             status_label: "2 panes".into(),
         },
-        rttx::connect_existing_dialog::SessionEntry {
+        rttx::connect_existing_dialog::RuntimeEntry {
             id: "b".into(),
             name: "redis server".into(),
             pane_count: 1,
-            availability: rttx::connect_existing_dialog::SessionAvailability::Available,
+            availability: rttx::connect_existing_dialog::RuntimeAvailability::Available,
             status_label: "1 pane".into(),
         },
     ];

@@ -12,21 +12,21 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     // Create session.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "io-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Create pane (spawns PTY).
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -41,8 +41,8 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     // Attach to receive Deltas.
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -52,7 +52,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    (session_id, pane_id)
+    (runtime_id, pane_id)
 }
 
 #[tokio::test]
@@ -61,14 +61,14 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // A shell produces a prompt or at least some output on startup.
     // Force output by sending a harmless command, then poll for the Delta.
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 data: bytes::Bytes::from_static(b"echo rttx_pty_test\n"),
             })),
@@ -93,7 +93,7 @@ async fn input_reaches_pty_and_echoes_back_as_delta() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // Drain initial shell startup output.
     client.drain(Duration::from_millis(500)).await;
@@ -103,7 +103,7 @@ async fn input_reaches_pty_and_echoes_back_as_delta() {
     let input_data = format!("echo {marker}\n");
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from(input_data.into_bytes()),
         })),
@@ -130,12 +130,12 @@ async fn resize_updates_pane_dimensions() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // Send resize.
     let resize = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             cols: 120,
             rows: 40,
@@ -149,20 +149,20 @@ async fn resize_updates_pane_dimensions() {
 
     // Verify by detaching and re-attaching: snapshot should show new dimensions.
     let detach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: runtime_id.clone(),
         })),
     };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(
                 proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
             ) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
@@ -170,8 +170,8 @@ async fn resize_updates_pane_dimensions() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -194,12 +194,12 @@ async fn close_pane_kills_pty() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // Close the pane.
     let close = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
         })),
     };
@@ -220,28 +220,28 @@ async fn close_pane_kills_pty() {
 
     // Verify pane is gone: re-attach and check snapshot has no panes.
     let detach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+            runtime_id: runtime_id.clone(),
         })),
     };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(
                 proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
             ) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -261,7 +261,7 @@ async fn pane_exit_produces_pane_exited_message() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // Drain startup output.
     client.drain(Duration::from_millis(500)).await;
@@ -269,7 +269,7 @@ async fn pane_exit_produces_pane_exited_message() {
     // Tell the shell to exit with a specific code.
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"exit 7\n"),
         })),
@@ -296,13 +296,13 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     client.drain(Duration::from_millis(500)).await;
 
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 data: bytes::Bytes::from_static(&[0x04]),
             })),
@@ -325,7 +325,7 @@ async fn multi_client_delta_broadcast_delivers_identical_data() {
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client_a = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client_a).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client_a).await;
     client_a.drain(Duration::from_millis(500)).await;
 
     // Second client attaches read-only to the same session.
@@ -333,8 +333,8 @@ async fn multi_client_delta_broadcast_delivers_identical_data() {
     client_b.handshake().await;
     client_b
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
             })),
         })
@@ -350,7 +350,7 @@ async fn multi_client_delta_broadcast_delivers_identical_data() {
 
     // Send a command that produces deterministic output.
     let marker = "BYTES_BROADCAST_TEST_42";
-    common::send_input(&mut client_a, &session_id, &pane_id, format!("echo {marker}\n").as_bytes())
+    common::send_input(&mut client_a, &runtime_id, &pane_id, format!("echo {marker}\n").as_bytes())
         .await;
 
     // Collect Delta data from both clients.

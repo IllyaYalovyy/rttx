@@ -217,7 +217,7 @@ impl Window {
         let adjacent_uuid = {
             let state = self.imp().state.borrow();
             state
-                .sessions
+                .workspaces
                 .iter()
                 .find(|s| s.layout.contains_terminal(&current_uuid))
                 .and_then(|s| s.layout.find_adjacent(&current_uuid, direction))
@@ -247,7 +247,7 @@ impl Window {
         let (session_uuid, session_state) = {
             let mut state = imp.state.borrow_mut();
             let session = state
-                .sessions
+                .workspaces
                 .iter_mut()
                 .find(|s| s.layout.contains_terminal(uuid_a) && s.layout.contains_terminal(uuid_b));
             let Some(session) = session else { return };
@@ -273,7 +273,7 @@ impl Window {
         };
         let session_state = {
             let mut state = self.imp().state.borrow_mut();
-            let Some(session) = state.sessions.iter_mut().find(|s| s.uuid == session_uuid) else {
+            let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == session_uuid) else {
                 return;
             };
             if session.is_zoomed() {
@@ -301,7 +301,7 @@ impl Window {
         };
         let session_state = {
             let mut state = self.imp().state.borrow_mut();
-            let Some(session) = state.sessions.iter_mut().find(|s| s.uuid == session_uuid) else {
+            let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == session_uuid) else {
                 return;
             };
             session.layout = session.layout.rotated();
@@ -433,7 +433,7 @@ impl Window {
     pub(super) fn cycle_session(&self, delta: i32) {
         let imp = self.imp();
         let state = imp.state.borrow();
-        let count = state.sessions.len() as i32;
+        let count = state.workspaces.len() as i32;
         if count <= 1 {
             return;
         }

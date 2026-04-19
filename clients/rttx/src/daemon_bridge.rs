@@ -82,7 +82,7 @@ pub enum EndpointEvent {
     },
     InventoryLoaded {
         endpoint: RuntimeEndpoint,
-        sessions: Vec<proto::SessionInfo>,
+        runtimes: Vec<proto::RuntimeInfo>,
     },
     RuntimeMessage {
         endpoint: RuntimeEndpoint,
@@ -559,9 +559,9 @@ impl EndpointActor {
                     | proto::server_message::Msg::CwdChanged(_)
                     | proto::server_message::Msg::Bell(_)
                     | proto::server_message::Msg::PaneResized(_)
-                    | proto::server_message::Msg::SessionRenamed(_),
+                    | proto::server_message::Msg::RuntimeRenamed(_),
                 ) => true,
-                Some(proto::server_message::Msg::SessionTerminated(_)) => !expect_terminated,
+                Some(proto::server_message::Msg::RuntimeTerminated(_)) => !expect_terminated,
                 _ => false,
             };
             if self.observe_inbound_message(&msg) {
@@ -576,8 +576,8 @@ impl EndpointActor {
     }
 
     fn dispatch_push(&mut self, msg: proto::ServerMessage) {
-        if let Some(proto::server_message::Msg::SessionTerminated(terminated)) = &msg.msg
-            && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id)
+        if let Some(proto::server_message::Msg::RuntimeTerminated(terminated)) = &msg.msg
+            && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
         {
             self.tracked_workspaces.retain(|_, tracked| tracked != &runtime_id.to_string());
         }
@@ -667,7 +667,7 @@ impl EndpointActor {
                 };
                 let msg = proto::ClientMessage {
                     msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         cwd,
                         dark_background: Some(dark_background),
                         cols,
@@ -749,7 +749,7 @@ impl EndpointActor {
                 };
                 let msg = proto::ClientMessage {
                     msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
                     })),
                 };
@@ -825,8 +825,8 @@ impl EndpointActor {
                 }
 
                 let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                     })),
                 };
                 if let Err(error) = self.send_message(&msg).await {
@@ -839,14 +839,14 @@ impl EndpointActor {
                 }
                 match self.read_response(true).await {
                     Ok(response) => match response.msg {
-                        Some(proto::server_message::Msg::SessionDetached(_)) => {
+                        Some(proto::server_message::Msg::RuntimeDetached(_)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::WorkspaceDetached {
                                 workspace_id,
                                 runtime_id,
                             });
                         }
-                        Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
+                        Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
@@ -901,9 +901,9 @@ impl EndpointActor {
                 }
 
                 let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::TerminateSession(
-                        proto::TerminateSession {
-                            session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    msg: Some(proto::client_message::Msg::TerminateRuntime(
+                        proto::TerminateRuntime {
+                            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         },
                     )),
                 };
@@ -917,7 +917,7 @@ impl EndpointActor {
                 }
                 match self.read_response(true).await {
                     Ok(response) => match response.msg {
-                        Some(proto::server_message::Msg::SessionTerminated(terminated)) => {
+                        Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
@@ -1018,13 +1018,13 @@ impl EndpointActor {
                 }
                 let list_result = if self.writer.is_some() {
                     let msg = proto::ClientMessage {
-                        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+                        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
                     };
                     match self.send_message(&msg).await {
                         Ok(()) => match self.read_response(false).await {
                             Ok(response) => match response.msg {
-                                Some(proto::server_message::Msg::SessionList(list)) => {
-                                    Ok(list.sessions)
+                                Some(proto::server_message::Msg::RuntimeList(list)) => {
+                                    Ok(list.runtimes)
                                 }
                                 Some(proto::server_message::Msg::Error(e)) => {
                                     Err(DaemonError::ServerError {
@@ -1040,13 +1040,13 @@ impl EndpointActor {
                     }
                 } else {
                     let connection = self.connection.as_mut().expect("connection must exist");
-                    connection.list_sessions().await
+                    connection.list_runtimes().await
                 };
                 match list_result {
-                    Ok(sessions) => {
+                    Ok(inventory) => {
                         let _ = self.event_tx.try_send(EndpointEvent::InventoryLoaded {
                             endpoint: self.endpoint.clone(),
-                            sessions,
+                            runtimes: inventory,
                         });
                     }
                     Err(error) => self.handle_command_error(
@@ -1154,8 +1154,8 @@ impl EndpointActor {
                     return;
                 }
                 let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::RenameSession(proto::RenameSession {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         name,
                     })),
                 };
@@ -1377,11 +1377,11 @@ impl EndpointActor {
         policy: WorkspacePolicy,
     ) -> Result<Uuid, DaemonError> {
         if let Some(connection) = self.connection.as_mut() {
-            return connection.create_session(name, policy).await;
+            return connection.create_runtime(name, policy).await;
         }
 
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: name.to_string(),
                 policy: policy.as_proto(),
             })),
@@ -1389,8 +1389,8 @@ impl EndpointActor {
         self.send_message(&msg).await?;
         let response = self.read_response(false).await?;
         match response.msg {
-            Some(proto::server_message::Msg::SessionCreated(created)) => {
-                rttx_proto::bytes_to_uuid(&created.session_id).map_err(DaemonError::Frame)
+            Some(proto::server_message::Msg::RuntimeCreated(created)) => {
+                rttx_proto::bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
             Some(proto::server_message::Msg::Error(error)) => {
                 Err(DaemonError::ServerError { code: error.code, message: error.message })
@@ -1405,13 +1405,13 @@ impl EndpointActor {
     ) -> Result<proto::Snapshot, DaemonError> {
         if let Some(connection) = self.connection.as_mut() {
             return connection
-                .attach_session(runtime_uuid, proto::RuntimeAttachMode::ReadWrite)
+                .attach_runtime(runtime_uuid, proto::RuntimeAttachMode::ReadWrite)
                 .await;
         }
 
         let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
@@ -1438,9 +1438,9 @@ impl EndpointActor {
                 if self.observe_inbound_message(&message) {
                     return;
                 }
-                if let Some(proto::server_message::Msg::SessionTerminated(terminated)) =
+                if let Some(proto::server_message::Msg::RuntimeTerminated(terminated)) =
                     &message.msg
-                    && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.session_id)
+                    && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
                 {
                     self.tracked_workspaces.retain(|_, tracked_runtime_id| {
                         tracked_runtime_id != &runtime_id.to_string()
@@ -1688,17 +1688,17 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_message(&mut server_stream, &mut read_buf).await;
             match request.msg {
-                Some(proto::client_message::Msg::CreateSession(create)) => {
+                Some(proto::client_message::Msg::CreateRuntime(create)) => {
                     assert_eq!(create.name, "Workspace 2");
                     assert_eq!(create.policy, WorkspacePolicy::Persistent.as_proto());
                 }
-                other => panic!("expected CreateSession request, got {other:?}"),
+                other => panic!("expected CreateRuntime request, got {other:?}"),
             }
             send_server_message(
                 &mut server_stream,
                 &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::SessionCreated(proto::SessionCreated {
-                        session_id: rttx_proto::uuid_to_bytes(expected_runtime),
+                    msg: Some(proto::server_message::Msg::RuntimeCreated(proto::RuntimeCreated {
+                        runtime_id: rttx_proto::uuid_to_bytes(expected_runtime),
                         revision: 1,
                     })),
                 },
@@ -1709,7 +1709,7 @@ mod tests {
         let runtime_id = actor
             .create_runtime_via_active_channel("Workspace 2", WorkspacePolicy::Persistent)
             .await
-            .expect("split transport should support CreateSession");
+            .expect("split transport should support CreateRuntime");
         assert_eq!(runtime_id, expected_runtime);
         server.await.expect("fake server task should complete");
     }
@@ -1724,17 +1724,17 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_message(&mut server_stream, &mut read_buf).await;
             match request.msg {
-                Some(proto::client_message::Msg::AttachSession(attach)) => {
-                    assert_eq!(rttx_proto::bytes_to_uuid(&attach.session_id).unwrap(), runtime_id);
+                Some(proto::client_message::Msg::AttachRuntime(attach)) => {
+                    assert_eq!(rttx_proto::bytes_to_uuid(&attach.runtime_id).unwrap(), runtime_id);
                     assert_eq!(attach.attach_mode, proto::RuntimeAttachMode::ReadWrite as i32);
                 }
-                other => panic!("expected AttachSession request, got {other:?}"),
+                other => panic!("expected AttachRuntime request, got {other:?}"),
             }
             send_server_message(
                 &mut server_stream,
                 &proto::ServerMessage {
                     msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                         panes: vec![],
                         revision: 1,
                         current_client_role: proto::RuntimeClientRole::Writer as i32,
@@ -1747,8 +1747,8 @@ mod tests {
         let snapshot = actor
             .attach_runtime_via_active_channel(runtime_id)
             .await
-            .expect("split transport should support AttachSession");
-        assert_eq!(rttx_proto::bytes_to_uuid(&snapshot.session_id).unwrap(), runtime_id);
+            .expect("split transport should support AttachRuntime");
+        assert_eq!(rttx_proto::bytes_to_uuid(&snapshot.runtime_id).unwrap(), runtime_id);
         server.await.expect("fake server task should complete");
     }
 
@@ -1805,7 +1805,7 @@ mod tests {
         assert!(
             !heartbeat.observe_inbound(&proto::ServerMessage {
                 msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-                    session_id: vec![],
+                    runtime_id: vec![],
                     pane_id: vec![],
                     data: bytes::Bytes::from_static(b"output"),
                 })),
@@ -2112,11 +2112,11 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
 
-            // Receive AttachSession for the stale runtime — reply "not found".
+            // Receive AttachRuntime for the stale runtime — reply "not found".
             let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
             assert!(
-                matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))),
-                "expected AttachSession, got {msg:?}"
+                matches!(msg.msg, Some(proto::client_message::Msg::AttachRuntime(_))),
+                "expected AttachRuntime, got {msg:?}"
             );
             send_server_message(
                 &mut server_stream,
@@ -2188,14 +2188,14 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
 
-            // Receive AttachSession — reply with AttachBlocked.
+            // Receive AttachRuntime — reply with AttachBlocked.
             let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
-            assert!(matches!(msg.msg, Some(proto::client_message::Msg::AttachSession(_))));
+            assert!(matches!(msg.msg, Some(proto::client_message::Msg::AttachRuntime(_))));
             send_server_message(
                 &mut server_stream,
                 &proto::ServerMessage {
                     msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                         current_client_role: 0,
                         attached_client_count: 1,
                         read_only_client_count: 0,
@@ -2421,7 +2421,7 @@ mod tests {
         // Regression test: during reconnect the actor must split the
         // connection before reattaching workspaces so that `read_response`
         // (which drains interleaved push messages) is used instead of the
-        // raw `DaemonConnection::attach_session` path.
+        // raw `DaemonConnection::attach_runtime` path.
         let ((reader, writer), mut server_stream) = split_duplex_connection();
         let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
 
@@ -2438,8 +2438,8 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_message(&mut server_stream, &mut read_buf).await;
             match request.msg {
-                Some(proto::client_message::Msg::AttachSession(_)) => {}
-                other => panic!("expected AttachSession, got {other:?}"),
+                Some(proto::client_message::Msg::AttachRuntime(_)) => {}
+                other => panic!("expected AttachRuntime, got {other:?}"),
             }
 
             // Send a delta push message first (simulating PTY output from
@@ -2448,7 +2448,7 @@ mod tests {
                 &mut server_stream,
                 &proto::ServerMessage {
                     msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                         pane_id: vec![0; 16],
                         data: bytes::Bytes::from_static(b"interleaved output"),
                     })),
@@ -2461,7 +2461,7 @@ mod tests {
                 &mut server_stream,
                 &proto::ServerMessage {
                     msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-                        session_id: rttx_proto::uuid_to_bytes(runtime_id),
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                         panes: vec![],
                         revision: 1,
                         current_client_role: proto::RuntimeClientRole::Writer as i32,
@@ -2611,7 +2611,7 @@ mod tests {
         // Inbound Delta resets the monitor.
         assert!(!heartbeat.observe_inbound(&proto::ServerMessage {
             msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-                session_id: vec![],
+                runtime_id: vec![],
                 pane_id: vec![],
                 data: bytes::Bytes::from_static(b"output"),
             })),

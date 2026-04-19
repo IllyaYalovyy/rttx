@@ -3,7 +3,7 @@
 
 use rttx::daemon_bridge::EndpointEvent;
 use rttx::runtime::{WorkspacePolicy, WorkspaceRuntime};
-use rttx::session::*;
+use rttx::workspace::*;
 
 fn term(id: &str) -> LayoutNode {
     LayoutNode::Terminal { uuid: id.to_string(), profile: None, cwd: None, custom_title: None }
@@ -40,7 +40,7 @@ fn snapshot(
     panes: Vec<rttx_proto::proto::PaneSnapshot>,
 ) -> rttx_proto::proto::Snapshot {
     rttx_proto::proto::Snapshot {
-        session_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
+        runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
         panes,
         revision: 1,
         current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
@@ -55,7 +55,7 @@ fn layout_stays_stable_across_reconnect_cycles_with_fresh_pane_ids() {
     let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
 
     let mut session =
-        SessionState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
+        WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
     session.uuid = "ws-1".into();
     session.layout = hsplit(term("left"), term("right"));
     session.runtime = WorkspaceRuntime::managed_local(
@@ -65,7 +65,7 @@ fn layout_stays_stable_across_reconnect_cycles_with_fresh_pane_ids() {
     session.runtime.runtime_id = Some(runtime_id.into());
     session.sync_legacy_mode_from_runtime();
 
-    let mut state = WindowState { sessions: vec![session], ..WindowState::default() };
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
     for cycle in 0..5 {
         let pane_a = uuid::Uuid::new_v4().to_string();

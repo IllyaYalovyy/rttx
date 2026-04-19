@@ -1,7 +1,7 @@
 //! Pane recovery recipes: source, target, and startup steps.
 //!
 //! These types describe *what* a pane was doing so it can be reconstructed
-//! after restart. They are persisted inside `SessionState.terminal_recovery`
+//! after restart. They are persisted inside `WorkspaceState.terminal_recovery`
 //! and must remain backward-compatible.
 
 use serde::{Deserialize, Serialize};

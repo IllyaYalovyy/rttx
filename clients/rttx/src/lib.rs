@@ -13,8 +13,8 @@ pub mod places;
 pub mod places_window;
 pub mod preferences;
 pub mod runtime;
-pub mod session;
 pub mod shortcuts;
+pub mod workspace;
 pub mod workspace_state;
 
 pub mod application;

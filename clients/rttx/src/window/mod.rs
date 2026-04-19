@@ -18,14 +18,14 @@ use crate::runtime::{
     WorkspacePolicy, connection_icon, pane_description, present_connection_status,
     present_workspace_actions, workspace_connection_summary,
 };
-use crate::session::{
-    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, SessionColor,
-    SessionState, SplitOrientation, StartupStep, WindowState,
-};
-use crate::sidebar::SessionRow;
+use crate::sidebar::WorkspaceRow;
 use crate::terminal::handle::TerminalHandle;
 use crate::terminal::persistent_widget::PersistentPaneView;
 use crate::terminal::widget::TerminalWidget;
+use crate::workspace::{
+    self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, SplitOrientation,
+    StartupStep, WindowState, WorkspaceColor, WorkspaceState,
+};
 use crate::workspace_state::{EndpointEventTransition, WorkspacePaneRestore};
 use std::collections::HashMap;
 
@@ -363,8 +363,9 @@ impl Window {
     }
 
     fn load_state(&self) {
-        let state = session::load_window_state();
-        let active_index = state.active_session_index.min(state.sessions.len().saturating_sub(1));
+        let state = workspace::load_window_state();
+        let active_index =
+            state.active_workspace_index.min(state.workspaces.len().saturating_sub(1));
         let is_maximized = state.is_maximized;
         let width = state.width;
         let height = state.height;
@@ -373,7 +374,7 @@ impl Window {
 
         self.imp().state.replace(state.clone());
 
-        for session in &state.sessions {
+        for session in &state.workspaces {
             self.build_session(session, true);
         }
 
@@ -427,21 +428,21 @@ impl Window {
         }
 
         let active_index = imp.sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
-        state.active_session_index = active_index;
+        state.active_workspace_index = active_index;
         if let Some(focused_terminal_uuid) = self.focused_terminal_uuid()
             && let Some(session) = state
-                .sessions
+                .workspaces
                 .iter_mut()
                 .find(|session| session.layout.contains_terminal(&focused_terminal_uuid))
         {
             session.active_terminal_uuid = Some(focused_terminal_uuid);
         }
 
-        for session in &mut state.sessions {
+        for session in &mut state.workspaces {
             if !session.is_zoomed()
                 && let Some(content) = imp.session_stack.child_by_name(&session.uuid)
             {
-                session::capture_paned_ratios(&mut session.layout, &content);
+                workspace::capture_paned_ratios(&mut session.layout, &content);
             }
             session.prune_recovery();
             session.normalize_active_terminal();
@@ -451,7 +452,7 @@ impl Window {
 
         {
             let terminals = imp.terminals.borrow();
-            for session in &mut state.sessions {
+            for session in &mut state.workspaces {
                 for node_uuid in session.layout.terminal_uuids() {
                     if let Some(term) = terminals.get(&node_uuid) {
                         session.layout.set_terminal_cwd(&node_uuid, term.current_directory());
@@ -463,7 +464,7 @@ impl Window {
 
         {
             let panes = imp.persistent_terminals.borrow();
-            for session in &mut state.sessions {
+            for session in &mut state.workspaces {
                 for node_uuid in session.layout.terminal_uuids() {
                     if let Some(pane) = panes.get(&node_uuid) {
                         if let Some(cwd) = pane.current_directory() {
@@ -475,7 +476,7 @@ impl Window {
             }
         }
 
-        if let Err(e) = session::save_window_state(&state) {
+        if let Err(e) = workspace::save_window_state(&state) {
             tracing::error!("Failed to save window state: {e}");
         }
     }
@@ -576,9 +577,9 @@ impl Window {
                 keys.push(h.key.clone());
             }
         }
-        // Include hosts from active sessions (matching sidebar behavior)
+        // Include hosts from active workspaces (matching sidebar behavior)
         let state = self.imp().state.borrow();
-        for s in &state.sessions {
+        for s in &state.workspaces {
             let k = s.runtime.endpoint.host_key();
             if !keys.contains(&k) {
                 keys.push(k);
@@ -626,9 +627,9 @@ impl Window {
         self.request_connect_existing(&host);
     }
 
-    fn append_session_row(&self, session_state: &SessionState) {
+    fn append_session_row(&self, session_state: &WorkspaceState) {
         let imp = self.imp();
-        let row = SessionRow::new(&session_state.uuid, &session_state.name);
+        let row = WorkspaceRow::new(&session_state.uuid, &session_state.name);
 
         let initial_status = if session_state.uses_managed_runtime() {
             ConnectionStatus::Connecting
@@ -669,7 +670,7 @@ impl Window {
         rename_gesture.set_button(1);
         rename_gesture.connect_released(move |gesture, n_press, _, _| {
             if n_press == 2 {
-                win.show_rename_session_popover(&row_for_rename, &session_uuid);
+                win.show_rename_runtime_popover(&row_for_rename, &session_uuid);
                 gesture.set_state(gtk4::EventSequenceState::Claimed);
             }
         });
@@ -723,13 +724,13 @@ impl Window {
             .sidebar_list
             .selected_row()
             .and_then(|r| r.child())
-            .and_then(|c| c.downcast::<SessionRow>().ok())
+            .and_then(|c| c.downcast::<WorkspaceRow>().ok())
             .is_some_and(|sr| sr.uuid() == visible_uuid.as_str());
         if already_synced {
             return;
         }
         let state = imp.state.borrow();
-        if let Some(idx) = state.sessions.iter().position(|s| s.uuid == visible_uuid.as_str()) {
+        if let Some(idx) = state.workspaces.iter().position(|s| s.uuid == visible_uuid.as_str()) {
             drop(state);
             if let Some(row) = imp.sidebar_list.row_at_index(idx as i32) {
                 imp.sidebar_list.select_row(Some(&row));
@@ -741,21 +742,21 @@ impl Window {
         let imp = self.imp();
         let mut idx = 0;
         while let Some(row) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok()) {
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<WorkspaceRow>().ok()) {
                 session_row.set_position(idx as usize);
             }
             idx += 1;
         }
     }
 
-    fn build_session(&self, session_state: &SessionState, auto_connect_managed: bool) {
+    fn build_session(&self, session_state: &WorkspaceState, auto_connect_managed: bool) {
         let imp = self.imp();
         self.append_session_row(session_state);
 
         let content = self.build_session_content(session_state);
 
         imp.session_stack.add_named(&content, Some(&session_state.uuid));
-        session::schedule_initial_paned_ratios(&content, &session_state.layout);
+        workspace::schedule_initial_paned_ratios(&content, &session_state.layout);
         self.refresh_sidebar_subtitle(&session_state.uuid);
         self.renumber_session_rows();
 
@@ -764,7 +765,7 @@ impl Window {
         }
     }
 
-    fn build_session_content(&self, session_state: &SessionState) -> gtk4::Widget {
+    fn build_session_content(&self, session_state: &WorkspaceState) -> gtk4::Widget {
         if let Some(ref zoomed_uuid) = session_state.zoomed_terminal_uuid {
             let zoomed_layout = LayoutNode::Terminal {
                 uuid: zoomed_uuid.clone(),
@@ -773,12 +774,12 @@ impl Window {
                 custom_title: session_state.layout.terminal_custom_title(zoomed_uuid),
             };
             let win = self.clone();
-            return session::build_layout_widget(&zoomed_layout, &move |spec| {
+            return workspace::build_layout_widget(&zoomed_layout, &move |spec| {
                 win.materialize_terminal(session_state, spec.uuid, spec.cwd, spec.custom_title)
             });
         }
         let win = self.clone();
-        session::build_layout_widget(&session_state.layout, &move |spec| {
+        workspace::build_layout_widget(&session_state.layout, &move |spec| {
             win.materialize_terminal(session_state, spec.uuid, spec.cwd, spec.custom_title)
         })
     }
@@ -790,8 +791,8 @@ impl Window {
             preferences::DefaultSessionFolder::CurrentSession => {
                 let terminal_uuid = {
                     let state = self.imp().state.borrow();
-                    let active = state.active_session_index;
-                    state.sessions.get(active).and_then(|session| {
+                    let active = state.active_workspace_index;
+                    state.workspaces.get(active).and_then(|session| {
                         session
                             .active_terminal_uuid
                             .clone()
@@ -812,9 +813,9 @@ impl Window {
         }
     }
 
-    fn next_session_color(&self) -> SessionColor {
-        let count = self.imp().state.borrow().sessions.len();
-        SessionColor::ALL[count % SessionColor::ALL.len()]
+    fn next_session_color(&self) -> WorkspaceColor {
+        let count = self.imp().state.borrow().workspaces.len();
+        WorkspaceColor::ALL[count % WorkspaceColor::ALL.len()]
     }
 
     pub(crate) fn visible_session_uuid(&self) -> Option<String> {
@@ -827,7 +828,7 @@ impl Window {
         self.imp()
             .session_stack
             .visible_child_name()
-            .and_then(|name| state.sessions.iter().find(|s| s.uuid == name.as_str()))
+            .and_then(|name| state.workspaces.iter().find(|s| s.uuid == name.as_str()))
             .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
     }
 
@@ -835,14 +836,14 @@ impl Window {
         let imp = self.imp();
         let (uuid, input_sync) = {
             let state = imp.state.borrow();
-            let Some(session) = state.sessions.get(index) else {
+            let Some(session) = state.workspaces.get(index) else {
                 return;
             };
             (session.uuid.clone(), session.input_sync)
         };
         imp.session_stack.set_visible_child_name(&uuid);
         if let Some(row) = imp.sidebar_list.row_at_index(index as i32)
-            && let Some(session_row) = row.child().and_then(|c| c.downcast::<SessionRow>().ok())
+            && let Some(session_row) = row.child().and_then(|c| c.downcast::<WorkspaceRow>().ok())
         {
             session_row.clear_activity();
         }
@@ -858,7 +859,8 @@ impl Window {
     fn focus_session_terminal(&self, session_uuid: &str) {
         let target = {
             let state = self.imp().state.borrow();
-            let Some(session) = state.sessions.iter().find(|session| session.uuid == session_uuid)
+            let Some(session) =
+                state.workspaces.iter().find(|session| session.uuid == session_uuid)
             else {
                 return;
             };
@@ -899,26 +901,26 @@ impl Window {
 
         {
             let mut state = imp.state.borrow_mut();
-            let Some(src) = state.sessions.iter().position(|s| s.uuid == source_uuid) else {
+            let Some(src) = state.workspaces.iter().position(|s| s.uuid == source_uuid) else {
                 return;
             };
-            let Some(tgt) = state.sessions.iter().position(|s| s.uuid == target_uuid) else {
+            let Some(tgt) = state.workspaces.iter().position(|s| s.uuid == target_uuid) else {
                 return;
             };
-            let session = state.sessions.remove(src);
-            state.sessions.insert(tgt, session);
+            let session = state.workspaces.remove(src);
+            state.workspaces.insert(tgt, session);
         }
 
         // Rebuild sidebar rows to reflect new order.
         while let Some(row) = imp.sidebar_list.row_at_index(0) {
             imp.sidebar_list.remove(&row);
         }
-        let sessions: Vec<_> = {
+        let workspaces: Vec<_> = {
             let state = imp.state.borrow();
-            state.sessions.clone()
+            state.workspaces.clone()
         };
-        for session_state in &sessions {
-            self.append_session_row(session_state);
+        for workspace_state in &workspaces {
+            self.append_session_row(workspace_state);
         }
 
         // Re-apply connection status subtitles lost during row rebuild.
@@ -930,7 +932,7 @@ impl Window {
         // Re-select the previously visible session.
         if let Some(uuid) = &visible_uuid {
             let state = imp.state.borrow();
-            if let Some(idx) = state.sessions.iter().position(|s| s.uuid == *uuid) {
+            if let Some(idx) = state.workspaces.iter().position(|s| s.uuid == *uuid) {
                 drop(state);
                 if let Some(row) = imp.sidebar_list.row_at_index(idx as i32) {
                     imp.sidebar_list.select_row(Some(&row));
@@ -940,28 +942,28 @@ impl Window {
         self.renumber_session_rows();
     }
 
-    pub(super) fn detach_session(&self, session_uuid: &str) {
+    pub(super) fn detach_runtime(&self, session_uuid: &str) {
         let imp = self.imp();
 
         let (terminal_uuids, new_index, detach_info) = {
             let mut state = imp.state.borrow_mut();
-            if state.sessions.len() <= 1 {
+            if state.workspaces.len() <= 1 {
                 return;
             }
-            let Some(pos) = state.sessions.iter().position(|s| s.uuid == session_uuid) else {
+            let Some(pos) = state.workspaces.iter().position(|s| s.uuid == session_uuid) else {
                 return;
             };
-            let session = &state.sessions[pos];
+            let session = &state.workspaces[pos];
             let info = session
                 .runtime
                 .runtime_id
                 .as_ref()
                 .map(|runtime_id| (session.runtime.endpoint.clone(), runtime_id.clone()));
             let uuids = session.layout.terminal_uuids();
-            let session = state.sessions.remove(pos);
+            let session = state.workspaces.remove(pos);
             drop(session);
-            let new_index = pos.min(state.sessions.len() - 1);
-            state.active_session_index = new_index;
+            let new_index = pos.min(state.workspaces.len() - 1);
+            state.active_workspace_index = new_index;
             (uuids, new_index, info)
         };
 
@@ -1011,15 +1013,15 @@ impl Window {
 
         let (terminal_uuids, new_index, managed_runtime) = {
             let mut state = imp.state.borrow_mut();
-            if state.sessions.len() <= 1 {
-                let session = state.sessions.iter().find(|s| s.uuid == session_uuid);
+            if state.workspaces.len() <= 1 {
+                let session = state.workspaces.iter().find(|s| s.uuid == session_uuid);
                 let managed_runtime = session.and_then(|s| {
                     s.uses_managed_runtime()
                         .then(|| (s.runtime.endpoint.clone(), s.runtime.runtime_id.clone()))
                 });
                 // Remove the session and dismiss the runtime so save_state()
                 // (triggered by close_request) writes clean state to disk.
-                state.sessions.retain(|s| s.uuid != session_uuid);
+                state.workspaces.retain(|s| s.uuid != session_uuid);
                 if let Some((_, ref runtime_id)) = managed_runtime
                     && let Some(runtime_id) = runtime_id
                 {
@@ -1037,18 +1039,18 @@ impl Window {
                 self.close();
                 return;
             }
-            let Some(pos) = state.sessions.iter().position(|s| s.uuid == session_uuid) else {
+            let Some(pos) = state.workspaces.iter().position(|s| s.uuid == session_uuid) else {
                 return;
             };
-            let session = state.sessions.remove(pos);
+            let session = state.workspaces.remove(pos);
             let uuids = session.layout.terminal_uuids();
             let managed_runtime = if session.uses_managed_runtime() {
                 Some((session.runtime.endpoint.clone(), session.runtime.runtime_id))
             } else {
                 None
             };
-            let new_index = pos.min(state.sessions.len() - 1);
-            state.active_session_index = new_index;
+            let new_index = pos.min(state.workspaces.len() - 1);
+            state.active_workspace_index = new_index;
             (uuids, new_index, managed_runtime)
         };
 
@@ -1113,7 +1115,7 @@ impl Window {
         }
         let mut idx = 0;
         while let Some(r) = imp.sidebar_list.row_at_index(idx) {
-            if let Some(sr) = r.child().and_then(|c| c.downcast::<SessionRow>().ok())
+            if let Some(sr) = r.child().and_then(|c| c.downcast::<WorkspaceRow>().ok())
                 && sr.uuid() == session_uuid
             {
                 imp.sidebar_list.remove(&r);
@@ -1131,7 +1133,7 @@ fn terminal_is_in_background_session(
 ) -> bool {
     visible_session_uuid.is_none_or(|visible| {
         !state
-            .sessions
+            .workspaces
             .iter()
             .find(|s| s.uuid == visible)
             .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
@@ -1158,7 +1160,7 @@ fn notification_tier(
 ) -> NotificationTier {
     if let Some(visible_uuid) = visible_session_uuid
         && state
-            .sessions
+            .workspaces
             .iter()
             .find(|s| s.uuid == visible_uuid)
             .is_some_and(|s| s.layout.contains_terminal(terminal_uuid))
@@ -1179,14 +1181,14 @@ fn preferred_command_target_uuid(
 
     if let Some(visible_session_uuid) = visible_session_uuid
         && let Some(session) =
-            state.sessions.iter().find(|session| session.uuid == visible_session_uuid)
+            state.workspaces.iter().find(|session| session.uuid == visible_session_uuid)
     {
         return session.layout.terminal_uuids().into_iter().next();
     }
 
     state
-        .sessions
-        .get(state.active_session_index)
+        .workspaces
+        .get(state.active_workspace_index)
         .and_then(|session| session.layout.terminal_uuids().into_iter().next())
 }
 

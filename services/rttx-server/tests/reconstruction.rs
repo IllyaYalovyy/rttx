@@ -13,7 +13,7 @@ async fn reconstruct_session_after_restart() {
     let tmp = tempfile::TempDir::new().unwrap();
 
     // Phase 1: start server, create session, produce output, let serialization tick.
-    let session_id;
+    let runtime_id;
     let pane_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
@@ -22,22 +22,22 @@ async fn reconstruct_session_after_restart() {
 
         // Create session.
         let create = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "reconstruct-test".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         };
         client.send(&create).await;
         let resp = client.recv().await;
-        session_id = match resp.msg {
-            Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-            other => panic!("expected SessionCreated, got {other:?}"),
+        runtime_id = match resp.msg {
+            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+            other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         // Create pane (spawns a PTY).
         let create_pane = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -53,8 +53,8 @@ async fn reconstruct_session_after_restart() {
 
         // Attach to get deltas.
         let attach = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
@@ -64,7 +64,7 @@ async fn reconstruct_session_after_restart() {
         // Send a command that produces recognizable output.
         let input = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 data: bytes::Bytes::from_static(b"echo RECONSTRUCT_MARKER\n"),
             })),
@@ -95,22 +95,22 @@ async fn reconstruct_session_after_restart() {
 
         // List sessions — should find our session.
         let list = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
         };
         client.send(&list).await;
         let resp = client.recv().await;
-        let sessions = match resp.msg {
-            Some(proto::server_message::Msg::SessionList(sl)) => sl.sessions,
-            other => panic!("expected SessionList, got {other:?}"),
+        let runtimes = match resp.msg {
+            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}"),
         };
-        assert_eq!(sessions.len(), 1, "session should be restored");
-        assert_eq!(sessions[0].name, "reconstruct-test");
-        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(runtimes.len(), 1, "session should be restored");
+        assert_eq!(runtimes[0].name, "reconstruct-test");
+        assert_eq!(runtimes[0].id, runtime_id);
 
         // Attach and check snapshot contains scrollback with our marker.
         let attach = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
@@ -140,7 +140,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
     std::fs::create_dir_all(&project_dir).unwrap();
     let project_dir_string = project_dir.to_string_lossy().to_string();
 
-    let session_id;
+    let runtime_id;
     let pane_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
@@ -149,21 +149,21 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
 
         client
             .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                     name: "reconstruct-cwd".into(),
                     policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
-        session_id = match client.recv().await.msg {
-            Some(proto::server_message::Msg::SessionCreated(created)) => created.session_id,
-            other => panic!("expected SessionCreated, got {other:?}"),
+        runtime_id = match client.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+            other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: None,
                     cols: 0,
@@ -178,8 +178,8 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
 
         client
             .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                    session_id: session_id.clone(),
+                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                    runtime_id: runtime_id.clone(),
                     attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
@@ -196,7 +196,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     data: bytes::Bytes::from(cwd_command.into_bytes()),
                 })),
@@ -222,8 +222,8 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
 
         client
             .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                    session_id: session_id.clone(),
+                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                    runtime_id: runtime_id.clone(),
                     attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
@@ -242,7 +242,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Input(proto::Input {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     data: bytes::Bytes::from_static(b"pwd\n"),
                 })),
@@ -281,7 +281,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
     std::fs::create_dir_all(&dir_a).unwrap();
     std::fs::create_dir_all(&dir_b).unwrap();
 
-    let session_id;
+    let runtime_id;
     let pane_a_id;
     let pane_b_id;
     {
@@ -289,11 +289,11 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        session_id =
-            create_session(&mut client, "multi-cwd", proto::RuntimePolicy::Persistent).await;
-        pane_a_id = create_pane(&mut client, &session_id).await;
-        pane_b_id = create_pane(&mut client, &session_id).await;
-        attach_rw(&mut client, &session_id).await;
+        runtime_id =
+            create_runtime(&mut client, "multi-cwd", proto::RuntimePolicy::Persistent).await;
+        pane_a_id = create_pane(&mut client, &runtime_id).await;
+        pane_b_id = create_pane(&mut client, &runtime_id).await;
+        attach_rw(&mut client, &runtime_id).await;
 
         // Set CWD for pane A via OSC 7.
         let osc_a = format!(
@@ -301,7 +301,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
             dir_a.display(),
             dir_a.display()
         );
-        send_input(&mut client, &session_id, &pane_a_id, osc_a.as_bytes()).await;
+        send_input(&mut client, &runtime_id, &pane_a_id, osc_a.as_bytes()).await;
 
         // Set CWD for pane B via OSC 7.
         let osc_b = format!(
@@ -309,7 +309,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
             dir_b.display(),
             dir_b.display()
         );
-        send_input(&mut client, &session_id, &pane_b_id, osc_b.as_bytes()).await;
+        send_input(&mut client, &runtime_id, &pane_b_id, osc_b.as_bytes()).await;
 
         // Wait for state to contain both directories.
         let dir_a_str = dir_a.to_string_lossy().to_string();
@@ -326,7 +326,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let snap = attach_rw(&mut client, &session_id).await;
+        let snap = attach_rw(&mut client, &runtime_id).await;
         let pane_a = snap.panes.iter().find(|p| p.pane_id == pane_a_id);
         let pane_b = snap.panes.iter().find(|p| p.pane_id == pane_b_id);
 
@@ -349,13 +349,13 @@ async fn pane_gets_unique_histfile() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let session_id =
-        create_session(&mut client, "hist-test", proto::RuntimePolicy::Persistent).await;
-    let pane_id = create_pane(&mut client, &session_id).await;
-    attach_rw(&mut client, &session_id).await;
+    let runtime_id =
+        create_runtime(&mut client, "hist-test", proto::RuntimePolicy::Persistent).await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
+    attach_rw(&mut client, &runtime_id).await;
 
     // Ask the shell to print its HISTFILE.
-    send_input(&mut client, &session_id, &pane_id, b"echo HISTFILE=$HISTFILE\n").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"echo HISTFILE=$HISTFILE\n").await;
 
     // Poll for the output containing the history path.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

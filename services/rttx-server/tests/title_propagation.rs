@@ -11,20 +11,20 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "title-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -38,8 +38,8 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     };
 
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -49,7 +49,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    (session_id, pane_id)
+    (runtime_id, pane_id)
 }
 
 #[tokio::test]
@@ -57,12 +57,12 @@ async fn osc0_triggers_title_changed_broadcast() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&sock).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
     // Send a printf that emits an OSC 0 (set window title) escape sequence.
     let title = "rttx-title-test-42";
     let osc0_cmd = format!("printf '\\033]0;{title}\\007'\n");
-    send_input(&mut client, &session_id, &pane_id, osc0_cmd.as_bytes()).await;
+    send_input(&mut client, &runtime_id, &pane_id, osc0_cmd.as_bytes()).await;
 
     // Collect messages — we should see a TitleChanged with our title among them.
     let msgs = client.drain(Duration::from_secs(5)).await;

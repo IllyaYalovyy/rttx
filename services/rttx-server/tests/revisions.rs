@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, list_sessions, start_test_server, wait_for_state_containing};
+use common::{TestClient, list_runtimes, start_test_server, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -16,24 +16,24 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "revision-acks".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let session_id = match client.recv().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(created)) => {
+    let runtime_id = match client.recv().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(created)) => {
             assert_eq!(created.revision, 1);
-            created.session_id
+            created.runtime_id
         }
-        other => panic!("expected SessionCreated, got {other:?}"),
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -47,7 +47,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -66,7 +66,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 cols: 100,
                 rows: 30,
@@ -85,7 +85,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 title: "acked-title".into(),
             })),
@@ -102,7 +102,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
             })),
         })
@@ -125,24 +125,24 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: runtime_id.clone(),
             })),
         })
         .await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for SessionDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(detached)) => {
+            Some(proto::server_message::Msg::RuntimeDetached(detached)) => {
                 assert_eq!(detached.revision, 7);
-                assert_eq!(detached.session_id, session_id);
+                assert_eq!(detached.runtime_id, runtime_id);
                 break;
             }
             Some(
                 proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
             ) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 }
@@ -150,7 +150,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
 #[tokio::test]
 async fn runtime_revision_survives_restart_and_attach_advances_it() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let session_id;
+    let runtime_id;
 
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
@@ -159,24 +159,24 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
 
         client
             .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                     name: "restart-revision".into(),
                     policy: proto::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
-        session_id = match client.recv().await.msg {
-            Some(proto::server_message::Msg::SessionCreated(created)) => {
+        runtime_id = match client.recv().await.msg {
+            Some(proto::server_message::Msg::RuntimeCreated(created)) => {
                 assert_eq!(created.revision, 1);
-                created.session_id
+                created.runtime_id
             }
-            other => panic!("expected SessionCreated, got {other:?}"),
+            other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: None,
                     cols: 0,
@@ -195,7 +195,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                    session_id: session_id.clone(),
+                    runtime_id: runtime_id.clone(),
                     pane_id,
                     cols: 110,
                     rows: 35,
@@ -224,14 +224,14 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let sessions = list_sessions(&mut client).await;
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].revision, 3);
+        let runtimes = list_runtimes(&mut client).await;
+        assert_eq!(runtimes.len(), 1);
+        assert_eq!(runtimes[0].revision, 3);
 
         client
             .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                    session_id: session_id.clone(),
+                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                    runtime_id: runtime_id.clone(),
                     attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
@@ -239,7 +239,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         match client.recv().await.msg {
             Some(proto::server_message::Msg::Snapshot(snapshot)) => {
                 assert_eq!(snapshot.revision, 4);
-                assert_eq!(snapshot.session_id, session_id);
+                assert_eq!(snapshot.runtime_id, runtime_id);
             }
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -256,21 +256,21 @@ async fn failed_close_pane_returns_error_without_revision_change() {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "revision-error".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let session_id = match client.recv().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(created)) => created.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -288,7 +288,7 @@ async fn failed_close_pane_returns_error_without_revision_change() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: vec![0; 16],
             })),
         })
@@ -301,8 +301,8 @@ async fn failed_close_pane_returns_error_without_revision_change() {
         other => panic!("expected Error, got {other:?}"),
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].revision, 2);
-    assert_eq!(sessions[0].pane_count, 1);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].revision, 2);
+    assert_eq!(runtimes[0].pane_count, 1);
 }

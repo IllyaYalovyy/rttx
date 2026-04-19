@@ -19,7 +19,7 @@ async fn exited_pane_snapshot_has_empty_scrollback() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_session(&mut client, "exit-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "exit-test", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -39,7 +39,7 @@ async fn exited_pane_snapshot_has_empty_scrollback() {
     }
 
     // Detach and reattach to get a fresh snapshot.
-    detach_session(&mut client, &sid).await;
+    detach_runtime(&mut client, &sid).await;
     let snapshot = attach_rw(&mut client, &sid).await;
 
     // The exited pane should have empty scrollback.

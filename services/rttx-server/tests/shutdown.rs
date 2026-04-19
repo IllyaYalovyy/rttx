@@ -18,7 +18,7 @@ async fn shutdown_stops_server_and_persists_state() {
 
     // Create a persistent session so there is state worth persisting.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "persist-me".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
@@ -26,8 +26,8 @@ async fn shutdown_stops_server_and_persists_state() {
     client.send(&create).await;
     let resp = client.recv().await;
     assert!(
-        matches!(resp.msg, Some(proto::server_message::Msg::SessionCreated(_))),
-        "expected SessionCreated, got {resp:?}"
+        matches!(resp.msg, Some(proto::server_message::Msg::RuntimeCreated(_))),
+        "expected RuntimeCreated, got {resp:?}"
     );
 
     // Send shutdown.

@@ -83,8 +83,8 @@ async fn short_uuid_in_attach_returns_invalid_parameter() {
     client.handshake().await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: short_uuid(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: short_uuid(),
             attach_mode: 0,
         })),
     };
@@ -104,7 +104,7 @@ async fn short_uuid_in_close_pane_returns_invalid_parameter() {
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: short_uuid(),
+            runtime_id: short_uuid(),
             pane_id: short_uuid(),
         })),
     };
@@ -125,8 +125,8 @@ async fn attach_nonexistent_session_returns_session_not_found() {
     client.handshake().await;
 
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: bogus_uuid(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: bogus_uuid(),
             attach_mode: 0,
         })),
     };
@@ -146,7 +146,7 @@ async fn create_pane_in_nonexistent_session_returns_error() {
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: bogus_uuid(),
+            runtime_id: bogus_uuid(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -167,11 +167,11 @@ async fn close_pane_with_nonexistent_pane_returns_error() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut client, "test", proto::RuntimePolicy::Persistent).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: bogus_uuid(),
         })),
     };
@@ -189,12 +189,12 @@ async fn resize_nonexistent_pane_is_silently_dropped() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
-    attach_session(&mut client, &session_id).await;
+    let runtime_id = create_runtime(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+    attach_runtime(&mut client, &runtime_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-            session_id,
+            runtime_id,
             pane_id: bogus_uuid(),
             cols: 120,
             rows: 40,
@@ -212,11 +212,11 @@ async fn resize_nonexistent_pane_is_silently_dropped() {
 
     // Server must remain functional.
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::SessionList(_))));
+    assert!(matches!(resp.msg, Some(proto::server_message::Msg::RuntimeList(_))));
 }
 
 // ── Duplicate and out-of-order mutations ────────────────────────
@@ -228,13 +228,13 @@ async fn duplicate_close_pane_returns_error_on_second_call() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
-    let pane_id = attach_and_create_pane(&mut client, &session_id).await;
+    let runtime_id = create_runtime(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+    let pane_id = attach_and_create_pane(&mut client, &runtime_id).await;
 
     // First close succeeds.
     let close = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
         })),
     };
@@ -262,11 +262,11 @@ async fn detach_without_attach_is_harmless() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut client, "test", proto::RuntimePolicy::Persistent).await;
 
     // Detach without ever attaching — should not panic or error.
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession { session_id })),
+        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime { runtime_id })),
     };
     client.send(&msg).await;
 
@@ -275,11 +275,11 @@ async fn detach_without_attach_is_harmless() {
         matches!(
             resp.msg,
             Some(
-                proto::server_message::Msg::SessionDetached(_)
+                proto::server_message::Msg::RuntimeDetached(_)
                     | proto::server_message::Msg::Delta(_)
             )
         ),
-        "detach without attach should return SessionDetached, got {resp:?}"
+        "detach without attach should return RuntimeDetached, got {resp:?}"
     );
 }
 
@@ -313,12 +313,12 @@ async fn input_to_nonexistent_pane_is_silently_dropped() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let session_id = create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
-    attach_session(&mut client, &session_id).await;
+    let runtime_id = create_runtime(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+    attach_runtime(&mut client, &runtime_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id,
+            runtime_id,
             pane_id: bogus_uuid(),
             data: bytes::Bytes::from_static(b"hello"),
         })),
@@ -335,11 +335,11 @@ async fn input_to_nonexistent_pane_is_silently_dropped() {
 
     // Server must remain functional.
     let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListSessions(proto::ListSessions {})),
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::SessionList(_))));
+    assert!(matches!(resp.msg, Some(proto::server_message::Msg::RuntimeList(_))));
 }
 
 // ── Fire-and-forget commands to nonexistent sessions ────────────
@@ -361,7 +361,7 @@ async fn fire_and_forget_to_nonexistent_session_produces_no_response() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: fake_session.clone(),
+                runtime_id: fake_session.clone(),
                 pane_id: fake_pane.clone(),
                 data: bytes::Bytes::from_static(b"hello"),
             })),
@@ -372,7 +372,7 @@ async fn fire_and_forget_to_nonexistent_session_produces_no_response() {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                session_id: fake_session,
+                runtime_id: fake_session,
                 pane_id: fake_pane,
                 cols: 80,
                 rows: 24,
@@ -397,10 +397,10 @@ fn expect_error(resp: &proto::ServerMessage) -> &proto::Error {
     }
 }
 
-async fn attach_session(client: &mut TestClient, session_id: &[u8]) {
+async fn attach_runtime(client: &mut TestClient, runtime_id: &[u8]) {
     let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.to_vec(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.to_vec(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -412,12 +412,12 @@ async fn attach_session(client: &mut TestClient, session_id: &[u8]) {
     }
 }
 
-async fn attach_and_create_pane(client: &mut TestClient, session_id: &[u8]) -> Vec<u8> {
-    attach_session(client, session_id).await;
+async fn attach_and_create_pane(client: &mut TestClient, runtime_id: &[u8]) -> Vec<u8> {
+    attach_runtime(client, runtime_id).await;
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.to_vec(),
+            runtime_id: runtime_id.to_vec(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -445,15 +445,15 @@ fn close_already_closed_pane_returns_pane_not_found() {
         let mut client = TestClient::connect(&socket_path).await;
         client.handshake().await;
 
-        let session_id =
-            create_session(&mut client, "test", proto::RuntimePolicy::Persistent).await;
-        attach_session(&mut client, &session_id).await;
-        let pane_id = create_pane(&mut client, &session_id).await;
+        let runtime_id =
+            create_runtime(&mut client, "test", proto::RuntimePolicy::Persistent).await;
+        attach_runtime(&mut client, &runtime_id).await;
+        let pane_id = create_pane(&mut client, &runtime_id).await;
 
         // First close succeeds.
         let close_msg = proto::ClientMessage {
             msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
             })),
         };

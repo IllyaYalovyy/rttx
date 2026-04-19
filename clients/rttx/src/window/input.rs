@@ -4,15 +4,17 @@ impl Window {
     pub(super) fn set_input_sync(&self, enabled: bool) {
         let mut state = self.imp().state.borrow_mut();
         let active_idx = self.imp().sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
-        if let Some(session) = state.sessions.get_mut(active_idx) {
+        if let Some(session) = state.workspaces.get_mut(active_idx) {
             session.input_sync = enabled;
         }
     }
 
     pub(super) fn forward_input(&self, source_uuid: &str, text: &str) {
         let state = self.imp().state.borrow();
-        let session =
-            state.sessions.iter().find(|s| s.input_sync && s.layout.contains_terminal(source_uuid));
+        let session = state
+            .workspaces
+            .iter()
+            .find(|s| s.input_sync && s.layout.contains_terminal(source_uuid));
         let Some(session) = session else { return };
         let uuids = session.layout.terminal_uuids();
         drop(state);

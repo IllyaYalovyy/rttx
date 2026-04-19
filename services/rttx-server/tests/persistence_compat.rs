@@ -3,16 +3,16 @@
 //! Verifies that legacy, minimal, and forward-compatible JSON state
 //! loads with predictable safe defaults.
 
+use rttx_server::runtime::{PersistedRuntime, Runtime, RuntimePolicy};
 use rttx_server::serialization::{ServerState, load_state, write_state_atomic};
-use rttx_server::session::{PersistedSession, RuntimePolicy, Session};
 use tempfile::TempDir;
 
 fn load_json(json: &str) -> ServerState {
     serde_json::from_str(json).expect("fixture must parse")
 }
 
-fn resurrect_first(state: &ServerState) -> Session {
-    Session::from_persisted(&state.sessions[0])
+fn resurrect_first(state: &ServerState) -> Runtime {
+    Runtime::from_persisted(&state.runtimes[0])
 }
 
 // ── Missing policy defaults to Persistent ───────────────────────
@@ -34,7 +34,7 @@ fn missing_policy_defaults_to_persistent() {
             "server_version": "0.0.1"
         }"#,
     );
-    assert_eq!(state.sessions[0].policy, RuntimePolicy::Persistent);
+    assert_eq!(state.runtimes[0].policy, RuntimePolicy::Persistent);
 }
 
 // ── Missing revision defaults to 1 ─────────────────────────────
@@ -82,8 +82,8 @@ fn ephemeral_policy_roundtrips_through_json() {
             "server_version": "0.1.0"
         }"#,
     );
-    assert_eq!(state.sessions[0].policy, RuntimePolicy::Ephemeral);
-    assert_eq!(state.sessions[0].revision, 5);
+    assert_eq!(state.runtimes[0].policy, RuntimePolicy::Ephemeral);
+    assert_eq!(state.runtimes[0].revision, 5);
 }
 
 // ── Pane with exit status roundtrips ────────────────────────────
@@ -180,8 +180,8 @@ fn unknown_session_fields_are_ignored() {
             "global_future": true
         }"#,
     );
-    assert_eq!(state.sessions[0].name, "future-session");
-    assert_eq!(state.sessions[0].revision, 3);
+    assert_eq!(state.runtimes[0].name, "future-session");
+    assert_eq!(state.runtimes[0].revision, 3);
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn write_load_roundtrip_preserves_policy_and_revision() {
     let path = tmp.path().join("state.json");
 
     let state = ServerState {
-        sessions: vec![PersistedSession {
+        runtimes: vec![PersistedRuntime {
             id: uuid::Uuid::new_v4(),
             name: "roundtrip".into(),
             panes: Vec::new(),
@@ -244,9 +244,9 @@ fn write_load_roundtrip_preserves_policy_and_revision() {
     write_state_atomic(&state, &path).unwrap();
     let loaded = load_state(&path).unwrap().unwrap();
 
-    assert_eq!(loaded.sessions[0].policy, RuntimePolicy::Ephemeral);
-    assert_eq!(loaded.sessions[0].revision, 42);
-    assert_eq!(loaded.sessions[0].name, "roundtrip");
+    assert_eq!(loaded.runtimes[0].policy, RuntimePolicy::Ephemeral);
+    assert_eq!(loaded.runtimes[0].revision, 42);
+    assert_eq!(loaded.runtimes[0].name, "roundtrip");
 }
 
 // ── Multiple sessions with mixed policies ───────────────────────
@@ -283,9 +283,37 @@ fn mixed_policy_sessions_load_correctly() {
             "server_version": "0.1.0"
         }"#,
     );
-    assert_eq!(state.sessions.len(), 2);
-    assert_eq!(state.sessions[0].policy, RuntimePolicy::Persistent);
-    assert_eq!(state.sessions[1].policy, RuntimePolicy::Ephemeral);
-    assert_eq!(state.sessions[0].revision, 10);
-    assert_eq!(state.sessions[1].revision, 7);
+    assert_eq!(state.runtimes.len(), 2);
+    assert_eq!(state.runtimes[0].policy, RuntimePolicy::Persistent);
+    assert_eq!(state.runtimes[1].policy, RuntimePolicy::Ephemeral);
+    assert_eq!(state.runtimes[0].revision, 10);
+    assert_eq!(state.runtimes[1].revision, 7);
+}
+
+// ── Legacy "sessions" key loads as "runtimes" ───────────────────
+
+#[test]
+fn legacy_sessions_key_loads_into_runtimes_field() {
+    let state = load_json(
+        r#"{
+            "sessions": [{
+                "id": "00000000-0000-0000-0000-00000000000a",
+                "name": "from-old-key",
+                "panes": [],
+                "active_pane_id": null,
+                "command_history": [],
+                "policy": "persistent",
+                "revision": 3,
+                "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+                "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
+            }],
+            "serialized_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "server_version": "0.3.2"
+        }"#,
+    );
+    assert_eq!(state.runtimes.len(), 1);
+    assert_eq!(state.runtimes[0].name, "from-old-key");
+    let rt = resurrect_first(&state);
+    assert_eq!(rt.name, "from-old-key");
+    assert_eq!(rt.revision(), 3);
 }

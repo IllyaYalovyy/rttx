@@ -28,7 +28,7 @@ mod imp {
     use std::cell::{Cell, RefCell};
 
     #[derive(Debug)]
-    pub struct SessionRow {
+    pub struct WorkspaceRow {
         pub uuid: RefCell<String>,
         pub name: RefCell<String>,
         pub position_label: gtk4::Label,
@@ -38,7 +38,7 @@ mod imp {
         pub idle_transition_source: RefCell<Option<glib::SourceId>>,
     }
 
-    impl Default for SessionRow {
+    impl Default for WorkspaceRow {
         fn default() -> Self {
             let connection_icon = gtk4::Image::new();
             connection_icon.set_pixel_size(16);
@@ -60,13 +60,13 @@ mod imp {
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for SessionRow {
-        const NAME: &'static str = "RttxSessionRow";
-        type Type = super::SessionRow;
+    impl ObjectSubclass for WorkspaceRow {
+        const NAME: &'static str = "RttxWorkspaceRow";
+        type Type = super::WorkspaceRow;
         type ParentType = adw::ActionRow;
     }
 
-    impl ObjectImpl for SessionRow {
+    impl ObjectImpl for WorkspaceRow {
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
@@ -86,19 +86,19 @@ mod imp {
         }
     }
 
-    impl WidgetImpl for SessionRow {}
-    impl ListBoxRowImpl for SessionRow {}
-    impl PreferencesRowImpl for SessionRow {}
-    impl ActionRowImpl for SessionRow {}
+    impl WidgetImpl for WorkspaceRow {}
+    impl ListBoxRowImpl for WorkspaceRow {}
+    impl PreferencesRowImpl for WorkspaceRow {}
+    impl ActionRowImpl for WorkspaceRow {}
 }
 
 glib::wrapper! {
-    pub struct SessionRow(ObjectSubclass<imp::SessionRow>)
+    pub struct WorkspaceRow(ObjectSubclass<imp::WorkspaceRow>)
         @extends adw::ActionRow, adw::PreferencesRow, gtk4::ListBoxRow, gtk4::Widget,
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Actionable;
 }
 
-impl SessionRow {
+impl WorkspaceRow {
     #[must_use]
     pub fn new(uuid: &str, name: &str) -> Self {
         let obj: Self = glib::Object::builder().build();
@@ -114,11 +114,11 @@ impl SessionRow {
     }
 
     #[must_use]
-    pub fn session_name(&self) -> String {
+    pub fn workspace_name(&self) -> String {
         self.imp().name.borrow().clone()
     }
 
-    pub fn set_session_name(&self, name: &str) {
+    pub fn set_workspace_name(&self, name: &str) {
         self.imp().name.replace(name.to_string());
         self.set_title(name);
     }
@@ -258,7 +258,7 @@ mod tests {
     fn session_row_is_an_action_row() {
         require_display!();
 
-        let row = SessionRow::new("session-1", "Session 1");
+        let row = WorkspaceRow::new("session-1", "Session 1");
 
         assert!(row.is::<adw::ActionRow>());
         assert!(row.is::<gtk4::ListBoxRow>());
@@ -270,10 +270,10 @@ mod tests {
     fn session_row_updates_title() {
         require_display!();
 
-        let row = SessionRow::new("session-1", "Session 1");
-        row.set_session_name("Renamed");
+        let row = WorkspaceRow::new("session-1", "Session 1");
+        row.set_workspace_name("Renamed");
 
-        assert_eq!(row.session_name(), "Renamed");
+        assert_eq!(row.workspace_name(), "Renamed");
         assert_eq!(row.title().as_str(), "Renamed");
     }
 
@@ -282,7 +282,7 @@ mod tests {
     fn session_row_subtitle_shows_pane_info() {
         require_display!();
 
-        let row = SessionRow::new("session-1", "Session 1");
+        let row = WorkspaceRow::new("session-1", "Session 1");
         row.set_subtitle("vim main.rs");
         assert_eq!(row.subtitle().unwrap().as_str(), "vim main.rs");
 
@@ -294,7 +294,7 @@ mod tests {
     #[ignore = "requires isolated GTK harness"]
     fn connection_icon_visible_by_default() {
         require_display!();
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         assert!(row.imp().connection_icon.is_visible());
     }
 
@@ -302,7 +302,7 @@ mod tests {
     #[ignore = "requires isolated GTK harness"]
     fn connection_icon_shows_and_updates() {
         require_display!();
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
 
         let icon = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
@@ -329,7 +329,7 @@ mod tests {
     #[ignore = "requires isolated GTK harness"]
     fn connection_icon_switches_css_class() {
         require_display!();
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
 
         let connected = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
@@ -355,7 +355,7 @@ mod tests {
     fn activity_indicator_toggles() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         assert_eq!(row.activity_state(), ActivityState::None);
         assert!(!row.has_activity(), "activity should be off initially");
         assert!(!row.has_css_class("session-activity-active"));
@@ -386,7 +386,7 @@ mod tests {
     fn repeated_activity_refreshes_idle_timer() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
 
         row.mark_activity();
         pump_events(ACTIVITY_IDLE_DELAY_MS / 2);
@@ -412,7 +412,7 @@ mod tests {
     fn clear_activity_cancels_pending_idle_transition() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
 
         row.mark_activity();
         assert_eq!(row.activity_state(), ActivityState::Active);
@@ -433,7 +433,7 @@ mod tests {
     fn position_label_shows_number() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         row.set_position(0);
         assert_eq!(row.position_label_text(), "1");
 
@@ -446,7 +446,7 @@ mod tests {
     fn position_label_hidden_beyond_nine() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         row.set_position(0);
         assert!(row.imp().position_label.is_visible());
 
@@ -458,7 +458,7 @@ mod tests {
     #[ignore = "requires isolated GTK harness"]
     fn connection_icon_tooltip_updates() {
         require_display!();
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
 
         let icon = crate::runtime::ConnectionIcon {
             icon_name: "network-server-symbolic",
@@ -484,7 +484,7 @@ mod tests {
     #[ignore = "requires isolated GTK harness"]
     fn managed_actions_style_changes_button_icon() {
         require_display!();
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         assert_eq!(row.close_button().icon_name().unwrap(), "window-close-symbolic");
 
         row.set_managed_actions_style();
@@ -495,7 +495,7 @@ mod tests {
     #[ignore = "requires isolated GTK harness"]
     fn session_row_has_css_class_and_subtitle_truncation() {
         require_display!();
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         assert!(row.has_css_class("session-row"));
         assert_eq!(row.subtitle_lines(), 2);
     }
@@ -510,7 +510,7 @@ mod tests {
     // cancelled on destruction to avoid a dangling GLib source.
     // ═══════════════════════════════════════════════════════════════
 
-    /// C5 regression: dropping a `SessionRow` with an active idle timer
+    /// C5 regression: dropping a `WorkspaceRow` with an active idle timer
     /// must not cause the timer callback to mutate the row's state.
     /// The weak-ref pattern in `mark_activity` returns `Break` when the
     /// row is gone — this test proves that contract holds.
@@ -519,7 +519,7 @@ mod tests {
     fn c5_dropped_session_row_idle_timer_does_not_fire() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         row.mark_activity();
         assert_eq!(row.activity_state(), ActivityState::Active);
 
@@ -538,7 +538,7 @@ mod tests {
         pump_events(ACTIVITY_IDLE_DELAY_MS + 100);
 
         // The weak ref should not upgrade — the row is gone.
-        assert!(weak.upgrade().is_none(), "SessionRow should be finalized after drop");
+        assert!(weak.upgrade().is_none(), "WorkspaceRow should be finalized after drop");
     }
 
     /// C5 regression: `clear_activity` must cancel the pending `GLib` source
@@ -548,7 +548,7 @@ mod tests {
     fn c5_clear_activity_removes_glib_source() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         row.mark_activity();
         assert!(
             row.imp().idle_transition_source.borrow().is_some(),
@@ -577,7 +577,7 @@ mod tests {
     fn c5_mark_activity_replaces_previous_source() {
         require_display!();
 
-        let row = SessionRow::new("s1", "Session");
+        let row = WorkspaceRow::new("s1", "Session");
         row.mark_activity();
         assert!(row.imp().idle_transition_source.borrow().is_some());
 

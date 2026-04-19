@@ -1,4 +1,4 @@
-//! rttx-server: persistent session daemon for the rttx terminal emulator.
+//! rttx-server: persistent runtime daemon for the rttx terminal emulator.
 
 pub mod diagnostics;
 pub mod engine;
@@ -8,8 +8,8 @@ pub mod os;
 pub mod pane;
 pub mod protocol;
 pub mod pty;
+pub mod runtime;
 pub mod screen;
 pub mod serialization;
 pub mod server;
-pub mod session;
 pub mod single_instance;

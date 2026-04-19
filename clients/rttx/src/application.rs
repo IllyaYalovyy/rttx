@@ -244,7 +244,7 @@ pub fn run() -> glib::ExitCode {
             && let Some(name) = param.and_then(glib::Variant::get::<String>)
             && let Some(uuid) = win.visible_session_uuid()
         {
-            win.rename_session(&uuid, &name);
+            win.rename_runtime(&uuid, &name);
         }
     });
     app.add_action(&rename_workspace_action);

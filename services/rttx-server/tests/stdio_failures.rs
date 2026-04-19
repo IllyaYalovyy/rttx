@@ -150,14 +150,14 @@ async fn stdin_close_after_session_create_exits_cleanly() {
     handshake(&mut stdin, &mut stdout, &mut read_buf).await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "disconnect-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     send_frame(&mut stdin, &create).await;
     let resp = recv_frame(&mut stdout, &mut read_buf).await;
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::SessionCreated(_))));
+    assert!(matches!(resp.msg, Some(proto::server_message::Msg::RuntimeCreated(_))));
 
     // Disconnect mid-session.
     drop(stdin);

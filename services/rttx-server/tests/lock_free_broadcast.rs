@@ -21,7 +21,7 @@ async fn both_clients_receive_deltas_after_lock_free_broadcast() {
     let mut client_a = TestClient::connect(&sock).await;
     client_a.handshake().await;
     let sid =
-        create_session(&mut client_a, "broadcast-test", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut client_a, "broadcast-test", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client_a, &sid).await;
     let pane_id = create_pane(&mut client_a, &sid).await;
 

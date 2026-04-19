@@ -16,20 +16,20 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
 
     // Create session and pane.
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "scrollback-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -44,8 +44,8 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
 
     // Attach to get Deltas.
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -62,7 +62,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     let marker = "SCROLLBACK_PERSIST_TEST";
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from(format!("echo {marker}\n").into_bytes()),
         })),
@@ -110,20 +110,20 @@ async fn scrollback_log_capped_at_max_size() {
     client.handshake().await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "cap-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -137,8 +137,8 @@ async fn scrollback_log_capped_at_max_size() {
     };
 
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -152,7 +152,7 @@ async fn scrollback_log_capped_at_max_size() {
     // Generate ~12 MB of output via a shell command.
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"head -c 12000000 /dev/zero | tr '\\0' 'A'\n"),
         })),
@@ -196,20 +196,20 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     client.handshake().await;
 
     let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "dsr-strip-test".into(),
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(sc)) => sc.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
@@ -223,8 +223,8 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     };
 
     let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-            session_id: session_id.clone(),
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
@@ -240,7 +240,7 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     // We also explicitly emit one via printf to guarantee it appears.
     let input = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
-            session_id: session_id.clone(),
+            runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             data: bytes::Bytes::from_static(b"printf '\\033[6n' && echo DSR_STRIP_MARKER\n"),
         })),

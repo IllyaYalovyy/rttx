@@ -19,14 +19,14 @@ async fn create_terminate_loop_leaves_zero_sessions() {
 
     for i in 0..10 {
         let sid =
-            create_session(&mut client, &format!("loop-{i}"), proto::RuntimePolicy::Persistent)
+            create_runtime(&mut client, &format!("loop-{i}"), proto::RuntimePolicy::Persistent)
                 .await;
         attach_rw(&mut client, &sid).await;
-        terminate_session(&mut client, &sid).await;
+        terminate_runtime(&mut client, &sid).await;
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 0, "all terminated sessions must be cleaned up");
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 0, "all terminated sessions must be cleaned up");
 }
 
 #[tokio::test]
@@ -37,7 +37,7 @@ async fn create_close_pane_loop_returns_to_zero_panes() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_session(&mut client, "pane-loop", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "pane-loop", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     for _ in 0..10 {
@@ -45,8 +45,8 @@ async fn create_close_pane_loop_returns_to_zero_panes() {
         close_pane(&mut client, &sid, &pane_id).await;
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions[0].pane_count, 0, "all closed panes must be cleaned up");
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes[0].pane_count, 0, "all closed panes must be cleaned up");
 }
 
 #[tokio::test]
@@ -57,17 +57,17 @@ async fn attach_detach_loop_persistent_session_survives() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_session(&mut client, "detach-loop", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "detach-loop", proto::RuntimePolicy::Persistent).await;
 
     for _ in 0..10 {
         attach_rw(&mut client, &sid).await;
-        detach_session(&mut client, &sid).await;
+        detach_runtime(&mut client, &sid).await;
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 1, "persistent session must survive detach loops");
-    assert_eq!(sessions[0].attached_client_count, 0);
-    assert!(!sessions[0].has_write_owner);
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 1, "persistent session must survive detach loops");
+    assert_eq!(runtimes[0].attached_client_count, 0);
+    assert!(!runtimes[0].has_write_owner);
 }
 
 #[tokio::test]
@@ -80,13 +80,13 @@ async fn ephemeral_create_detach_loop_leaves_zero_sessions() {
 
     for i in 0..10 {
         let sid =
-            create_session(&mut client, &format!("eph-{i}"), proto::RuntimePolicy::Ephemeral).await;
+            create_runtime(&mut client, &format!("eph-{i}"), proto::RuntimePolicy::Ephemeral).await;
         attach_rw(&mut client, &sid).await;
-        detach_session(&mut client, &sid).await;
+        detach_runtime(&mut client, &sid).await;
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 0, "ephemeral sessions must terminate on last detach");
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 0, "ephemeral sessions must terminate on last detach");
 }
 
 #[tokio::test]
@@ -99,18 +99,18 @@ async fn full_lifecycle_loop_returns_to_clean_state() {
 
     for i in 0..5 {
         let sid =
-            create_session(&mut client, &format!("full-{i}"), proto::RuntimePolicy::Persistent)
+            create_runtime(&mut client, &format!("full-{i}"), proto::RuntimePolicy::Persistent)
                 .await;
         attach_rw(&mut client, &sid).await;
         let p1 = create_pane(&mut client, &sid).await;
         let p2 = create_pane(&mut client, &sid).await;
         close_pane(&mut client, &sid, &p1).await;
         close_pane(&mut client, &sid, &p2).await;
-        terminate_session(&mut client, &sid).await;
+        terminate_runtime(&mut client, &sid).await;
     }
 
-    let sessions = list_sessions(&mut client).await;
-    assert_eq!(sessions.len(), 0, "full lifecycle loop must leave zero sessions");
+    let runtimes = list_runtimes(&mut client).await;
+    assert_eq!(runtimes.len(), 0, "full lifecycle loop must leave zero sessions");
 }
 
 #[tokio::test]
@@ -120,22 +120,22 @@ async fn reconnect_loop_does_not_leak_sessions() {
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let sid = create_session(&mut c, "reconnect-loop", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut c, "reconnect-loop", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut c, &sid).await;
     drop(c);
 
     for _ in 0..10 {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sessions = list_sessions(&mut c).await;
-        assert_eq!(sessions.len(), 1, "reconnect must not create duplicate sessions");
+        let runtimes = list_runtimes(&mut c).await;
+        assert_eq!(runtimes.len(), 1, "reconnect must not create duplicate sessions");
         attach_rw(&mut c, &sid).await;
         drop(c);
     }
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let sessions = list_sessions(&mut c).await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].attached_client_count, 0);
+    let runtimes = list_runtimes(&mut c).await;
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].attached_client_count, 0);
 }

@@ -6,7 +6,7 @@
 //! large/complex layouts.
 
 use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
-use rttx::session::*;
+use rttx::workspace::*;
 use std::collections::BTreeMap;
 
 // ── Inline helpers (test_helpers is cfg(test)-gated) ────────────
@@ -61,7 +61,7 @@ fn save_and_load(state: &WindowState) -> WindowState {
     std::fs::write(&path, &json).unwrap();
     let loaded_json = std::fs::read_to_string(&path).unwrap();
     let mut loaded: WindowState = serde_json::from_str(&loaded_json).unwrap();
-    for session in &mut loaded.sessions {
+    for session in &mut loaded.workspaces {
         session.normalize_runtime_metadata();
         session.normalize_active_terminal();
     }
@@ -80,15 +80,15 @@ fn older_format_without_sidebar_widths_loads_with_defaults() {
             "name": "Legacy",
             "layout": {"Terminal": {"uuid": "t1"}}
         }],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 1024,
         "height": 768,
         "is_maximized": false
     }"#;
 
     let state: WindowState = serde_json::from_str(json).unwrap();
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].name, "Legacy");
+    assert_eq!(state.workspaces.len(), 1);
+    assert_eq!(state.workspaces[0].name, "Legacy");
     assert_eq!(state.left_sidebar_width, 220, "missing left_sidebar_width should default to 220");
     assert_eq!(state.right_sidebar_width, 320, "missing right_sidebar_width should default to 320");
 }
@@ -107,16 +107,16 @@ fn older_format_without_runtime_or_color_fields_loads_gracefully() {
             "input_sync": false,
             "mode": "direct"
         }],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false
     }"#;
 
     let state: WindowState = serde_json::from_str(json).unwrap();
-    let session = &state.sessions[0];
+    let session = &state.workspaces[0];
     assert_eq!(session.runtime, WorkspaceRuntime::default());
-    assert_eq!(session.color, SessionColor::Blue);
+    assert_eq!(session.color, WorkspaceColor::Blue);
     assert!(session.zoomed_terminal_uuid.is_none());
     assert!(!session.user_renamed);
 }
@@ -127,7 +127,7 @@ fn older_format_without_runtime_or_color_fields_loads_gracefully() {
 fn older_format_without_dismissed_runtime_ids_loads_empty() {
     let json = r#"{
         "sessions": [{"uuid": "s1", "name": "W", "layout": {"Terminal": {"uuid": "t1"}}}],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false
@@ -148,10 +148,10 @@ fn legacy_persistent_mode_normalizes_to_runtime_metadata() {
         "terminal_recovery": {},
         "active_terminal_uuid": "t1",
         "input_sync": false,
-        "mode": {"persistent": {"daemon_session_id": "runtime-abc"}}
+        "mode": {"persistent": {"daemon_runtime_id": "runtime-abc"}}
     }"#;
 
-    let mut session: SessionState = serde_json::from_str(json).unwrap();
+    let mut session: WorkspaceState = serde_json::from_str(json).unwrap();
     session.normalize_runtime_metadata();
 
     assert!(session.runtime.is_managed());
@@ -167,8 +167,8 @@ fn legacy_persistent_mode_normalizes_to_runtime_metadata() {
 #[test]
 fn corrupted_json_falls_back_to_default() {
     let result: WindowState = serde_json::from_str("{{{{not json at all!!!!").unwrap_or_default();
-    assert_eq!(result.sessions.len(), 1, "corrupted JSON should produce default state");
-    assert_eq!(result.sessions[0].name, "Session 1");
+    assert_eq!(result.workspaces.len(), 1, "corrupted JSON should produce default state");
+    assert_eq!(result.workspaces[0].name, "Workspace 1");
 }
 
 /// Truncated JSON (e.g. from a crash during write) must fall back to
@@ -176,23 +176,23 @@ fn corrupted_json_falls_back_to_default() {
 #[test]
 fn truncated_json_falls_back_to_default() {
     let state = WindowState {
-        sessions: vec![SessionState::new("First".into()), SessionState::new("Second".into())],
-        active_session_index: 1,
+        workspaces: vec![WorkspaceState::new("First".into()), WorkspaceState::new("Second".into())],
+        active_workspace_index: 1,
         ..WindowState::default()
     };
     let full_json = serde_json::to_string_pretty(&state).unwrap();
     let truncated = &full_json[..full_json.len() / 2];
 
     let loaded: WindowState = serde_json::from_str(truncated).unwrap_or_default();
-    assert_eq!(loaded.sessions.len(), 1, "truncated JSON should produce default state");
-    assert_eq!(loaded.sessions[0].name, "Session 1");
+    assert_eq!(loaded.workspaces.len(), 1, "truncated JSON should produce default state");
+    assert_eq!(loaded.workspaces[0].name, "Workspace 1");
 }
 
 /// An empty string must fall back to default state.
 #[test]
 fn empty_string_falls_back_to_default() {
     let loaded: WindowState = serde_json::from_str("").unwrap_or_default();
-    assert_eq!(loaded.sessions.len(), 1);
+    assert_eq!(loaded.workspaces.len(), 1);
 }
 
 /// JSON with unknown extra fields must still deserialize (forward compat).
@@ -206,7 +206,7 @@ fn unknown_fields_are_ignored_gracefully() {
             "some_future_field": true,
             "another_new_thing": [1, 2, 3]
         }],
-        "active_session_index": 0,
+        "active_workspace_index": 0,
         "width": 800,
         "height": 600,
         "is_maximized": false,
@@ -214,8 +214,8 @@ fn unknown_fields_are_ignored_gracefully() {
     }"#;
 
     let state: WindowState = serde_json::from_str(json).unwrap();
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].name, "Future");
+    assert_eq!(state.workspaces.len(), 1);
+    assert_eq!(state.workspaces[0].name, "Future");
 }
 
 // ── Large state ─────────────────────────────────────────────────
@@ -234,20 +234,20 @@ fn large_layout_persists_and_restores_through_file() {
     assert_eq!(layout.terminal_count(), 16);
 
     let state = WindowState {
-        sessions: vec![SessionState {
+        workspaces: vec![WorkspaceState {
             uuid: "large-session".into(),
             name: "Large Workspace".into(),
             layout,
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("t7".into()),
             input_sync: true,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::Teal,
+            color: WorkspaceColor::Teal,
             zoomed_terminal_uuid: None,
             user_renamed: true,
         }],
-        active_session_index: 0,
+        active_workspace_index: 0,
         width: 2560,
         height: 1440,
         is_maximized: true,
@@ -256,19 +256,19 @@ fn large_layout_persists_and_restores_through_file() {
 
     let loaded = save_and_load(&state);
 
-    assert_eq!(loaded.sessions.len(), 1);
-    assert_eq!(loaded.sessions[0].layout.terminal_count(), 16);
-    assert_eq!(loaded.sessions[0].name, "Large Workspace");
-    assert_eq!(loaded.sessions[0].active_terminal_uuid.as_deref(), Some("t7"));
-    assert!(loaded.sessions[0].input_sync);
-    assert_eq!(loaded.sessions[0].color, SessionColor::Teal);
-    assert!(loaded.sessions[0].user_renamed);
+    assert_eq!(loaded.workspaces.len(), 1);
+    assert_eq!(loaded.workspaces[0].layout.terminal_count(), 16);
+    assert_eq!(loaded.workspaces[0].name, "Large Workspace");
+    assert_eq!(loaded.workspaces[0].active_terminal_uuid.as_deref(), Some("t7"));
+    assert!(loaded.workspaces[0].input_sync);
+    assert_eq!(loaded.workspaces[0].color, WorkspaceColor::Teal);
+    assert!(loaded.workspaces[0].user_renamed);
     assert!(loaded.is_maximized);
 
     for i in 0..16 {
         let uuid = format!("t{i}");
         assert_eq!(
-            loaded.sessions[0].layout.terminal_cwd(&uuid).as_deref(),
+            loaded.workspaces[0].layout.terminal_cwd(&uuid).as_deref(),
             Some(format!("/home/user/project-{i}").as_str()),
             "CWD for {uuid} must survive persistence"
         );
@@ -279,8 +279,8 @@ fn large_layout_persists_and_restores_through_file() {
 /// file-based save/load cycle.
 #[test]
 fn multi_workspace_mixed_config_persists_through_file() {
-    let sessions = vec![
-        SessionState {
+    let workspaces = vec![
+        WorkspaceState {
             uuid: "ws-direct".into(),
             name: "Editor".into(),
             layout: hsplit(
@@ -293,40 +293,40 @@ fn multi_workspace_mixed_config_persists_through_file() {
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("t2".into()),
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::Green,
+            color: WorkspaceColor::Green,
             zoomed_terminal_uuid: None,
             user_renamed: true,
         },
         {
-            let mut s = SessionState::new_managed_local(
+            let mut s = WorkspaceState::new_managed_local(
                 "Build".into(),
                 WorkspacePolicy::Persistent,
                 Some("/home/user/build".into()),
             );
             s.uuid = "ws-managed".into();
-            s.color = SessionColor::Red;
+            s.color = WorkspaceColor::Red;
             s
         },
-        SessionState {
+        WorkspaceState {
             uuid: "ws-simple".into(),
             name: "Monitoring".into(),
             layout: term("t-mon"),
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("t-mon".into()),
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::Purple,
+            color: WorkspaceColor::Purple,
             zoomed_terminal_uuid: None,
             user_renamed: false,
         },
     ];
 
     let state = WindowState {
-        sessions,
-        active_session_index: 1,
+        workspaces,
+        active_workspace_index: 1,
         width: 1920,
         height: 1080,
         is_maximized: false,
@@ -337,37 +337,37 @@ fn multi_workspace_mixed_config_persists_through_file() {
 
     let loaded = save_and_load(&state);
 
-    assert_eq!(loaded.sessions.len(), 3);
-    assert_eq!(loaded.active_session_index, 1);
+    assert_eq!(loaded.workspaces.len(), 3);
+    assert_eq!(loaded.active_workspace_index, 1);
     assert_eq!(loaded.left_sidebar_width, 250);
     assert_eq!(loaded.right_sidebar_width, 400);
 
     // Workspace order preserved.
-    assert_eq!(loaded.sessions[0].uuid, "ws-direct");
-    assert_eq!(loaded.sessions[1].uuid, "ws-managed");
-    assert_eq!(loaded.sessions[2].uuid, "ws-simple");
+    assert_eq!(loaded.workspaces[0].uuid, "ws-direct");
+    assert_eq!(loaded.workspaces[1].uuid, "ws-managed");
+    assert_eq!(loaded.workspaces[2].uuid, "ws-simple");
 
     // Names preserved.
-    assert_eq!(loaded.sessions[0].name, "Editor");
-    assert_eq!(loaded.sessions[1].name, "Build");
-    assert_eq!(loaded.sessions[2].name, "Monitoring");
+    assert_eq!(loaded.workspaces[0].name, "Editor");
+    assert_eq!(loaded.workspaces[1].name, "Build");
+    assert_eq!(loaded.workspaces[2].name, "Monitoring");
 
     // Layout structure preserved.
-    assert_eq!(loaded.sessions[0].layout.terminal_count(), 3);
-    assert_eq!(loaded.sessions[2].layout.terminal_count(), 1);
+    assert_eq!(loaded.workspaces[0].layout.terminal_count(), 3);
+    assert_eq!(loaded.workspaces[2].layout.terminal_count(), 1);
 
     // Colors preserved.
-    assert_eq!(loaded.sessions[0].color, SessionColor::Green);
-    assert_eq!(loaded.sessions[1].color, SessionColor::Red);
-    assert_eq!(loaded.sessions[2].color, SessionColor::Purple);
+    assert_eq!(loaded.workspaces[0].color, WorkspaceColor::Green);
+    assert_eq!(loaded.workspaces[1].color, WorkspaceColor::Red);
+    assert_eq!(loaded.workspaces[2].color, WorkspaceColor::Purple);
 
     // Active terminal preserved.
-    assert_eq!(loaded.sessions[0].active_terminal_uuid.as_deref(), Some("t2"));
+    assert_eq!(loaded.workspaces[0].active_terminal_uuid.as_deref(), Some("t2"));
 
     // Managed runtime metadata preserved.
-    assert!(loaded.sessions[1].runtime.is_managed());
-    assert_eq!(loaded.sessions[1].runtime.endpoint, RuntimeEndpoint::Local);
-    assert_eq!(loaded.sessions[1].runtime.policy, WorkspacePolicy::Persistent);
+    assert!(loaded.workspaces[1].runtime.is_managed());
+    assert_eq!(loaded.workspaces[1].runtime.endpoint, RuntimeEndpoint::Local);
+    assert_eq!(loaded.workspaces[1].runtime.policy, WorkspacePolicy::Persistent);
 }
 
 // ── Full round-trip through file persistence ────────────────────
@@ -381,8 +381,8 @@ fn full_roundtrip_through_file_persistence() {
     dismissed.insert("old-runtime-2".to_string());
 
     let state = WindowState {
-        sessions: vec![
-            SessionState {
+        workspaces: vec![
+            WorkspaceState {
                 uuid: "ws-1".into(),
                 name: "Development".into(),
                 layout: split_ratio(
@@ -394,27 +394,27 @@ fn full_roundtrip_through_file_persistence() {
                 terminal_recovery: BTreeMap::default(),
                 active_terminal_uuid: Some("t2".into()),
                 input_sync: true,
-                mode: SessionMode::default(),
+                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
-                color: SessionColor::Orange,
+                color: WorkspaceColor::Orange,
                 zoomed_terminal_uuid: None,
                 user_renamed: true,
             },
-            SessionState {
+            WorkspaceState {
                 uuid: "ws-2".into(),
                 name: "Session 2".into(),
                 layout: term("t3"),
                 terminal_recovery: BTreeMap::default(),
                 active_terminal_uuid: Some("t3".into()),
                 input_sync: false,
-                mode: SessionMode::default(),
+                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
-                color: SessionColor::Blue,
+                color: WorkspaceColor::Blue,
                 zoomed_terminal_uuid: None,
                 user_renamed: false,
             },
         ],
-        active_session_index: 0,
+        active_workspace_index: 0,
         width: 1600,
         height: 900,
         is_maximized: false,
@@ -431,19 +431,19 @@ fn full_roundtrip_through_file_persistence() {
     assert!(!loaded.is_maximized);
     assert_eq!(loaded.left_sidebar_width, 200);
     assert_eq!(loaded.right_sidebar_width, 350);
-    assert_eq!(loaded.active_session_index, 0);
+    assert_eq!(loaded.active_workspace_index, 0);
 
     // Dismissed runtime IDs.
     assert!(loaded.dismissed_runtime_ids.contains("old-runtime-1"));
     assert!(loaded.dismissed_runtime_ids.contains("old-runtime-2"));
 
     // Session 1 details.
-    let s1 = &loaded.sessions[0];
+    let s1 = &loaded.workspaces[0];
     assert_eq!(s1.uuid, "ws-1");
     assert_eq!(s1.name, "Development");
     assert_eq!(s1.active_terminal_uuid.as_deref(), Some("t2"));
     assert!(s1.input_sync);
-    assert_eq!(s1.color, SessionColor::Orange);
+    assert_eq!(s1.color, WorkspaceColor::Orange);
     assert!(s1.user_renamed);
     assert_eq!(s1.layout.terminal_count(), 2);
 
@@ -460,9 +460,9 @@ fn full_roundtrip_through_file_persistence() {
     assert_eq!(s1.layout.terminal_custom_title("t2").as_deref(), Some("cargo test"));
 
     // Session 2 details.
-    let s2 = &loaded.sessions[1];
+    let s2 = &loaded.workspaces[1];
     assert_eq!(s2.uuid, "ws-2");
     assert_eq!(s2.name, "Session 2");
     assert!(!s2.input_sync);
-    assert_eq!(s2.color, SessionColor::Blue);
+    assert_eq!(s2.color, WorkspaceColor::Blue);
 }

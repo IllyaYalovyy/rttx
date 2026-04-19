@@ -1,6 +1,6 @@
 //! Persisted session and window state.
 //!
-//! `SessionState` and `WindowState` are serialized to `sessions.json`.
+//! `WorkspaceState` and `WindowState` are serialized to `sessions.json`.
 //! Changes here must preserve backward compatibility via `#[serde(default)]`.
 
 use serde::{Deserialize, Serialize};
@@ -13,30 +13,32 @@ use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 /// How a session's terminals are backed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum SessionMode {
+pub enum WorkspaceMode {
     #[default]
     Direct,
     Persistent {
-        daemon_session_id: String,
+        #[serde(alias = "daemon_session_id")]
+        daemon_runtime_id: String,
     },
     RemotePersistent {
         host: String,
-        daemon_session_id: String,
+        #[serde(alias = "daemon_session_id")]
+        daemon_runtime_id: String,
     },
 }
 
-impl SessionMode {
+impl WorkspaceMode {
     #[must_use]
     pub const fn is_persistent(&self) -> bool {
         !matches!(self, Self::Direct)
     }
 
     #[must_use]
-    pub fn daemon_session_id(&self) -> Option<&str> {
+    pub fn daemon_runtime_id(&self) -> Option<&str> {
         match self {
             Self::Direct => None,
-            Self::Persistent { daemon_session_id }
-            | Self::RemotePersistent { daemon_session_id, .. } => Some(daemon_session_id),
+            Self::Persistent { daemon_runtime_id }
+            | Self::RemotePersistent { daemon_runtime_id, .. } => Some(daemon_runtime_id),
         }
     }
 
@@ -52,7 +54,7 @@ impl SessionMode {
 /// Accent color for a session's sidebar indicator dot.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum SessionColor {
+pub enum WorkspaceColor {
     #[default]
     Blue,
     Green,
@@ -64,7 +66,7 @@ pub enum SessionColor {
     Orange,
 }
 
-impl SessionColor {
+impl WorkspaceColor {
     /// All available colors in assignment order.
     pub const ALL: [Self; 8] = [
         Self::Blue,
@@ -95,7 +97,7 @@ impl SessionColor {
 
 /// State of a single terminal session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionState {
+pub struct WorkspaceState {
     pub uuid: String,
     pub name: String,
     pub layout: LayoutNode,
@@ -106,18 +108,18 @@ pub struct SessionState {
     #[serde(default)]
     pub input_sync: bool,
     #[serde(default)]
-    pub mode: SessionMode,
+    pub mode: WorkspaceMode,
     #[serde(default)]
     pub runtime: WorkspaceRuntime,
     #[serde(default)]
-    pub color: SessionColor,
+    pub color: WorkspaceColor,
     #[serde(default)]
     pub zoomed_terminal_uuid: Option<String>,
     #[serde(default)]
     pub user_renamed: bool,
 }
 
-impl SessionState {
+impl WorkspaceState {
     #[must_use]
     pub fn new(name: String) -> Self {
         Self::new_with_initial_cwd(name, None)
@@ -143,9 +145,9 @@ impl SessionState {
             terminal_recovery,
             active_terminal_uuid,
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         }
@@ -185,21 +187,21 @@ impl SessionState {
         terminal_recovery.insert("test-terminal-uuid".to_string(), PaneRecovery::empty_shell());
         Self {
             uuid: "test-session-uuid".to_string(),
-            name: "Session 1".to_string(),
+            name: "Workspace 1".to_string(),
             layout: LayoutNode::new_terminal_with_uuid("test-terminal-uuid"),
             terminal_recovery,
             active_terminal_uuid: Some("test-terminal-uuid".to_string()),
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         }
     }
 }
 
-impl SessionState {
+impl WorkspaceState {
     #[must_use]
     pub const fn uses_managed_runtime(&self) -> bool {
         self.runtime.is_managed() || self.mode.is_persistent()
@@ -213,21 +215,21 @@ impl SessionState {
     pub fn normalize_runtime_metadata(&mut self) {
         if !self.runtime.is_managed() {
             match &self.mode {
-                SessionMode::Direct => {}
-                SessionMode::Persistent { daemon_session_id } => {
+                WorkspaceMode::Direct => {}
+                WorkspaceMode::Persistent { daemon_runtime_id } => {
                     self.runtime.managed = true;
                     self.runtime.endpoint = RuntimeEndpoint::Local;
                     self.runtime.policy = WorkspacePolicy::Persistent;
-                    if !daemon_session_id.is_empty() {
-                        self.runtime.runtime_id = Some(daemon_session_id.clone());
+                    if !daemon_runtime_id.is_empty() {
+                        self.runtime.runtime_id = Some(daemon_runtime_id.clone());
                     }
                 }
-                SessionMode::RemotePersistent { host, daemon_session_id } => {
+                WorkspaceMode::RemotePersistent { host, daemon_runtime_id } => {
                     self.runtime.managed = true;
                     self.runtime.endpoint = RuntimeEndpoint::Remote { host: host.clone() };
                     self.runtime.policy = WorkspacePolicy::Persistent;
-                    if !daemon_session_id.is_empty() {
-                        self.runtime.runtime_id = Some(daemon_session_id.clone());
+                    if !daemon_runtime_id.is_empty() {
+                        self.runtime.runtime_id = Some(daemon_runtime_id.clone());
                     }
                 }
             }
@@ -239,15 +241,15 @@ impl SessionState {
 
     pub fn sync_legacy_mode_from_runtime(&mut self) {
         self.mode = if self.runtime.is_managed() {
-            let daemon_session_id = self.runtime.runtime_id.clone().unwrap_or_default();
+            let daemon_runtime_id = self.runtime.runtime_id.clone().unwrap_or_default();
             match &self.runtime.endpoint {
-                RuntimeEndpoint::Local => SessionMode::Persistent { daemon_session_id },
+                RuntimeEndpoint::Local => WorkspaceMode::Persistent { daemon_runtime_id },
                 RuntimeEndpoint::Remote { host } => {
-                    SessionMode::RemotePersistent { host: host.clone(), daemon_session_id }
+                    WorkspaceMode::RemotePersistent { host: host.clone(), daemon_runtime_id }
                 }
             }
         } else {
-            SessionMode::Direct
+            WorkspaceMode::Direct
         };
     }
 
@@ -335,8 +337,10 @@ const fn default_right_sidebar_width() -> i32 {
 /// Persistent state of the entire application window.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
-    pub sessions: Vec<SessionState>,
-    pub active_session_index: usize,
+    #[serde(alias = "sessions")]
+    pub workspaces: Vec<WorkspaceState>,
+    #[serde(alias = "active_session_index")]
+    pub active_workspace_index: usize,
     pub width: i32,
     pub height: i32,
     pub is_maximized: bool,
@@ -353,8 +357,8 @@ pub struct WindowState {
 impl Default for WindowState {
     fn default() -> Self {
         Self {
-            sessions: vec![SessionState::new("Session 1".into())],
-            active_session_index: 0,
+            workspaces: vec![WorkspaceState::new("Workspace 1".into())],
+            active_workspace_index: 0,
             width: 900,
             height: 600,
             is_maximized: false,
@@ -370,8 +374,8 @@ impl WindowState {
     #[must_use]
     pub fn default_for_test() -> Self {
         Self {
-            sessions: vec![SessionState::default_for_test()],
-            active_session_index: 0,
+            workspaces: vec![WorkspaceState::default_for_test()],
+            active_workspace_index: 0,
             width: 900,
             height: 600,
             is_maximized: false,
@@ -384,8 +388,8 @@ impl WindowState {
 mod tests {
     use super::*;
     use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
-    use crate::session::recovery::{PaneSource, PaneTarget, StartupStep};
     use crate::test_helpers::{hsplit, term};
+    use crate::workspace::recovery::{PaneSource, PaneTarget, StartupStep};
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 
@@ -403,27 +407,27 @@ mod tests {
                 }],
             },
         );
-        let session = SessionState {
+        let session = WorkspaceState {
             uuid: "s1".into(),
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
             terminal_recovery,
             active_terminal_uuid: Some("t2".into()),
             input_sync: true,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         };
         let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
         assert_eq!(session, restored);
     }
 
     #[test]
     fn session_replace_terminal_uuid_updates_recovery_and_focus() {
-        let mut session = SessionState::default_for_test();
+        let mut session = WorkspaceState::default_for_test();
         session.set_recovery(
             "other-terminal",
             PaneRecovery { source: PaneSource::Manual, target: None, startup: vec![] },
@@ -439,7 +443,7 @@ mod tests {
 
     #[test]
     fn session_replace_terminal_uuid_is_noop_for_missing_terminal() {
-        let mut session = SessionState::default_for_test();
+        let mut session = WorkspaceState::default_for_test();
         let original = session.clone();
         assert!(!session.replace_terminal_uuid("missing", "daemon-pane"));
         assert_eq!(session, original);
@@ -448,8 +452,8 @@ mod tests {
     #[test]
     fn window_state_roundtrip() {
         let state = WindowState {
-            sessions: vec![SessionState::new("S1".into())],
-            active_session_index: 0,
+            workspaces: vec![WorkspaceState::new("S1".into())],
+            active_workspace_index: 0,
             width: 800,
             height: 600,
             is_maximized: true,
@@ -462,47 +466,47 @@ mod tests {
 
     #[test]
     fn session_mode_default_is_direct() {
-        let session = SessionState::new("Test".into());
-        assert_eq!(session.mode, SessionMode::Direct);
+        let session = WorkspaceState::new("Test".into());
+        assert_eq!(session.mode, WorkspaceMode::Direct);
         assert!(!session.mode.is_persistent());
-        assert!(session.mode.daemon_session_id().is_none());
+        assert!(session.mode.daemon_runtime_id().is_none());
         assert!(session.mode.host().is_none());
         assert!(!session.uses_managed_runtime());
     }
 
     #[test]
     fn session_mode_persistent_accessors() {
-        let mode = SessionMode::Persistent { daemon_session_id: "ds1".into() };
+        let mode = WorkspaceMode::Persistent { daemon_runtime_id: "ds1".into() };
         assert!(mode.is_persistent());
-        assert_eq!(mode.daemon_session_id(), Some("ds1"));
+        assert_eq!(mode.daemon_runtime_id(), Some("ds1"));
         assert!(mode.host().is_none());
     }
 
     #[test]
     fn session_mode_remote_persistent_accessors() {
-        let mode = SessionMode::RemotePersistent {
+        let mode = WorkspaceMode::RemotePersistent {
             host: "user@devbox".into(),
-            daemon_session_id: "ds2".into(),
+            daemon_runtime_id: "ds2".into(),
         };
         assert!(mode.is_persistent());
-        assert_eq!(mode.daemon_session_id(), Some("ds2"));
+        assert_eq!(mode.daemon_runtime_id(), Some("ds2"));
         assert_eq!(mode.host(), Some("user@devbox"));
     }
 
     #[test]
     fn session_mode_roundtrips_through_json() {
         for mode in [
-            SessionMode::Direct,
-            SessionMode::Persistent { daemon_session_id: "abc-123".into() },
-            SessionMode::RemotePersistent {
+            WorkspaceMode::Direct,
+            WorkspaceMode::Persistent { daemon_runtime_id: "abc-123".into() },
+            WorkspaceMode::RemotePersistent {
                 host: "admin@prod".into(),
-                daemon_session_id: "def-456".into(),
+                daemon_runtime_id: "def-456".into(),
             },
         ] {
-            let mut session = SessionState::new("Test".into());
+            let mut session = WorkspaceState::new("Test".into());
             session.mode = mode.clone();
             let json = serde_json::to_string(&session).unwrap();
-            let restored: SessionState = serde_json::from_str(&json).unwrap();
+            let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
             assert_eq!(restored.mode, mode);
         }
     }
@@ -517,19 +521,19 @@ mod tests {
             "active_terminal_uuid": "t1",
             "input_sync": false
         }"#;
-        let session: SessionState = serde_json::from_str(json).unwrap();
-        assert_eq!(session.mode, SessionMode::Direct);
+        let session: WorkspaceState = serde_json::from_str(json).unwrap();
+        assert_eq!(session.mode, WorkspaceMode::Direct);
     }
 
     #[test]
     fn persistent_session_in_window_state_roundtrips() {
-        let mut session = SessionState::new("Persistent".into());
-        session.mode = SessionMode::Persistent { daemon_session_id: "ds-1".into() };
+        let mut session = WorkspaceState::new("Persistent".into());
+        session.mode = WorkspaceMode::Persistent { daemon_runtime_id: "ds-1".into() };
         session.normalize_runtime_metadata();
 
         let state = WindowState {
-            sessions: vec![SessionState::new("Direct".into()), session],
-            active_session_index: 1,
+            workspaces: vec![WorkspaceState::new("Direct".into()), session],
+            active_workspace_index: 1,
             width: 1920,
             height: 1080,
             is_maximized: false,
@@ -537,19 +541,19 @@ mod tests {
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: WindowState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.sessions[0].mode, SessionMode::Direct);
+        assert_eq!(restored.workspaces[0].mode, WorkspaceMode::Direct);
         assert_eq!(
-            restored.sessions[1].mode,
-            SessionMode::Persistent { daemon_session_id: "ds-1".into() }
+            restored.workspaces[1].mode,
+            WorkspaceMode::Persistent { daemon_runtime_id: "ds-1".into() }
         );
-        assert!(restored.sessions[1].runtime.is_managed());
-        assert_eq!(restored.sessions[1].runtime.runtime_id.as_deref(), Some("ds-1"));
+        assert!(restored.workspaces[1].runtime.is_managed());
+        assert_eq!(restored.workspaces[1].runtime.runtime_id.as_deref(), Some("ds-1"));
     }
 
     #[test]
     fn new_managed_local_session_sets_runtime_metadata() {
         let session =
-            SessionState::new_managed_local("Workspace".into(), WorkspacePolicy::Ephemeral, None);
+            WorkspaceState::new_managed_local("Workspace".into(), WorkspacePolicy::Ephemeral, None);
         assert!(session.uses_managed_runtime());
         assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
         assert_eq!(session.runtime.policy, WorkspacePolicy::Ephemeral);
@@ -560,10 +564,10 @@ mod tests {
 
     #[test]
     fn normalize_runtime_metadata_migrates_remote_legacy_mode() {
-        let mut session = SessionState::new("Remote".into());
-        session.mode = SessionMode::RemotePersistent {
+        let mut session = WorkspaceState::new("Remote".into());
+        session.mode = WorkspaceMode::RemotePersistent {
             host: "deploy@example.com".into(),
-            daemon_session_id: "runtime-1".into(),
+            daemon_runtime_id: "runtime-1".into(),
         };
         session.normalize_runtime_metadata();
         assert!(session.runtime.is_managed());
@@ -588,11 +592,11 @@ mod tests {
             "mode": {
                 "remote-persistent": {
                     "host": "deploy@example.com",
-                    "daemon_session_id": ""
+                    "daemon_runtime_id": ""
                 }
             }
         }"#;
-        let mut session: SessionState = serde_json::from_str(json).unwrap();
+        let mut session: WorkspaceState = serde_json::from_str(json).unwrap();
         session.normalize_runtime_metadata();
         assert!(session.runtime.is_managed());
         assert_eq!(
@@ -603,9 +607,9 @@ mod tests {
         assert_eq!(session.runtime.runtime_id, None);
         assert_eq!(
             session.mode,
-            SessionMode::RemotePersistent {
+            WorkspaceMode::RemotePersistent {
                 host: "deploy@example.com".into(),
-                daemon_session_id: String::new(),
+                daemon_runtime_id: String::new(),
             }
         );
         assert_eq!(session.runtime.pane_bindings.get("pane-1").map(String::as_str), Some("pane-1"));
@@ -615,21 +619,21 @@ mod tests {
     #[test]
     fn default_window_state_is_valid() {
         let state = WindowState::default();
-        assert_eq!(state.sessions.len(), 1);
-        assert_eq!(state.active_session_index, 0);
-        assert!(!state.sessions[0].uuid.is_empty());
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.active_workspace_index, 0);
+        assert!(!state.workspaces[0].uuid.is_empty());
     }
 
     #[test]
     fn new_session_starts_with_empty_shell_recovery_for_initial_terminal() {
-        let session = SessionState::new("Work".into());
+        let session = WorkspaceState::new("Work".into());
         let terminal_uuid = session.layout.terminal_uuids().into_iter().next().unwrap();
         assert_eq!(session.recovery_for(&terminal_uuid), Some(&PaneRecovery::empty_shell()));
     }
 
     #[test]
     fn prune_recovery_removes_closed_terminal_entries() {
-        let mut session = SessionState {
+        let mut session = WorkspaceState {
             uuid: "s1".into(),
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
@@ -670,9 +674,9 @@ mod tests {
             ]),
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         };
@@ -685,16 +689,16 @@ mod tests {
 
     #[test]
     fn normalize_active_terminal_falls_back_to_first_live_terminal() {
-        let mut session = SessionState {
+        let mut session = WorkspaceState {
             uuid: "s1".into(),
             name: "Work".into(),
             layout: hsplit(term("t1"), term("t2")),
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("ghost".into()),
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         };
@@ -719,59 +723,86 @@ mod tests {
                 startup: Vec::new(),
             },
         );
-        let session = SessionState {
+        let session = WorkspaceState {
             uuid: "session-1".into(),
             name: "Prod".into(),
             layout: term("t1"),
             terminal_recovery,
             active_terminal_uuid: Some("t1".into()),
             input_sync: false,
-            mode: SessionMode::default(),
+            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
-            color: SessionColor::default(),
+            color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
             user_renamed: false,
         };
         let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
         assert_eq!(session, restored);
     }
 
     #[test]
     fn zoom_state_defaults_to_none_for_backward_compat() {
         let json = r#"{"uuid":"s1","name":"W","layout":{"Terminal":{"uuid":"t1"}}}"#;
-        let session: SessionState = serde_json::from_str(json).unwrap();
+        let session: WorkspaceState = serde_json::from_str(json).unwrap();
         assert!(session.zoomed_terminal_uuid.is_none());
     }
 
     #[test]
     fn zoom_state_roundtrips_through_serde() {
-        let mut session = SessionState::default_for_test();
+        let mut session = WorkspaceState::default_for_test();
         session.zoomed_terminal_uuid = Some("test-terminal-uuid".to_string());
         let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.zoomed_terminal_uuid.as_deref(), Some("test-terminal-uuid"));
     }
 
     #[test]
     fn is_zoomed_reflects_zoom_state() {
-        let mut session = SessionState::default_for_test();
+        let mut session = WorkspaceState::default_for_test();
         assert!(!session.is_zoomed());
         session.zoomed_terminal_uuid = Some("test-terminal-uuid".to_string());
         assert!(session.is_zoomed());
+    }
+
+    #[test]
+    fn window_state_loads_legacy_sessions_key() {
+        let json = r#"{
+            "sessions": [{"uuid":"s1","name":"Old","layout":{"Terminal":{"uuid":"t1"}}}],
+            "active_session_index": 0,
+            "width": 800,
+            "height": 600,
+            "is_maximized": false
+        }"#;
+        let state: WindowState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.workspaces[0].name, "Old");
+        assert_eq!(state.active_workspace_index, 0);
+    }
+
+    #[test]
+    fn workspace_mode_loads_legacy_daemon_session_id() {
+        let json = r#"{
+            "uuid": "s1",
+            "name": "Legacy",
+            "layout": {"Terminal": {"uuid": "t1"}},
+            "mode": {"persistent": {"daemon_session_id": "ds-1"}}
+        }"#;
+        let ws: WorkspaceState = serde_json::from_str(json).unwrap();
+        assert_eq!(ws.mode.daemon_runtime_id(), Some("ds-1"));
     }
 }
 
 #[cfg(test)]
 mod module_boundary_tests {
     use super::*;
-    use crate::session::layout::SplitOrientation;
+    use crate::workspace::layout::SplitOrientation;
 
     /// Verify that layout tree operations and state recovery stay consistent
     /// across the module boundary after the layout/state/recovery split.
     #[test]
     fn split_then_prune_recovery_respects_module_boundary() {
-        let mut session = SessionState::new("Test".into());
+        let mut session = WorkspaceState::new("Test".into());
         let uuid = session.layout.terminal_uuids()[0].clone();
 
         let (new_layout, new_uuid) = session
@@ -794,7 +825,7 @@ mod module_boundary_tests {
 
     #[test]
     fn new_managed_remote_sets_endpoint_and_mode() {
-        let session = SessionState::new_managed_remote(
+        let session = WorkspaceState::new_managed_remote(
             "Work".into(),
             "server.example.com",
             WorkspacePolicy::Persistent,
@@ -808,9 +839,9 @@ mod module_boundary_tests {
         assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
         assert_eq!(
             session.mode,
-            SessionMode::RemotePersistent {
+            WorkspaceMode::RemotePersistent {
                 host: "server.example.com".into(),
-                daemon_session_id: String::new(),
+                daemon_runtime_id: String::new(),
             }
         );
         assert_eq!(
@@ -821,33 +852,33 @@ mod module_boundary_tests {
 
     #[test]
     fn session_color_survives_serde_roundtrip() {
-        let mut session = SessionState::new("Test".into());
-        session.color = SessionColor::Purple;
+        let mut session = WorkspaceState::new("Test".into());
+        session.color = WorkspaceColor::Purple;
         let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.color, SessionColor::Purple);
+        let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.color, WorkspaceColor::Purple);
     }
 
     #[test]
     fn session_color_defaults_to_blue_for_old_state() {
-        let mut session = SessionState::new("Test".into());
-        session.color = SessionColor::Blue;
+        let mut session = WorkspaceState::new("Test".into());
+        session.color = WorkspaceColor::Blue;
         let json = serde_json::to_string(&session).unwrap();
         // Remove color field to simulate old state.
         let json = json.replace(r#","color":"blue""#, "");
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.color, SessionColor::Blue);
+        let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.color, WorkspaceColor::Blue);
     }
 
     #[test]
     fn session_color_all_has_eight_variants() {
-        assert_eq!(SessionColor::ALL.len(), 8);
+        assert_eq!(WorkspaceColor::ALL.len(), 8);
     }
 
     #[test]
     fn session_color_css_classes_are_unique() {
         let classes: std::collections::HashSet<_> =
-            SessionColor::ALL.iter().map(|c| c.css_class()).collect();
+            WorkspaceColor::ALL.iter().map(|c| c.css_class()).collect();
         assert_eq!(classes.len(), 8);
     }
 
@@ -861,7 +892,7 @@ mod module_boundary_tests {
     fn accent_css_has_dark_and_light_rules_for_every_color() {
         let dark = crate::application::accent_css_for_dark(true);
         let light = crate::application::accent_css_for_dark(false);
-        for color in SessionColor::ALL {
+        for color in WorkspaceColor::ALL {
             let cls = color.css_class();
             assert!(dark.contains(&format!(".{cls}")), ".{cls} missing from dark accent CSS");
             assert!(light.contains(&format!(".{cls}")), ".{cls} missing from light accent CSS");
@@ -943,16 +974,16 @@ mod module_boundary_tests {
     #[test]
     fn user_renamed_defaults_to_false_on_deserialize() {
         let json = r#"{"uuid":"u","name":"Test","layout":{"Terminal":{"uuid":"t"}}}"#;
-        let session: SessionState = serde_json::from_str(json).unwrap();
+        let session: WorkspaceState = serde_json::from_str(json).unwrap();
         assert!(!session.user_renamed);
     }
 
     #[test]
     fn user_renamed_roundtrips_through_serde() {
-        let mut session = SessionState::new("Test".into());
+        let mut session = WorkspaceState::new("Test".into());
         session.user_renamed = true;
         let json = serde_json::to_string(&session).unwrap();
-        let restored: SessionState = serde_json::from_str(&json).unwrap();
+        let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
         assert!(restored.user_renamed);
     }
 }

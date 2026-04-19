@@ -72,21 +72,21 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateSession(proto::CreateSession {
+            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
                 name: "shell-editing".into(),
                 policy: proto::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let session_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::SessionCreated(created)) => created.session_id,
-        other => panic!("expected SessionCreated, got {other:?}"),
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                session_id: session_id.clone(),
+                runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
@@ -101,8 +101,8 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.clone(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.clone(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -112,7 +112,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    (session_id, pane_id)
+    (runtime_id, pane_id)
 }
 
 async fn wait_for_prompt(client: &mut TestClient) {
@@ -133,7 +133,7 @@ async fn wait_for_prompt(client: &mut TestClient) {
 
 async fn resize_pane(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     pane_id: &[u8],
     cols: u32,
     rows: u32,
@@ -141,7 +141,7 @@ async fn resize_pane(
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Resize(proto::Resize {
-                session_id: session_id.to_vec(),
+                runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
                 cols,
                 rows,
@@ -169,28 +169,28 @@ fn pane_scrollback(snapshot: &proto::Snapshot, pane_id: &[u8]) -> bytes::Bytes {
 
 async fn reattach_snapshot_bytes(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     pane_id: &[u8],
 ) -> bytes::Bytes {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachSession(proto::DetachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+                runtime_id: runtime_id.to_vec(),
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::SessionDetached(_)) => break,
+            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
             Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected SessionDetached, got {other:?}"),
+            other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -205,19 +205,19 @@ async fn reattach_snapshot_bytes(
     pane_scrollback(&snapshot, pane_id)
 }
 
-async fn snapshot_scrollback(client: &mut TestClient, session_id: &[u8], pane_id: &[u8]) -> String {
-    normalize_scrollback(&reattach_snapshot_bytes(client, session_id, pane_id).await)
+async fn snapshot_scrollback(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8]) -> String {
+    normalize_scrollback(&reattach_snapshot_bytes(client, runtime_id, pane_id).await)
 }
 
 async fn attach_snapshot_bytes(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     pane_id: &[u8],
 ) -> bytes::Bytes {
     client
         .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachSession(proto::AttachSession {
-                session_id: session_id.to_vec(),
+            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
                 attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
@@ -234,10 +234,10 @@ async fn attach_snapshot_bytes(
 
 async fn attach_and_collect_prompt(
     client: &mut TestClient,
-    session_id: &[u8],
+    runtime_id: &[u8],
     pane_id: &[u8],
 ) -> String {
-    let mut output = attach_snapshot_bytes(client, session_id, pane_id).await.to_vec();
+    let mut output = attach_snapshot_bytes(client, runtime_id, pane_id).await.to_vec();
     if String::from_utf8_lossy(&output).contains(PROMPT) {
         return normalize_scrollback(&output);
     }
@@ -257,11 +257,11 @@ async fn attach_and_collect_prompt(
     panic!("shell prompt did not arrive after reattach");
 }
 
-async fn send_input(client: &mut TestClient, session_id: &[u8], pane_id: &[u8], data: &[u8]) {
+async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
     client
         .send(&proto::ClientMessage {
             msg: Some(proto::client_message::Msg::Input(proto::Input {
-                session_id: session_id.to_vec(),
+                runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
                 data: bytes::Bytes::copy_from_slice(data),
             })),
@@ -300,15 +300,15 @@ async fn shell_line_editing_bytes_render_expected_output_after_snapshot_restore(
     let (socket_path, mut server_child) = start_binary_server(&tmp).await;
 
     let mut client = TestClient::connect(&socket_path).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     wait_for_prompt(&mut client).await;
 
     // Type `echo abxd`, move left once, backspace the `x`, insert `c`,
     // then press Return. This should execute `echo abcd`.
-    send_input(&mut client, &session_id, &pane_id, b"echo abxd\x1b[D\x7fc\r").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"echo abxd\x1b[D\x7fc\r").await;
 
     tokio::time::sleep(Duration::from_millis(800)).await;
-    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    let scrollback = snapshot_scrollback(&mut client, &runtime_id, &pane_id).await;
 
     assert!(
         scrollback.contains("\nabcd\nPROMPT> "),
@@ -324,23 +324,23 @@ async fn shell_line_editing_survives_detach_mid_command_and_executes_after_reatt
     let (socket_path, mut server_child) = start_binary_server(&tmp).await;
 
     let mut client = TestClient::connect(&socket_path).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     wait_for_prompt(&mut client).await;
 
-    send_input(&mut client, &session_id, &pane_id, b"echo abxd\x1b[D\x7f").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"echo abxd\x1b[D\x7f").await;
     tokio::time::sleep(Duration::from_millis(250)).await;
 
-    let partial_snapshot = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    let partial_snapshot = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
     assert!(
         contains_bytes(&partial_snapshot, b"echo abxd"),
         "expected the in-progress command to survive reattach.\nsnapshot bytes: {:?}",
         String::from_utf8_lossy(&partial_snapshot)
     );
 
-    send_input(&mut client, &session_id, &pane_id, b"c\r").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"c\r").await;
     tokio::time::sleep(Duration::from_millis(800)).await;
 
-    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    let scrollback = snapshot_scrollback(&mut client, &runtime_id, &pane_id).await;
     assert!(
         scrollback.contains("\nabcd\nPROMPT> "),
         "expected reattached line editing to continue at the restored cursor.\nscrollback:\n{scrollback:?}"
@@ -355,19 +355,19 @@ async fn wrapped_shell_line_editing_survives_detach_and_reattach() {
     let (socket_path, mut server_child) = start_binary_server(&tmp).await;
 
     let mut client = TestClient::connect(&socket_path).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     wait_for_prompt(&mut client).await;
-    resize_pane(&mut client, &session_id, &pane_id, 12, 24).await;
+    resize_pane(&mut client, &runtime_id, &pane_id, 12, 24).await;
 
-    send_input(&mut client, &session_id, &pane_id, b"echo 0123456789abxd\x1b[D\x7f").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"echo 0123456789abxd\x1b[D\x7f").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
 
-    send_input(&mut client, &session_id, &pane_id, b"c\r").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"c\r").await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    let scrollback = snapshot_scrollback(&mut client, &runtime_id, &pane_id).await;
     assert!(
         scrollback.contains("0123456789abcd\nPROMPT> "),
         "expected wrapped line editing to survive reattach with the cursor in the right column.\nscrollback:\n{scrollback:?}"
@@ -382,23 +382,23 @@ async fn formatted_output_survives_reattach_and_allows_follow_up_input() {
     let (socket_path, mut server_child) = start_binary_server(&tmp).await;
 
     let mut client = TestClient::connect(&socket_path).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     wait_for_prompt(&mut client).await;
 
-    send_input(&mut client, &session_id, &pane_id, b"printf $'\\033[31mRED\\033[0m\\n'\r").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"printf $'\\033[31mRED\\033[0m\\n'\r").await;
     tokio::time::sleep(Duration::from_millis(600)).await;
 
-    let snapshot_bytes = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    let snapshot_bytes = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
     assert!(
         contains_bytes(&snapshot_bytes, b"\x1b[31mRED\x1b[0m"),
         "expected ANSI formatting bytes to survive snapshot replay.\nsnapshot bytes: {:?}",
         String::from_utf8_lossy(&snapshot_bytes)
     );
 
-    send_input(&mut client, &session_id, &pane_id, b"echo AFTER\r").await;
+    send_input(&mut client, &runtime_id, &pane_id, b"echo AFTER\r").await;
     tokio::time::sleep(Duration::from_millis(600)).await;
 
-    let scrollback = snapshot_scrollback(&mut client, &session_id, &pane_id).await;
+    let scrollback = snapshot_scrollback(&mut client, &runtime_id, &pane_id).await;
     assert!(
         scrollback.contains("RED") && scrollback.contains("AFTER\nPROMPT> "),
         "expected formatted output and follow-up typing to survive reattach.\nscrollback:\n{scrollback:?}"
@@ -414,10 +414,10 @@ fn graceful_restart_does_not_fossilize_stale_prompt_lines() {
         let (socket_path, mut server_child) = start_binary_server(&tmp).await;
 
         let mut client = TestClient::connect(&socket_path).await;
-        let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+        let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
         wait_for_prompt(&mut client).await;
 
-        send_input(&mut client, &session_id, &pane_id, b"echo cycle-0\r").await;
+        send_input(&mut client, &runtime_id, &pane_id, b"echo cycle-0\r").await;
         wait_for_prompt(&mut client).await;
         shutdown_server(&mut client, &mut server_child).await;
 
@@ -425,13 +425,13 @@ fn graceful_restart_does_not_fossilize_stale_prompt_lines() {
         let mut client = TestClient::connect(&socket_path).await;
         client.handshake().await;
 
-        let first_restart = attach_and_collect_prompt(&mut client, &session_id, &pane_id).await;
+        let first_restart = attach_and_collect_prompt(&mut client, &runtime_id, &pane_id).await;
         assert!(
             !first_restart.contains("PROMPT> PROMPT> "),
             "first restart should not replay stacked prompts.\nscrollback:\n{first_restart:?}"
         );
 
-        send_input(&mut client, &session_id, &pane_id, b"echo cycle-1\r").await;
+        send_input(&mut client, &runtime_id, &pane_id, b"echo cycle-1\r").await;
         wait_for_prompt(&mut client).await;
         shutdown_server(&mut client, &mut server_child).await;
 
@@ -439,7 +439,7 @@ fn graceful_restart_does_not_fossilize_stale_prompt_lines() {
         let mut client = TestClient::connect(&socket_path).await;
         client.handshake().await;
 
-        let second_restart = attach_and_collect_prompt(&mut client, &session_id, &pane_id).await;
+        let second_restart = attach_and_collect_prompt(&mut client, &runtime_id, &pane_id).await;
         assert!(
             !second_restart.contains("PROMPT> PROMPT> "),
             "repeated graceful restarts must not fossilize stale prompt tails.\nscrollback:\n{second_restart:?}"
@@ -463,11 +463,11 @@ async fn reattach_without_resize_does_not_duplicate_prompt() {
     let (socket_path, mut server_child) = start_binary_server(&tmp).await;
 
     let mut client = TestClient::connect(&socket_path).await;
-    let (session_id, pane_id) = setup_attached_pane(&mut client).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
     wait_for_prompt(&mut client).await;
 
     // Detach and reattach without sending a resize.
-    let scrollback = reattach_snapshot_bytes(&mut client, &session_id, &pane_id).await;
+    let scrollback = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
     let text = normalize_scrollback(&scrollback);
 
     // The snapshot should end with exactly one prompt, not a duplicate.
