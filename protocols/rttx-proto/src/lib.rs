@@ -38,6 +38,9 @@ pub mod v3_terminal_input;
 /// V3 error model: typed `ProtocolError` builders and `ErrorKind` classification (RFC-021 Section 11).
 pub mod v3_error;
 
+/// V3 snapshot and output delta: builders and helpers (RFC-021 Sections 7–8).
+pub mod v3_snapshot;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
