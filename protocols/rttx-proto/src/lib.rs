@@ -41,6 +41,9 @@ pub mod v3_error;
 /// V3 snapshot and output delta: builders and helpers (RFC-021 Sections 7–8).
 pub mod v3_snapshot;
 
+/// V3 chunked scrollback: builders, validation, and capability gating (RFC-021 Section 8, `OPT_CHUNKED_SCROLLBACK`).
+pub mod v3_scrollback;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
