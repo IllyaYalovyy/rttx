@@ -44,6 +44,9 @@ pub mod v3_snapshot;
 /// V3 chunked scrollback: builders, validation, and capability gating (RFC-021 Section 8, `OPT_CHUNKED_SCROLLBACK`).
 pub mod v3_scrollback;
 
+/// V3 resync: capability gating, builders, and overflow handling (RFC-021 Section 8, `OPT_RESYNC`).
+pub mod v3_resync;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
