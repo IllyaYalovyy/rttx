@@ -205,6 +205,28 @@ message AttachBlocked {
   uint32 read_only_client_count = 4;
 }
 
+// ─── Runtime takeover (OPT_RUNTIME_TAKEOVER) ─────────────────────────
+
+message TakeoverRuntime {
+  bytes runtime_id = 1;
+}
+
+message TakeoverCompleted {
+  bytes runtime_id = 1;
+  uint64 runtime_revision = 2;
+}
+
+message LeaseLost {
+  bytes runtime_id = 1;
+  uint64 runtime_revision = 2;
+  bytes new_owner_id = 3;
+}
+
+message OwnerDisconnected {
+  bytes runtime_id = 1;
+  uint64 runtime_revision = 2;
+}
+
 // ─── Runtime inventory ───────────────────────────────────────────────
 
 message RuntimeList {
@@ -430,6 +452,7 @@ message ClientEnvelope {
     TerminateRuntime terminate_runtime = 23;
     RenameRuntime rename_runtime = 24;
     ListRuntimes list_runtimes = 25;
+    TakeoverRuntime takeover_runtime = 26;  // OPT_RUNTIME_TAKEOVER
 
     // Pane lifecycle
     CreatePane create_pane = 30;
@@ -466,6 +489,9 @@ message ServerEnvelope {
     RuntimeRenamed runtime_renamed = 24;
     RuntimeList runtime_list = 25;
     AttachBlocked attach_blocked = 26;
+    TakeoverCompleted takeover_completed = 27;  // OPT_RUNTIME_TAKEOVER
+    LeaseLost lease_lost = 28;                  // OPT_RUNTIME_TAKEOVER
+    OwnerDisconnected owner_disconnected = 29;  // OPT_RUNTIME_TAKEOVER
 
     // Pane lifecycle events
     PaneCreated pane_created = 30;

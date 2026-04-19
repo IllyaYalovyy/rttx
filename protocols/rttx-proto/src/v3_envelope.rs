@@ -272,6 +272,14 @@ mod tests {
         assert!(!is_fire_and_forget(&cmd));
     }
 
+    #[test]
+    fn takeover_runtime_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::TakeoverRuntime(v3::TakeoverRuntime {
+            runtime_id: rid(),
+        });
+        assert!(!is_fire_and_forget(&cmd));
+    }
+
     // ── build_client_envelope ──
 
     #[test]

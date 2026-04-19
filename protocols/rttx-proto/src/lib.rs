@@ -50,6 +50,9 @@ pub mod v3_resync;
 /// V3 runtime inventory: capability gating, builders, and field stripping (RFC-021 Section 9, `OPT_RUNTIME_INVENTORY_V2`).
 pub mod v3_inventory;
 
+/// V3 runtime takeover: capability gating, builders, and lease events (RFC-021 Section 10, `OPT_RUNTIME_TAKEOVER`).
+pub mod v3_takeover;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
@@ -866,6 +869,13 @@ mod v3_envelope_tests {
                 request_id: 12,
                 command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
             },
+            // Takeover (OPT_RUNTIME_TAKEOVER)
+            v3::ClientEnvelope {
+                request_id: 13,
+                command: Some(v3::client_envelope::Command::TakeoverRuntime(
+                    v3::TakeoverRuntime { runtime_id: rt.clone() },
+                )),
+            },
         ];
 
         for env in &envelopes {
@@ -1078,6 +1088,33 @@ mod v3_envelope_tests {
                     user_action_required: false,
                     retry_after_seconds: 0,
                 })),
+            },
+            // Takeover events (OPT_RUNTIME_TAKEOVER)
+            v3::ServerEnvelope {
+                request_id: 13,
+                payload: Some(v3::server_envelope::Payload::TakeoverCompleted(
+                    v3::TakeoverCompleted {
+                        runtime_id: rt.clone(),
+                        runtime_revision: 50,
+                    },
+                )),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::LeaseLost(v3::LeaseLost {
+                    runtime_id: rt.clone(),
+                    runtime_revision: 51,
+                    new_owner_id: rid(),
+                })),
+            },
+            v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::OwnerDisconnected(
+                    v3::OwnerDisconnected {
+                        runtime_id: rt.clone(),
+                        runtime_revision: 52,
+                    },
+                )),
             },
         ];
 
