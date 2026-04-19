@@ -438,6 +438,8 @@ impl Window {
             return false;
         };
 
+        let saved_scroll = target.vte().vadjustment().map(|adj| adj.value());
+
         let pre_split_position = match orientation {
             SplitOrientation::Horizontal => target.width() / 2,
             SplitOrientation::Vertical => target.height() / 2,
@@ -493,6 +495,19 @@ impl Window {
             }
         };
 
+        let restore_target_scroll = |target_uuid: &str, imp: &imp::Window| {
+            if let Some(value) = saved_scroll
+                && let Some(term) = imp.terminals.borrow().get(target_uuid)
+            {
+                let vte = term.vte().clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(adj) = vte.vadjustment() {
+                        adj.set_value(value);
+                    }
+                });
+            }
+        };
+
         if let Ok(stack) = parent.clone().downcast::<gtk4::Stack>() {
             stack.remove(&target);
             let branch = build_branch();
@@ -509,6 +524,7 @@ impl Window {
             if let Some(term) = imp.terminals.borrow().get(new_terminal_uuid) {
                 term.ensure_shell_spawned_when_ready();
             }
+            restore_target_scroll(target_uuid, imp);
             return true;
         }
 
@@ -551,11 +567,15 @@ impl Window {
         if let Some(term) = imp.terminals.borrow().get(new_terminal_uuid) {
             term.ensure_shell_spawned_when_ready();
         }
+        restore_target_scroll(target_uuid, imp);
         true
     }
 
     pub(super) fn rebuild_session_content(&self, session_uuid: &str, session_state: &SessionState) {
         let imp = self.imp();
+
+        let saved_positions = self.save_session_scroll_positions(session_state);
+
         let previously_visible =
             imp.session_stack.visible_child_name().map(|name| name.to_string());
 
@@ -582,9 +602,33 @@ impl Window {
             session::schedule_initial_paned_ratios(&content, &session_state.layout);
         }
 
+        self.restore_scroll_positions(&saved_positions);
+
         self.remove_stale_terminal_map_entries(imp);
         self.refresh_sidebar_subtitle(session_uuid);
         self.sync_sidebar_to_visible_session();
+    }
+
+    /// Save the VTE scroll position for every terminal in a session.
+    fn save_session_scroll_positions(&self, session_state: &SessionState) -> Vec<(String, f64)> {
+        let mut positions = Vec::new();
+        for uuid in session_state.layout.terminal_uuids() {
+            if let Some(handle) = self.terminal_handle(&uuid)
+                && let Some(value) = handle.scroll_position()
+            {
+                positions.push((uuid, value));
+            }
+        }
+        positions
+    }
+
+    /// Schedule restoration of saved scroll positions after widgets are realized.
+    fn restore_scroll_positions(&self, positions: &[(String, f64)]) {
+        for (uuid, value) in positions {
+            if let Some(handle) = self.terminal_handle(uuid) {
+                handle.restore_scroll_position(*value);
+            }
+        }
     }
 
     /// Remove terminal map entries that no longer belong to any workspace layout.

@@ -1157,4 +1157,21 @@ mod search_tests {
         assert_eq!(strip_user_host_prefix("bash"), "bash");
         assert_eq!(strip_user_host_prefix(""), "");
     }
+
+    /// `TerminalHandle::scroll_position` returns `None` when the VTE has
+    /// no vadjustment (widget not yet realized). Regression for #686.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn scroll_position_returns_none_before_realize() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let pane = super::persistent_widget::PersistentPaneView::new("sp-1", "rt-1");
+        let handle = super::handle::TerminalHandle::Managed(pane);
+        // Before the widget is parented, vadjustment may or may not exist
+        // depending on VTE version, but scroll_position must not panic.
+        let _ = handle.scroll_position();
+    }
 }

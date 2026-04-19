@@ -1,3 +1,5 @@
+use gtk4::glib;
+
 use crate::terminal::persistent_widget::PersistentPaneView;
 use crate::terminal::widget::TerminalWidget;
 use vte4::prelude::*;
@@ -15,6 +17,30 @@ impl TerminalHandle {
             Self::Direct(terminal) => terminal.vte(),
             Self::Managed(pane) => pane.vte(),
         }
+    }
+
+    /// Capture the current VTE scroll position as a vadjustment value.
+    #[must_use]
+    pub fn scroll_position(&self) -> Option<f64> {
+        self.vte().vadjustment().map(|adj| adj.value())
+    }
+
+    /// Schedule restoration of a saved scroll position after the next layout
+    /// pass. Reparenting resets the vadjustment, so the value must be
+    /// reapplied once GTK has laid out the widget.
+    pub fn restore_scroll_position(&self, value: f64) {
+        let vte = self.vte().clone();
+        // Use idle to let GTK finish the current reparenting/layout pass
+        // before touching the adjustment.
+        glib::idle_add_local_once(move || {
+            if let Some(adj) = vte.vadjustment() {
+                // Clamp to valid range — the upper bound may have changed
+                // if the terminal was resized during the rebuild.
+                let clamped =
+                    value.clamp(adj.lower(), (adj.upper() - adj.page_size()).max(adj.lower()));
+                adj.set_value(clamped);
+            }
+        });
     }
 
     /// Human-readable title for notifications and UI actions.

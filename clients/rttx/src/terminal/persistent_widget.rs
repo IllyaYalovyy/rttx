@@ -2073,4 +2073,90 @@ mod tests {
         pane.set_custom_title(None);
         assert_eq!(pane.title_label().label(), "bash : /var");
     }
+
+    /// Feeding a snapshot scrolls to the bottom of the scrollback.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn feed_snapshot_scrolls_to_bottom() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("scroll-1", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 480);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(100);
+
+        // Feed enough lines to create scrollback.
+        let mut data = Vec::new();
+        for i in 0..200 {
+            data.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        pane.feed_snapshot(&data);
+        pump_events(50);
+
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        let bottom = adj.upper() - adj.page_size();
+        assert!(
+            (adj.value() - bottom).abs() < 1.0,
+            "feed_snapshot should scroll to bottom, got {} expected ~{bottom}",
+            adj.value()
+        );
+
+        window.close();
+    }
+
+    /// Scroll position is accessible via vadjustment and can be saved/restored.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn scroll_position_save_restore_round_trip() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("scroll-rt", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 480);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(100);
+
+        // Feed enough lines to create scrollback.
+        let mut data = Vec::new();
+        for i in 0..200 {
+            data.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        pane.feed_snapshot(&data);
+        pump_events(50);
+
+        // Scroll up from the bottom.
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        let target = (adj.upper() - adj.page_size()) / 2.0;
+        adj.set_value(target);
+        pump_events(20);
+
+        let saved = adj.value();
+        assert!(
+            (saved - target).abs() < 1.0,
+            "scroll position should be near target {target}, got {saved}"
+        );
+
+        // Simulate reparenting: unparent and re-add.
+        window.set_child(None::<&gtk4::Widget>);
+        pump_events(20);
+        window.set_child(Some(&pane));
+        pump_events(20);
+
+        // Restore the saved position.
+        if let Some(adj) = pane.vte().vadjustment() {
+            adj.set_value(saved);
+        }
+        pump_events(20);
+
+        let restored = pane.vte().vadjustment().map_or(0.0, |a| a.value());
+        assert!(
+            (restored - saved).abs() < 1.0,
+            "restored scroll position should be near saved {saved}, got {restored}"
+        );
+
+        window.close();
+    }
 }
