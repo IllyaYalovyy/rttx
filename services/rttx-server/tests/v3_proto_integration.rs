@@ -360,3 +360,68 @@ fn v3_handshake_full_roundtrip_with_optional_capabilities() {
     assert!(!effective.contains(&(v3::Capability::OptDiagnostics as i32)));
     assert!(!effective.contains(&(v3::Capability::OptChunkedScrollback as i32)));
 }
+
+// ── V3 terminal modes integration tests ──
+
+use rttx_proto::v3_terminal_modes;
+
+#[test]
+fn v3_terminal_mode_changed_push_event_roundtrip() {
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+
+    let modes = v3::TerminalModeState {
+        bracketed_paste: true,
+        focus_reporting: true,
+        application_cursor_keys: true,
+        application_keypad: true,
+        alternate_screen: true,
+        cursor_hidden: true,
+        mouse_mode: v3::MouseMode::Any as i32,
+        sgr_mouse: true,
+    };
+
+    let env = v3_terminal_modes::build_mode_changed_envelope(runtime_id, pane_id, 42, modes);
+    assert!(v3_envelope::is_push_event(&env));
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.request_id, 0);
+
+    let Some(v3::server_envelope::Payload::TerminalModeChanged(changed)) = decoded.payload else {
+        panic!("expected TerminalModeChanged");
+    };
+    assert_eq!(changed.runtime_id, uuid_to_bytes(runtime_id));
+    assert_eq!(changed.pane_id, uuid_to_bytes(pane_id));
+    assert_eq!(changed.runtime_revision, 42);
+    let decoded_modes = changed.modes.expect("modes must be present");
+    assert!(decoded_modes.bracketed_paste);
+    assert!(decoded_modes.focus_reporting);
+    assert!(decoded_modes.application_cursor_keys);
+    assert!(decoded_modes.application_keypad);
+    assert!(decoded_modes.alternate_screen);
+    assert!(decoded_modes.cursor_hidden);
+    assert_eq!(decoded_modes.mouse_mode, v3::MouseMode::Any as i32);
+    assert!(decoded_modes.sgr_mouse);
+}
+
+#[test]
+fn v3_mouse_mode_conversion_covers_all_tracking_values() {
+    let cases: &[(u16, v3::MouseMode)] = &[
+        (0, v3::MouseMode::None),
+        (1000, v3::MouseMode::Normal),
+        (1002, v3::MouseMode::Button),
+        (1003, v3::MouseMode::Any),
+        (9999, v3::MouseMode::None),
+    ];
+    for &(tracking, expected) in cases {
+        let mode = v3_terminal_modes::mouse_mode_from_tracking_value(tracking);
+        assert_eq!(mode, expected, "tracking value {tracking}");
+        if tracking != 9999 {
+            let back = v3_terminal_modes::tracking_value_from_mouse_mode(mode);
+            assert_eq!(back, tracking, "roundtrip for tracking value {tracking}");
+        }
+    }
+}
