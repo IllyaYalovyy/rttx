@@ -23,6 +23,9 @@ pub mod v3 {
     include!(concat!(env!("OUT_DIR"), "/rttx.v3.rs"));
 }
 
+/// V3 handshake: version negotiation, capability validation, message builders.
+pub mod v3_handshake;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {
