@@ -880,3 +880,180 @@ fn v3_chunked_scrollback_capability_gating() {
     assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
     assert_eq!(e.operation, "GetScrollback");
 }
+
+// ── V3 resync integration tests (OPT_RESYNC) ──
+
+use rttx_proto::v3_resync;
+
+#[test]
+fn v3_resync_overflow_and_resync_roundtrip() {
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+    let id_gen = v3_envelope::RequestIdGenerator::new();
+
+    // 1. Server sends StreamOverflow push event
+    let overflow = v3_resync::build_stream_overflow(runtime_id, Some(pane_id), 5);
+    let overflow_env = v3_resync::build_stream_overflow_envelope(overflow);
+    assert!(v3_envelope::is_push_event(&overflow_env));
+
+    // Wire roundtrip for overflow
+    let mut buf = BytesMut::new();
+    encode_frame(&overflow_env, &mut buf).unwrap();
+    let decoded_overflow: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_overflow.request_id, 0);
+    let Some(v3::server_envelope::Payload::StreamOverflow(so)) = decoded_overflow.payload else {
+        panic!("expected StreamOverflow");
+    };
+    assert_eq!(so.runtime_id, uuid_to_bytes(runtime_id));
+    assert_eq!(so.pane_id, Some(uuid_to_bytes(pane_id)));
+    assert_eq!(so.dropped_count, 5);
+
+    // 2. Client sends ResyncRuntime request
+    let resync_req = v3_resync::build_resync_runtime(runtime_id);
+    let resync_env = v3_resync::build_resync_runtime_envelope(&id_gen, resync_req);
+    assert_ne!(resync_env.request_id, 0);
+    let saved_request_id = resync_env.request_id;
+
+    // Wire roundtrip for resync request
+    let mut buf = BytesMut::new();
+    encode_frame(&resync_env, &mut buf).unwrap();
+    let decoded_resync: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_resync.request_id, saved_request_id);
+    let Some(v3::client_envelope::Command::ResyncRuntime(rs)) = decoded_resync.command else {
+        panic!("expected ResyncRuntime command");
+    };
+    assert_eq!(rs.runtime_id, uuid_to_bytes(runtime_id));
+
+    // 3. Server responds with fresh RuntimeSnapshot
+    let pane = v3_snapshot::build_pane_snapshot(PaneSnapshotParams {
+        pane_id,
+        pane_output_seq: 200,
+        title: "bash".into(),
+        cwd: "/home/user".into(),
+        cols: 120,
+        rows: 40,
+        exit_status: None,
+        terminal_modes: v3::TerminalModeState::default(),
+        scrollback_tail: bytes::Bytes::from_static(b"$ ls\n"),
+        total_scrollback_bytes: 5,
+    });
+    let snapshot = v3_snapshot::build_runtime_snapshot(
+        runtime_id,
+        50,
+        v3::RuntimeClientRole::Writer,
+        vec![pane],
+    );
+    let snap_env = v3_resync::build_resync_response(saved_request_id, snapshot);
+    assert_eq!(snap_env.request_id, saved_request_id);
+    assert!(!v3_envelope::is_push_event(&snap_env));
+
+    // Wire roundtrip for snapshot response
+    let mut buf = BytesMut::new();
+    encode_frame(&snap_env, &mut buf).unwrap();
+    let decoded_snap: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded_snap.request_id, saved_request_id);
+    let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = decoded_snap.payload else {
+        panic!("expected RuntimeSnapshot");
+    };
+    assert_eq!(snap.runtime_id, uuid_to_bytes(runtime_id));
+    assert_eq!(snap.runtime_revision, 50);
+    assert_eq!(snap.panes.len(), 1);
+    assert_eq!(snap.panes[0].pane_output_seq, 200);
+}
+
+#[test]
+fn v3_resync_capability_gating() {
+    // With OPT_RESYNC negotiated
+    let caps_with =
+        vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::OptResync as i32];
+    assert!(v3_resync::is_supported(&caps_with));
+
+    // Without OPT_RESYNC
+    let caps_without = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+    assert!(!v3_resync::is_supported(&caps_without));
+
+    // Server returns error when capability not negotiated
+    let err = rttx_proto::v3_error::build_error(
+        v3::ErrorKind::UnsupportedCapability,
+        "OPT_RESYNC not negotiated",
+        "ResyncRuntime",
+    );
+    let env = rttx_proto::v3_error::build_error_response(1, err);
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    let Some(v3::server_envelope::Payload::Error(e)) = decoded.payload else {
+        panic!("expected Error payload");
+    };
+    assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
+    assert_eq!(e.operation, "ResyncRuntime");
+}
+
+#[test]
+fn v3_resync_runtime_level_overflow() {
+    // Runtime-level overflow (no pane_id)
+    let runtime_id = uuid::Uuid::new_v4();
+    let overflow = v3_resync::build_stream_overflow(runtime_id, None, 10);
+    let env = v3_resync::build_stream_overflow_envelope(overflow);
+
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    let Some(v3::server_envelope::Payload::StreamOverflow(so)) = decoded.payload else {
+        panic!("expected StreamOverflow");
+    };
+    assert_eq!(so.runtime_id, uuid_to_bytes(runtime_id));
+    assert!(so.pane_id.is_none());
+    assert_eq!(so.dropped_count, 10);
+}
+
+#[test]
+fn v3_resync_seq_gap_triggers_resync_when_supported() {
+    let id_gen = v3_envelope::RequestIdGenerator::new();
+    let runtime_id = uuid::Uuid::new_v4();
+
+    // Client detects gap in pane_output_seq
+    let gap = v3_snapshot::detect_output_seq_gap(10, 15);
+    assert_eq!(gap, Some(5));
+
+    // Client has OPT_RESYNC → sends ResyncRuntime
+    let caps = vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::OptResync as i32];
+    assert!(v3_resync::is_supported(&caps));
+
+    let req = v3_resync::build_resync_runtime(runtime_id);
+    let env = v3_resync::build_resync_runtime_envelope(&id_gen, req);
+    assert_ne!(env.request_id, 0);
+
+    // Wire roundtrip
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+    let Some(v3::client_envelope::Command::ResyncRuntime(rs)) = decoded.command else {
+        panic!("expected ResyncRuntime");
+    };
+    assert_eq!(rs.runtime_id, uuid_to_bytes(runtime_id));
+}
+
+#[test]
+fn v3_without_resync_server_disconnects_client() {
+    // Without OPT_RESYNC, server sends ProtocolError with StreamOverflow kind
+    let caps = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+    assert!(!v3_resync::is_supported(&caps));
+
+    let err = rttx_proto::v3_error::build_error(
+        v3::ErrorKind::StreamOverflow,
+        "push channel overflow; client does not support OPT_RESYNC — disconnecting",
+        "push",
+    );
+    assert!(err.retryable);
+
+    let env = rttx_proto::v3_error::build_error_response(0, err);
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    let Some(v3::server_envelope::Payload::Error(e)) = decoded.payload else {
+        panic!("expected Error payload");
+    };
+    assert_eq!(e.kind, v3::ErrorKind::StreamOverflow as i32);
+    assert!(e.retryable);
+}
