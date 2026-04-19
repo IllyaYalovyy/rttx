@@ -149,8 +149,10 @@ fn v3_handshake_happy_path() {
     assert!(v3_handshake::validate_server_capabilities(&decoded_server.capabilities).is_ok());
 
     // Effective set is intersection (core only, since server has no optional)
-    let effective =
-        v3_handshake::effective_capabilities(&client_hello.capabilities, &decoded_server.capabilities);
+    let effective = v3_handshake::effective_capabilities(
+        &client_hello.capabilities,
+        &decoded_server.capabilities,
+    );
     assert_eq!(effective.len(), 6);
     assert!(!effective.contains(&(v3::Capability::OptDiagnostics as i32)));
 }
@@ -190,8 +192,7 @@ fn v3_handshake_missing_core_capability_rejected() {
         .filter(|c| **c != v3::Capability::CoreFocusEvents)
         .copied()
         .collect();
-    let server_hello =
-        v3_handshake::build_server_hello(server_id, "0.3.0", 3, &incomplete_caps);
+    let server_hello = v3_handshake::build_server_hello(server_id, "0.3.0", 3, &incomplete_caps);
 
     let result = v3_handshake::validate_server_capabilities(&server_hello.capabilities);
     let missing = result.unwrap_err();
@@ -226,8 +227,10 @@ fn v3_handshake_full_roundtrip_with_optional_capabilities() {
     let client_hello = v3_handshake::build_client_hello(client_id, "rttx", "0.4.0", &client_caps);
     let server_hello = v3_handshake::build_server_hello(server_id, "0.4.0", 3, &server_caps);
 
-    let effective =
-        v3_handshake::effective_capabilities(&client_hello.capabilities, &server_hello.capabilities);
+    let effective = v3_handshake::effective_capabilities(
+        &client_hello.capabilities,
+        &server_hello.capabilities,
+    );
 
     // Should have 6 core + OPT_RESYNC (shared), not OPT_DIAGNOSTICS or OPT_CHUNKED_SCROLLBACK
     assert_eq!(effective.len(), 7);

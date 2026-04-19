@@ -86,9 +86,7 @@ pub fn negotiate_version(
 ///
 /// Returns `Ok(())` if all core capabilities are present, or `Err` with the
 /// list of missing core capabilities.
-pub fn validate_server_capabilities(
-    server_caps: &[i32],
-) -> Result<(), Vec<v3::Capability>> {
+pub fn validate_server_capabilities(server_caps: &[i32]) -> Result<(), Vec<v3::Capability>> {
     let missing: Vec<v3::Capability> = CORE_CAPABILITIES
         .iter()
         .filter(|core| !server_caps.contains(&(**core as i32)))
