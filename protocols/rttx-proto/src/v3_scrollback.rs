@@ -279,8 +279,7 @@ mod tests {
 
     #[test]
     fn chunk_response_echoes_request_id() {
-        let chunk =
-            build_scrollback_chunk(rt(), pn(), 0, bytes::Bytes::from_static(b"data"), true);
+        let chunk = build_scrollback_chunk(rt(), pn(), 0, bytes::Bytes::from_static(b"data"), true);
         let env = build_scrollback_chunk_response(42, chunk.clone());
         assert_eq!(env.request_id, 42);
         match env.payload {
@@ -293,8 +292,7 @@ mod tests {
 
     #[test]
     fn chunk_response_is_not_push_event() {
-        let chunk =
-            build_scrollback_chunk(rt(), pn(), 0, bytes::Bytes::from_static(b"data"), true);
+        let chunk = build_scrollback_chunk(rt(), pn(), 0, bytes::Bytes::from_static(b"data"), true);
         let env = build_scrollback_chunk_response(1, chunk);
         assert!(!crate::v3_envelope::is_push_event(&env));
     }
