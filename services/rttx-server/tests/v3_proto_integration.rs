@@ -1160,12 +1160,11 @@ fn v3_profile_handshake_core_only_daemon() {
 
     let server_caps = core_only_caps();
 
-    let client_hello =
-        v3_handshake::build_client_hello(client_id, "rttx", "0.4.0", &{
-            let mut caps: Vec<v3::Capability> = v3_handshake::CORE_CAPABILITIES.to_vec();
-            caps.extend(all_optional_caps());
-            caps
-        });
+    let client_hello = v3_handshake::build_client_hello(client_id, "rttx", "0.4.0", &{
+        let mut caps: Vec<v3::Capability> = v3_handshake::CORE_CAPABILITIES.to_vec();
+        caps.extend(all_optional_caps());
+        caps
+    });
     let server_hello =
         v3_handshake::build_server_hello(server_id, "0.4.0", 3, v3_handshake::CORE_CAPABILITIES);
 
@@ -1314,9 +1313,7 @@ fn v3_send_discipline_core_commands_always_allowed() {
             runtime_id: rt.clone(),
             attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         }),
-        v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-            runtime_id: rt.clone(),
-        }),
+        v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime { runtime_id: rt.clone() }),
         v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
             runtime_id: rt.clone(),
         }),
@@ -1783,13 +1780,14 @@ fn v3_core_terminal_io_end_to_end() {
     assert!(v3_envelope::is_push_event(&bell));
 
     // Server sends PaneExited (push)
-    let exited =
-        v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneExited(v3::PaneExited {
+    let exited = v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneExited(
+        v3::PaneExited {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             status: 0,
             runtime_revision: 3,
-        }));
+        },
+    ));
     assert!(v3_envelope::is_push_event(&exited));
 
     // Wire roundtrip for all push events
@@ -1974,7 +1972,7 @@ fn v3_backpressure_disconnect_without_resync_is_retryable() {
 
 #[test]
 fn v3_error_all_kinds_map_to_connection_problem() {
-    use rttx_proto::v3_error::{classify_error_kind, ErrorClassification};
+    use rttx_proto::v3_error::{ErrorClassification, classify_error_kind};
 
     let mappings: &[(v3::ErrorKind, ErrorClassification)] = &[
         (v3::ErrorKind::Unspecified, ErrorClassification::Unknown),
