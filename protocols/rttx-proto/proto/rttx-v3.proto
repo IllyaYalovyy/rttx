@@ -1,0 +1,491 @@
+syntax = "proto3";
+package rttx.v3;
+
+// ─── Enums ───────────────────────────────────────────────────────────
+
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  // Core (required) — values 1–99
+  CORE_RUNTIME_LIFECYCLE = 1;
+  CORE_PANE_LIFECYCLE = 2;
+  CORE_TERMINAL_IO = 3;
+  CORE_TERMINAL_MODES = 4;
+  CORE_PASTE_INTENT = 5;
+  CORE_FOCUS_EVENTS = 6;
+  // Optional — values 100+
+  OPT_RUNTIME_INVENTORY_V2 = 100;
+  OPT_RUNTIME_TAKEOVER = 101;
+  OPT_RESYNC = 102;
+  OPT_CHUNKED_SCROLLBACK = 103;
+  OPT_DIAGNOSTICS = 104;
+}
+
+enum RuntimePolicy {
+  RUNTIME_POLICY_UNSPECIFIED = 0;
+  RUNTIME_POLICY_PERSISTENT = 1;
+  RUNTIME_POLICY_EPHEMERAL = 2;
+}
+
+enum RuntimeAttachMode {
+  RUNTIME_ATTACH_MODE_UNSPECIFIED = 0;
+  RUNTIME_ATTACH_MODE_READ_WRITE = 1;
+  RUNTIME_ATTACH_MODE_READ_ONLY = 2;
+}
+
+enum RuntimeClientRole {
+  RUNTIME_CLIENT_ROLE_UNSPECIFIED = 0;
+  RUNTIME_CLIENT_ROLE_UNATTACHED = 1;
+  RUNTIME_CLIENT_ROLE_WRITER = 2;
+  RUNTIME_CLIENT_ROLE_READER = 3;
+}
+
+enum RuntimeTerminationReason {
+  RUNTIME_TERMINATION_REASON_UNSPECIFIED = 0;
+  RUNTIME_TERMINATION_REASON_EXPLICIT = 1;
+  RUNTIME_TERMINATION_REASON_EPHEMERAL_DETACH = 2;
+}
+
+enum MouseMode {
+  MOUSE_MODE_NONE = 0;
+  MOUSE_MODE_X10 = 1;
+  MOUSE_MODE_NORMAL = 2;
+  MOUSE_MODE_BUTTON = 3;
+  MOUSE_MODE_ANY = 4;
+}
+
+enum ErrorKind {
+  ERROR_KIND_UNSPECIFIED = 0;
+  ERROR_KIND_PROTOCOL_MISMATCH = 1;
+  ERROR_KIND_UNSUPPORTED_CAPABILITY = 2;
+  ERROR_KIND_INVALID_ARGUMENT = 3;
+  ERROR_KIND_RUNTIME_NOT_FOUND = 4;
+  ERROR_KIND_PANE_NOT_FOUND = 5;
+  ERROR_KIND_OWNERSHIP_CONFLICT = 6;
+  ERROR_KIND_TAKEOVER_REQUIRED = 7;
+  ERROR_KIND_STREAM_OVERFLOW = 8;
+  ERROR_KIND_INTERNAL = 9;
+}
+
+// ─── Handshake (bare messages, exchanged before envelopes) ───────────
+
+message ClientHello {
+  uint32 min_protocol_version = 1;
+  uint32 max_protocol_version = 2;
+  bytes client_id = 3;
+  string client_name = 4;
+  string client_version = 5;
+  repeated Capability capabilities = 6;
+}
+
+message ServerHello {
+  uint32 negotiated_protocol_version = 1;
+  bytes server_id = 2;
+  string server_version = 3;
+  repeated Capability capabilities = 4;
+}
+
+// ─── Terminal mode state ─────────────────────────────────────────────
+
+message TerminalModeState {
+  bool bracketed_paste = 1;
+  bool focus_reporting = 2;
+  bool application_cursor_keys = 3;
+  bool application_keypad = 4;
+  bool alternate_screen = 5;
+  bool cursor_hidden = 6;
+  MouseMode mouse_mode = 7;
+  bool sgr_mouse = 8;
+}
+
+// ─── Terminal I/O ────────────────────────────────────────────────────
+
+message TerminalInput {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  oneof kind {
+    RawInput raw = 3;
+    PasteInput paste = 4;
+    FocusInput focus = 5;
+  }
+}
+
+message RawInput {
+  bytes data = 1;
+}
+
+message PasteInput {
+  bytes text = 1;
+}
+
+message FocusInput {
+  bool focused = 1;
+}
+
+message OutputDelta {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  bytes data = 3;
+  uint64 pane_output_seq = 4;
+}
+
+message TerminalModeChanged {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 runtime_revision = 3;
+  TerminalModeState modes = 4;
+}
+
+// ─── Control ─────────────────────────────────────────────────────────
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+message Shutdown {}
+
+// ─── Runtime lifecycle — commands ────────────────────────────────────
+
+message CreateRuntime {
+  string name = 1;
+  RuntimePolicy policy = 2;
+}
+
+message AttachRuntime {
+  bytes runtime_id = 1;
+  RuntimeAttachMode attach_mode = 2;
+}
+
+message DetachRuntime {
+  bytes runtime_id = 1;
+}
+
+message TerminateRuntime {
+  bytes runtime_id = 1;
+}
+
+message RenameRuntime {
+  bytes runtime_id = 1;
+  string name = 2;
+}
+
+message ListRuntimes {}
+
+// ─── Runtime lifecycle — events ──────────────────────────────────────
+
+message RuntimeCreated {
+  bytes runtime_id = 1;
+  uint64 runtime_revision = 2;
+}
+
+message RuntimeDetached {
+  bytes runtime_id = 1;
+  uint64 runtime_revision = 2;
+}
+
+message RuntimeTerminated {
+  bytes runtime_id = 1;
+  uint64 final_revision = 2;
+  RuntimeTerminationReason reason = 3;
+}
+
+message RuntimeRenamed {
+  bytes runtime_id = 1;
+  string name = 2;
+  uint64 runtime_revision = 3;
+}
+
+message AttachBlocked {
+  bytes runtime_id = 1;
+  RuntimeClientRole current_client_role = 2;
+  uint32 attached_client_count = 3;
+  uint32 read_only_client_count = 4;
+}
+
+// ─── Runtime inventory ───────────────────────────────────────────────
+
+message RuntimeList {
+  repeated RuntimeInfo runtimes = 1;
+}
+
+message RuntimeInfo {
+  bytes id = 1;
+  string name = 2;
+  RuntimePolicy policy = 3;
+  uint32 pane_count = 4;
+  bool has_write_owner = 5;
+  uint32 read_only_client_count = 6;
+  RuntimeClientRole current_client_role = 7;
+  uint64 runtime_revision = 8;
+  bool reconstructed = 9;
+  // OPT_RUNTIME_INVENTORY_V2 fields
+  string active_pane_summary = 10;
+  bool takeover_eligible = 11;
+  string disabled_reason = 12;
+  repeated PaneInfo panes = 13;
+}
+
+message PaneInfo {
+  bytes id = 1;
+  string title = 2;
+  string cwd = 3;
+  uint32 cols = 4;
+  uint32 rows = 5;
+  optional int32 exit_status = 6;
+  bool reconstructed = 7;
+}
+
+// ─── Snapshots ───────────────────────────────────────────────────────
+
+message RuntimeSnapshot {
+  bytes runtime_id = 1;
+  uint64 runtime_revision = 2;
+  RuntimeClientRole client_role = 3;
+  repeated PaneSnapshot panes = 4;
+}
+
+message PaneSnapshot {
+  bytes pane_id = 1;
+  uint64 pane_output_seq = 2;
+  string title = 3;
+  string cwd = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+  optional int32 exit_status = 7;
+  TerminalModeState terminal_modes = 8;
+  bytes scrollback_tail = 9;
+  uint64 total_scrollback_bytes = 10;
+  bool scrollback_complete = 11;
+}
+
+// ─── Pane lifecycle — commands ───────────────────────────────────────
+
+message CreatePane {
+  bytes runtime_id = 1;
+  optional string cwd = 2;
+  optional bool dark_background = 3;
+  uint32 cols = 4;
+  uint32 rows = 5;
+}
+
+message ClosePane {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+}
+
+message ResizePane {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint32 cols = 3;
+  uint32 rows = 4;
+}
+
+message SetPaneTitle {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  string title = 3;
+}
+
+// ─── Pane lifecycle — events ─────────────────────────────────────────
+
+message PaneCreated {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 runtime_revision = 3;
+}
+
+message PaneClosed {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 runtime_revision = 3;
+}
+
+message PaneResized {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint32 cols = 3;
+  uint32 rows = 4;
+  uint64 runtime_revision = 5;
+}
+
+message PaneExited {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  int32 status = 3;
+  uint64 runtime_revision = 4;
+}
+
+message TitleChanged {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  string title = 3;
+  uint64 runtime_revision = 4;
+}
+
+message CwdChanged {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  string cwd = 3;
+  uint64 runtime_revision = 4;
+}
+
+message Bell {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+}
+
+// ─── Recovery (OPT_RESYNC) ──────────────────────────────────────────
+
+message ResyncRuntime {
+  bytes runtime_id = 1;
+}
+
+message StreamOverflow {
+  bytes runtime_id = 1;
+  optional bytes pane_id = 2;
+  uint64 dropped_count = 3;
+}
+
+// ─── Scrollback (OPT_CHUNKED_SCROLLBACK) ─────────────────────────────
+
+message GetScrollback {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 offset = 3;
+  uint32 limit = 4;
+}
+
+message ScrollbackChunk {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool is_last = 5;
+}
+
+// ─── Diagnostics (OPT_DIAGNOSTICS) ──────────────────────────────────
+
+message GetDiagnostics {}
+
+message PaneDiagnosticsInfo {
+  bytes id = 1;
+  uint64 raw_bytes_len = 2;
+  uint64 pending_flush_len = 3;
+  bool is_exited = 4;
+}
+
+message RuntimeDiagnosticsInfo {
+  bytes id = 1;
+  string name = 2;
+  uint32 active_pane_count = 3;
+  uint32 exited_pane_count = 4;
+  uint32 command_history_len = 5;
+  uint32 attached_client_count = 6;
+  repeated PaneDiagnosticsInfo panes = 7;
+}
+
+message DiagnosticsReport {
+  uint32 runtime_count = 1;
+  uint32 total_pane_count = 2;
+  uint32 total_active_panes = 3;
+  uint32 total_exited_panes = 4;
+  uint32 client_count = 5;
+  uint32 pty_writer_count = 6;
+  uint64 total_raw_bytes = 7;
+  uint64 total_pending_flush = 8;
+  uint32 total_command_history = 9;
+  repeated RuntimeDiagnosticsInfo runtimes = 10;
+}
+
+// ─── Errors ──────────────────────────────────────────────────────────
+
+message ProtocolError {
+  ErrorKind kind = 1;
+  string message = 2;
+  string operation = 3;
+  bool retryable = 4;
+  bool user_action_required = 5;
+  uint32 retry_after_seconds = 6;
+}
+
+// ─── Envelopes ───────────────────────────────────────────────────────
+
+message ClientEnvelope {
+  uint64 request_id = 1;
+  oneof command {
+    // Terminal I/O (field 2: single-byte tag for highest-frequency path)
+    TerminalInput terminal_input = 2;
+
+    // Control
+    Ping ping = 10;
+    Shutdown shutdown = 11;
+
+    // Runtime lifecycle
+    CreateRuntime create_runtime = 20;
+    AttachRuntime attach_runtime = 21;
+    DetachRuntime detach_runtime = 22;
+    TerminateRuntime terminate_runtime = 23;
+    RenameRuntime rename_runtime = 24;
+    ListRuntimes list_runtimes = 25;
+
+    // Pane lifecycle
+    CreatePane create_pane = 30;
+    ClosePane close_pane = 31;
+    ResizePane resize_pane = 32;
+    SetPaneTitle set_pane_title = 33;
+
+    // Recovery (OPT_RESYNC)
+    ResyncRuntime resync_runtime = 50;
+
+    // Scrollback (OPT_CHUNKED_SCROLLBACK)
+    GetScrollback get_scrollback = 51;
+
+    // Diagnostics (OPT_DIAGNOSTICS)
+    GetDiagnostics get_diagnostics = 60;
+  }
+}
+
+message ServerEnvelope {
+  uint64 request_id = 1;
+  oneof payload {
+    // Terminal I/O (fields 2–3: single-byte tags for highest-frequency paths)
+    OutputDelta output_delta = 2;
+    TerminalModeChanged terminal_mode_changed = 3;
+
+    // Control
+    Pong pong = 10;
+
+    // Runtime lifecycle events
+    RuntimeCreated runtime_created = 20;
+    RuntimeSnapshot runtime_snapshot = 21;
+    RuntimeDetached runtime_detached = 22;
+    RuntimeTerminated runtime_terminated = 23;
+    RuntimeRenamed runtime_renamed = 24;
+    RuntimeList runtime_list = 25;
+    AttachBlocked attach_blocked = 26;
+
+    // Pane lifecycle events
+    PaneCreated pane_created = 30;
+    PaneClosed pane_closed = 31;
+    PaneResized pane_resized = 32;
+    PaneExited pane_exited = 33;
+    TitleChanged title_changed = 34;
+    CwdChanged cwd_changed = 35;
+    Bell bell = 36;
+
+    // Recovery events (OPT_RESYNC)
+    StreamOverflow stream_overflow = 50;
+
+    // Scrollback response (OPT_CHUNKED_SCROLLBACK)
+    ScrollbackChunk scrollback_chunk = 51;
+
+    // Diagnostics response (OPT_DIAGNOSTICS)
+    DiagnosticsReport diagnostics_report = 60;
+
+    // Errors
+    ProtocolError error = 100;
+  }
+}
