@@ -596,8 +596,7 @@ fn v3_error_classification_maps_to_connection_policy() {
     );
 
     // Non-retryable, user-action-required → IncompatibleVersion
-    let mismatch =
-        v3_error::build_error(v3::ErrorKind::ProtocolMismatch, "mismatch", "Handshake");
+    let mismatch = v3_error::build_error(v3::ErrorKind::ProtocolMismatch, "mismatch", "Handshake");
     assert!(!mismatch.retryable);
     assert!(mismatch.user_action_required);
     assert_eq!(
@@ -606,8 +605,7 @@ fn v3_error_classification_maps_to_connection_policy() {
     );
 
     // Ownership conflict
-    let conflict =
-        v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachRuntime");
+    let conflict = v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachRuntime");
     assert_eq!(
         v3_error::classify_error_kind(v3_error::error_kind(&conflict)),
         ErrorClassification::OwnershipConflict
