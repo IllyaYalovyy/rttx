@@ -144,10 +144,7 @@ pub fn build_runtime_list(runtimes: Vec<v3::RuntimeInfo>) -> v3::RuntimeList {
 
 /// Build a `ServerEnvelope` response containing a `RuntimeList`.
 #[must_use]
-pub fn build_runtime_list_response(
-    request_id: u64,
-    list: v3::RuntimeList,
-) -> v3::ServerEnvelope {
+pub fn build_runtime_list_response(request_id: u64, list: v3::RuntimeList) -> v3::ServerEnvelope {
     crate::v3_envelope::build_response_envelope(
         request_id,
         v3::server_envelope::Payload::RuntimeList(list),
@@ -502,19 +499,13 @@ mod tests {
 
     #[test]
     fn summary_skips_exited_panes() {
-        let panes = vec![
-            test_pane("bash", "/", None),
-            test_pane("done", "/", Some(0)),
-        ];
+        let panes = vec![test_pane("bash", "/", None), test_pane("done", "/", Some(0))];
         assert_eq!(build_active_pane_summary(&panes), "bash");
     }
 
     #[test]
     fn summary_skips_empty_titles() {
-        let panes = vec![
-            test_pane("", "/", None),
-            test_pane("bash", "/", None),
-        ];
+        let panes = vec![test_pane("", "/", None), test_pane("bash", "/", None)];
         assert_eq!(build_active_pane_summary(&panes), "bash");
     }
 
