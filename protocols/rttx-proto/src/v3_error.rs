@@ -210,10 +210,7 @@ mod tests {
 
     #[test]
     fn classify_unspecified() {
-        assert_eq!(
-            classify_error_kind(v3::ErrorKind::Unspecified),
-            ErrorClassification::Unknown
-        );
+        assert_eq!(classify_error_kind(v3::ErrorKind::Unspecified), ErrorClassification::Unknown);
     }
 
     // ── is_default_retryable ──
@@ -289,7 +286,8 @@ mod tests {
 
     #[test]
     fn build_error_sets_kind_and_message() {
-        let err = build_error(v3::ErrorKind::RuntimeNotFound, "runtime abc not found", "AttachRuntime");
+        let err =
+            build_error(v3::ErrorKind::RuntimeNotFound, "runtime abc not found", "AttachRuntime");
         assert_eq!(err.kind, v3::ErrorKind::RuntimeNotFound as i32);
         assert_eq!(err.message, "runtime abc not found");
         assert_eq!(err.operation, "AttachRuntime");
