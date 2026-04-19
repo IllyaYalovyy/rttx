@@ -527,3 +527,115 @@ fn v3_structured_input_envelope_fire_and_forget() {
     assert_eq!(decoded.request_id, 0);
     assert!(matches!(decoded.command, Some(v3::client_envelope::Command::TerminalInput(_))));
 }
+
+// ── v3_error integration tests ──
+
+#[test]
+fn v3_error_response_roundtrip_through_envelope() {
+    use rttx_proto::v3_error;
+
+    let err = v3_error::build_error(
+        v3::ErrorKind::RuntimeNotFound,
+        "runtime abc not found",
+        "AttachRuntime",
+    );
+    let env = v3_error::build_error_response(42, err);
+    assert_eq!(env.request_id, 42);
+
+    let mut buf = BytesMut::new();
+    encode_frame(&env, &mut buf).unwrap();
+    let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.request_id, 42);
+    match decoded.payload {
+        Some(v3::server_envelope::Payload::Error(ref e)) => {
+            assert_eq!(v3_error::error_kind(e), v3::ErrorKind::RuntimeNotFound);
+            assert_eq!(e.operation, "AttachRuntime");
+            assert!(!e.retryable);
+        }
+        _ => panic!("expected Error payload"),
+    }
+}
+
+#[test]
+fn v3_bare_protocol_error_during_handshake() {
+    use rttx_proto::v3_error;
+
+    let err = v3_error::build_error(
+        v3::ErrorKind::ProtocolMismatch,
+        "no common version: client v4–v4, server v3–v3",
+        "Handshake",
+    );
+    assert!(err.user_action_required);
+    assert!(!err.retryable);
+
+    // Bare ProtocolError (not inside an envelope) — handshake phase
+    let mut buf = BytesMut::new();
+    encode_frame(&err, &mut buf).unwrap();
+    let decoded: v3::ProtocolError = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.kind, v3::ErrorKind::ProtocolMismatch as i32);
+    assert_eq!(decoded.operation, "Handshake");
+}
+
+#[test]
+fn v3_error_classification_maps_to_connection_policy() {
+    use rttx_proto::v3_error::{self, ErrorClassification};
+
+    // Retryable errors → TransientError or StreamOverflow
+    let overflow = v3_error::build_error(v3::ErrorKind::StreamOverflow, "overflow", "push");
+    assert!(overflow.retryable);
+    assert_eq!(
+        v3_error::classify_error_kind(v3_error::error_kind(&overflow)),
+        ErrorClassification::StreamOverflow
+    );
+
+    let internal = v3_error::build_error(v3::ErrorKind::Internal, "oops", "CreatePane");
+    assert!(internal.retryable);
+    assert_eq!(
+        v3_error::classify_error_kind(v3_error::error_kind(&internal)),
+        ErrorClassification::TransientError
+    );
+
+    // Non-retryable, user-action-required → IncompatibleVersion
+    let mismatch = v3_error::build_error(v3::ErrorKind::ProtocolMismatch, "mismatch", "Handshake");
+    assert!(!mismatch.retryable);
+    assert!(mismatch.user_action_required);
+    assert_eq!(
+        v3_error::classify_error_kind(v3_error::error_kind(&mismatch)),
+        ErrorClassification::IncompatibleVersion
+    );
+
+    // Ownership conflict
+    let conflict = v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachRuntime");
+    assert_eq!(
+        v3_error::classify_error_kind(v3_error::error_kind(&conflict)),
+        ErrorClassification::OwnershipConflict
+    );
+}
+
+#[test]
+fn v3_error_unknown_kind_from_newer_server() {
+    use rttx_proto::v3_error::{self, ErrorClassification};
+
+    // Simulate a ProtocolError with an unknown ErrorKind value (from a newer server)
+    let err = v3::ProtocolError {
+        kind: 999,
+        message: "future error kind".into(),
+        operation: "FutureCommand".into(),
+        retryable: true,
+        user_action_required: false,
+        retry_after_seconds: 10,
+    };
+
+    // Wire roundtrip preserves the raw i32 value
+    let mut buf = BytesMut::new();
+    encode_frame(&err, &mut buf).unwrap();
+    let decoded: v3::ProtocolError = decode_frame(&mut buf).unwrap();
+    assert_eq!(decoded.kind, 999);
+
+    // error_kind() returns Unspecified for unknown values
+    assert_eq!(v3_error::error_kind(&decoded), v3::ErrorKind::Unspecified);
+    assert_eq!(
+        v3_error::classify_error_kind(v3_error::error_kind(&decoded)),
+        ErrorClassification::Unknown
+    );
+}
