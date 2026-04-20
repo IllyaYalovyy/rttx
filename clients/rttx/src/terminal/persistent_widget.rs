@@ -516,6 +516,10 @@ impl PersistentPaneView {
     /// Feed a snapshot's scrollback bytes into VTE to restore state on attach.
     /// Bell characters are stripped to prevent historical bells from ringing.
     /// Scrolls to the bottom so the viewport shows the most recent output.
+    ///
+    /// The scroll is deferred to the next main-loop iteration because VTE
+    /// updates its layout asynchronously after `feed()` — the adjustment's
+    /// `upper` value is not yet correct at the point `feed()` returns.
     pub fn feed_snapshot(&self, scrollback: &[u8]) {
         if scrollback.is_empty() {
             return;
@@ -526,10 +530,13 @@ impl PersistentPaneView {
         } else {
             self.imp().vte.feed(scrollback);
         }
-        let adj = self.imp().vte.vadjustment();
-        if let Some(adj) = adj {
-            adj.set_value(adj.upper() - adj.page_size());
-        }
+        let vte_weak = self.imp().vte.downgrade();
+        glib::idle_add_local_once(move || {
+            let Some(vte) = vte_weak.upgrade() else { return };
+            if let Some(adj) = vte.vadjustment() {
+                adj.set_value(adj.upper() - adj.page_size());
+            }
+        });
     }
 
     /// Set the bracketed paste mode state from a snapshot.
@@ -2100,6 +2107,48 @@ mod tests {
         assert!(
             (adj.value() - bottom).abs() < 1.0,
             "feed_snapshot should scroll to bottom, got {} expected ~{bottom}",
+            adj.value()
+        );
+
+        window.close();
+    }
+
+    /// Regression for #707: `feed_snapshot` defers scroll-to-bottom so VTE has
+    /// time to update its layout. Without the deferred idle handler, the
+    /// viewport would show the top of the scrollback after reconnect.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn feed_snapshot_deferred_scroll_after_reconnect() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("scroll-defer", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 480);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(100);
+
+        // Simulate reconnect: feed a large snapshot.
+        let mut data = Vec::new();
+        for i in 0..300 {
+            data.extend_from_slice(format!("reconnect line {i}\r\n").as_bytes());
+        }
+        pane.feed_snapshot(&data);
+
+        // Pump events to let the deferred idle handler fire.
+        pump_events(100);
+
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        let bottom = adj.upper() - adj.page_size();
+        assert!(
+            bottom > 0.0,
+            "scrollback should be large enough to scroll, upper={} page_size={}",
+            adj.upper(),
+            adj.page_size()
+        );
+        assert!(
+            (adj.value() - bottom).abs() < 1.0,
+            "after reconnect, viewport must show bottom of scrollback; got {} expected ~{bottom}",
             adj.value()
         );
 
