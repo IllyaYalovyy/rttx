@@ -13,3 +13,4 @@ pub mod screen;
 pub mod serialization;
 pub mod server;
 pub mod single_instance;
+pub mod state;
