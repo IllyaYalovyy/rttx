@@ -188,6 +188,9 @@ mod tests {
             fn cache_dir(&self) -> PathBuf {
                 PathBuf::from("/tmp/test-cache")
             }
+            fn state_dir(&self) -> PathBuf {
+                PathBuf::from("/tmp/test-state/rttx/daemon")
+            }
         }
         Server::new(Box::new(TestOs))
     }

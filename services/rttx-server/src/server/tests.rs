@@ -14,6 +14,9 @@ impl OsInterface for StubOs {
     fn cache_dir(&self) -> PathBuf {
         PathBuf::from("/tmp/test-cache")
     }
+    fn state_dir(&self) -> PathBuf {
+        PathBuf::from("/tmp/test-state/rttx/daemon")
+    }
 }
 
 fn new_server() -> Arc<Mutex<Server>> {

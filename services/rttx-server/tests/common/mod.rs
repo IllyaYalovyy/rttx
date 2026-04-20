@@ -110,6 +110,9 @@ pub async fn start_test_server(
         fn cache_dir(&self) -> PathBuf {
             self.cache_dir.clone()
         }
+        fn state_dir(&self) -> PathBuf {
+            self.cache_dir.parent().unwrap_or(self.cache_dir.as_path()).join("state/rttx/daemon")
+        }
     }
 
     let runtime_dir = tmp_dir.join("runtime");

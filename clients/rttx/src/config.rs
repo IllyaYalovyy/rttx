@@ -22,12 +22,20 @@ pub const CONFIG_DIR: &str = "rttx";
 pub const DEV_CONFIG_DIR: &str = "rttx-devel";
 pub const SCHEMES_DIR: &str = "schemes";
 
+/// State directory name under `$XDG_STATE_HOME`.
+///
+/// RFC-023 owns `client/` under this root. RFC-022 owns `daemon/`.
+pub const STATE_DIR: &str = "rttx";
+pub const DEV_STATE_DIR: &str = "rttx-devel";
+const CLIENT_SUBDIR: &str = "client";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppProfile {
     pub app_id: &'static str,
     pub icon_name: &'static str,
     pub display_name: &'static str,
     pub config_dir: &'static str,
+    pub state_dir: &'static str,
     pub settings_id: &'static str,
     pub settings_path: &'static str,
     pub badge_label: Option<&'static str>,
@@ -89,6 +97,26 @@ pub fn config_dir_path_for(base: &Path, profile: AppProfile) -> PathBuf {
     base.join(profile.config_dir)
 }
 
+/// Return the client state directory under `$XDG_STATE_HOME`.
+///
+/// Layout: `$XDG_STATE_HOME/rttx/client/` (production) or
+/// `$XDG_STATE_HOME/rttx-devel/client/` (dev mode).
+#[must_use]
+pub fn state_dir_path() -> PathBuf {
+    let base = xdg_state_home();
+    state_dir_path_for(&base, app_profile())
+}
+
+#[must_use]
+pub fn state_dir_path_for(base: &Path, profile: AppProfile) -> PathBuf {
+    base.join(profile.state_dir).join(CLIENT_SUBDIR)
+}
+
+fn xdg_state_home() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map_or_else(|| glib::home_dir().join(".local").join("state"), PathBuf::from)
+}
+
 #[must_use]
 pub fn dev_icon_search_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("data").join("icons")
@@ -102,6 +130,7 @@ pub const fn app_profile_from_dev_mode(is_dev: bool) -> AppProfile {
             icon_name: DEV_ICON_NAME,
             display_name: DEV_APP_NAME,
             config_dir: DEV_CONFIG_DIR,
+            state_dir: DEV_STATE_DIR,
             settings_id: DEV_SETTINGS_ID,
             settings_path: DEV_SETTINGS_PATH,
             badge_label: Some("Devel"),
@@ -113,6 +142,7 @@ pub const fn app_profile_from_dev_mode(is_dev: bool) -> AppProfile {
             icon_name: APP_ID,
             display_name: APP_NAME,
             config_dir: CONFIG_DIR,
+            state_dir: STATE_DIR,
             settings_id: SETTINGS_ID,
             settings_path: SETTINGS_PATH,
             badge_label: None,
@@ -161,6 +191,7 @@ mod tests {
         assert_eq!(profile.app_id, APP_ID);
         assert_eq!(profile.icon_name, APP_ID);
         assert_eq!(profile.config_dir, CONFIG_DIR);
+        assert_eq!(profile.state_dir, STATE_DIR);
         assert_eq!(profile.display_name, APP_NAME);
         assert!(!profile.is_development);
     }
@@ -171,6 +202,7 @@ mod tests {
         assert_eq!(profile.app_id, "io.github.IllyaYalovyy.rttx.Devel");
         assert_eq!(profile.icon_name, "io.github.IllyaYalovyy.rttx.Devel");
         assert_eq!(profile.config_dir, "rttx-devel");
+        assert_eq!(profile.state_dir, "rttx-devel");
         assert_eq!(profile.display_name, "rttx (Devel)");
         assert_eq!(profile.badge_label, Some("Devel"));
         assert!(profile.is_development);
@@ -202,6 +234,28 @@ mod tests {
             config_dir_path_for(base, development),
             Path::new("/tmp/rttx-profile-test/rttx-devel")
         );
+    }
+
+    #[test]
+    fn state_dir_path_uses_client_subdir() {
+        let production = app_profile_from_dev_mode(false);
+        let development = app_profile_from_dev_mode(true);
+        let base = Path::new("/tmp/state");
+
+        assert_eq!(state_dir_path_for(base, production), Path::new("/tmp/state/rttx/client"));
+        assert_eq!(
+            state_dir_path_for(base, development),
+            Path::new("/tmp/state/rttx-devel/client")
+        );
+    }
+
+    #[test]
+    fn state_and_config_dirs_are_disjoint() {
+        let profile = app_profile_from_dev_mode(false);
+        let config = config_dir_path_for(Path::new("/xdg/config"), profile);
+        let state = state_dir_path_for(Path::new("/xdg/state"), profile);
+        assert!(!state.starts_with(&config));
+        assert!(!config.starts_with(&state));
     }
 
     #[test]
