@@ -144,3 +144,40 @@ fn scroll_position_restore_clamps_to_valid_range() {
 
     window.close();
 }
+
+/// After reconnect, `feed_snapshot` must scroll the viewport to the bottom
+/// so the user sees the most recent output. The scroll is deferred to the
+/// next main-loop iteration because VTE updates its layout asynchronously.
+/// Regression for #707.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn feed_snapshot_scrolls_to_bottom_after_reconnect() {
+    require_display!();
+
+    let pane = PersistentPaneView::new("reconnect-scroll", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 480);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(100);
+
+    // Simulate reconnect with scrollback replay.
+    feed_scrollback(&pane, 300);
+    pump_events(100);
+
+    let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+    let bottom = adj.upper() - adj.page_size();
+    assert!(
+        bottom > 0.0,
+        "scrollback must exceed visible area; upper={} page_size={}",
+        adj.upper(),
+        adj.page_size()
+    );
+    assert!(
+        (adj.value() - bottom).abs() < 1.0,
+        "viewport must be at bottom after reconnect snapshot; got {} expected ~{bottom}",
+        adj.value()
+    );
+
+    window.close();
+}

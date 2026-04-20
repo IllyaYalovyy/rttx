@@ -1042,6 +1042,54 @@ mod pane_passive_tests {
             "Ctrl+Shift+right-click must not open context menu"
         );
     }
+
+    /// `feed_snapshot` must not scroll synchronously — the scroll is deferred
+    /// so VTE has time to update its layout. Regression for #707.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn feed_snapshot_defers_scroll_to_idle() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let pane = super::persistent_widget::PersistentPaneView::new("defer-mod", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 480);
+        window.set_child(Some(&pane));
+        window.present();
+
+        let ctx = gtk4::glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        while std::time::Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+
+        let mut data = Vec::new();
+        for i in 0..200 {
+            data.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        pane.feed_snapshot(&data);
+
+        // After idle fires, viewport must be at the bottom.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        while std::time::Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        let bottom = adj.upper() - adj.page_size();
+        assert!(
+            (adj.value() - bottom).abs() < 1.0,
+            "deferred scroll must land at bottom; got {} expected ~{bottom}",
+            adj.value()
+        );
+        window.close();
+    }
 }
 
 #[cfg(test)]
