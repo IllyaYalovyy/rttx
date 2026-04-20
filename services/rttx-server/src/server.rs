@@ -60,12 +60,97 @@ const RESP_CHANNEL_BOUND: usize = 256;
 /// This is the lock-free counterpart of [`Server::broadcast_to_runtime`]:
 /// collect handles with [`Server::collect_runtime_senders`] while holding
 /// the mutex, then call this after releasing it.
-fn send_to_collected(senders: &[(Uuid, mpsc::Sender<ClientMsg>)], msg: &ClientMsg) {
-    for (client_id, sender) in senders {
-        if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(msg.clone()) {
+fn send_to_collected(
+    senders: &[(Uuid, mpsc::Sender<ClientMsg>, Option<ClientProtocol>)],
+    msg: &ClientMsg,
+) {
+    let mut v3_msg: Option<ClientMsg> = None;
+    for (client_id, sender, protocol) in senders {
+        let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
+            v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg))
+        } else {
+            msg
+        };
+        if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(outgoing.clone()) {
             tracing::warn!("Client {} push channel full — dropping message", short_id(*client_id),);
         }
     }
+}
+
+/// Convert a v2 push message to a v3 `ServerEnvelope`.
+///
+/// Falls back to the original v2 message if conversion is not applicable
+/// (e.g., the message is already v3 or is not a push event).
+fn convert_v2_push_to_v3(msg: &ClientMsg) -> ClientMsg {
+    let ClientMsg::V2(v2) = msg else {
+        return msg.clone();
+    };
+    let Some(ref inner) = v2.msg else {
+        return msg.clone();
+    };
+    let payload = match inner {
+        proto::server_message::Msg::Delta(d) => {
+            v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
+                runtime_id: d.runtime_id.clone(),
+                pane_id: d.pane_id.clone(),
+                data: d.data.clone(),
+                pane_output_seq: 0,
+            })
+        }
+        proto::server_message::Msg::TitleChanged(t) => {
+            v3::server_envelope::Payload::TitleChanged(v3::TitleChanged {
+                runtime_id: t.runtime_id.clone(),
+                pane_id: t.pane_id.clone(),
+                title: t.title.clone(),
+                runtime_revision: t.revision,
+            })
+        }
+        proto::server_message::Msg::CwdChanged(c) => {
+            v3::server_envelope::Payload::CwdChanged(v3::CwdChanged {
+                runtime_id: c.runtime_id.clone(),
+                pane_id: c.pane_id.clone(),
+                cwd: c.cwd.clone(),
+                runtime_revision: c.revision,
+            })
+        }
+        proto::server_message::Msg::PaneExited(p) => {
+            v3::server_envelope::Payload::PaneExited(v3::PaneExited {
+                runtime_id: p.runtime_id.clone(),
+                pane_id: p.pane_id.clone(),
+                status: p.status,
+                runtime_revision: p.revision,
+            })
+        }
+        proto::server_message::Msg::Bell(b) => v3::server_envelope::Payload::Bell(v3::Bell {
+            runtime_id: b.runtime_id.clone(),
+            pane_id: b.pane_id.clone(),
+        }),
+        proto::server_message::Msg::PaneResized(r) => {
+            v3::server_envelope::Payload::PaneResized(v3::PaneResized {
+                runtime_id: r.runtime_id.clone(),
+                pane_id: r.pane_id.clone(),
+                cols: r.cols,
+                rows: r.rows,
+                runtime_revision: r.revision,
+            })
+        }
+        proto::server_message::Msg::RuntimeTerminated(t) => {
+            v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
+                runtime_id: t.runtime_id.clone(),
+                final_revision: t.final_revision,
+                reason: t.reason,
+            })
+        }
+        proto::server_message::Msg::RuntimeRenamed(r) => {
+            v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
+                runtime_id: r.runtime_id.clone(),
+                name: r.name.clone(),
+                runtime_revision: r.revision,
+            })
+        }
+        _ => return msg.clone(),
+    };
+    ClientMsg::V3(rttx_proto::v3_envelope::build_push_envelope(payload))
 }
 
 /// Shared mutable server state.
@@ -298,7 +383,8 @@ impl Server {
         }
     }
 
-    /// Send a message to the provided clients.
+    /// Send a message to the provided clients, converting v2 push messages
+    /// to v3 envelopes for v3 clients.
     fn broadcast_to_clients<I>(
         &self,
         client_ids: I,
@@ -307,13 +393,23 @@ impl Server {
     ) where
         I: IntoIterator<Item = Uuid>,
     {
+        // Lazily convert v2 push to v3 envelope only if needed.
+        let mut v3_msg: Option<ClientMsg> = None;
         for client_id in client_ids {
             if Some(client_id) == exclude_client_id {
                 continue;
             }
-            if let Some(sender) = self.client_senders.get(&client_id)
-                && let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(msg.clone())
-            {
+            let Some(sender) = self.client_senders.get(&client_id) else {
+                continue;
+            };
+            let outgoing =
+                if matches!(self.client_protocols.get(&client_id), Some(ClientProtocol::V3 { .. }))
+                {
+                    v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg))
+                } else {
+                    msg
+                };
+            if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(outgoing.clone()) {
                 tracing::warn!(
                     "Client {} push channel full — dropping message",
                     short_id(client_id),
@@ -334,13 +430,20 @@ impl Server {
     ///
     /// The returned senders can be used after releasing the server mutex via
     /// [`send_to_collected`].
-    fn collect_runtime_senders(&self, runtime_id: Uuid) -> Vec<(Uuid, mpsc::Sender<ClientMsg>)> {
+    fn collect_runtime_senders(
+        &self,
+        runtime_id: Uuid,
+    ) -> Vec<(Uuid, mpsc::Sender<ClientMsg>, Option<ClientProtocol>)> {
         let Some(rt) = self.runtimes.get(&runtime_id) else {
             return Vec::new();
         };
         rt.attached_clients
             .keys()
-            .filter_map(|&cid| self.client_senders.get(&cid).map(|s| (cid, s.clone())))
+            .filter_map(|&cid| {
+                self.client_senders
+                    .get(&cid)
+                    .map(|s| (cid, s.clone(), self.client_protocols.get(&cid).cloned()))
+            })
             .collect()
     }
 
@@ -2073,7 +2176,7 @@ pub async fn handle_stdio_client(server: Arc<Mutex<Server>>) -> anyhow::Result<(
 #[allow(clippy::significant_drop_tightening)]
 async fn handle_client<S>(
     server: Arc<Mutex<Server>>,
-    conn: ClientConnection<S>,
+    mut conn: ClientConnection<S>,
 ) -> anyhow::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -2082,22 +2185,34 @@ where
     let client_short = short_id(client_id);
 
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
-    // Channel for responses that the reader task needs to send back to the
-    // client (e.g. pong replies, runtime snapshots). The writer task drains
-    // this alongside the push channel so writes never block reads.
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(RESP_CHANNEL_BOUND);
     {
         let mut s = server.lock().await;
         s.client_senders.insert(client_id, tx);
     }
 
-    let (reader, writer) = conn.into_split();
+    // Read the first raw frame to detect v2 vs v3 protocol.
+    let Some(raw_frame) = conn.read_raw_frame().await? else {
+        tracing::debug!("Client probe from {client_short} (disconnected before handshake)");
+        let mut s = server.lock().await;
+        s.client_senders.remove(&client_id);
+        return Ok(());
+    };
 
+    // Try v3 ClientHello first, then fall back to v2 ClientMessage.
+    let is_v3 = try_v3_handshake(&server, client_id, &client_short, &mut conn, &raw_frame).await?;
+
+    let (reader, writer) = conn.into_split();
     let write_short = client_short.clone();
     let writer_task = tokio::spawn(client_writer(writer, rx, resp_rx, write_short));
 
-    let (result, handshake_completed) =
-        client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await;
+    let (result, handshake_completed) = if is_v3 {
+        tracing::info!("Client {client_short} connected (v3)");
+        v3_client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await
+    } else {
+        v2_client_reader(server.clone(), client_id, &client_short, reader, resp_tx, &raw_frame)
+            .await
+    };
 
     // Cleanup: remove sender and detach from all runtimes.
     {
@@ -2111,7 +2226,6 @@ where
         }
     }
 
-    // Writer task will stop when both senders are dropped.
     writer_task.abort();
 
     if let Err(ref e) = result {
@@ -2121,51 +2235,150 @@ where
     result
 }
 
-/// Read client messages and dispatch responses via `resp_tx`.
+/// Attempt v3 handshake. Returns `true` if the client speaks v3.
 ///
-/// Runs until the client disconnects or an error occurs. Returns `true`
-/// if the client completed the handshake (sent at least one message),
-/// `false` if it disconnected before sending anything (probe connection).
-async fn client_reader(
+/// On success, sends `ServerHello` and registers the client protocol.
+/// On failure (frame is v2), leaves the connection unchanged for v2 handling.
+async fn try_v3_handshake<S>(
+    server: &Arc<Mutex<Server>>,
+    client_id: Uuid,
+    client_short: &str,
+    conn: &mut ClientConnection<S>,
+    raw_frame: &[u8],
+) -> anyhow::Result<bool>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use prost::Message;
+
+    // Skip the 4-byte length prefix.
+    let payload = &raw_frame[4..];
+    let Ok(client_hello) = v3::ClientHello::decode(payload) else {
+        return Ok(false);
+    };
+
+    // Validate: a real ClientHello has a non-empty client_id and version range.
+    if client_hello.client_id.len() != 16 || client_hello.max_protocol_version == 0 {
+        return Ok(false);
+    }
+
+    let server_version = env!("CARGO_PKG_VERSION");
+    let server_id = server.lock().await.server_id;
+
+    match rttx_proto::v3_handshake::negotiate_version(
+        client_hello.min_protocol_version,
+        client_hello.max_protocol_version,
+        rttx_proto::v3_handshake::V3_PROTOCOL_VERSION,
+        rttx_proto::v3_handshake::V3_PROTOCOL_VERSION,
+    ) {
+        Ok(negotiated_version) => {
+            let server_caps: Vec<i32> = SERVER_CAPABILITIES.iter().map(|c| *c as i32).collect();
+            let effective_caps = rttx_proto::v3_handshake::effective_capabilities(
+                &client_hello.capabilities,
+                &server_caps,
+            );
+
+            // Validate core capabilities from client.
+            if let Err(missing) =
+                rttx_proto::v3_handshake::validate_server_capabilities(&effective_caps)
+            {
+                let err = rttx_proto::v3_handshake::missing_capabilities_error(&missing);
+                conn.send_v3_error(&err).await?;
+                return Err(anyhow::anyhow!("v3 client {client_short} missing core capabilities"));
+            }
+
+            let hello = rttx_proto::v3_handshake::build_server_hello(
+                server_id,
+                server_version,
+                negotiated_version,
+                SERVER_CAPABILITIES,
+            );
+            conn.send_v3_server_hello(&hello).await?;
+
+            {
+                let mut s = server.lock().await;
+                s.set_client_protocol(client_id, ClientProtocol::V3 { effective_caps });
+            }
+
+            Ok(true)
+        }
+        Err(err) => {
+            conn.send_v3_error(&err).await?;
+            Err(anyhow::anyhow!(
+                "v3 version negotiation failed for {client_short}: {}",
+                err.message
+            ))
+        }
+    }
+}
+
+/// Read v2 client messages and dispatch responses via `resp_tx`.
+///
+/// The first frame was already read during protocol detection and is passed
+/// in as `first_frame`. It is decoded as a v2 `ClientMessage` and processed
+/// before entering the normal read loop.
+async fn v2_client_reader(
     server: Arc<Mutex<Server>>,
     client_id: Uuid,
     client_short: &str,
     mut reader: ClientConnectionReader,
     resp_tx: mpsc::Sender<ClientMsg>,
+    first_frame: &[u8],
 ) -> (anyhow::Result<()>, bool) {
-    let mut handshake_completed = false;
+    use prost::Message;
+
+    // Decode the first frame that was already read during handshake detection.
+    let payload = &first_frame[4..];
+    let msg = match proto::ClientMessage::decode(payload) {
+        Ok(msg) => msg,
+        Err(e) => return (Err(anyhow::anyhow!("failed to decode first v2 frame: {e}")), false),
+    };
+
+    tracing::info!("Client {client_short} connected (v2)");
+
+    // Register as v2 client.
+    {
+        let mut s = server.lock().await;
+        s.set_client_protocol(client_id, ClientProtocol::V2);
+    }
+
+    // Process the first message (Hello).
+    if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
+        tracing::info!("Shutdown requested by client {client_short}");
+        server.lock().await.request_shutdown();
+        return (Ok(()), true);
+    }
+
+    if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
+        if resp_tx.send(ClientMsg::V2(protocol::pong(ping.nonce))).await.is_err() {
+            return (Ok(()), true);
+        }
+    } else if let Some(response) = Server::handle_message(&server, client_id, msg).await
+        && resp_tx.send(ClientMsg::V2(response)).await.is_err()
+    {
+        return (Ok(()), true);
+    }
+
+    // Continue with normal v2 read loop.
     loop {
         let msg = match reader.read_message().await {
             Ok(Some(msg)) => msg,
             Ok(None) => {
-                if handshake_completed {
-                    tracing::info!("Client {client_short} disconnected");
-                } else {
-                    tracing::debug!(
-                        "Client probe from {client_short} (disconnected without handshake)"
-                    );
-                }
-                return (Ok(()), handshake_completed);
+                tracing::info!("Client {client_short} disconnected");
+                return (Ok(()), true);
             }
-            Err(e) => return (Err(e.into()), handshake_completed),
+            Err(e) => return (Err(e.into()), true),
         };
-
-        if !handshake_completed {
-            handshake_completed = true;
-            tracing::info!("Client {client_short} connected");
-        }
 
         if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
             tracing::info!("Shutdown requested by client {client_short}");
             server.lock().await.request_shutdown();
-            return (Ok(()), handshake_completed);
+            return (Ok(()), true);
         }
 
-        // Fast-path: respond to Ping without acquiring the server mutex.
-        // The heartbeat must never stall behind PTY I/O or runtime work.
         if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
             if resp_tx.send(ClientMsg::V2(protocol::pong(ping.nonce))).await.is_err() {
-                return (Ok(()), handshake_completed);
+                return (Ok(()), true);
             }
             continue;
         }
@@ -2173,7 +2386,62 @@ async fn client_reader(
         if let Some(response) = Server::handle_message(&server, client_id, msg).await
             && resp_tx.send(ClientMsg::V2(response)).await.is_err()
         {
-            return (Ok(()), handshake_completed);
+            return (Ok(()), true);
+        }
+    }
+}
+
+/// Read v3 client envelopes and dispatch responses via `resp_tx`.
+async fn v3_client_reader(
+    server: Arc<Mutex<Server>>,
+    client_id: Uuid,
+    client_short: &str,
+    mut reader: ClientConnectionReader,
+    resp_tx: mpsc::Sender<ClientMsg>,
+) -> (anyhow::Result<()>, bool) {
+    loop {
+        let envelope = match reader.read_v3_envelope().await {
+            Ok(Some(env)) => env,
+            Ok(None) => {
+                tracing::info!("Client {client_short} disconnected");
+                return (Ok(()), true);
+            }
+            Err(e) => return (Err(e.into()), true),
+        };
+
+        // Check for Shutdown (fire-and-forget).
+        if matches!(envelope.command, Some(v3::client_envelope::Command::Shutdown(_))) {
+            tracing::info!("Shutdown requested by client {client_short}");
+            server.lock().await.request_shutdown();
+            return (Ok(()), true);
+        }
+
+        // Fast-path: respond to Ping without acquiring the server mutex.
+        if let Some(v3::client_envelope::Command::Ping(ref ping)) = envelope.command {
+            let response = rttx_proto::v3_envelope::build_response_envelope(
+                envelope.request_id,
+                v3::server_envelope::Payload::Pong(v3::Pong { nonce: ping.nonce }),
+            );
+            if resp_tx.send(ClientMsg::V3(response)).await.is_err() {
+                return (Ok(()), true);
+            }
+            continue;
+        }
+
+        // Look up effective capabilities for this client.
+        let effective_caps = {
+            let s = server.lock().await;
+            match s.client_protocol(client_id) {
+                Some(ClientProtocol::V3 { effective_caps }) => effective_caps.clone(),
+                _ => Vec::new(),
+            }
+        };
+
+        if let Some(response) =
+            Server::handle_v3_message(&server, client_id, &effective_caps, envelope).await
+            && resp_tx.send(ClientMsg::V3(response)).await.is_err()
+        {
+            return (Ok(()), true);
         }
     }
 }

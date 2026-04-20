@@ -33,6 +33,7 @@ dbg_macro = "warn"
 rttx-proto = { path = "../../protocols/rttx-proto" }
 
 # Protocol serialization
+prost = "0.13"
 bytes = "1"
 
 # Async runtime
