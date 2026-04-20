@@ -11,18 +11,34 @@ use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
 use crate::runtime::{
-    AttachError, AttachMode, AttachOutcome, DetachOutcome, DetachReason, Runtime, RuntimePolicy,
-    TerminationReason,
+    AttachError, AttachMode, AttachOutcome, ClientRole, DetachOutcome, DetachReason, Runtime,
+    RuntimePolicy, TerminationReason,
 };
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
 use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
+use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use uuid::Uuid;
+
+/// Per-client protocol state negotiated during handshake.
+#[derive(Debug, Clone)]
+pub enum ClientProtocol {
+    /// V2 client (legacy `ClientMessage`/`ServerMessage`).
+    V2,
+    /// V3 client with negotiated capabilities.
+    V3 { effective_caps: Vec<i32> },
+}
+
+/// Message that can be sent to a client, abstracting over v2 and v3.
+#[derive(Debug, Clone)]
+pub enum ClientMsg {
+    V2(proto::ServerMessage),
+    V3(v3::ServerEnvelope),
+}
 
 /// Return the first 8 characters of a UUID for compact log output.
 #[must_use]
@@ -44,10 +60,7 @@ const RESP_CHANNEL_BOUND: usize = 256;
 /// This is the lock-free counterpart of [`Server::broadcast_to_runtime`]:
 /// collect handles with [`Server::collect_runtime_senders`] while holding
 /// the mutex, then call this after releasing it.
-fn send_to_collected(
-    senders: &[(Uuid, mpsc::Sender<proto::ServerMessage>)],
-    msg: &proto::ServerMessage,
-) {
+fn send_to_collected(senders: &[(Uuid, mpsc::Sender<ClientMsg>)], msg: &ClientMsg) {
     for (client_id, sender) in senders {
         if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(msg.clone()) {
             tracing::warn!("Client {} push channel full — dropping message", short_id(*client_id),);
@@ -66,7 +79,9 @@ pub struct Server {
     /// OS abstraction for paths.
     pub os: Box<dyn OsInterface>,
     /// Per-client bounded push channels for server-initiated messages (Deltas, etc.).
-    client_senders: HashMap<Uuid, mpsc::Sender<proto::ServerMessage>>,
+    client_senders: HashMap<Uuid, mpsc::Sender<ClientMsg>>,
+    /// Per-client protocol version and capabilities.
+    client_protocols: HashMap<Uuid, ClientProtocol>,
     /// Per-pane PTY write handles for Input and Resize routing.
     pty_writers: HashMap<Uuid, Arc<tokio::sync::Mutex<pty_process::OwnedWritePty>>>,
     /// Per-pane kill signals to cancel PTY read loops.
@@ -86,6 +101,7 @@ impl Server {
             engine: Box::new(NativeEngine),
             os,
             client_senders: HashMap::new(),
+            client_protocols: HashMap::new(),
             pty_writers: HashMap::new(),
             pty_kill_senders: HashMap::new(),
             shutdown_tx,
@@ -287,7 +303,7 @@ impl Server {
         &self,
         client_ids: I,
         exclude_client_id: Option<Uuid>,
-        msg: &proto::ServerMessage,
+        msg: &ClientMsg,
     ) where
         I: IntoIterator<Item = Uuid>,
     {
@@ -307,7 +323,7 @@ impl Server {
     }
 
     /// Send a message to all clients attached to a runtime.
-    fn broadcast_to_runtime(&self, runtime_id: Uuid, msg: &proto::ServerMessage) {
+    fn broadcast_to_runtime(&self, runtime_id: Uuid, msg: &ClientMsg) {
         let Some(rt) = self.runtimes.get(&runtime_id) else {
             return;
         };
@@ -318,10 +334,7 @@ impl Server {
     ///
     /// The returned senders can be used after releasing the server mutex via
     /// [`send_to_collected`].
-    fn collect_runtime_senders(
-        &self,
-        runtime_id: Uuid,
-    ) -> Vec<(Uuid, mpsc::Sender<proto::ServerMessage>)> {
+    fn collect_runtime_senders(&self, runtime_id: Uuid) -> Vec<(Uuid, mpsc::Sender<ClientMsg>)> {
         let Some(rt) = self.runtimes.get(&runtime_id) else {
             return Vec::new();
         };
@@ -331,13 +344,24 @@ impl Server {
             .collect()
     }
 
+    /// Look up the protocol version for a client.
+    #[must_use]
+    pub fn client_protocol(&self, client_id: Uuid) -> Option<&ClientProtocol> {
+        self.client_protocols.get(&client_id)
+    }
+
+    /// Register a client's protocol version.
+    pub fn set_client_protocol(&mut self, client_id: Uuid, protocol: ClientProtocol) {
+        self.client_protocols.insert(client_id, protocol);
+    }
+
     fn terminate_runtime(
         &mut self,
         runtime_id: Uuid,
         final_revision: u64,
         reason: TerminationReason,
         exclude_client_id: Option<Uuid>,
-    ) -> Option<proto::ServerMessage> {
+    ) -> Option<ClientMsg> {
         let rt = self.runtimes.remove(&runtime_id)?;
         let attached_client_ids: Vec<_> = rt.attached_clients.keys().copied().collect();
         let pane_ids: Vec<_> = rt.panes.keys().copied().collect();
@@ -348,7 +372,7 @@ impl Server {
             }
         }
 
-        let msg = protocol::runtime_terminated(runtime_id, final_revision, reason);
+        let msg = ClientMsg::V2(protocol::runtime_terminated(runtime_id, final_revision, reason));
         self.broadcast_to_clients(attached_client_ids, exclude_client_id, &msg);
         Some(msg)
     }
@@ -877,9 +901,868 @@ impl Server {
             proto::client_message::Msg::Shutdown(_) => None,
         }
     }
+
+    /// Handle a single v3 client envelope, returning an optional response.
+    #[allow(clippy::significant_drop_tightening, clippy::too_many_lines)]
+    pub async fn handle_v3_message(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        effective_caps: &[i32],
+        envelope: v3::ClientEnvelope,
+    ) -> Option<v3::ServerEnvelope> {
+        let request_id = envelope.request_id;
+        let Some(command) = envelope.command else {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::InvalidArgument,
+                    "empty envelope",
+                    "Dispatch",
+                ),
+            ));
+        };
+
+        match command {
+            v3::client_envelope::Command::Ping(ping) => {
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::Pong(v3::Pong { nonce: ping.nonce }),
+                ))
+            }
+
+            v3::client_envelope::Command::ListRuntimes(_) => {
+                let s = server.lock().await;
+                let has_inventory_v2 = rttx_proto::v3_inventory::is_supported(effective_caps);
+                let infos = protocol::v3_runtime_inventory_for(
+                    client_id,
+                    s.runtimes.values(),
+                    has_inventory_v2,
+                );
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::RuntimeList(v3::RuntimeList { runtimes: infos }),
+                ))
+            }
+
+            v3::client_envelope::Command::GetDiagnostics(_) => {
+                if !rttx_proto::v3_diagnostics::is_supported(effective_caps) {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::UnsupportedCapability,
+                            "OPT_DIAGNOSTICS not negotiated",
+                            "GetDiagnostics",
+                        ),
+                    ));
+                }
+                let s = server.lock().await;
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::DiagnosticsReport(
+                        protocol::v3_diagnostics_report(&s),
+                    ),
+                ))
+            }
+
+            v3::client_envelope::Command::CreateRuntime(req) => {
+                let mut s = server.lock().await;
+                let rt = Runtime::new(req.name);
+                let runtime_id = rt.id;
+                let policy = RuntimePolicy::from_v3_proto(req.policy);
+                let mut rt = rt;
+                rt.policy = policy;
+                let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                let policy_str = match policy {
+                    RuntimePolicy::Persistent => "persistent",
+                    RuntimePolicy::Ephemeral => "ephemeral",
+                };
+                let revision = rt.revision();
+                s.runtimes.insert(runtime_id, rt);
+                tracing::info!("Runtime created: {label}, policy={policy_str}");
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+                        runtime_id: uuid_to_bytes(runtime_id),
+                        runtime_revision: revision,
+                    }),
+                ))
+            }
+
+            v3::client_envelope::Command::AttachRuntime(req) => {
+                Self::handle_v3_attach(server, client_id, request_id, req).await
+            }
+
+            v3::client_envelope::Command::DetachRuntime(req) => {
+                Self::handle_v3_detach(server, client_id, request_id, req).await
+            }
+
+            v3::client_envelope::Command::TerminateRuntime(req) => {
+                Self::handle_v3_terminate(server, client_id, request_id, req).await
+            }
+
+            v3::client_envelope::Command::CreatePane(req) => {
+                Self::handle_v3_create_pane(server, client_id, request_id, req).await
+            }
+
+            v3::client_envelope::Command::ClosePane(req) => {
+                Self::handle_v3_close_pane(server, client_id, request_id, req).await
+            }
+
+            v3::client_envelope::Command::TerminalInput(input) => {
+                Self::handle_v3_terminal_input(server, client_id, input).await
+            }
+
+            v3::client_envelope::Command::ResizePane(req) => {
+                Self::handle_v3_resize(server, client_id, req).await
+            }
+
+            v3::client_envelope::Command::SetPaneTitle(req) => {
+                Self::handle_v3_set_pane_title(server, client_id, req).await
+            }
+
+            v3::client_envelope::Command::RenameRuntime(req) => {
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::InvalidArgument,
+                                &e.to_string(),
+                                "RenameRuntime",
+                            ),
+                        ));
+                    }
+                };
+                let mut s = server.lock().await;
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::RuntimeNotFound,
+                            "runtime not found",
+                            "RenameRuntime",
+                        ),
+                    ));
+                };
+                if !rt.client_has_write_access(client_id) {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::OwnershipConflict,
+                            "runtime is currently owned by another client",
+                            "RenameRuntime",
+                        ),
+                    ));
+                }
+                let old_name = rt.name.clone();
+                let revision = rt.rename(req.name.clone());
+                tracing::info!(
+                    "Runtime renamed: \"{}\" -> \"{}\" ({})",
+                    old_name,
+                    req.name,
+                    short_id(runtime_id),
+                );
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
+                        runtime_id: uuid_to_bytes(runtime_id),
+                        name: req.name,
+                        runtime_revision: revision,
+                    }),
+                ))
+            }
+
+            v3::client_envelope::Command::ResyncRuntime(req) => {
+                if !rttx_proto::v3_resync::is_supported(effective_caps) {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::UnsupportedCapability,
+                            "OPT_RESYNC not negotiated",
+                            "ResyncRuntime",
+                        ),
+                    ));
+                }
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::InvalidArgument,
+                                &e.to_string(),
+                                "ResyncRuntime",
+                            ),
+                        ));
+                    }
+                };
+                let s = server.lock().await;
+                let Some(rt) = s.runtimes.get(&runtime_id) else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::RuntimeNotFound,
+                            "runtime not found",
+                            "ResyncRuntime",
+                        ),
+                    ));
+                };
+                let role = rt
+                    .client_role(client_id)
+                    .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto);
+                let snapshot = protocol::build_v3_runtime_snapshot(rt, runtime_id, role);
+                Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
+            }
+
+            v3::client_envelope::Command::GetScrollback(req) => {
+                if !rttx_proto::v3_scrollback::is_supported(effective_caps) {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::UnsupportedCapability,
+                            "OPT_CHUNKED_SCROLLBACK not negotiated",
+                            "GetScrollback",
+                        ),
+                    ));
+                }
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::InvalidArgument,
+                                &e.to_string(),
+                                "GetScrollback",
+                            ),
+                        ));
+                    }
+                };
+                let pane_id = match bytes_to_uuid(&req.pane_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::InvalidArgument,
+                                &e.to_string(),
+                                "GetScrollback",
+                            ),
+                        ));
+                    }
+                };
+                let s = server.lock().await;
+                let Some(rt) = s.runtimes.get(&runtime_id) else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::RuntimeNotFound,
+                            "runtime not found",
+                            "GetScrollback",
+                        ),
+                    ));
+                };
+                let Some(pane) = rt.panes.get(&pane_id) else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::PaneNotFound,
+                            "pane not found",
+                            "GetScrollback",
+                        ),
+                    ));
+                };
+                let limit = rttx_proto::v3_scrollback::cap_limit(req.limit) as usize;
+                let raw = pane.screen.raw_bytes();
+                let offset = req.offset as usize;
+                let (data, is_last) = if offset >= raw.len() {
+                    (bytes::Bytes::new(), true)
+                } else {
+                    let end = raw.len().min(offset + limit);
+                    let chunk = &raw[offset..end];
+                    (bytes::Bytes::copy_from_slice(chunk), end >= raw.len())
+                };
+                let chunk = rttx_proto::v3_scrollback::build_scrollback_chunk(
+                    runtime_id, pane_id, req.offset, data, is_last,
+                );
+                Some(rttx_proto::v3_scrollback::build_scrollback_chunk_response(request_id, chunk))
+            }
+
+            v3::client_envelope::Command::TakeoverRuntime(req) => {
+                if !rttx_proto::v3_takeover::is_supported(effective_caps) {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::UnsupportedCapability,
+                            "OPT_RUNTIME_TAKEOVER not negotiated",
+                            "TakeoverRuntime",
+                        ),
+                    ));
+                }
+                let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::InvalidArgument,
+                                &e.to_string(),
+                                "TakeoverRuntime",
+                            ),
+                        ));
+                    }
+                };
+                let mut s = server.lock().await;
+                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::RuntimeNotFound,
+                            "runtime not found",
+                            "TakeoverRuntime",
+                        ),
+                    ));
+                };
+                match rt.attach_client(client_id, AttachMode::TakeOver) {
+                    Ok(AttachOutcome::Attached { revision, .. }) => {
+                        Some(rttx_proto::v3_takeover::build_takeover_completed_response(
+                            request_id,
+                            rttx_proto::v3_takeover::build_takeover_completed(runtime_id, revision),
+                        ))
+                    }
+                    Ok(AttachOutcome::Blocked { .. }) | Err(AttachError::UnsupportedTakeOver) => {
+                        Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::OwnershipConflict,
+                                "takeover failed",
+                                "TakeoverRuntime",
+                            ),
+                        ))
+                    }
+                }
+            }
+
+            v3::client_envelope::Command::Shutdown(_) => None,
+        }
+    }
 }
 
-/// Maximum bytes to accumulate before flushing a coalesced batch.
+/// Server capabilities advertised during v3 handshake.
+pub const SERVER_CAPABILITIES: &[v3::Capability] = &[
+    v3::Capability::CoreRuntimeLifecycle,
+    v3::Capability::CorePaneLifecycle,
+    v3::Capability::CoreTerminalIo,
+    v3::Capability::CoreTerminalModes,
+    v3::Capability::CorePasteIntent,
+    v3::Capability::CoreFocusEvents,
+    v3::Capability::OptRuntimeInventoryV2,
+    v3::Capability::OptResync,
+    v3::Capability::OptChunkedScrollback,
+    v3::Capability::OptDiagnostics,
+    v3::Capability::OptRuntimeTakeover,
+];
+
+// ── V3 dispatch helpers ─────────────────────────────────────────
+
+#[allow(clippy::significant_drop_tightening)]
+impl Server {
+    #[allow(clippy::significant_drop_tightening)]
+    async fn handle_v3_attach(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::AttachRuntime,
+    ) -> Option<v3::ServerEnvelope> {
+        let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+            Ok(id) => id,
+            Err(e) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::InvalidArgument,
+                        &e.to_string(),
+                        "AttachRuntime",
+                    ),
+                ));
+            }
+        };
+        let attach_mode = AttachMode::from_v3_proto(req.attach_mode);
+        let mut s = server.lock().await;
+        let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::RuntimeNotFound,
+                    "runtime not found",
+                    "AttachRuntime",
+                ),
+            ));
+        };
+        let attach_outcome = match rt.attach_client(client_id, attach_mode) {
+            Ok(outcome) => outcome,
+            Err(AttachError::UnsupportedTakeOver) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::TakeoverRequired,
+                        "use TakeoverRuntime command",
+                        "AttachRuntime",
+                    ),
+                ));
+            }
+        };
+        match attach_outcome {
+            AttachOutcome::Attached { role, .. } => {
+                let v3_role = role.as_v3_proto();
+                let snapshot = protocol::build_v3_runtime_snapshot(rt, runtime_id, v3_role);
+                let runtime_label = s.runtime_label(runtime_id);
+                tracing::info!(
+                    "Client {} attached to runtime {runtime_label} as {role:?}",
+                    short_id(client_id)
+                );
+                Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
+            }
+            AttachOutcome::Blocked { current_role, .. } => {
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::AttachBlocked(v3::AttachBlocked {
+                        runtime_id: uuid_to_bytes(runtime_id),
+                        current_client_role: current_role
+                            .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto)
+                            as i32,
+                        attached_client_count: u32::try_from(rt.attached_client_count())
+                            .unwrap_or(u32::MAX),
+                        read_only_client_count: u32::try_from(rt.read_only_client_count())
+                            .unwrap_or(u32::MAX),
+                    }),
+                ))
+            }
+        }
+    }
+
+    async fn handle_v3_detach(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::DetachRuntime,
+    ) -> Option<v3::ServerEnvelope> {
+        let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+            Ok(id) => id,
+            Err(e) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::InvalidArgument,
+                        &e.to_string(),
+                        "DetachRuntime",
+                    ),
+                ));
+            }
+        };
+        let mut s = server.lock().await;
+        let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::RuntimeNotFound,
+                    "runtime not found",
+                    "DetachRuntime",
+                ),
+            ));
+        };
+        match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
+            DetachOutcome::Detached { revision } | DetachOutcome::NotAttached { revision } => {
+                let runtime_label = s.runtime_label(runtime_id);
+                tracing::info!(
+                    "Client {} detached from runtime {runtime_label}",
+                    short_id(client_id)
+                );
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::RuntimeDetached(v3::RuntimeDetached {
+                        runtime_id: uuid_to_bytes(runtime_id),
+                        runtime_revision: revision,
+                    }),
+                ))
+            }
+            DetachOutcome::Terminated { final_revision, reason } => {
+                let runtime_label = s.runtime_label(runtime_id);
+                tracing::info!(
+                    "Client {} detached from runtime {runtime_label} (terminated: {reason:?})",
+                    short_id(client_id)
+                );
+                let _ = s.terminate_runtime(runtime_id, final_revision, reason, Some(client_id));
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
+                        runtime_id: uuid_to_bytes(runtime_id),
+                        final_revision,
+                        reason: reason.as_v3_proto() as i32,
+                    }),
+                ))
+            }
+        }
+    }
+
+    async fn handle_v3_terminate(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::TerminateRuntime,
+    ) -> Option<v3::ServerEnvelope> {
+        let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+            Ok(id) => id,
+            Err(e) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::InvalidArgument,
+                        &e.to_string(),
+                        "TerminateRuntime",
+                    ),
+                ));
+            }
+        };
+        let mut s = server.lock().await;
+        let Some(rt) = s.runtimes.get(&runtime_id) else {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::RuntimeNotFound,
+                    "runtime not found",
+                    "TerminateRuntime",
+                ),
+            ));
+        };
+        if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::OwnershipConflict,
+                    "runtime is currently owned by another client",
+                    "TerminateRuntime",
+                ),
+            ));
+        }
+        let final_revision = rt.revision().saturating_add(1);
+        let runtime_label = s.runtime_label(runtime_id);
+        let _ = s.terminate_runtime(
+            runtime_id,
+            final_revision,
+            TerminationReason::Explicit,
+            Some(client_id),
+        );
+        tracing::info!("Runtime terminated: {runtime_label}");
+        Some(rttx_proto::v3_envelope::build_response_envelope(
+            request_id,
+            v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
+                runtime_id: uuid_to_bytes(runtime_id),
+                final_revision,
+                reason: v3::RuntimeTerminationReason::Explicit as i32,
+            }),
+        ))
+    }
+
+    #[allow(clippy::significant_drop_tightening)]
+    async fn handle_v3_create_pane(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::CreatePane,
+    ) -> Option<v3::ServerEnvelope> {
+        let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+            Ok(id) => id,
+            Err(e) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::InvalidArgument,
+                        &e.to_string(),
+                        "CreatePane",
+                    ),
+                ));
+            }
+        };
+        let pane_id = Uuid::new_v4();
+        let (pty_result, runtime_label, cols, rows) = {
+            let s = server.lock().await;
+            let Some(rt) = s.runtimes.get(&runtime_id) else {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::RuntimeNotFound,
+                        "runtime not found",
+                        "CreatePane",
+                    ),
+                ));
+            };
+            if !rt.client_has_write_access(client_id) {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::OwnershipConflict,
+                        "runtime is currently owned by another client",
+                        "CreatePane",
+                    ),
+                ));
+            }
+            let label = s.runtime_label(runtime_id);
+            let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+            if let Some(parent) = hist.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let colorfgbg = if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
+            let env = vec![
+                ("HISTFILE".into(), hist.to_string_lossy().into_owned()),
+                ("COLORFGBG".into(), colorfgbg.into()),
+            ];
+            let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
+            let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
+            let config = PaneSpawnConfig { command: vec![], cwd: req.cwd, env, cols, rows };
+            (s.engine.spawn_pane(pane_id, &config), label, cols, rows)
+        };
+        match pty_result {
+            Ok(pty) => {
+                let child_pid = pty.pid();
+                let (reader, writer, mut child) = pty.into_parts();
+                let (kill_tx, kill_rx) = oneshot::channel();
+                let (revision, runtime_name) = {
+                    let mut s = server.lock().await;
+                    let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+                        let _ = child.start_kill();
+                        return Some(rttx_proto::v3_error::build_error_response(
+                            request_id,
+                            rttx_proto::v3_error::build_error(
+                                v3::ErrorKind::RuntimeNotFound,
+                                "runtime not found",
+                                "CreatePane",
+                            ),
+                        ));
+                    };
+                    let mut pane = Pane::new(pane_id, cols, rows);
+                    pane.child_pid = child_pid;
+                    rt.add_pane(pane);
+                    let revision = rt.revision();
+                    let name = rt.name.clone();
+                    s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
+                    s.pty_kill_senders.insert(pane_id, kill_tx);
+                    (revision, name)
+                };
+                spawn_pty_read_loop(
+                    Arc::clone(server),
+                    runtime_id,
+                    pane_id,
+                    &runtime_name,
+                    reader,
+                    child,
+                    kill_rx,
+                );
+                tracing::info!(
+                    "Pane {} created in runtime \"{}\" ({})",
+                    short_id(pane_id),
+                    runtime_name,
+                    short_id(runtime_id)
+                );
+                Some(rttx_proto::v3_envelope::build_response_envelope(
+                    request_id,
+                    v3::server_envelope::Payload::PaneCreated(v3::PaneCreated {
+                        runtime_id: uuid_to_bytes(runtime_id),
+                        pane_id: uuid_to_bytes(pane_id),
+                        runtime_revision: revision,
+                    }),
+                ))
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to spawn PTY for pane {} in runtime {runtime_label}: {e}",
+                    short_id(pane_id)
+                );
+                Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::Internal,
+                        &format!("failed to spawn pane: {e}"),
+                        "CreatePane",
+                    ),
+                ))
+            }
+        }
+    }
+
+    async fn handle_v3_close_pane(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::ClosePane,
+    ) -> Option<v3::ServerEnvelope> {
+        let runtime_id = match bytes_to_uuid(&req.runtime_id) {
+            Ok(id) => id,
+            Err(e) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::InvalidArgument,
+                        &e.to_string(),
+                        "ClosePane",
+                    ),
+                ));
+            }
+        };
+        let pane_id = match bytes_to_uuid(&req.pane_id) {
+            Ok(id) => id,
+            Err(e) => {
+                return Some(rttx_proto::v3_error::build_error_response(
+                    request_id,
+                    rttx_proto::v3_error::build_error(
+                        v3::ErrorKind::InvalidArgument,
+                        &e.to_string(),
+                        "ClosePane",
+                    ),
+                ));
+            }
+        };
+        let mut s = server.lock().await;
+        let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::RuntimeNotFound,
+                    "runtime not found",
+                    "ClosePane",
+                ),
+            ));
+        };
+        if !rt.client_has_write_access(client_id) {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::OwnershipConflict,
+                    "runtime is currently owned by another client",
+                    "ClosePane",
+                ),
+            ));
+        }
+        if rt.remove_pane(pane_id).is_none() {
+            return Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(
+                    v3::ErrorKind::PaneNotFound,
+                    "pane not found",
+                    "ClosePane",
+                ),
+            ));
+        }
+        let revision = rt.revision();
+        let runtime_label = s.runtime_label(runtime_id);
+        s.pty_writers.remove(&pane_id);
+        if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
+            let _ = kill_tx.send(());
+        }
+        tracing::info!("Pane {} closed in runtime {runtime_label}", short_id(pane_id));
+        Some(rttx_proto::v3_envelope::build_response_envelope(
+            request_id,
+            v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
+                runtime_id: uuid_to_bytes(runtime_id),
+                pane_id: uuid_to_bytes(pane_id),
+                runtime_revision: revision,
+            }),
+        ))
+    }
+
+    async fn handle_v3_terminal_input(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        input: v3::TerminalInput,
+    ) -> Option<v3::ServerEnvelope> {
+        let Ok(runtime_id) = bytes_to_uuid(&input.runtime_id) else { return None };
+        let Ok(pane_id) = bytes_to_uuid(&input.pane_id) else { return None };
+        let (writer, resolved_bytes) = {
+            let s = server.lock().await;
+            let rt = s.runtimes.get(&runtime_id)?;
+            if !rt.panes.contains_key(&pane_id) {
+                return None;
+            }
+            if !rt.client_has_write_access(client_id) {
+                return None;
+            }
+            let modes = rt.panes.get(&pane_id)?.screen.terminal_mode_state();
+            let resolved =
+                rttx_proto::v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
+            (s.pty_writers.get(&pane_id).cloned(), resolved)
+        };
+        if resolved_bytes.is_empty() {
+            return None;
+        }
+        if let Some(writer) = writer {
+            let pane_short = short_id(pane_id);
+            let mut w = writer.lock().await;
+            if let Err(e) = w.write_all(&resolved_bytes).await {
+                tracing::error!("Failed to write to PTY {pane_short}: {e}");
+            }
+            if let Err(e) = w.flush().await {
+                tracing::error!("Failed to flush PTY {pane_short}: {e}");
+            }
+        }
+        None
+    }
+
+    async fn handle_v3_resize(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        req: v3::ResizePane,
+    ) -> Option<v3::ServerEnvelope> {
+        let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
+        let Ok(cols) = u16::try_from(req.cols) else { return None };
+        let Ok(rows) = u16::try_from(req.rows) else { return None };
+        let writer = {
+            let s = server.lock().await;
+            let rt = s.runtimes.get(&runtime_id)?;
+            if !rt.panes.contains_key(&pane_id) {
+                return None;
+            }
+            if !rt.client_has_write_access(client_id) {
+                return None;
+            }
+            s.pty_writers.get(&pane_id).cloned()
+        };
+        let writer = writer?;
+        {
+            let w = writer.lock().await;
+            if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
+                let s = server.lock().await;
+                tracing::error!(
+                    "Failed to resize PTY {} in runtime {}: {e}",
+                    short_id(pane_id),
+                    s.runtime_label(runtime_id)
+                );
+                return None;
+            }
+        }
+        let mut s = server.lock().await;
+        let rt = s.runtimes.get_mut(&runtime_id)?;
+        rt.resize_pane(pane_id, cols, rows)?;
+        None
+    }
+
+    async fn handle_v3_set_pane_title(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        req: v3::SetPaneTitle,
+    ) -> Option<v3::ServerEnvelope> {
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
+        let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
+        let mut s = server.lock().await;
+        let rt = s.runtimes.get_mut(&runtime_id)?;
+        if !rt.client_has_write_access(client_id) {
+            return None;
+        }
+        let _ = rt.set_pane_title(pane_id, req.title);
+        None
+    }
+}
 const COALESCE_MAX_BYTES: usize = 64 * 1024;
 
 /// How long to wait for additional PTY data after the first read.
@@ -929,13 +1812,14 @@ fn spawn_pty_read_loop(
                             let data = batch.split().freeze();
 
                             // Phase 1: hold lock for state mutation and handle collection.
-                            let (new_cwd, new_title, pending_replies, pty_writer, senders) = {
+                            let (new_cwd, new_title, pending_replies, pty_writer, senders, _output_seq) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut s = server.lock().await;
-                                let (new_cwd, new_title, pending_replies) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
+                                let (new_cwd, new_title, pending_replies, output_seq) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
                                     let result = pane.feed_output(&data);
+                                    let seq = pane.output_seq;
                                     let cwd = result.new_cwd.and_then(|cwd| {
                                         let rev = rt.set_pane_cwd(pane_id, &cwd)?;
                                         Some((cwd, rev))
@@ -944,9 +1828,9 @@ fn spawn_pty_read_loop(
                                         let rev = rt.set_pane_title(pane_id, title.clone())?;
                                         Some((title, rev))
                                     });
-                                    (cwd, title, result.pending_replies)
+                                    (cwd, title, result.pending_replies, seq)
                                 } else {
-                                    (None, None, Vec::new())
+                                    (None, None, Vec::new(), 0)
                                 };
                                 let pty_writer = if pending_replies.is_empty() {
                                     None
@@ -964,7 +1848,7 @@ fn spawn_pty_read_loop(
                                         "server mutex held too long in PTY read loop",
                                     );
                                 }
-                                (new_cwd, new_title, pending_replies, pty_writer, senders)
+                                (new_cwd, new_title, pending_replies, pty_writer, senders, output_seq)
                             };
                             // Lock released.
 
@@ -991,15 +1875,15 @@ fn spawn_pty_read_loop(
                             // generate duplicate responses that leak as visible garbage.
                             let client_data = crate::screen::strip_client_queries(&data);
                             if !client_data.is_empty() {
-                                let msg = protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data));
+                                let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data.clone())));
                                 send_to_collected(&senders, &msg);
                             }
                             if let Some((cwd, revision)) = new_cwd {
-                                let msg = protocol::cwd_changed(runtime_id, pane_id, cwd, revision);
+                                let msg = ClientMsg::V2(protocol::cwd_changed(runtime_id, pane_id, cwd, revision));
                                 send_to_collected(&senders, &msg);
                             }
                             if let Some((title, revision)) = new_title {
-                                let msg = protocol::title_changed(runtime_id, pane_id, title, revision);
+                                let msg = ClientMsg::V2(protocol::title_changed(runtime_id, pane_id, title, revision));
                                 send_to_collected(&senders, &msg);
                             }
                         }
@@ -1030,9 +1914,9 @@ fn spawn_pty_read_loop(
 
         let mut s = server.lock().await;
         let exit_msg = if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
-            let msg = rt
-                .set_pane_exit_status(pane_id, Some(status))
-                .map(|revision| protocol::pane_exited(runtime_id, pane_id, status, revision));
+            let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
+                ClientMsg::V2(protocol::pane_exited(runtime_id, pane_id, status, revision))
+            });
             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                 pane.release_scrollback();
             }
@@ -1201,7 +2085,7 @@ where
     // Channel for responses that the reader task needs to send back to the
     // client (e.g. pong replies, runtime snapshots). The writer task drains
     // this alongside the push channel so writes never block reads.
-    let (resp_tx, resp_rx) = mpsc::channel::<proto::ServerMessage>(RESP_CHANNEL_BOUND);
+    let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(RESP_CHANNEL_BOUND);
     {
         let mut s = server.lock().await;
         s.client_senders.insert(client_id, tx);
@@ -1219,6 +2103,7 @@ where
     {
         let mut s = server.lock().await;
         s.client_senders.remove(&client_id);
+        s.client_protocols.remove(&client_id);
         if handshake_completed {
             for rt in s.runtimes.values_mut() {
                 let _ = rt.detach_client(client_id, DetachReason::Disconnect);
@@ -1246,7 +2131,7 @@ async fn client_reader(
     client_id: Uuid,
     client_short: &str,
     mut reader: ClientConnectionReader,
-    resp_tx: mpsc::Sender<proto::ServerMessage>,
+    resp_tx: mpsc::Sender<ClientMsg>,
 ) -> (anyhow::Result<()>, bool) {
     let mut handshake_completed = false;
     loop {
@@ -1279,14 +2164,14 @@ async fn client_reader(
         // Fast-path: respond to Ping without acquiring the server mutex.
         // The heartbeat must never stall behind PTY I/O or runtime work.
         if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
-            if resp_tx.send(protocol::pong(ping.nonce)).await.is_err() {
+            if resp_tx.send(ClientMsg::V2(protocol::pong(ping.nonce))).await.is_err() {
                 return (Ok(()), handshake_completed);
             }
             continue;
         }
 
         if let Some(response) = Server::handle_message(&server, client_id, msg).await
-            && resp_tx.send(response).await.is_err()
+            && resp_tx.send(ClientMsg::V2(response)).await.is_err()
         {
             return (Ok(()), handshake_completed);
         }
@@ -1298,8 +2183,8 @@ async fn client_reader(
 /// a write error occurs.
 async fn client_writer(
     mut writer: ClientConnectionWriter,
-    mut push_rx: mpsc::Receiver<proto::ServerMessage>,
-    mut resp_rx: mpsc::Receiver<proto::ServerMessage>,
+    mut push_rx: mpsc::Receiver<ClientMsg>,
+    mut resp_rx: mpsc::Receiver<ClientMsg>,
     client_short: String,
 ) {
     loop {
@@ -1320,7 +2205,11 @@ async fn client_writer(
                 },
             },
         };
-        if let Err(e) = writer.send_message(&msg).await {
+        let result = match &msg {
+            ClientMsg::V2(v2_msg) => writer.send_message(v2_msg).await,
+            ClientMsg::V3(v3_msg) => writer.send_v3_envelope(v3_msg).await,
+        };
+        if let Err(e) = result {
             tracing::error!("Client {client_short} write error: {e}");
             break;
         }

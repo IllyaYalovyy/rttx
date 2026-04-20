@@ -59,6 +59,8 @@ pub struct Pane {
     pending_flush: Vec<u8>,
     /// PID of the child process, used to read CWD from /proc.
     pub child_pid: Option<u32>,
+    /// Monotonic output sequence counter for v3 `OutputDelta` continuity.
+    pub output_seq: u64,
 }
 
 impl Pane {
@@ -77,6 +79,7 @@ impl Pane {
             scrollback_log_path: None,
             pending_flush: Vec::new(),
             child_pid: None,
+            output_seq: 0,
         }
     }
 
@@ -84,6 +87,7 @@ impl Pane {
     pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
         self.screen.feed(data);
         self.pending_flush.extend_from_slice(data);
+        self.output_seq += 1;
         if self.pending_flush.len() > DEFAULT_MAX_SCROLLBACK {
             let excess = self.pending_flush.len() - DEFAULT_MAX_SCROLLBACK;
             self.pending_flush.drain(..excess);
