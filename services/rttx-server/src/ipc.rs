@@ -6,7 +6,7 @@
 //! and stdin/stdout (remote via SSH).
 
 use bytes::BytesMut;
-use rttx_proto::{decode_frame, encode_frame, proto};
+use rttx_proto::{decode_frame, encode_frame, proto, v3};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -123,6 +123,53 @@ where
         Ok(())
     }
 
+    /// Read the next raw frame as bytes without decoding.
+    ///
+    /// Used during handshake to peek at the first message and determine
+    /// whether the client speaks v2 or v3.
+    pub async fn read_raw_frame(&mut self) -> Result<Option<BytesMut>, IpcError> {
+        loop {
+            if self.read_buf.len() >= 4 {
+                let len = u32::from_le_bytes([
+                    self.read_buf[0],
+                    self.read_buf[1],
+                    self.read_buf[2],
+                    self.read_buf[3],
+                ]);
+                if len > rttx_proto::MAX_MESSAGE_SIZE {
+                    return Err(IpcError::Frame(rttx_proto::FrameError::TooLarge(len)));
+                }
+                let total = 4 + len as usize;
+                if self.read_buf.len() >= total {
+                    let frame = self.read_buf.split_to(total);
+                    return Ok(Some(frame));
+                }
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Send a v3 server hello message.
+    pub async fn send_v3_server_hello(&mut self, msg: &v3::ServerHello) -> Result<(), IpcError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+
+    /// Send a v3 protocol error (bare, during handshake).
+    pub async fn send_v3_error(&mut self, msg: &v3::ProtocolError) -> Result<(), IpcError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+
     /// Split into independent reader and writer halves.
     pub fn into_split(self) -> (ClientConnectionReader, ClientConnectionWriter)
     where
@@ -157,6 +204,21 @@ impl ClientConnectionReader {
             }
         }
     }
+
+    /// Read the next v3 client envelope. Returns `None` on clean disconnect.
+    pub async fn read_v3_envelope(&mut self) -> Result<Option<v3::ClientEnvelope>, IpcError> {
+        loop {
+            match decode_frame::<v3::ClientEnvelope>(&mut self.read_buf) {
+                Ok(msg) => return Ok(Some(msg)),
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => return Err(IpcError::Frame(e)),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+        }
+    }
 }
 
 /// Write half of a split client connection.
@@ -167,6 +229,15 @@ pub struct ClientConnectionWriter {
 impl ClientConnectionWriter {
     /// Send a server message to this client.
     pub async fn send_message(&mut self, msg: &proto::ServerMessage) -> Result<(), IpcError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+
+    /// Send a v3 server envelope to this client.
+    pub async fn send_v3_envelope(&mut self, msg: &v3::ServerEnvelope) -> Result<(), IpcError> {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.stream.write_all(&buf).await?;

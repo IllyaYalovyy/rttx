@@ -1238,7 +1238,11 @@ async fn broadcast_drops_messages_when_client_channel_is_full() {
     server.lock().await.client_senders.insert(client_id, tx);
 
     // Fill the channel to capacity.
-    let msg = protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from(vec![0u8; 64]));
+    let msg = ClientMsg::V2(protocol::delta(
+        runtime_id,
+        Uuid::new_v4(),
+        bytes::Bytes::from(vec![0u8; 64]),
+    ));
     for _ in 0..PUSH_CHANNEL_BOUND {
         server.lock().await.broadcast_to_runtime(runtime_id, &msg);
     }
@@ -1292,19 +1296,25 @@ async fn delta_broadcast_shares_bytes_across_clients() {
     }
 
     let data = bytes::Bytes::from(vec![b'X'; 4096]);
-    let msg = protocol::delta(runtime_id, Uuid::new_v4(), data.clone());
+    let msg = ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), data.clone()));
     server.lock().await.broadcast_to_runtime(runtime_id, &msg);
 
     let msg_a = rx_a.try_recv().unwrap();
     let msg_b = rx_b.try_recv().unwrap();
 
-    let data_a = match msg_a.msg {
-        Some(proto::server_message::Msg::Delta(d)) => d.data,
-        other => panic!("expected Delta, got {other:?}"),
+    let data_a = match msg_a {
+        ClientMsg::V2(ref m) => match &m.msg {
+            Some(proto::server_message::Msg::Delta(d)) => d.data.clone(),
+            other => panic!("expected Delta, got {other:?}"),
+        },
+        ClientMsg::V3(ref other) => panic!("expected V2, got V3({other:?})"),
     };
-    let data_b = match msg_b.msg {
-        Some(proto::server_message::Msg::Delta(d)) => d.data,
-        other => panic!("expected Delta, got {other:?}"),
+    let data_b = match msg_b {
+        ClientMsg::V2(ref m) => match &m.msg {
+            Some(proto::server_message::Msg::Delta(d)) => d.data.clone(),
+            other => panic!("expected Delta, got {other:?}"),
+        },
+        ClientMsg::V3(ref other) => panic!("expected V2, got V3({other:?})"),
     };
 
     // Both clones share the same backing allocation.
@@ -1348,17 +1358,21 @@ async fn client_writer_prioritizes_resp_over_push() {
     // Regression: #557 — resp_rx (Pong, Snapshot) must be drained before
     // push_rx (Delta) so heartbeat replies are never starved by burst data.
     let push_count = 64;
-    let (push_tx, push_rx) = mpsc::channel::<proto::ServerMessage>(push_count);
-    let (resp_tx, resp_rx) = mpsc::channel::<proto::ServerMessage>(16);
+    let (push_tx, push_rx) = mpsc::channel::<ClientMsg>(push_count);
+    let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
 
     // Pre-fill push channel with many Deltas.
-    let delta = protocol::delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"x"));
+    let delta = ClientMsg::V2(protocol::delta(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        bytes::Bytes::from_static(b"x"),
+    ));
     for _ in 0..push_count {
         push_tx.send(delta.clone()).await.unwrap();
     }
 
     // Then add a single Pong to the response channel.
-    resp_tx.send(protocol::pong(42)).await.unwrap();
+    resp_tx.send(ClientMsg::V2(protocol::pong(42))).await.unwrap();
 
     // Drop senders so the writer will exit after draining.
     drop(push_tx);
@@ -1446,11 +1460,17 @@ async fn send_to_collected_delivers_messages() {
     let client_id = Uuid::new_v4();
     let senders = vec![(client_id, tx)];
 
-    let msg = protocol::delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"hi"));
+    let msg = ClientMsg::V2(protocol::delta(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        bytes::Bytes::from_static(b"hi"),
+    ));
     send_to_collected(&senders, &msg);
 
     let received = rx.try_recv().unwrap();
-    assert!(matches!(received.msg, Some(proto::server_message::Msg::Delta(_))));
+    assert!(
+        matches!(received, ClientMsg::V2(ref m) if matches!(m.msg, Some(proto::server_message::Msg::Delta(_))))
+    );
 }
 
 #[tokio::test]
@@ -1460,7 +1480,11 @@ async fn send_to_collected_drops_when_channel_full() {
     let client_id = Uuid::new_v4();
     let senders = vec![(client_id, tx)];
 
-    let msg = protocol::delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"a"));
+    let msg = ClientMsg::V2(protocol::delta(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        bytes::Bytes::from_static(b"a"),
+    ));
     send_to_collected(&senders, &msg);
     // Channel is now full.
     send_to_collected(&senders, &msg);
@@ -1565,4 +1589,315 @@ async fn real_client_logs_connected_and_disconnected_at_info() {
     assert!(logs_contain("disconnected"));
     // Must NOT contain probe message.
     assert!(!logs_contain("Client probe from"));
+}
+
+// ── V3 dispatch tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn v3_empty_envelope_returns_invalid_argument() {
+    let server = new_server();
+    let caps =
+        rttx_proto::v3_handshake::CORE_CAPABILITIES.iter().map(|c| *c as i32).collect::<Vec<_>>();
+    let env = v3::ClientEnvelope { request_id: 1, command: None };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, v3::ErrorKind::InvalidArgument as i32);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_ping_returns_pong() {
+    let server = new_server();
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 7,
+        command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 42 })),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 7);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Pong(p)) => assert_eq!(p.nonce, 42),
+        other => panic!("expected Pong, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_create_runtime_returns_runtime_created() {
+    let server = new_server();
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 1,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            name: "test-ws".into(),
+            policy: v3::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 1);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => {
+            assert!(!rc.runtime_id.is_empty());
+        }
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_attach_returns_snapshot() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _pane_id) = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 2,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 2);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
+            assert_eq!(snap.runtime_id, uuid_to_bytes(runtime_id));
+            assert_eq!(snap.panes.len(), 1);
+            assert!(snap.panes[0].terminal_modes.is_some());
+        }
+        other => panic!("expected RuntimeSnapshot, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_detach_returns_runtime_detached() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 3,
+        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 3);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeDetached(rd)) => {
+            assert_eq!(rd.runtime_id, uuid_to_bytes(runtime_id));
+        }
+        other => panic!("expected RuntimeDetached, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_terminate_returns_runtime_terminated() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 4,
+        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 4);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeTerminated(rt)) => {
+            assert_eq!(rt.runtime_id, uuid_to_bytes(runtime_id));
+            assert_eq!(rt.reason, v3::RuntimeTerminationReason::Explicit as i32);
+        }
+        other => panic!("expected RuntimeTerminated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_list_runtimes_returns_inventory() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let _ = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 5,
+        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 5);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeList(rl)) => {
+            assert_eq!(rl.runtimes.len(), 1);
+            assert_eq!(rl.runtimes[0].name, "test");
+        }
+        other => panic!("expected RuntimeList, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_get_diagnostics_requires_capability() {
+    let server = new_server();
+    let caps = vec![]; // no OPT_DIAGNOSTICS
+    let env = v3::ClientEnvelope {
+        request_id: 6,
+        command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_get_diagnostics_with_capability_returns_report() {
+    let server = new_server();
+    let caps = vec![v3::Capability::OptDiagnostics as i32];
+    let env = v3::ClientEnvelope {
+        request_id: 7,
+        command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 7);
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::DiagnosticsReport(_))));
+}
+
+#[tokio::test]
+async fn v3_rename_runtime_returns_renamed() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 8,
+        command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
+            name: "new-name".into(),
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    assert_eq!(resp.request_id, 8);
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeRenamed(rr)) => {
+            assert_eq!(rr.name, "new-name");
+        }
+        other => panic!("expected RuntimeRenamed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_terminal_input_is_fire_and_forget() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"hello"),
+            })),
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await;
+    assert!(resp.is_none());
+}
+
+#[tokio::test]
+async fn v3_resync_requires_capability() {
+    let server = new_server();
+    let caps = vec![]; // no OPT_RESYNC
+    let env = v3::ClientEnvelope {
+        request_id: 9,
+        command: Some(v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_get_scrollback_requires_capability() {
+    let server = new_server();
+    let caps = vec![]; // no OPT_CHUNKED_SCROLLBACK
+    let env = v3::ClientEnvelope {
+        request_id: 10,
+        command: Some(v3::client_envelope::Command::GetScrollback(v3::GetScrollback {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
+            pane_id: uuid_to_bytes(Uuid::new_v4()),
+            offset: 0,
+            limit: 1024,
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_takeover_requires_capability() {
+    let server = new_server();
+    let caps = vec![]; // no OPT_RUNTIME_TAKEOVER
+    let env = v3::ClientEnvelope {
+        request_id: 11,
+        command: Some(v3::client_envelope::Command::TakeoverRuntime(v3::TakeoverRuntime {
+            runtime_id: uuid_to_bytes(Uuid::new_v4()),
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn v3_pane_output_seq_increments_on_feed() {
+    let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+    assert_eq!(pane.output_seq, 0);
+    pane.feed_output(b"hello");
+    assert_eq!(pane.output_seq, 1);
+    pane.feed_output(b"world");
+    assert_eq!(pane.output_seq, 2);
+}
+
+#[tokio::test]
+async fn v3_snapshot_includes_terminal_modes() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let caps = vec![];
+    let env = v3::ClientEnvelope {
+        request_id: 1,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            runtime_id: uuid_to_bytes(runtime_id),
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    if let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = resp.payload {
+        for pane_snap in &snap.panes {
+            assert!(pane_snap.terminal_modes.is_some());
+        }
+    } else {
+        panic!("expected RuntimeSnapshot");
+    }
 }

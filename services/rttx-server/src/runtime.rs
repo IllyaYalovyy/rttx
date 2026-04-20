@@ -4,7 +4,7 @@
 //! persist across GUI disconnects and can be serialized to disk.
 
 use crate::pane::{HistoryEntry, Pane, PersistedPane};
-use rttx_proto::proto;
+use rttx_proto::{proto, v3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -42,6 +42,15 @@ impl RuntimePolicy {
             _ => Self::Persistent,
         }
     }
+
+    /// Convert from the v3 wire enum.
+    #[must_use]
+    pub fn from_v3_proto(value: i32) -> Self {
+        match v3::RuntimePolicy::try_from(value).ok() {
+            Some(v3::RuntimePolicy::Ephemeral) => Self::Ephemeral,
+            _ => Self::Persistent,
+        }
+    }
 }
 
 /// Client role within a runtime.
@@ -60,6 +69,15 @@ impl ClientRole {
         match self {
             Self::Writer => proto::RuntimeClientRole::Writer,
             Self::Reader => proto::RuntimeClientRole::Reader,
+        }
+    }
+
+    /// Convert to the v3 protocol enum value.
+    #[must_use]
+    pub const fn as_v3_proto(self) -> v3::RuntimeClientRole {
+        match self {
+            Self::Writer => v3::RuntimeClientRole::Writer,
+            Self::Reader => v3::RuntimeClientRole::Reader,
         }
     }
 }
@@ -85,6 +103,15 @@ impl AttachMode {
             _ => Self::ReadWrite,
         }
     }
+
+    /// Convert from the v3 wire enum.
+    #[must_use]
+    pub fn from_v3_proto(value: i32) -> Self {
+        match v3::RuntimeAttachMode::try_from(value).ok() {
+            Some(v3::RuntimeAttachMode::ReadOnly) => Self::ReadOnly,
+            _ => Self::ReadWrite,
+        }
+    }
 }
 
 /// Reason a runtime was terminated.
@@ -103,6 +130,15 @@ impl TerminationReason {
         match self {
             Self::Explicit => proto::RuntimeTerminationReason::Explicit,
             Self::EphemeralLastDetach => proto::RuntimeTerminationReason::EphemeralLastDetach,
+        }
+    }
+
+    /// Convert to the v3 wire enum.
+    #[must_use]
+    pub const fn as_v3_proto(self) -> v3::RuntimeTerminationReason {
+        match self {
+            Self::Explicit => v3::RuntimeTerminationReason::Explicit,
+            Self::EphemeralLastDetach => v3::RuntimeTerminationReason::EphemeralDetach,
         }
     }
 }
