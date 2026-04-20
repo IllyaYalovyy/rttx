@@ -1331,3 +1331,66 @@ fn default_window_state_has_reasonable_sidebar_widths() {
         "right sidebar should be at least 200px for commands/places"
     );
 }
+
+#[test]
+fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+    let pane_id = uuid::Uuid::new_v4().to_string();
+    let mut state = WindowState {
+        workspaces: vec![WorkspaceState::new_managed_local(
+            "Test".into(),
+            rttx::runtime::WorkspacePolicy::Persistent,
+            None,
+        )],
+        ..WindowState::default()
+    };
+    let ws_id = state.workspaces[0].uuid.clone();
+
+    let snapshot = rttx_proto::v3::RuntimeSnapshot {
+        runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
+        panes: vec![rttx_proto::v3::PaneSnapshot {
+            pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
+            pane_output_seq: 42,
+            title: "vim".into(),
+            cwd: "/home".into(),
+            cols: 80,
+            rows: 24,
+            exit_status: None,
+            terminal_modes: Some(rttx_proto::v3::TerminalModeState {
+                bracketed_paste: true,
+                focus_reporting: true,
+                application_cursor_keys: true,
+                application_keypad: false,
+                alternate_screen: true,
+                cursor_hidden: false,
+                mouse_mode: rttx_proto::v3::MouseMode::Normal as i32,
+                sgr_mouse: true,
+            }),
+            scrollback_tail: bytes::Bytes::from_static(b"scrollback data"),
+            total_scrollback_bytes: 15,
+            scrollback_complete: true,
+        }],
+        runtime_revision: 5,
+        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+    };
+
+    let transition = state.reconcile_endpoint_event(
+        &rttx::daemon_bridge::EndpointEvent::WorkspaceOpened {
+            workspace_id: ws_id,
+            runtime_id,
+            snapshot,
+        },
+    );
+
+    assert_eq!(transition.pane_snapshot_restores.len(), 1);
+    let restore = &transition.pane_snapshot_restores[0];
+    assert_eq!(restore.pane_output_seq, 42);
+    assert_eq!(restore.scrollback_tail, &b"scrollback data"[..]);
+    assert!(restore.scrollback_complete);
+    let modes = restore.terminal_modes.as_ref().expect("modes should be present");
+    assert!(modes.bracketed_paste);
+    assert!(modes.application_cursor_keys);
+    assert!(modes.alternate_screen);
+    assert_eq!(modes.mouse_mode, rttx_proto::v3::MouseMode::Normal as i32);
+    assert!(modes.sgr_mouse);
+}

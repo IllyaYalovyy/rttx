@@ -1001,4 +1001,60 @@ mod tests {
         // BatchMode=yes makes SSH fail immediately instead of hanging for auth.
         assert!(start.elapsed().as_secs() < 15, "SSH should fail fast, not hang");
     }
+
+    #[test]
+    fn request_id_generator_never_returns_zero() {
+        let id_gen = RequestIdGenerator::new();
+        for _ in 0..1000 {
+            assert_ne!(id_gen.next_id(), 0, "request_id must never be zero (reserved for push events)");
+        }
+    }
+
+    #[test]
+    fn client_capabilities_include_all_core_capabilities() {
+        let core = v3_handshake::CORE_CAPABILITIES;
+        for cap in core {
+            assert!(
+                CLIENT_CAPABILITIES.contains(cap),
+                "CLIENT_CAPABILITIES must include core capability {cap:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_error_conversion_preserves_kind_and_retryable() {
+        let err = protocol_error(v3::ProtocolError {
+            kind: v3::ErrorKind::RuntimeNotFound as i32,
+            message: "runtime gone".into(),
+            operation: "AttachRuntime".into(),
+            retryable: false,
+            user_action_required: false,
+            retry_after_seconds: 0,
+        });
+        match err {
+            DaemonError::ProtocolError { kind, message, retryable } => {
+                assert_eq!(kind, v3::ErrorKind::RuntimeNotFound);
+                assert_eq!(message, "runtime gone");
+                assert!(!retryable);
+            }
+            other => panic!("expected ProtocolError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_pane_id_from_terminal_mode_changed() {
+        let pane_id = Uuid::new_v4();
+        let env = v3::ServerEnvelope {
+            request_id: 0,
+            payload: Some(v3::server_envelope::Payload::TerminalModeChanged(
+                v3::TerminalModeChanged {
+                    runtime_id: uuid_to_bytes(Uuid::new_v4()),
+                    pane_id: uuid_to_bytes(pane_id),
+                    runtime_revision: 1,
+                    modes: None,
+                },
+            )),
+        };
+        assert_eq!(extract_pane_id(&env), Some(pane_id));
+    }
 }
