@@ -163,7 +163,9 @@ fn connection_classification_exercises_tracing_path() {
 /// the state machine to `Blocked`.
 #[test]
 fn transient_problem_never_produces_blocked_status() {
-    use rttx::runtime::{ConnectionEvent, ConnectionProblem, ConnectionStatus, advance_connection_status};
+    use rttx::runtime::{
+        ConnectionEvent, ConnectionProblem, ConnectionStatus, advance_connection_status,
+    };
 
     let transient = ConnectionProblem::DaemonUnavailable;
     assert!(transient.is_transient());
