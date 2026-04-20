@@ -86,10 +86,8 @@ fn dirs_fallback_cache_dir() -> PathBuf {
 }
 
 fn dirs_fallback_state_dir() -> PathBuf {
-    std::env::var("HOME").map_or_else(
-        |_| PathBuf::from("/tmp"),
-        |h| PathBuf::from(h).join(".local").join("state"),
-    )
+    std::env::var("HOME")
+        .map_or_else(|_| PathBuf::from("/tmp"), |h| PathBuf::from(h).join(".local").join("state"))
 }
 
 #[cfg(test)]

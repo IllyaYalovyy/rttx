@@ -242,10 +242,7 @@ mod tests {
         let development = app_profile_from_dev_mode(true);
         let base = Path::new("/tmp/state");
 
-        assert_eq!(
-            state_dir_path_for(base, production),
-            Path::new("/tmp/state/rttx/client")
-        );
+        assert_eq!(state_dir_path_for(base, production), Path::new("/tmp/state/rttx/client"));
         assert_eq!(
             state_dir_path_for(base, development),
             Path::new("/tmp/state/rttx-devel/client")
