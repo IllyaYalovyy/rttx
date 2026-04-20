@@ -1374,13 +1374,12 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
         client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
     };
 
-    let transition = state.reconcile_endpoint_event(
-        &rttx::daemon_bridge::EndpointEvent::WorkspaceOpened {
+    let transition =
+        state.reconcile_endpoint_event(&rttx::daemon_bridge::EndpointEvent::WorkspaceOpened {
             workspace_id: ws_id,
             runtime_id,
             snapshot,
-        },
-    );
+        });
 
     assert_eq!(transition.pane_snapshot_restores.len(), 1);
     let restore = &transition.pane_snapshot_restores[0];

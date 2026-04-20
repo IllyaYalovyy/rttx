@@ -1006,7 +1006,11 @@ mod tests {
     fn request_id_generator_never_returns_zero() {
         let id_gen = RequestIdGenerator::new();
         for _ in 0..1000 {
-            assert_ne!(id_gen.next_id(), 0, "request_id must never be zero (reserved for push events)");
+            assert_ne!(
+                id_gen.next_id(),
+                0,
+                "request_id must never be zero (reserved for push events)"
+            );
         }
     }
 
