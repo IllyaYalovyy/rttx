@@ -1,7 +1,7 @@
 use crate::daemon_bridge::EndpointEvent;
 use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
 use crate::workspace::{LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceState};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Routing metadata for a daemon-managed terminal pane.
@@ -14,23 +14,21 @@ pub struct ManagedTerminalBinding {
 }
 
 /// Mapping from a daemon pane snapshot to a layout terminal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkspacePaneRestore {
     pub layout_terminal_uuid: String,
     pub title: String,
     pub cwd: String,
-    pub scrollback: bytes::Bytes,
+    pub pane_output_seq: u64,
+    pub scrollback_tail: bytes::Bytes,
+    pub scrollback_complete: bool,
     pub cols: u16,
     pub rows: u16,
-    pub bracketed_paste_mode: bool,
-    pub application_cursor_keys: bool,
-    pub application_keypad: bool,
-    pub mouse_tracking_mode: u32,
-    pub sgr_mouse_mode: bool,
+    pub terminal_modes: Option<v3::TerminalModeState>,
 }
 
 /// Pure result of reconciling a workspace against a runtime snapshot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ManagedWorkspaceOpenResult {
     pub session_state: WorkspaceState,
     pub panes_to_create: Vec<String>,
@@ -64,7 +62,7 @@ pub struct ManagedPaneCreateRequest {
 }
 
 /// Pure outcome of reconciling a daemon endpoint event against app state.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct EndpointEventTransition {
     pub recovered_workspaces: Vec<WorkspaceState>,
     pub rebuilt_workspaces: Vec<ManagedWorkspaceRebuild>,
@@ -228,7 +226,7 @@ impl WindowState {
     pub fn recover_managed_workspaces_from_inventory(
         &mut self,
         endpoint: &RuntimeEndpoint,
-        runtimes: &[proto::RuntimeInfo],
+        runtimes: &[v3::RuntimeInfo],
     ) -> Vec<WorkspaceState> {
         let mut known_runtime_ids = self
             .workspaces
@@ -399,7 +397,7 @@ impl WindowState {
         &mut self,
         workspace_id: &str,
         runtime_id: &str,
-        snapshot: &proto::Snapshot,
+        snapshot: &v3::RuntimeSnapshot,
     ) -> Option<ManagedWorkspaceOpenResult> {
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
 
@@ -498,14 +496,12 @@ impl WindowState {
                     layout_terminal_uuid,
                     title: pane_snapshot.title.clone(),
                     cwd: pane_snapshot.cwd.clone(),
-                    scrollback: pane_snapshot.scrollback.clone(),
+                    pane_output_seq: pane_snapshot.pane_output_seq,
+                    scrollback_tail: pane_snapshot.scrollback_tail.clone(),
+                    scrollback_complete: pane_snapshot.scrollback_complete,
                     cols: pane_snapshot.cols as u16,
                     rows: pane_snapshot.rows as u16,
-                    bracketed_paste_mode: pane_snapshot.bracketed_paste_mode,
-                    application_cursor_keys: pane_snapshot.application_cursor_keys,
-                    application_keypad: pane_snapshot.application_keypad,
-                    mouse_tracking_mode: pane_snapshot.mouse_tracking_mode,
-                    sgr_mouse_mode: pane_snapshot.sgr_mouse_mode,
+                    terminal_modes: pane_snapshot.terminal_modes,
                 })
             })
             .collect::<Vec<_>>();
@@ -532,11 +528,11 @@ impl WindowState {
 
 fn recovered_managed_workspace(
     endpoint: &RuntimeEndpoint,
-    rt_info: &proto::RuntimeInfo,
+    rt_info: &v3::RuntimeInfo,
 ) -> Option<WorkspaceState> {
     let runtime_id = rttx_proto::bytes_to_uuid(&rt_info.id).ok()?.to_string();
-    let policy = match proto::RuntimePolicy::try_from(rt_info.policy).ok() {
-        Some(proto::RuntimePolicy::Ephemeral) => WorkspacePolicy::Ephemeral,
+    let policy = match v3::RuntimePolicy::try_from(rt_info.policy).ok() {
+        Some(v3::RuntimePolicy::Ephemeral) => WorkspacePolicy::Ephemeral,
         _ => WorkspacePolicy::Persistent,
     };
 
@@ -553,11 +549,7 @@ fn recovered_managed_workspace(
             .cloned()
             .map(|pane_id| (pane_id, PaneRecovery::empty_shell()))
             .collect();
-        session.active_terminal_uuid = rt_info
-            .active_pane_id
-            .as_ref()
-            .and_then(|pane_id| rttx_proto::bytes_to_uuid(pane_id).ok().map(|id| id.to_string()))
-            .or_else(|| pane_ids.first().cloned());
+        session.active_terminal_uuid = pane_ids.first().cloned();
         session.runtime.pane_bindings =
             pane_ids.iter().cloned().map(|pane_id| (pane_id.clone(), pane_id)).collect();
         session.runtime.pending_layout_panes.clear();
@@ -571,7 +563,7 @@ fn inventory_workspace_id(endpoint: &RuntimeEndpoint, runtime_id: &str) -> Strin
     format!("inventory:{}:{runtime_id}", endpoint.key())
 }
 
-fn layout_from_inventory_panes(panes: &[proto::PaneInfo]) -> LayoutNode {
+fn layout_from_inventory_panes(panes: &[v3::PaneInfo]) -> LayoutNode {
     let mut panes = panes.iter();
     let Some(first_pane) = panes.next() else {
         return LayoutNode::new_terminal();
@@ -585,7 +577,7 @@ fn layout_from_inventory_panes(panes: &[proto::PaneInfo]) -> LayoutNode {
     })
 }
 
-fn layout_terminal_from_inventory(pane: &proto::PaneInfo) -> LayoutNode {
+fn layout_terminal_from_inventory(pane: &v3::PaneInfo) -> LayoutNode {
     LayoutNode::Terminal {
         uuid: inventory_pane_id(pane).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         profile: None,
@@ -594,11 +586,11 @@ fn layout_terminal_from_inventory(pane: &proto::PaneInfo) -> LayoutNode {
     }
 }
 
-fn inventory_pane_id(pane: &proto::PaneInfo) -> Option<String> {
+fn inventory_pane_id(pane: &v3::PaneInfo) -> Option<String> {
     rttx_proto::bytes_to_uuid(&pane.id).ok().map(|uuid| uuid.to_string())
 }
 
-fn snapshot_pane_id(pane_snapshot: &proto::PaneSnapshot) -> Option<String> {
+fn snapshot_pane_id(pane_snapshot: &v3::PaneSnapshot) -> Option<String> {
     rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id).ok().map(|uuid| uuid.to_string())
 }
 
@@ -613,39 +605,33 @@ mod tests {
         workspace,
     };
 
-    fn pane_snapshot(
-        pane_id: &str,
-        title: &str,
-        cwd: &str,
-        scrollback: &[u8],
-    ) -> proto::PaneSnapshot {
-        proto::PaneSnapshot {
+    fn pane_snapshot(pane_id: &str, title: &str, cwd: &str, scrollback: &[u8]) -> v3::PaneSnapshot {
+        v3::PaneSnapshot {
             pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap()),
+            pane_output_seq: 0,
             title: title.to_string(),
             cwd: cwd.to_string(),
             cols: 120,
             rows: 40,
-            scrollback: bytes::Bytes::copy_from_slice(scrollback),
             exit_status: None,
-            bracketed_paste_mode: false,
-            application_cursor_keys: false,
-            application_keypad: false,
-            mouse_tracking_mode: 0,
-            sgr_mouse_mode: false,
+            terminal_modes: None,
+            scrollback_tail: bytes::Bytes::copy_from_slice(scrollback),
+            total_scrollback_bytes: scrollback.len() as u64,
+            scrollback_complete: true,
         }
     }
 
-    fn snapshot(runtime_id: &str, panes: Vec<proto::PaneSnapshot>) -> proto::Snapshot {
-        proto::Snapshot {
+    fn snapshot(runtime_id: &str, panes: Vec<v3::PaneSnapshot>) -> v3::RuntimeSnapshot {
+        v3::RuntimeSnapshot {
             runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             panes,
-            revision: 7,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+            runtime_revision: 7,
+            client_role: v3::RuntimeClientRole::Writer as i32,
         }
     }
 
-    fn pane_info(pane_id: &str, title: &str, cwd: &str) -> proto::PaneInfo {
-        proto::PaneInfo {
+    fn pane_info(pane_id: &str, title: &str, cwd: &str) -> v3::PaneInfo {
+        v3::PaneInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap()),
             title: title.to_string(),
             cwd: cwd.to_string(),
@@ -659,25 +645,24 @@ mod tests {
     fn rt_info(
         runtime_id: &str,
         name: &str,
-        policy: proto::RuntimePolicy,
-        panes: Vec<proto::PaneInfo>,
-        active_pane_id: Option<&str>,
-    ) -> proto::RuntimeInfo {
-        proto::RuntimeInfo {
+        policy: v3::RuntimePolicy,
+        panes: Vec<v3::PaneInfo>,
+        _active_pane_id: Option<&str>,
+    ) -> v3::RuntimeInfo {
+        v3::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             name: name.to_string(),
             pane_count: panes.len() as u32,
-            has_attached_client: false,
-            active_pane_id: active_pane_id
-                .map(|pane_id| rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap())),
             panes,
             policy: policy as i32,
-            attached_client_count: 0,
             reconstructed: true,
-            revision: 7,
-            current_client_role: proto::RuntimeClientRole::Unattached as i32,
+            runtime_revision: 7,
+            current_client_role: v3::RuntimeClientRole::Unattached as i32,
             has_write_owner: false,
             read_only_client_count: 0,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
         }
     }
 
@@ -869,13 +854,13 @@ mod tests {
             restore.layout_terminal_uuid == "left"
                 && restore.title == "Shell"
                 && restore.cwd == "/srv/project"
-                && restore.scrollback[..] == b"shell"[..]
+                && restore.scrollback_tail[..] == b"shell"[..]
         }));
         assert!(opened.snapshot_restores.iter().any(|restore| {
             restore.layout_terminal_uuid == recovered_terminal_uuid
                 && restore.title == "Logs"
                 && restore.cwd == "/srv/project"
-                && restore.scrollback[..] == b"logs"[..]
+                && restore.scrollback_tail[..] == b"logs"[..]
         }));
     }
 
@@ -891,7 +876,7 @@ mod tests {
             &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![
                     pane_info(first_pane, "Shell", "/srv/project"),
                     pane_info(second_pane, "Logs", "/srv/project"),
@@ -908,7 +893,7 @@ mod tests {
         assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
         assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
         assert_eq!(session.runtime.runtime_id.as_deref(), Some(runtime_id));
-        assert_eq!(session.active_terminal_uuid.as_deref(), Some(second_pane));
+        assert_eq!(session.active_terminal_uuid.as_deref(), Some(first_pane));
         assert_eq!(
             session.layout.terminal_uuids(),
             vec![first_pane.to_string(), second_pane.to_string()]
@@ -957,7 +942,7 @@ mod tests {
             &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![pane_info("07fa83b4-9ae3-4354-a1c5-1f685ffab370", "Shell", "/srv/project")],
                 None,
             )],
@@ -978,7 +963,7 @@ mod tests {
             &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![],
                 None,
             )],
@@ -1029,7 +1014,7 @@ mod tests {
             runtimes: vec![rt_info(
                 &runtime_id,
                 "Recovered Workspace",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![pane_info(&pane_id, "Shell", "/srv/project")],
                 Some(&pane_id),
             )],
@@ -1142,14 +1127,12 @@ mod tests {
                 layout_terminal_uuid: first_terminal_uuid,
                 title: "Shell".into(),
                 cwd: "/srv/project".into(),
-                scrollback: bytes::Bytes::from_static(b"restored output"),
+                pane_output_seq: 0,
+                scrollback_tail: bytes::Bytes::from_static(b"restored output"),
+                scrollback_complete: true,
                 cols: 120,
                 rows: 40,
-                bracketed_paste_mode: false,
-                application_cursor_keys: false,
-                application_keypad: false,
-                mouse_tracking_mode: 0,
-                sgr_mouse_mode: false,
+                terminal_modes: None,
             }],
         );
         assert_eq!(state.workspaces[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
@@ -1163,11 +1146,16 @@ mod tests {
             window_state(vec![managed_session("workspace-1", "Workspace", term(&terminal_uuid))]);
 
         let mut snap = pane_snapshot(&terminal_uuid, "vim", "/home", b"");
-        snap.application_cursor_keys = true;
-        snap.application_keypad = true;
-        snap.mouse_tracking_mode = 1003;
-        snap.sgr_mouse_mode = true;
-        snap.bracketed_paste_mode = true;
+        snap.terminal_modes = Some(v3::TerminalModeState {
+            bracketed_paste: true,
+            focus_reporting: false,
+            application_cursor_keys: true,
+            application_keypad: true,
+            alternate_screen: false,
+            cursor_hidden: false,
+            mouse_mode: v3::MouseMode::Any as i32,
+            sgr_mouse: true,
+        });
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "workspace-1".into(),
@@ -1177,11 +1165,12 @@ mod tests {
 
         assert_eq!(transition.pane_snapshot_restores.len(), 1);
         let restore = &transition.pane_snapshot_restores[0];
-        assert!(restore.application_cursor_keys);
-        assert!(restore.application_keypad);
-        assert_eq!(restore.mouse_tracking_mode, 1003);
-        assert!(restore.sgr_mouse_mode);
-        assert!(restore.bracketed_paste_mode);
+        let modes = restore.terminal_modes.as_ref().expect("terminal_modes should be present");
+        assert!(modes.application_cursor_keys);
+        assert!(modes.application_keypad);
+        assert_eq!(modes.mouse_mode, v3::MouseMode::Any as i32);
+        assert!(modes.sgr_mouse);
+        assert!(modes.bracketed_paste);
     }
 
     #[test]
@@ -1278,7 +1267,7 @@ mod tests {
         let transition = state.reconcile_endpoint_event(&EndpointEvent::RuntimeTerminated {
             workspace_id: "workspace-1".into(),
             runtime_id: "d7d04564-b2bf-4302-9495-e65c4df12ac6".into(),
-            reason: proto::RuntimeTerminationReason::Explicit,
+            reason: v3::RuntimeTerminationReason::Explicit,
         });
 
         assert_eq!(state.workspaces[0].runtime.runtime_id, None);
@@ -1319,7 +1308,7 @@ mod tests {
             runtimes: vec![rt_info(
                 &runtime_id,
                 "Should Not Resurrect",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![pane_info(&pane_id, "Shell", "/tmp")],
                 Some(&pane_id),
             )],
@@ -1351,7 +1340,7 @@ mod tests {
             runtimes: vec![rt_info(
                 &runtime_id,
                 "Remote Work",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![pane_info(&pane_id, "bash", "/home/user")],
                 Some(&pane_id),
             )],
@@ -1391,7 +1380,7 @@ mod tests {
                 runtimes: vec![rt_info(
                     &runtime_id,
                     &format!("Dismissed {i}"),
-                    proto::RuntimePolicy::Persistent,
+                    v3::RuntimePolicy::Persistent,
                     vec![pane_info(&pane_id, "bash", "/tmp")],
                     Some(&pane_id),
                 )],
@@ -1439,24 +1428,23 @@ mod tests {
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "ws-1".into(),
             runtime_id: runtime_id.clone(),
-            snapshot: proto::Snapshot {
+            snapshot: v3::RuntimeSnapshot {
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
-                panes: vec![proto::PaneSnapshot {
+                panes: vec![v3::PaneSnapshot {
                     pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
+                    pane_output_seq: 0,
                     title: "bash".into(),
                     cwd: "/new/project".into(),
                     cols: 80,
                     rows: 24,
-                    scrollback: bytes::Bytes::new(),
                     exit_status: None,
-                    bracketed_paste_mode: false,
-                    application_cursor_keys: false,
-                    application_keypad: false,
-                    mouse_tracking_mode: 0,
-                    sgr_mouse_mode: false,
+                    terminal_modes: None,
+                    scrollback_tail: bytes::Bytes::new(),
+                    total_scrollback_bytes: 0,
+                    scrollback_complete: true,
                 }],
-                revision: 2,
-                current_client_role: proto::RuntimeClientRole::Writer as i32,
+                runtime_revision: 2,
+                client_role: v3::RuntimeClientRole::Writer as i32,
             },
         });
 
@@ -1906,7 +1894,7 @@ mod tests {
             runtimes: vec![rt_info(
                 &live_id,
                 "Still Running",
-                proto::RuntimePolicy::Persistent,
+                v3::RuntimePolicy::Persistent,
                 vec![pane_info(&pane_id, "bash", "/tmp")],
                 Some(&pane_id),
             )],

@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 use crate::host::Host;
 use crate::window::Window;
@@ -32,7 +32,7 @@ pub struct RuntimeEntry {
 /// `open_runtime_ids` contains runtime IDs already attached by this client.
 #[must_use]
 pub fn classify_runtimes(
-    runtimes: &[proto::RuntimeInfo],
+    runtimes: &[v3::RuntimeInfo],
     open_runtime_ids: &[String],
 ) -> Vec<RuntimeEntry> {
     runtimes
@@ -77,7 +77,7 @@ pub fn matches_query(entry: &RuntimeEntry, query: &str) -> bool {
 }
 
 /// Show the Connect to Existing dialog for a specific host.
-pub fn show(window: &Window, host: &Host, runtimes: &[proto::RuntimeInfo]) {
+pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
     let title = format!("Connect to Existing: {}", host.name);
     let dialog = adw::Dialog::builder().title(&title).content_width(400).build();
 
@@ -244,21 +244,21 @@ mod tests {
         name: &str,
         pane_count: u32,
         has_write_owner: bool,
-    ) -> proto::RuntimeInfo {
-        proto::RuntimeInfo {
+    ) -> v3::RuntimeInfo {
+        v3::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(id),
             name: name.into(),
             pane_count,
-            has_attached_client: has_write_owner,
-            active_pane_id: None,
-            panes: vec![],
-            policy: 0,
-            attached_client_count: u32::from(has_write_owner),
-            reconstructed: false,
-            revision: 1,
-            current_client_role: 0,
             has_write_owner,
+            policy: 0,
             read_only_client_count: 0,
+            current_client_role: 0,
+            runtime_revision: 1,
+            reconstructed: false,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
+            panes: vec![],
         }
     }
 

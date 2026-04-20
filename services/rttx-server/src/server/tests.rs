@@ -1441,7 +1441,7 @@ async fn collect_runtime_senders_returns_attached_client_senders() {
     }
 
     let senders = server.lock().await.collect_runtime_senders(runtime_id);
-    let ids: std::collections::HashSet<Uuid> = senders.iter().map(|(id, _)| *id).collect();
+    let ids: std::collections::HashSet<Uuid> = senders.iter().map(|(id, _, _)| *id).collect();
     assert!(ids.contains(&client_a));
     assert!(ids.contains(&client_b));
     assert_eq!(senders.len(), 2);
@@ -1458,7 +1458,7 @@ async fn collect_runtime_senders_returns_empty_for_unknown_runtime() {
 async fn send_to_collected_delivers_messages() {
     let (tx, mut rx) = mpsc::channel(16);
     let client_id = Uuid::new_v4();
-    let senders = vec![(client_id, tx)];
+    let senders = vec![(client_id, tx, None)];
 
     let msg = ClientMsg::V2(protocol::delta(
         Uuid::new_v4(),
@@ -1478,7 +1478,7 @@ async fn send_to_collected_delivers_messages() {
 async fn send_to_collected_drops_when_channel_full() {
     let (tx, rx) = mpsc::channel(1);
     let client_id = Uuid::new_v4();
-    let senders = vec![(client_id, tx)];
+    let senders = vec![(client_id, tx, None)];
 
     let msg = ClientMsg::V2(protocol::delta(
         Uuid::new_v4(),
@@ -1549,7 +1549,7 @@ async fn probe_connection_logs_at_debug_not_info() {
 
     // Probe should be logged at debug level, not info.
     assert!(logs_contain("Client probe from"));
-    assert!(logs_contain("disconnected without handshake"));
+    assert!(logs_contain("disconnected before handshake"));
 }
 
 #[tokio::test]

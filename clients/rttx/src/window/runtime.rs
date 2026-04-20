@@ -1,4 +1,5 @@
 use super::*;
+use rttx_proto::v3;
 
 /// Maximum events the poller processes per GTK timer callback.
 /// Keeps the main loop responsive during output bursts.
@@ -644,14 +645,19 @@ impl Window {
         let Some(pane) = pane else { return };
 
         pane.vte().reset(true, true);
-        pane.feed_snapshot(&restore.scrollback);
-        pane.set_bracketed_paste_mode(restore.bracketed_paste_mode);
-        pane.restore_interaction_modes(
-            restore.application_cursor_keys,
-            restore.application_keypad,
-            restore.mouse_tracking_mode,
-            restore.sgr_mouse_mode,
-        );
+        pane.feed_snapshot(&restore.scrollback_tail);
+        if let Some(ref modes) = restore.terminal_modes {
+            pane.set_bracketed_paste_mode(modes.bracketed_paste);
+            pane.restore_interaction_modes(
+                modes.application_cursor_keys,
+                modes.application_keypad,
+                u32::from(rttx_proto::v3_terminal_modes::tracking_value_from_mouse_mode(
+                    rttx_proto::v3::MouseMode::try_from(modes.mouse_mode)
+                        .unwrap_or(rttx_proto::v3::MouseMode::None),
+                )),
+                modes.sgr_mouse,
+            );
+        }
         pane.set_current_directory(Some(&restore.cwd));
         if !restore.title.is_empty() && pane.custom_title().is_none() {
             pane.set_daemon_title(&restore.title);
@@ -823,20 +829,20 @@ impl Window {
     pub(super) fn dispatch_managed_runtime_message(
         &self,
         endpoint: &RuntimeEndpoint,
-        msg: &rttx_proto::proto::ServerMessage,
+        msg: &v3::ServerEnvelope,
     ) {
-        use rttx_proto::proto::server_message::Msg;
+        use v3::server_envelope::Payload;
 
-        let Some(inner) = msg.msg.as_ref() else {
+        let Some(inner) = msg.payload.as_ref() else {
             return;
         };
 
-        if let Msg::Error(error) = inner {
-            tracing::warn!("Daemon error: {} (code {})", error.message, error.code);
+        if let Payload::Error(error) = inner {
+            tracing::warn!("Daemon error: {} ({:?})", error.message, error.kind());
             return;
         }
 
-        if let Msg::RuntimeTerminated(terminated) = inner {
+        if let Payload::RuntimeTerminated(terminated) = inner {
             let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id) else {
                 return;
             };
@@ -873,32 +879,30 @@ impl Window {
         let Some(pane) = pane else { return };
 
         match inner {
-            Msg::Delta(delta) => {
+            Payload::OutputDelta(delta) => {
                 pane.feed_output(&delta.data);
                 self.mark_session_activity(&layout_terminal_uuid);
             }
-            Msg::TitleChanged(title_changed) => {
+            Payload::TitleChanged(t) => {
                 if pane.custom_title().is_none() {
-                    pane.set_daemon_title(&title_changed.title);
+                    pane.set_daemon_title(&t.title);
                 }
                 self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
-            Msg::CwdChanged(cwd_changed) => {
-                pane.set_current_directory(Some(&cwd_changed.cwd));
+            Payload::CwdChanged(c) => {
+                pane.set_current_directory(Some(&c.cwd));
                 {
                     let mut state = self.imp().state.borrow_mut();
                     if let Some(session) =
                         state.workspaces.iter_mut().find(|s| s.uuid == workspace_id)
                     {
-                        session
-                            .layout
-                            .set_terminal_cwd(&layout_terminal_uuid, Some(cwd_changed.cwd.clone()));
+                        session.layout.set_terminal_cwd(&layout_terminal_uuid, Some(c.cwd.clone()));
                     }
                 }
-                self.maybe_auto_rename_workspace(&workspace_id, Some(&cwd_changed.cwd));
+                self.maybe_auto_rename_workspace(&workspace_id, Some(&c.cwd));
                 self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
-            Msg::PaneExited(exited) => {
+            Payload::PaneExited(exited) => {
                 pane.mark_exited(exited.status);
                 let visible_session = self.imp().session_stack.visible_child_name();
                 let state = self.imp().state.borrow();
@@ -912,21 +916,26 @@ impl Window {
                     self.notify_process_completed(&layout_terminal_uuid, exited.status);
                 }
             }
-            Msg::Bell(_) => pane.flash_bell(),
-            Msg::PaneResized(_)
-            | Msg::PaneCreated(_)
-            | Msg::PaneClosed(_)
-            | Msg::HelloAck(_)
-            | Msg::RuntimeList(_)
-            | Msg::RuntimeCreated(_)
-            | Msg::Snapshot(_)
-            | Msg::AttachBlocked(_)
-            | Msg::RuntimeDetached(_)
-            | Msg::RuntimeTerminated(_)
-            | Msg::RuntimeRenamed(_)
-            | Msg::Pong(_)
-            | Msg::Error(_)
-            | Msg::DiagnosticsReport(_) => {}
+            Payload::Bell(_) => pane.flash_bell(),
+            Payload::PaneResized(_)
+            | Payload::PaneCreated(_)
+            | Payload::PaneClosed(_)
+            | Payload::RuntimeList(_)
+            | Payload::RuntimeCreated(_)
+            | Payload::RuntimeSnapshot(_)
+            | Payload::AttachBlocked(_)
+            | Payload::RuntimeDetached(_)
+            | Payload::RuntimeTerminated(_)
+            | Payload::RuntimeRenamed(_)
+            | Payload::Pong(_)
+            | Payload::Error(_)
+            | Payload::DiagnosticsReport(_)
+            | Payload::TerminalModeChanged(_)
+            | Payload::StreamOverflow(_)
+            | Payload::ScrollbackChunk(_)
+            | Payload::TakeoverCompleted(_)
+            | Payload::LeaseLost(_)
+            | Payload::OwnerDisconnected(_) => {}
         }
 
         let _ = workspace_id;

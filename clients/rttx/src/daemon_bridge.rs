@@ -12,7 +12,7 @@ use crate::runtime::{
     ConnectionEvent, ConnectionProblem, ConnectionStatus, RuntimeEndpoint, WorkspacePolicy,
     advance_connection_status, classify_connection_problem,
 };
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -57,7 +57,7 @@ pub enum EndpointEvent {
     WorkspaceOpened {
         workspace_id: String,
         runtime_id: String,
-        snapshot: proto::Snapshot,
+        snapshot: v3::RuntimeSnapshot,
     },
     PaneCreated {
         workspace_id: String,
@@ -78,15 +78,15 @@ pub enum EndpointEvent {
     RuntimeTerminated {
         workspace_id: String,
         runtime_id: String,
-        reason: proto::RuntimeTerminationReason,
+        reason: v3::RuntimeTerminationReason,
     },
     InventoryLoaded {
         endpoint: RuntimeEndpoint,
-        runtimes: Vec<proto::RuntimeInfo>,
+        runtimes: Vec<v3::RuntimeInfo>,
     },
     RuntimeMessage {
         endpoint: RuntimeEndpoint,
-        message: proto::ServerMessage,
+        message: v3::ServerEnvelope,
     },
     WorkspaceError {
         workspace_id: String,
@@ -388,6 +388,7 @@ struct EndpointActor {
     daemon_start_attempted: bool,
     auto_start_daemon: bool,
     reconnect_delay_secs: u32,
+    next_request_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,9 +426,10 @@ impl HeartbeatMonitor {
         HeartbeatAction::SendPing { nonce }
     }
 
-    fn observe_inbound(&mut self, msg: &proto::ServerMessage) -> bool {
-        match &msg.msg {
-            Some(proto::server_message::Msg::Pong(pong)) => {
+    #[cfg(test)]
+    fn observe_inbound(&mut self, env: &v3::ServerEnvelope) -> bool {
+        match &env.payload {
+            Some(v3::server_envelope::Payload::Pong(pong)) => {
                 if self.pending_nonce == Some(pong.nonce) {
                     self.pending_nonce = None;
                     self.missed_ticks = 0;
@@ -478,13 +480,23 @@ impl EndpointActor {
             daemon_start_attempted: false,
             auto_start_daemon,
             reconnect_delay_secs,
+            next_request_id: 1,
         }
+    }
+
+    const fn next_id(&mut self) -> u64 {
+        let id = self.next_request_id;
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        if self.next_request_id == 0 {
+            self.next_request_id = 1;
+        }
+        id
     }
 
     async fn run(mut self) {
         enum LoopEvent {
             Command(Option<EndpointCommand>),
-            Message(Result<Option<proto::ServerMessage>, DaemonError>),
+            Message(Result<Option<v3::ServerEnvelope>, DaemonError>),
             HeartbeatTick,
         }
 
@@ -537,51 +549,59 @@ impl EndpointActor {
         self.heartbeat_deadline = new_heartbeat_deadline();
     }
 
-    async fn send_message(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+    async fn send_message(&mut self, env: &v3::ClientEnvelope) -> Result<(), DaemonError> {
         let writer = self.writer.as_mut().ok_or(DaemonError::Disconnected)?;
-        writer.send(msg).await
+        writer.send_envelope(env).await
+    }
+
+    /// Send a v3 command and wait for the correlated response.
+    async fn send_and_read(
+        &mut self,
+        command: v3::client_envelope::Command,
+        expect_terminated: bool,
+    ) -> Result<v3::ServerEnvelope, DaemonError> {
+        let request_id = self.next_id();
+        let env = v3::ClientEnvelope { request_id, command: Some(command) };
+        self.send_message(&env).await?;
+        self.read_response(request_id, expect_terminated).await
     }
 
     async fn read_response(
         &mut self,
+        request_id: u64,
         expect_terminated: bool,
-    ) -> Result<proto::ServerMessage, DaemonError> {
+    ) -> Result<v3::ServerEnvelope, DaemonError> {
         loop {
-            let msg = {
+            let env = {
                 let reader = self.reader.as_mut().ok_or(DaemonError::Disconnected)?;
                 reader.recv().await?.ok_or(DaemonError::Disconnected)?
             };
-            let is_push = match &msg.msg {
-                Some(
-                    proto::server_message::Msg::Delta(_)
-                    | proto::server_message::Msg::PaneExited(_)
-                    | proto::server_message::Msg::TitleChanged(_)
-                    | proto::server_message::Msg::CwdChanged(_)
-                    | proto::server_message::Msg::Bell(_)
-                    | proto::server_message::Msg::PaneResized(_)
-                    | proto::server_message::Msg::RuntimeRenamed(_),
-                ) => true,
-                Some(proto::server_message::Msg::RuntimeTerminated(_)) => !expect_terminated,
-                _ => false,
-            };
-            if self.observe_inbound_message(&msg) {
-                continue;
+            // Correlated response.
+            if env.request_id == request_id {
+                return Ok(env);
             }
-            if is_push {
-                self.dispatch_push(msg);
+            // Push event (request_id == 0) or stale response — dispatch and loop.
+            if matches!(env.payload, Some(v3::server_envelope::Payload::Pong(_))) {
+                self.observe_inbound_pong(&env);
+            } else if matches!(
+                env.payload,
+                Some(v3::server_envelope::Payload::RuntimeTerminated(_))
+            ) && expect_terminated
+            {
+                // Expected terminated response but with wrong request_id — skip.
             } else {
-                return Ok(msg);
+                self.dispatch_push(env);
             }
         }
     }
 
-    fn dispatch_push(&mut self, msg: proto::ServerMessage) {
-        if let Some(proto::server_message::Msg::RuntimeTerminated(terminated)) = &msg.msg
+    fn dispatch_push(&mut self, env: v3::ServerEnvelope) {
+        if let Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) = &env.payload
             && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
         {
             self.tracked_workspaces.retain(|_, tracked| tracked != &runtime_id.to_string());
         }
-        self.forward_push(msg);
+        self.forward_push(env);
     }
 
     async fn handle_command(&mut self, command: EndpointCommand) {
@@ -665,22 +685,16 @@ impl EndpointActor {
                 ) else {
                     return;
                 };
-                let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                        cwd,
-                        dark_background: Some(dark_background),
-                        cols,
-                        rows,
-                    })),
-                };
-                if let Err(error) = self.send_message(&msg).await {
-                    self.handle_command_error(&workspace_id, ManagerOperation::CreatePane, &error);
-                    return;
-                }
-                match self.read_response(false).await {
-                    Ok(response) => match response.msg {
-                        Some(proto::server_message::Msg::PaneCreated(created)) => {
+                let msg = v3::client_envelope::Command::CreatePane(v3::CreatePane {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    cwd,
+                    dark_background: Some(dark_background),
+                    cols,
+                    rows,
+                });
+                match self.send_and_read(msg, false).await {
+                    Ok(response) => match response.payload {
+                        Some(v3::server_envelope::Payload::PaneCreated(created)) => {
                             if let Ok(pane_id) = rttx_proto::bytes_to_uuid(&created.pane_id) {
                                 let _ = self.event_tx.try_send(EndpointEvent::PaneCreated {
                                     workspace_id: workspace_id.clone(),
@@ -691,11 +705,11 @@ impl EndpointActor {
                                 self.emit_status(&workspace_id, ConnectionStatus::Connected);
                             }
                         }
-                        Some(proto::server_message::Msg::Error(e)) => {
+                        Some(v3::server_envelope::Payload::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
                                 ManagerOperation::CreatePane,
-                                &DaemonError::ServerError { code: e.code, message: e.message },
+                                &protocol_error_to_daemon(e),
                             );
                         }
                         _ => {
@@ -747,19 +761,13 @@ impl EndpointActor {
                 ) else {
                     return;
                 };
-                let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                        pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
-                    })),
-                };
-                if let Err(error) = self.send_message(&msg).await {
-                    self.handle_command_error(&workspace_id, ManagerOperation::ClosePane, &error);
-                    return;
-                }
-                match self.read_response(false).await {
-                    Ok(response) => match response.msg {
-                        Some(proto::server_message::Msg::PaneClosed(_)) => {
+                let msg = v3::client_envelope::Command::ClosePane(v3::ClosePane {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
+                });
+                match self.send_and_read(msg, false).await {
+                    Ok(response) => match response.payload {
+                        Some(v3::server_envelope::Payload::PaneClosed(_)) => {
                             let _ = self.event_tx.try_send(EndpointEvent::PaneClosed {
                                 workspace_id,
                                 layout_terminal_uuid,
@@ -767,7 +775,10 @@ impl EndpointActor {
                                 runtime_pane_id,
                             });
                         }
-                        Some(proto::server_message::Msg::Error(e)) if e.code == 6 => {
+                        Some(v3::server_envelope::Payload::Error(e))
+                            if v3::ErrorKind::try_from(e.kind)
+                                == Ok(v3::ErrorKind::PaneNotFound) =>
+                        {
                             // ERR_PANE_NOT_FOUND: the pane is already gone on the
                             // daemon, so treat this as a successful close.
                             tracing::info!(
@@ -781,11 +792,11 @@ impl EndpointActor {
                                 runtime_pane_id,
                             });
                         }
-                        Some(proto::server_message::Msg::Error(e)) => {
+                        Some(v3::server_envelope::Payload::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
                                 ManagerOperation::ClosePane,
-                                &DaemonError::ServerError { code: e.code, message: e.message },
+                                &protocol_error_to_daemon(e),
                             );
                         }
                         _ => {
@@ -824,44 +835,32 @@ impl EndpointActor {
                     return;
                 }
 
-                let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                    })),
-                };
-                if let Err(error) = self.send_message(&msg).await {
-                    self.handle_command_error(
-                        &workspace_id,
-                        ManagerOperation::DetachRuntime,
-                        &error,
-                    );
-                    return;
-                }
-                match self.read_response(true).await {
-                    Ok(response) => match response.msg {
-                        Some(proto::server_message::Msg::RuntimeDetached(_)) => {
+                let msg = v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                });
+                match self.send_and_read(msg, true).await {
+                    Ok(response) => match response.payload {
+                        Some(v3::server_envelope::Payload::RuntimeDetached(_)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::WorkspaceDetached {
                                 workspace_id,
                                 runtime_id,
                             });
                         }
-                        Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
+                        Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
                                 runtime_id,
-                                reason: proto::RuntimeTerminationReason::try_from(
-                                    terminated.reason,
-                                )
-                                .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
+                                reason: v3::RuntimeTerminationReason::try_from(terminated.reason)
+                                    .unwrap_or(v3::RuntimeTerminationReason::Unspecified),
                             });
                         }
-                        Some(proto::server_message::Msg::Error(e)) => {
+                        Some(v3::server_envelope::Payload::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
                                 ManagerOperation::DetachRuntime,
-                                &DaemonError::ServerError { code: e.code, message: e.message },
+                                &protocol_error_to_daemon(e),
                             );
                         }
                         _ => {
@@ -900,39 +899,25 @@ impl EndpointActor {
                     return;
                 }
 
-                let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::TerminateRuntime(
-                        proto::TerminateRuntime {
-                            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                        },
-                    )),
-                };
-                if let Err(error) = self.send_message(&msg).await {
-                    self.handle_command_error(
-                        &workspace_id,
-                        ManagerOperation::TerminateRuntime,
-                        &error,
-                    );
-                    return;
-                }
-                match self.read_response(true).await {
-                    Ok(response) => match response.msg {
-                        Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
+                let msg = v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                });
+                match self.send_and_read(msg, true).await {
+                    Ok(response) => match response.payload {
+                        Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
                                 workspace_id,
                                 runtime_id,
-                                reason: proto::RuntimeTerminationReason::try_from(
-                                    terminated.reason,
-                                )
-                                .unwrap_or(proto::RuntimeTerminationReason::Unspecified),
+                                reason: v3::RuntimeTerminationReason::try_from(terminated.reason)
+                                    .unwrap_or(v3::RuntimeTerminationReason::Unspecified),
                             });
                         }
-                        Some(proto::server_message::Msg::Error(e)) => {
+                        Some(v3::server_envelope::Payload::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
                                 ManagerOperation::TerminateRuntime,
-                                &DaemonError::ServerError { code: e.code, message: e.message },
+                                &protocol_error_to_daemon(e),
                             );
                         }
                         _ => {
@@ -1017,24 +1002,16 @@ impl EndpointActor {
                     return;
                 }
                 let list_result = if self.writer.is_some() {
-                    let msg = proto::ClientMessage {
-                        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-                    };
-                    match self.send_message(&msg).await {
-                        Ok(()) => match self.read_response(false).await {
-                            Ok(response) => match response.msg {
-                                Some(proto::server_message::Msg::RuntimeList(list)) => {
-                                    Ok(list.runtimes)
-                                }
-                                Some(proto::server_message::Msg::Error(e)) => {
-                                    Err(DaemonError::ServerError {
-                                        code: e.code,
-                                        message: e.message,
-                                    })
-                                }
-                                _ => Err(DaemonError::UnexpectedMessage),
-                            },
-                            Err(e) => Err(e),
+                    let msg = v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {});
+                    match self.send_and_read(msg, false).await {
+                        Ok(response) => match response.payload {
+                            Some(v3::server_envelope::Payload::RuntimeList(list)) => {
+                                Ok(list.runtimes)
+                            }
+                            Some(v3::server_envelope::Payload::Error(e)) => {
+                                Err(protocol_error_to_daemon(e))
+                            }
+                            _ => Err(DaemonError::UnexpectedMessage),
                         },
                         Err(e) => Err(e),
                     }
@@ -1153,13 +1130,14 @@ impl EndpointActor {
                 if self.ensure_connected(&workspace_id).await.is_err() {
                     return;
                 }
-                let msg = proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+                let env = v3::ClientEnvelope {
+                    request_id: 0,
+                    command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
                         runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         name,
                     })),
                 };
-                let _ = self.send_message(&msg).await;
+                let _ = self.send_message(&env).await;
             }
             EndpointCommand::ForgetWorkspace { workspace_id } => {
                 self.tracked_workspaces.remove(&workspace_id);
@@ -1294,7 +1272,7 @@ impl EndpointActor {
         &mut self,
         workspace_id: &str,
         runtime_id: &str,
-    ) -> Result<proto::Snapshot, ()> {
+    ) -> Result<v3::RuntimeSnapshot, ()> {
         let Some(runtime_uuid) =
             parse_uuid(workspace_id, ManagerOperation::OpenWorkspace, runtime_id, &self.event_tx)
         else {
@@ -1323,7 +1301,7 @@ impl EndpointActor {
         name: &str,
         policy: WorkspacePolicy,
         existing_runtime_id: Option<&str>,
-    ) -> Result<(String, proto::Snapshot), ()> {
+    ) -> Result<(String, v3::RuntimeSnapshot), ()> {
         if let Some(runtime_id) = existing_runtime_id
             && let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>()
         {
@@ -1380,21 +1358,16 @@ impl EndpointActor {
             return connection.create_runtime(name, policy).await;
         }
 
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
-                name: name.to_string(),
-                policy: policy.as_proto(),
-            })),
-        };
-        self.send_message(&msg).await?;
-        let response = self.read_response(false).await?;
-        match response.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(created)) => {
+        let msg = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            name: name.to_string(),
+            policy: policy.as_v3_proto(),
+        });
+        let response = self.send_and_read(msg, false).await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => {
                 rttx_proto::bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
-            Some(proto::server_message::Msg::Error(error)) => {
-                Err(DaemonError::ServerError { code: error.code, message: error.message })
-            }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error_to_daemon(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
@@ -1402,64 +1375,67 @@ impl EndpointActor {
     async fn attach_runtime_via_active_channel(
         &mut self,
         runtime_uuid: Uuid,
-    ) -> Result<proto::Snapshot, DaemonError> {
+    ) -> Result<v3::RuntimeSnapshot, DaemonError> {
         if let Some(connection) = self.connection.as_mut() {
-            return connection
-                .attach_runtime(runtime_uuid, proto::RuntimeAttachMode::ReadWrite)
-                .await;
+            return connection.attach_runtime(runtime_uuid, v3::RuntimeAttachMode::ReadWrite).await;
         }
 
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
-                runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        };
-        self.send_message(&msg).await?;
-        let response = self.read_response(false).await?;
-        match response.msg {
-            Some(proto::server_message::Msg::Snapshot(snapshot)) => Ok(snapshot),
-            Some(proto::server_message::Msg::AttachBlocked(blocked)) => {
+        let msg = v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        });
+        let response = self.send_and_read(msg, false).await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => Ok(snapshot),
+            Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
                 Err(DaemonError::AttachBlocked(blocked))
             }
-            Some(proto::server_message::Msg::Error(error)) => {
-                Err(DaemonError::ServerError { code: error.code, message: error.message })
-            }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error_to_daemon(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
 
-    fn handle_runtime_message(
-        &mut self,
-        message: Result<Option<proto::ServerMessage>, DaemonError>,
-    ) {
+    fn handle_runtime_message(&mut self, message: Result<Option<v3::ServerEnvelope>, DaemonError>) {
         match message {
-            Ok(Some(message)) => {
-                if self.observe_inbound_message(&message) {
+            Ok(Some(env)) => {
+                if self.observe_inbound_pong(&env) {
                     return;
                 }
-                if let Some(proto::server_message::Msg::RuntimeTerminated(terminated)) =
-                    &message.msg
+                self.observe_inbound_any();
+                if let Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) =
+                    &env.payload
                     && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
                 {
                     self.tracked_workspaces.retain(|_, tracked_runtime_id| {
                         tracked_runtime_id != &runtime_id.to_string()
                     });
                 }
-                self.forward_push(message);
+                self.forward_push(env);
             }
             Ok(None) | Err(_) => self.handle_disconnect(),
         }
     }
 
-    fn forward_push(&self, message: proto::ServerMessage) {
+    fn forward_push(&self, message: v3::ServerEnvelope) {
         let _ = self
             .event_tx
             .try_send(EndpointEvent::RuntimeMessage { endpoint: self.endpoint.clone(), message });
     }
 
-    fn observe_inbound_message(&mut self, message: &proto::ServerMessage) -> bool {
-        self.heartbeat.observe_inbound(message)
+    fn observe_inbound_pong(&mut self, env: &v3::ServerEnvelope) -> bool {
+        if let Some(v3::server_envelope::Payload::Pong(pong)) = &env.payload {
+            if self.heartbeat.pending_nonce == Some(pong.nonce) {
+                self.heartbeat.pending_nonce = None;
+                self.heartbeat.missed_ticks = 0;
+            }
+            return true;
+        }
+        false
+    }
+
+    const fn observe_inbound_any(&mut self) {
+        self.heartbeat.pending_nonce = None;
+        self.heartbeat.missed_ticks = 0;
     }
 
     async fn handle_heartbeat_tick(&mut self) {
@@ -1604,6 +1580,14 @@ fn parse_uuid(
     }
 }
 
+fn protocol_error_to_daemon(e: v3::ProtocolError) -> DaemonError {
+    DaemonError::ProtocolError {
+        kind: v3::ErrorKind::try_from(e.kind).unwrap_or(v3::ErrorKind::Unspecified),
+        message: e.message,
+        retryable: e.retryable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1617,22 +1601,22 @@ mod tests {
         (crate::daemon::split_transport_for_test(read_half, write_half), server)
     }
 
-    async fn recv_client_message(
+    async fn recv_client_envelope(
         stream: &mut tokio::io::DuplexStream,
         read_buf: &mut BytesMut,
-    ) -> proto::ClientMessage {
-        recv_client_message_opt(stream, read_buf)
+    ) -> v3::ClientEnvelope {
+        recv_client_envelope_opt(stream, read_buf)
             .await
             .expect("read from duplex transport")
-            .expect("unexpected EOF while waiting for client message")
+            .expect("unexpected EOF while waiting for client envelope")
     }
 
-    async fn recv_client_message_opt(
+    async fn recv_client_envelope_opt(
         stream: &mut tokio::io::DuplexStream,
         read_buf: &mut BytesMut,
-    ) -> std::io::Result<Option<proto::ClientMessage>> {
+    ) -> std::io::Result<Option<v3::ClientEnvelope>> {
         loop {
-            match rttx_proto::decode_frame::<proto::ClientMessage>(read_buf) {
+            match rttx_proto::decode_frame::<v3::ClientEnvelope>(read_buf) {
                 Ok(message) => return Ok(Some(message)),
                 Err(rttx_proto::FrameError::Incomplete) => {}
                 Err(error) => {
@@ -1646,14 +1630,11 @@ mod tests {
         }
     }
 
-    async fn send_server_message(
-        stream: &mut tokio::io::DuplexStream,
-        message: &proto::ServerMessage,
-    ) {
+    async fn send_server_envelope(stream: &mut tokio::io::DuplexStream, env: &v3::ServerEnvelope) {
         let mut buf = BytesMut::new();
-        rttx_proto::encode_frame(message, &mut buf).expect("encode server message");
-        stream.write_all(&buf).await.expect("write server message");
-        stream.flush().await.expect("flush server message");
+        rttx_proto::encode_frame(env, &mut buf).expect("encode server envelope");
+        stream.write_all(&buf).await.expect("write server envelope");
+        stream.flush().await.expect("flush server envelope");
     }
 
     fn make_actor(reader: DaemonReader, writer: DaemonWriter) -> EndpointActor {
@@ -1675,6 +1656,7 @@ mod tests {
             daemon_start_attempted: false,
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
+            next_request_id: 1,
         }
     }
 
@@ -1686,21 +1668,24 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
-            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
-            match request.msg {
-                Some(proto::client_message::Msg::CreateRuntime(create)) => {
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            match request.command {
+                Some(v3::client_envelope::Command::CreateRuntime(create)) => {
                     assert_eq!(create.name, "Workspace 2");
-                    assert_eq!(create.policy, WorkspacePolicy::Persistent.as_proto());
+                    assert_eq!(create.policy, WorkspacePolicy::Persistent.as_v3_proto());
                 }
                 other => panic!("expected CreateRuntime request, got {other:?}"),
             }
-            send_server_message(
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::RuntimeCreated(proto::RuntimeCreated {
-                        runtime_id: rttx_proto::uuid_to_bytes(expected_runtime),
-                        revision: 1,
-                    })),
+                &v3::ServerEnvelope {
+                    request_id: request.request_id,
+                    payload: Some(v3::server_envelope::Payload::RuntimeCreated(
+                        v3::RuntimeCreated {
+                            runtime_id: rttx_proto::uuid_to_bytes(expected_runtime),
+                            runtime_revision: 1,
+                        },
+                    )),
                 },
             )
             .await;
@@ -1722,23 +1707,26 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
-            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
-            match request.msg {
-                Some(proto::client_message::Msg::AttachRuntime(attach)) => {
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            match request.command {
+                Some(v3::client_envelope::Command::AttachRuntime(attach)) => {
                     assert_eq!(rttx_proto::bytes_to_uuid(&attach.runtime_id).unwrap(), runtime_id);
-                    assert_eq!(attach.attach_mode, proto::RuntimeAttachMode::ReadWrite as i32);
+                    assert_eq!(attach.attach_mode, v3::RuntimeAttachMode::ReadWrite as i32);
                 }
                 other => panic!("expected AttachRuntime request, got {other:?}"),
             }
-            send_server_message(
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-                        panes: vec![],
-                        revision: 1,
-                        current_client_role: proto::RuntimeClientRole::Writer as i32,
-                    })),
+                &v3::ServerEnvelope {
+                    request_id: request.request_id,
+                    payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
+                        v3::RuntimeSnapshot {
+                            runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+                            panes: vec![],
+                            runtime_revision: 1,
+                            client_role: v3::RuntimeClientRole::Writer as i32,
+                        },
+                    )),
                 },
             )
             .await;
@@ -1774,6 +1762,7 @@ mod tests {
             daemon_start_attempted: false,
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
+            next_request_id: 1,
         };
         (actor, event_rx)
     }
@@ -1803,11 +1792,13 @@ mod tests {
         let mut heartbeat = HeartbeatMonitor::default();
         assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
         assert!(
-            !heartbeat.observe_inbound(&proto::ServerMessage {
-                msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+            !heartbeat.observe_inbound(&v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
                     runtime_id: vec![],
                     pane_id: vec![],
                     data: bytes::Bytes::from_static(b"output"),
+                    ..Default::default()
                 })),
             }),
             "non-heartbeat traffic should not be swallowed"
@@ -1820,8 +1811,9 @@ mod tests {
         let mut heartbeat = HeartbeatMonitor::default();
         assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
         assert!(
-            heartbeat.observe_inbound(&proto::ServerMessage {
-                msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 0 })),
+            heartbeat.observe_inbound(&v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::Pong(v3::Pong { nonce: 0 })),
             }),
             "heartbeat pong should stay internal to the actor"
         );
@@ -1839,18 +1831,23 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
-            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
-            match request.msg {
-                Some(proto::client_message::Msg::ClosePane(_)) => {}
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            match request.command {
+                Some(v3::client_envelope::Command::ClosePane(_)) => {}
                 other => panic!("expected ClosePane, got {other:?}"),
             }
-            // Respond with ERR_PANE_NOT_FOUND (code 6).
-            send_server_message(
+            // Respond with PaneNotFound error.
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Error(proto::Error {
-                        code: 6,
+                &v3::ServerEnvelope {
+                    request_id: request.request_id,
+                    payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
+                        kind: v3::ErrorKind::PaneNotFound as i32,
                         message: "pane not found".into(),
+                        retryable: false,
+                        operation: String::new(),
+                        retry_after_seconds: 0,
+                        user_action_required: false,
                     })),
                 },
             )
@@ -1897,12 +1894,12 @@ mod tests {
             // declare the connection lost after HEARTBEAT_MISS_LIMIT ticks.
             loop {
                 let Ok(Some(request)) =
-                    recv_client_message_opt(&mut server_stream, &mut read_buf).await
+                    recv_client_envelope_opt(&mut server_stream, &mut read_buf).await
                 else {
                     break;
                 };
-                match request.msg {
-                    Some(proto::client_message::Msg::Ping(_)) => {}
+                match request.command {
+                    Some(v3::client_envelope::Command::Ping(_)) => {}
                     other => panic!("expected Ping request, got {other:?}"),
                 }
             }
@@ -1946,16 +1943,17 @@ mod tests {
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
-            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
-            let nonce = match request.msg {
-                Some(proto::client_message::Msg::Ping(ping)) => ping.nonce,
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            let nonce = match request.command {
+                Some(v3::client_envelope::Command::Ping(ping)) => ping.nonce,
                 other => panic!("expected Ping request, got {other:?}"),
             };
             assert_eq!(nonce, 0);
-            send_server_message(
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce })),
+                &v3::ServerEnvelope {
+                    request_id: 0,
+                    payload: Some(v3::server_envelope::Payload::Pong(v3::Pong { nonce })),
                 },
             )
             .await;
@@ -2105,6 +2103,7 @@ mod tests {
             daemon_start_attempted: false,
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
+            next_request_id: 1,
         };
 
         let stale_runtime = Uuid::new_v4();
@@ -2113,17 +2112,22 @@ mod tests {
             let mut read_buf = BytesMut::new();
 
             // Receive AttachRuntime for the stale runtime — reply "not found".
-            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
+            let msg = recv_client_envelope(&mut server_stream, &mut read_buf).await;
             assert!(
-                matches!(msg.msg, Some(proto::client_message::Msg::AttachRuntime(_))),
+                matches!(msg.command, Some(v3::client_envelope::Command::AttachRuntime(_))),
                 "expected AttachRuntime, got {msg:?}"
             );
-            send_server_message(
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Error(proto::Error {
-                        code: 4,
+                &v3::ServerEnvelope {
+                    request_id: msg.request_id,
+                    payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
+                        kind: v3::ErrorKind::RuntimeNotFound as i32,
                         message: "session not found".into(),
+                        retryable: false,
+                        operation: String::new(),
+                        retry_after_seconds: 0,
+                        user_action_required: false,
                     })),
                 },
             )
@@ -2181,6 +2185,7 @@ mod tests {
             daemon_start_attempted: false,
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
+            next_request_id: 1,
         };
 
         let runtime_id = Uuid::new_v4();
@@ -2189,12 +2194,13 @@ mod tests {
             let mut read_buf = BytesMut::new();
 
             // Receive AttachRuntime — reply with AttachBlocked.
-            let msg = recv_client_message(&mut server_stream, &mut read_buf).await;
-            assert!(matches!(msg.msg, Some(proto::client_message::Msg::AttachRuntime(_))));
-            send_server_message(
+            let msg = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            assert!(matches!(msg.command, Some(v3::client_envelope::Command::AttachRuntime(_))));
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::AttachBlocked(proto::AttachBlocked {
+                &v3::ServerEnvelope {
+                    request_id: msg.request_id,
+                    payload: Some(v3::server_envelope::Payload::AttachBlocked(v3::AttachBlocked {
                         runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                         current_client_role: 0,
                         attached_client_count: 1,
@@ -2386,6 +2392,7 @@ mod tests {
             daemon_start_attempted: false,
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
+            next_request_id: 1,
         };
 
         // Server: drop the connection immediately to cause I/O errors.
@@ -2436,36 +2443,41 @@ mod tests {
         // Server sends a push message (delta) before the snapshot response.
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
-            let request = recv_client_message(&mut server_stream, &mut read_buf).await;
-            match request.msg {
-                Some(proto::client_message::Msg::AttachRuntime(_)) => {}
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            match request.command {
+                Some(v3::client_envelope::Command::AttachRuntime(_)) => {}
                 other => panic!("expected AttachRuntime, got {other:?}"),
             }
 
             // Send a delta push message first (simulating PTY output from
             // a previously attached session).
-            send_server_message(
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+                &v3::ServerEnvelope {
+                    request_id: 0,
+                    payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
                         runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                         pane_id: vec![0; 16],
                         data: bytes::Bytes::from_static(b"interleaved output"),
+                        ..Default::default()
                     })),
                 },
             )
             .await;
 
             // Then send the actual snapshot response.
-            send_server_message(
+            send_server_envelope(
                 &mut server_stream,
-                &proto::ServerMessage {
-                    msg: Some(proto::server_message::Msg::Snapshot(proto::Snapshot {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-                        panes: vec![],
-                        revision: 1,
-                        current_client_role: proto::RuntimeClientRole::Writer as i32,
-                    })),
+                &v3::ServerEnvelope {
+                    request_id: request.request_id,
+                    payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
+                        v3::RuntimeSnapshot {
+                            runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+                            panes: vec![],
+                            runtime_revision: 1,
+                            client_role: v3::RuntimeClientRole::Writer as i32,
+                        },
+                    )),
                 },
             )
             .await;
@@ -2481,7 +2493,7 @@ mod tests {
         let mut saw_delta = false;
         while let Ok(event) = event_rx.try_recv() {
             if let EndpointEvent::RuntimeMessage { message, .. } = event
-                && matches!(message.msg, Some(proto::server_message::Msg::Delta(_)))
+                && matches!(message.payload, Some(v3::server_envelope::Payload::OutputDelta(_)))
             {
                 saw_delta = true;
             }
@@ -2590,8 +2602,9 @@ mod tests {
             assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
         }
         // Late Pong arrives just before the limit.
-        assert!(heartbeat.observe_inbound(&proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 0 })),
+        assert!(heartbeat.observe_inbound(&v3::ServerEnvelope {
+            request_id: 0,
+            payload: Some(v3::server_envelope::Payload::Pong(v3::Pong { nonce: 0 })),
         }));
         // Next tick should issue a fresh nonce, not declare lost.
         assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 1 });
@@ -2609,11 +2622,13 @@ mod tests {
             assert_eq!(heartbeat.on_tick(), HeartbeatAction::SendPing { nonce: 0 });
         }
         // Inbound Delta resets the monitor.
-        assert!(!heartbeat.observe_inbound(&proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+        assert!(!heartbeat.observe_inbound(&v3::ServerEnvelope {
+            request_id: 0,
+            payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
                 runtime_id: vec![],
                 pane_id: vec![],
                 data: bytes::Bytes::from_static(b"output"),
+                ..Default::default()
             })),
         }));
         // Miss another half — should still be fine because we reset.

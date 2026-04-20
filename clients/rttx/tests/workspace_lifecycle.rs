@@ -360,13 +360,14 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
     let pane_id = uuid::Uuid::new_v4().to_string();
     let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::proto::RuntimeInfo {
+        runtimes: vec![rttx_proto::v3::RuntimeInfo {
             id: uuid::Uuid::parse_str(&runtime_id).unwrap().as_bytes().to_vec(),
             name: "Should Not Resurrect".into(),
             pane_count: 1,
-            has_attached_client: false,
-            active_pane_id: None,
-            panes: vec![rttx_proto::proto::PaneInfo {
+            has_write_owner: false,
+            read_only_client_count: 0,
+            current_client_role: 0,
+            panes: vec![rttx_proto::v3::PaneInfo {
                 id: uuid::Uuid::parse_str(&pane_id).unwrap().as_bytes().to_vec(),
                 title: "bash".into(),
                 cwd: "/tmp".into(),
@@ -375,13 +376,12 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
                 exit_status: None,
                 reconstructed: false,
             }],
-            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
-            attached_client_count: 0,
+            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
             reconstructed: false,
-            revision: 1,
-            current_client_role: 0,
-            has_write_owner: false,
-            read_only_client_count: 0,
+            runtime_revision: 1,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
         }],
     });
 
@@ -423,13 +423,14 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
     let pane_id = uuid::Uuid::new_v4().to_string();
     let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::proto::RuntimeInfo {
+        runtimes: vec![rttx_proto::v3::RuntimeInfo {
             id: uuid::Uuid::parse_str(&unrelated_runtime_id).unwrap().as_bytes().to_vec(),
             name: "Unrelated Runtime".into(),
             pane_count: 1,
-            has_attached_client: false,
-            active_pane_id: None,
-            panes: vec![rttx_proto::proto::PaneInfo {
+            has_write_owner: false,
+            read_only_client_count: 0,
+            current_client_role: 0,
+            panes: vec![rttx_proto::v3::PaneInfo {
                 id: uuid::Uuid::parse_str(&pane_id).unwrap().as_bytes().to_vec(),
                 title: "bash".into(),
                 cwd: "/tmp".into(),
@@ -438,13 +439,12 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
                 exit_status: None,
                 reconstructed: false,
             }],
-            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
-            attached_client_count: 0,
+            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
             reconstructed: false,
-            revision: 1,
-            current_client_role: 0,
-            has_write_owner: false,
-            read_only_client_count: 0,
+            runtime_revision: 1,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
         }],
     });
 
@@ -955,24 +955,23 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
         workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: runtime_id.clone(),
-        snapshot: rttx_proto::proto::Snapshot {
+        snapshot: rttx_proto::v3::RuntimeSnapshot {
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
-            panes: vec![rttx_proto::proto::PaneSnapshot {
+            panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(first_uuid.parse().unwrap()),
+                pane_output_seq: 0,
                 title: "Shell".into(),
                 cwd: "/home".into(),
-                scrollback: bytes::Bytes::new(),
+                scrollback_tail: bytes::Bytes::new(),
                 cols: 80,
                 rows: 24,
                 exit_status: None,
-                bracketed_paste_mode: false,
-                application_cursor_keys: false,
-                application_keypad: false,
-                mouse_tracking_mode: 0,
-                sgr_mouse_mode: false,
+                terminal_modes: None,
+                total_scrollback_bytes: 0,
+                scrollback_complete: true,
             }],
-            revision: 0,
-            current_client_role: 0,
+            runtime_revision: 0,
+            client_role: 0,
         },
     });
 
@@ -1117,24 +1116,23 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
         workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: new_runtime.to_string(),
-        snapshot: rttx_proto::proto::Snapshot {
+        snapshot: rttx_proto::v3::RuntimeSnapshot {
             runtime_id: rttx_proto::uuid_to_bytes(new_runtime),
-            panes: vec![rttx_proto::proto::PaneSnapshot {
+            panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                pane_output_seq: 0,
                 title: "shell".into(),
                 cwd: "/home".into(),
                 cols: 80,
                 rows: 24,
-                scrollback: bytes::Bytes::new(),
+                scrollback_tail: bytes::Bytes::new(),
                 exit_status: None,
-                bracketed_paste_mode: false,
-                application_cursor_keys: false,
-                application_keypad: false,
-                mouse_tracking_mode: 0,
-                sgr_mouse_mode: false,
+                terminal_modes: None,
+                total_scrollback_bytes: 0,
+                scrollback_complete: true,
             }],
-            revision: 1,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+            runtime_revision: 1,
+            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
         },
     });
 
@@ -1292,13 +1290,14 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
     // Inventory contains only `live` — `stale` was already cleaned up by daemon.
     let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::proto::RuntimeInfo {
+        runtimes: vec![rttx_proto::v3::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&live).unwrap()),
             name: "Live".into(),
             pane_count: 1,
-            has_attached_client: false,
-            active_pane_id: Some(rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane).unwrap())),
-            panes: vec![rttx_proto::proto::PaneInfo {
+            has_write_owner: false,
+            read_only_client_count: 0,
+            current_client_role: rttx_proto::v3::RuntimeClientRole::Unattached as i32,
+            panes: vec![rttx_proto::v3::PaneInfo {
                 id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane).unwrap()),
                 title: "bash".into(),
                 cwd: "/tmp".into(),
@@ -1307,13 +1306,12 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
                 exit_status: None,
                 reconstructed: false,
             }],
-            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
-            attached_client_count: 0,
+            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
             reconstructed: false,
-            revision: 1,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Unattached as i32,
-            has_write_owner: false,
-            read_only_client_count: 0,
+            runtime_revision: 1,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
         }],
     });
 
@@ -1332,4 +1330,66 @@ fn default_window_state_has_reasonable_sidebar_widths() {
         state.right_sidebar_width >= 200,
         "right sidebar should be at least 200px for commands/places"
     );
+}
+
+#[test]
+fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+    let pane_id = uuid::Uuid::new_v4().to_string();
+    let mut state = WindowState {
+        workspaces: vec![WorkspaceState::new_managed_local(
+            "Test".into(),
+            rttx::runtime::WorkspacePolicy::Persistent,
+            None,
+        )],
+        ..WindowState::default()
+    };
+    let ws_id = state.workspaces[0].uuid.clone();
+
+    let snapshot = rttx_proto::v3::RuntimeSnapshot {
+        runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
+        panes: vec![rttx_proto::v3::PaneSnapshot {
+            pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
+            pane_output_seq: 42,
+            title: "vim".into(),
+            cwd: "/home".into(),
+            cols: 80,
+            rows: 24,
+            exit_status: None,
+            terminal_modes: Some(rttx_proto::v3::TerminalModeState {
+                bracketed_paste: true,
+                focus_reporting: true,
+                application_cursor_keys: true,
+                application_keypad: false,
+                alternate_screen: true,
+                cursor_hidden: false,
+                mouse_mode: rttx_proto::v3::MouseMode::Normal as i32,
+                sgr_mouse: true,
+            }),
+            scrollback_tail: bytes::Bytes::from_static(b"scrollback data"),
+            total_scrollback_bytes: 15,
+            scrollback_complete: true,
+        }],
+        runtime_revision: 5,
+        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+    };
+
+    let transition =
+        state.reconcile_endpoint_event(&rttx::daemon_bridge::EndpointEvent::WorkspaceOpened {
+            workspace_id: ws_id,
+            runtime_id,
+            snapshot,
+        });
+
+    assert_eq!(transition.pane_snapshot_restores.len(), 1);
+    let restore = &transition.pane_snapshot_restores[0];
+    assert_eq!(restore.pane_output_seq, 42);
+    assert_eq!(restore.scrollback_tail, &b"scrollback data"[..]);
+    assert!(restore.scrollback_complete);
+    let modes = restore.terminal_modes.as_ref().expect("modes should be present");
+    assert!(modes.bracketed_paste);
+    assert!(modes.application_cursor_keys);
+    assert!(modes.alternate_screen);
+    assert_eq!(modes.mouse_mode, rttx_proto::v3::MouseMode::Normal as i32);
+    assert!(modes.sgr_mouse);
 }

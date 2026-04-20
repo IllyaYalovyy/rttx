@@ -19,32 +19,31 @@ fn hsplit(first: LayoutNode, second: LayoutNode) -> LayoutNode {
     }
 }
 
-fn pane_snapshot(pane_id: &str, title: &str, cwd: &str) -> rttx_proto::proto::PaneSnapshot {
-    rttx_proto::proto::PaneSnapshot {
+fn pane_snapshot(pane_id: &str, title: &str, cwd: &str) -> rttx_proto::v3::PaneSnapshot {
+    rttx_proto::v3::PaneSnapshot {
         pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap()),
+        pane_output_seq: 0,
         title: title.to_string(),
         cwd: cwd.to_string(),
         cols: 120,
         rows: 40,
-        scrollback: bytes::Bytes::new(),
         exit_status: None,
-        bracketed_paste_mode: false,
-        application_cursor_keys: false,
-        application_keypad: false,
-        mouse_tracking_mode: 0,
-        sgr_mouse_mode: false,
+        terminal_modes: None,
+        scrollback_tail: bytes::Bytes::new(),
+        total_scrollback_bytes: 0,
+        scrollback_complete: true,
     }
 }
 
 fn snapshot(
     runtime_id: &str,
-    panes: Vec<rttx_proto::proto::PaneSnapshot>,
-) -> rttx_proto::proto::Snapshot {
-    rttx_proto::proto::Snapshot {
+    panes: Vec<rttx_proto::v3::PaneSnapshot>,
+) -> rttx_proto::v3::RuntimeSnapshot {
+    rttx_proto::v3::RuntimeSnapshot {
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
         panes,
-        revision: 1,
-        current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
+        runtime_revision: 1,
+        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
     }
 }
 

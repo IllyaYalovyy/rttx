@@ -1250,13 +1250,14 @@ dependencies = [
 
 [[package]]
 name = "rttx"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "bytes",
  "gtk4",
  "libadwaita",
  "pretty_assertions",
  "proptest",
+ "prost",
  "rstest",
  "rttx-proto",
  "serde",
@@ -1273,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "rttx-proto"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "bytes",
  "prost",
@@ -1284,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "rttx-server"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1292,6 +1293,7 @@ dependencies = [
  "daemonize",
  "nix",
  "pretty_assertions",
+ "prost",
  "pty-process",
  "rttx-proto",
  "serde",
