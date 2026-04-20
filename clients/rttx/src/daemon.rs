@@ -7,10 +7,9 @@
 //! from the glib main loop. This module has no GTK dependency.
 
 use bytes::BytesMut;
-use rttx_proto::{
-    PROTOCOL_VERSION, bytes_to_uuid, decode_frame, encode_frame, proto, uuid_to_bytes,
-};
+use rttx_proto::{bytes_to_uuid, decode_frame, encode_frame, uuid_to_bytes, v3, v3_handshake};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use uuid::Uuid;
@@ -60,7 +59,18 @@ pub enum DaemonError {
         client: u32,
     },
 
-    /// Server returned an error message.
+    /// Server returned a typed v3 protocol error.
+    #[error("server error: {message}")]
+    ProtocolError {
+        /// Error kind from the server.
+        kind: v3::ErrorKind,
+        /// Human-readable error message.
+        message: String,
+        /// Whether the error is retryable.
+        retryable: bool,
+    },
+
+    /// Server returned a legacy v2 error message.
     #[error("server error ({code}): {message}")]
     ServerError {
         /// Error code from the server.
@@ -75,7 +85,7 @@ pub enum DaemonError {
 
     /// Attach was blocked because another client already owns the runtime.
     #[error("runtime attach blocked")]
-    AttachBlocked(proto::AttachBlocked),
+    AttachBlocked(v3::AttachBlocked),
 
     /// Connection was closed by the server.
     #[error("connection closed")]
@@ -85,9 +95,24 @@ pub enum DaemonError {
 /// Successful detach outcome from the daemon.
 #[derive(Debug, Clone)]
 pub enum DetachResponse {
-    Detached(proto::RuntimeDetached),
-    Terminated(proto::RuntimeTerminated),
+    Detached(v3::RuntimeDetached),
+    Terminated(v3::RuntimeTerminated),
 }
+
+/// Client capabilities advertised during v3 handshake.
+const CLIENT_CAPABILITIES: &[v3::Capability] = &[
+    v3::Capability::CoreRuntimeLifecycle,
+    v3::Capability::CorePaneLifecycle,
+    v3::Capability::CoreTerminalIo,
+    v3::Capability::CoreTerminalModes,
+    v3::Capability::CorePasteIntent,
+    v3::Capability::CoreFocusEvents,
+    v3::Capability::OptRuntimeInventoryV2,
+    v3::Capability::OptResync,
+    v3::Capability::OptChunkedScrollback,
+    v3::Capability::OptDiagnostics,
+    v3::Capability::OptRuntimeTakeover,
+];
 
 /// A connection to a running `rttx-server` instance (pre-split).
 ///
@@ -100,6 +125,8 @@ pub struct DaemonConnection {
     writer: Box<dyn AsyncWrite + Unpin + Send>,
     read_buf: BytesMut,
     client_id: Uuid,
+    effective_caps: Vec<i32>,
+    id_gen: RequestIdGenerator,
 }
 
 impl std::fmt::Debug for DaemonConnection {
@@ -107,6 +134,23 @@ impl std::fmt::Debug for DaemonConnection {
         f.debug_struct("DaemonConnection")
             .field("client_id", &self.client_id)
             .finish_non_exhaustive()
+    }
+}
+
+/// Atomic request ID generator for v3 envelope correlation.
+#[derive(Debug)]
+struct RequestIdGenerator {
+    next: AtomicU64,
+}
+
+impl RequestIdGenerator {
+    const fn new() -> Self {
+        Self { next: AtomicU64::new(1) }
+    }
+
+    fn next_id(&self) -> u64 {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        if id == 0 { self.next.fetch_add(1, Ordering::Relaxed) } else { id }
     }
 }
 
@@ -120,16 +164,14 @@ impl DaemonConnection {
             writer: Box::new(write_half),
             read_buf: BytesMut::with_capacity(8192),
             client_id: Uuid::new_v4(),
+            effective_caps: Vec::new(),
+            id_gen: RequestIdGenerator::new(),
         };
         conn.handshake().await?;
         Ok(conn)
     }
 
     /// Connect to `rttx-server` on a remote host via SSH.
-    ///
-    /// Spawns `ssh <host> rttx-server attach-stdio` and speaks the protocol
-    /// over the subprocess's stdin/stdout. The returned `SshHandle` must be
-    /// kept alive for the connection to persist.
     pub async fn connect_ssh(host: &str) -> Result<(Self, SshHandle), DaemonError> {
         let mut child = tokio::process::Command::new("ssh")
             .args(["-o", "BatchMode=yes"])
@@ -154,6 +196,8 @@ impl DaemonConnection {
             writer: Box::new(child_stdin),
             read_buf: BytesMut::with_capacity(8192),
             client_id: Uuid::new_v4(),
+            effective_caps: Vec::new(),
+            id_gen: RequestIdGenerator::new(),
         };
         conn.handshake().await?;
         Ok((conn, SshHandle { child }))
@@ -164,24 +208,33 @@ impl DaemonConnection {
     pub fn into_split(self) -> (DaemonReader, DaemonWriter) {
         (
             DaemonReader { stream: self.reader, read_buf: self.read_buf },
-            DaemonWriter { stream: self.writer },
+            DaemonWriter { stream: self.writer, id_gen: self.id_gen },
         )
     }
 
-    /// Send a client message to the daemon.
-    pub(crate) async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+    /// Return the effective capabilities negotiated during handshake.
+    #[must_use]
+    pub fn effective_caps(&self) -> &[i32] {
+        &self.effective_caps
+    }
+
+    /// Send a v3 client envelope to the daemon.
+    pub(crate) async fn send_envelope(
+        &mut self,
+        env: &v3::ClientEnvelope,
+    ) -> Result<(), DaemonError> {
         let mut buf = BytesMut::new();
-        encode_frame(msg, &mut buf)?;
+        encode_frame(env, &mut buf)?;
         self.writer.write_all(&buf).await?;
         self.writer.flush().await?;
         Ok(())
     }
 
-    /// Read the next server message. Returns `None` on clean disconnect.
-    pub async fn recv(&mut self) -> Result<Option<proto::ServerMessage>, DaemonError> {
+    /// Read the next v3 server envelope. Returns `None` on clean disconnect.
+    pub async fn recv_envelope(&mut self) -> Result<Option<v3::ServerEnvelope>, DaemonError> {
         loop {
-            match decode_frame::<proto::ServerMessage>(&mut self.read_buf) {
-                Ok(msg) => return Ok(Some(msg)),
+            match decode_frame::<v3::ServerEnvelope>(&mut self.read_buf) {
+                Ok(env) => return Ok(Some(env)),
                 Err(rttx_proto::FrameError::Incomplete) => {}
                 Err(e) => return Err(DaemonError::Frame(e)),
             }
@@ -192,105 +245,153 @@ impl DaemonConnection {
         }
     }
 
-    /// Perform the Hello/HelloAck handshake.
+    /// Send a request and wait for the correlated response, dispatching
+    /// push events encountered along the way.
+    async fn request(
+        &mut self,
+        command: v3::client_envelope::Command,
+    ) -> Result<v3::ServerEnvelope, DaemonError> {
+        let request_id = self.id_gen.next_id();
+        let env = v3::ClientEnvelope { request_id, command: Some(command) };
+        self.send_envelope(&env).await?;
+        loop {
+            let response = self.recv_envelope().await?.ok_or(DaemonError::Disconnected)?;
+            if response.request_id == request_id {
+                return Ok(response);
+            }
+            // Push event (request_id == 0) — skip during request/response.
+        }
+    }
+
+    /// Perform the v3 `ClientHello`/`ServerHello` handshake.
     async fn handshake(&mut self) -> Result<(), DaemonError> {
-        let hello = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                protocol_version: PROTOCOL_VERSION,
-                client_id: uuid_to_bytes(self.client_id),
-            })),
-        };
-        self.send(&hello).await?;
+        let client_hello = v3_handshake::build_client_hello(
+            self.client_id,
+            "rttx",
+            env!("CARGO_PKG_VERSION"),
+            CLIENT_CAPABILITIES,
+        );
+        let mut buf = BytesMut::new();
+        encode_frame(&client_hello, &mut buf)?;
+        self.writer.write_all(&buf).await?;
+        self.writer.flush().await?;
 
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::HelloAck(ack)) => {
-                if ack.protocol_version != PROTOCOL_VERSION {
-                    return Err(DaemonError::VersionMismatch {
-                        server: ack.protocol_version,
-                        client: PROTOCOL_VERSION,
-                    });
+        // Server responds with bare ServerHello (not wrapped in ServerEnvelope).
+        // Read the raw frame and try to decode as ServerHello or ProtocolError.
+        let raw = self.read_raw_frame().await?.ok_or(DaemonError::Disconnected)?;
+        let payload = &raw[4..]; // skip 4-byte length prefix
+
+        // Try ServerHello first.
+        if let Ok(server_hello) = <v3::ServerHello as prost::Message>::decode(payload) {
+            if let Err(missing) =
+                v3_handshake::validate_server_capabilities(&server_hello.capabilities)
+            {
+                let err = v3_handshake::missing_capabilities_error(&missing);
+                return Err(DaemonError::ProtocolError {
+                    kind: v3::ErrorKind::try_from(err.kind).unwrap_or(v3::ErrorKind::Unspecified),
+                    message: err.message,
+                    retryable: false,
+                });
+            }
+            let client_caps: Vec<i32> = CLIENT_CAPABILITIES.iter().map(|c| *c as i32).collect();
+            self.effective_caps =
+                v3_handshake::effective_capabilities(&client_caps, &server_hello.capabilities);
+            return Ok(());
+        }
+
+        // Try ProtocolError.
+        if let Ok(err) = <v3::ProtocolError as prost::Message>::decode(payload) {
+            return Err(DaemonError::ProtocolError {
+                kind: v3::ErrorKind::try_from(err.kind).unwrap_or(v3::ErrorKind::Unspecified),
+                message: err.message,
+                retryable: err.retryable,
+            });
+        }
+
+        Err(DaemonError::UnexpectedMessage)
+    }
+
+    /// Read a raw length-prefixed frame without decoding.
+    async fn read_raw_frame(&mut self) -> Result<Option<BytesMut>, DaemonError> {
+        loop {
+            if self.read_buf.len() >= 4 {
+                let len = u32::from_le_bytes([
+                    self.read_buf[0],
+                    self.read_buf[1],
+                    self.read_buf[2],
+                    self.read_buf[3],
+                ]);
+                if len > rttx_proto::MAX_MESSAGE_SIZE {
+                    return Err(DaemonError::Frame(rttx_proto::FrameError::TooLarge(len)));
                 }
-                Ok(())
+                let total = 4 + len as usize;
+                if self.read_buf.len() >= total {
+                    let frame = self.read_buf.split_to(total);
+                    return Ok(Some(frame));
+                }
             }
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
+            let n = self.reader.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Ok(None);
             }
+        }
+    }
+
+    /// List all runtimes on the daemon.
+    pub async fn list_runtimes(&mut self) -> Result<Vec<v3::RuntimeInfo>, DaemonError> {
+        let response =
+            self.request(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})).await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(list)) => Ok(list.runtimes),
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
 
-    /// List all sessions on the daemon.
-    pub async fn list_runtimes(&mut self) -> Result<Vec<proto::RuntimeInfo>, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::RuntimeList(list)) => Ok(list.runtimes),
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
-            _ => Err(DaemonError::UnexpectedMessage),
-        }
-    }
-
-    /// Create a new session and return its UUID.
+    /// Create a new runtime and return its UUID.
     pub async fn create_runtime(
         &mut self,
         name: &str,
         policy: WorkspacePolicy,
     ) -> Result<Uuid, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        let response = self
+            .request(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: name.to_string(),
-                policy: policy.as_proto(),
-            })),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(created)) => {
+                policy: policy.as_v3_proto(),
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => {
                 bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
 
-    /// Attach to a session and receive the initial snapshot.
+    /// Attach to a runtime and receive the initial snapshot.
     pub async fn attach_runtime(
         &mut self,
         runtime_id: Uuid,
-        attach_mode: proto::RuntimeAttachMode,
-    ) -> Result<proto::Snapshot, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        attach_mode: v3::RuntimeAttachMode,
+    ) -> Result<v3::RuntimeSnapshot, DaemonError> {
+        let response = self
+            .request(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: uuid_to_bytes(runtime_id),
                 attach_mode: attach_mode as i32,
-            })),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::Snapshot(snapshot)) => Ok(snapshot),
-            Some(proto::server_message::Msg::AttachBlocked(blocked)) => {
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => Ok(snapshot),
+            Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
                 Err(DaemonError::AttachBlocked(blocked))
             }
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
 
-    /// Create a pane in a session and return the new pane UUID.
+    /// Create a pane in a runtime and return the new pane UUID.
     pub async fn create_pane(
         &mut self,
         runtime_id: Uuid,
@@ -299,49 +400,39 @@ impl DaemonConnection {
         cols: u32,
         rows: u32,
     ) -> Result<Uuid, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        let response = self
+            .request(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: uuid_to_bytes(runtime_id),
                 cwd,
                 dark_background,
                 cols,
                 rows,
-            })),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::PaneCreated(created)) => {
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(created)) => {
                 bytes_to_uuid(&created.pane_id).map_err(DaemonError::Frame)
             }
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
 
-    /// Close a pane in a session and return the acknowledgement.
+    /// Close a pane in a runtime.
     pub async fn close_pane(
         &mut self,
         runtime_id: Uuid,
         pane_id: Uuid,
-    ) -> Result<proto::PaneClosed, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+    ) -> Result<v3::PaneClosed, DaemonError> {
+        let response = self
+            .request(v3::client_envelope::Command::ClosePane(v3::ClosePane {
                 runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
-            })),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::PaneClosed(closed)) => Ok(closed),
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::PaneClosed(closed)) => Ok(closed),
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
@@ -351,24 +442,19 @@ impl DaemonConnection {
         &mut self,
         runtime_id: Uuid,
     ) -> Result<DetachResponse, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+        let response = self
+            .request(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
                 runtime_id: uuid_to_bytes(runtime_id),
-            })),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::RuntimeDetached(detached)) => {
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeDetached(detached)) => {
                 Ok(DetachResponse::Detached(detached))
             }
-            Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
+            Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
                 Ok(DetachResponse::Terminated(terminated))
             }
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
     }
@@ -377,22 +463,26 @@ impl DaemonConnection {
     pub async fn terminate_runtime(
         &mut self,
         runtime_id: Uuid,
-    ) -> Result<proto::RuntimeTerminated, DaemonError> {
-        let msg = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+    ) -> Result<v3::RuntimeTerminated, DaemonError> {
+        let response = self
+            .request(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
                 runtime_id: uuid_to_bytes(runtime_id),
-            })),
-        };
-        self.send(&msg).await?;
-
-        let response = self.recv().await?.ok_or(DaemonError::Disconnected)?;
-        match response.msg {
-            Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => Ok(terminated),
-            Some(proto::server_message::Msg::Error(e)) => {
-                Err(DaemonError::ServerError { code: e.code, message: e.message })
-            }
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => Ok(terminated),
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
+    }
+}
+
+/// Convert a v3 `ProtocolError` to a `DaemonError`.
+fn protocol_error(e: v3::ProtocolError) -> DaemonError {
+    DaemonError::ProtocolError {
+        kind: v3::ErrorKind::try_from(e.kind).unwrap_or(v3::ErrorKind::Unspecified),
+        message: e.message,
+        retryable: e.retryable,
     }
 }
 
@@ -427,6 +517,7 @@ impl Drop for SshHandle {
 /// the glib main thread.
 pub struct DaemonWriter {
     stream: Box<dyn AsyncWrite + Unpin + Send>,
+    id_gen: RequestIdGenerator,
 }
 
 impl std::fmt::Debug for DaemonWriter {
@@ -436,24 +527,27 @@ impl std::fmt::Debug for DaemonWriter {
 }
 
 impl DaemonWriter {
-    /// Send keyboard input to a pane.
+    /// Send keyboard input to a pane (fire-and-forget).
     pub async fn send_input(
         &mut self,
         runtime_id: Uuid,
         pane_id: Uuid,
         data: &[u8],
     ) -> Result<(), DaemonError> {
-        self.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
+        let env = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
-                data: bytes::Bytes::copy_from_slice(data),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::copy_from_slice(data),
+                })),
             })),
-        })
-        .await
+        };
+        self.send_envelope(&env).await
     }
 
-    /// Notify the daemon of a pane resize.
+    /// Notify the daemon of a pane resize (fire-and-forget).
     pub async fn send_resize(
         &mut self,
         runtime_id: Uuid,
@@ -461,38 +555,44 @@ impl DaemonWriter {
         cols: u16,
         rows: u16,
     ) -> Result<(), DaemonError> {
-        self.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+        let env = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
                 runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
                 cols: u32::from(cols),
                 rows: u32::from(rows),
             })),
-        })
-        .await
+        };
+        self.send_envelope(&env).await
     }
 
     /// Send a heartbeat ping to the daemon.
     pub async fn send_ping(&mut self, nonce: u64) -> Result<(), DaemonError> {
-        self.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce })),
-        })
-        .await
+        let env = v3::ClientEnvelope {
+            request_id: self.id_gen.next_id(),
+            command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce })),
+        };
+        self.send_envelope(&env).await
     }
 
-    /// Detach from a session without killing it.
+    /// Detach from a runtime without killing it.
     pub async fn detach_runtime(&mut self, runtime_id: Uuid) -> Result<(), DaemonError> {
-        self.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+        let env = v3::ClientEnvelope {
+            request_id: self.id_gen.next_id(),
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
                 runtime_id: uuid_to_bytes(runtime_id),
             })),
-        })
-        .await
+        };
+        self.send_envelope(&env).await
     }
 
-    pub(crate) async fn send(&mut self, msg: &proto::ClientMessage) -> Result<(), DaemonError> {
+    pub(crate) async fn send_envelope(
+        &mut self,
+        env: &v3::ClientEnvelope,
+    ) -> Result<(), DaemonError> {
         let mut buf = BytesMut::new();
-        encode_frame(msg, &mut buf)?;
+        encode_frame(env, &mut buf)?;
         self.stream.write_all(&buf).await?;
         self.stream.flush().await?;
         Ok(())
@@ -515,11 +615,11 @@ impl std::fmt::Debug for DaemonReader {
 }
 
 impl DaemonReader {
-    /// Read the next server message. Returns `None` on clean disconnect.
-    pub async fn recv(&mut self) -> Result<Option<proto::ServerMessage>, DaemonError> {
+    /// Read the next v3 server envelope. Returns `None` on clean disconnect.
+    pub async fn recv(&mut self) -> Result<Option<v3::ServerEnvelope>, DaemonError> {
         loop {
-            match decode_frame::<proto::ServerMessage>(&mut self.read_buf) {
-                Ok(msg) => return Ok(Some(msg)),
+            match decode_frame::<v3::ServerEnvelope>(&mut self.read_buf) {
+                Ok(env) => return Ok(Some(env)),
                 Err(rttx_proto::FrameError::Incomplete) => {}
                 Err(e) => return Err(DaemonError::Frame(e)),
             }
@@ -539,34 +639,39 @@ where
 {
     (
         DaemonReader { stream: Box::new(reader), read_buf: BytesMut::new() },
-        DaemonWriter { stream: Box::new(writer) },
+        DaemonWriter { stream: Box::new(writer), id_gen: RequestIdGenerator::new() },
     )
 }
 
-/// Extract the `pane_id` bytes from a server message, if present.
+/// Extract the `pane_id` bytes from a v3 server envelope, if present.
 #[must_use]
-pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
-    use proto::server_message::Msg;
-    let bytes = match msg.msg.as_ref()? {
-        Msg::Delta(m) => &m.pane_id,
-        Msg::PaneExited(m) => &m.pane_id,
-        Msg::PaneCreated(m) => &m.pane_id,
-        Msg::PaneClosed(m) => &m.pane_id,
-        Msg::TitleChanged(m) => &m.pane_id,
-        Msg::CwdChanged(m) => &m.pane_id,
-        Msg::Bell(m) => &m.pane_id,
-        Msg::PaneResized(m) => &m.pane_id,
-        Msg::HelloAck(_)
-        | Msg::Pong(_)
-        | Msg::RuntimeList(_)
-        | Msg::RuntimeCreated(_)
-        | Msg::Snapshot(_)
-        | Msg::AttachBlocked(_)
-        | Msg::RuntimeDetached(_)
-        | Msg::RuntimeTerminated(_)
-        | Msg::RuntimeRenamed(_)
-        | Msg::Error(_)
-        | Msg::DiagnosticsReport(_) => return None,
+pub fn extract_pane_id(env: &v3::ServerEnvelope) -> Option<Uuid> {
+    use v3::server_envelope::Payload;
+    let bytes = match env.payload.as_ref()? {
+        Payload::OutputDelta(m) => &m.pane_id,
+        Payload::PaneExited(m) => &m.pane_id,
+        Payload::PaneCreated(m) => &m.pane_id,
+        Payload::PaneClosed(m) => &m.pane_id,
+        Payload::TitleChanged(m) => &m.pane_id,
+        Payload::CwdChanged(m) => &m.pane_id,
+        Payload::Bell(m) => &m.pane_id,
+        Payload::PaneResized(m) => &m.pane_id,
+        Payload::TerminalModeChanged(m) => &m.pane_id,
+        Payload::Pong(_)
+        | Payload::RuntimeList(_)
+        | Payload::RuntimeCreated(_)
+        | Payload::RuntimeSnapshot(_)
+        | Payload::AttachBlocked(_)
+        | Payload::RuntimeDetached(_)
+        | Payload::RuntimeTerminated(_)
+        | Payload::RuntimeRenamed(_)
+        | Payload::Error(_)
+        | Payload::DiagnosticsReport(_)
+        | Payload::StreamOverflow(_)
+        | Payload::ScrollbackChunk(_)
+        | Payload::TakeoverCompleted(_)
+        | Payload::LeaseLost(_)
+        | Payload::OwnerDisconnected(_) => return None,
     };
     bytes_to_uuid(bytes).ok()
 }
@@ -574,29 +679,29 @@ pub fn extract_pane_id(msg: &proto::ServerMessage) -> Option<Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rttx_proto::{decode_frame, encode_frame, proto};
+    use rttx_proto::{decode_frame, encode_frame, v3, v3_handshake};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixListener;
 
-    /// Accept one client, read `Hello`, send `HelloAck`.
+    /// Accept one client, read `ClientHello`, send `ServerHello`.
     async fn serve_handshake(listener: &UnixListener) -> UnixStream {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buf = BytesMut::with_capacity(4096);
         loop {
             let n = stream.read_buf(&mut buf).await.unwrap();
-            assert!(n > 0, "client disconnected before Hello");
-            if let Ok(_hello) = decode_frame::<proto::ClientMessage>(&mut buf) {
+            assert!(n > 0, "client disconnected before ClientHello");
+            if let Ok(_hello) = decode_frame::<v3::ClientHello>(&mut buf) {
                 break;
             }
         }
-        let ack = proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::HelloAck(proto::HelloAck {
-                protocol_version: PROTOCOL_VERSION,
-                server_id: uuid_to_bytes(Uuid::new_v4()),
-            })),
-        };
+        let server_hello = v3_handshake::build_server_hello(
+            Uuid::new_v4(),
+            "0.1.0",
+            v3_handshake::V3_PROTOCOL_VERSION,
+            v3_handshake::CORE_CAPABILITIES,
+        );
         let mut out = BytesMut::new();
-        encode_frame(&ack, &mut out).unwrap();
+        encode_frame(&server_hello, &mut out).unwrap();
         stream.write_all(&out).await.unwrap();
         stream
     }
@@ -645,7 +750,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handshake_fails_on_version_mismatch() {
+    async fn handshake_fails_on_protocol_error() {
         let tmp = tempfile::TempDir::new().unwrap();
         let sock = tmp.path().join("test.sock");
         let listener = UnixListener::bind(&sock).unwrap();
@@ -660,56 +765,59 @@ mod tests {
         loop {
             let n = stream.read_buf(&mut buf).await.unwrap();
             assert!(n > 0);
-            if decode_frame::<proto::ClientMessage>(&mut buf).is_ok() {
+            if decode_frame::<v3::ClientHello>(&mut buf).is_ok() {
                 break;
             }
         }
-        let ack = proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::HelloAck(proto::HelloAck {
-                protocol_version: 999,
-                server_id: uuid_to_bytes(Uuid::new_v4()),
-            })),
-        };
-        let mut out = BytesMut::new();
-        encode_frame(&ack, &mut out).unwrap();
-        stream.write_all(&out).await.unwrap();
-
-        let result = client_task.await.unwrap();
-        assert!(matches!(result, Err(DaemonError::VersionMismatch { server: 999, .. })));
-    }
-
-    #[tokio::test]
-    async fn handshake_fails_on_server_error() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let sock = tmp.path().join("test.sock");
-        let listener = UnixListener::bind(&sock).unwrap();
-
-        let client_task = tokio::spawn({
-            let sock = sock.clone();
-            async move { DaemonConnection::connect(&sock).await }
-        });
-
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = BytesMut::with_capacity(4096);
-        loop {
-            let n = stream.read_buf(&mut buf).await.unwrap();
-            assert!(n > 0);
-            if decode_frame::<proto::ClientMessage>(&mut buf).is_ok() {
-                break;
-            }
-        }
-        let err = proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Error(proto::Error {
-                code: 2,
-                message: "version mismatch".into(),
-            })),
+        let err = v3::ProtocolError {
+            kind: v3::ErrorKind::ProtocolMismatch as i32,
+            message: "version mismatch".into(),
+            operation: "Handshake".into(),
+            retryable: false,
+            user_action_required: true,
+            retry_after_seconds: 0,
         };
         let mut out = BytesMut::new();
         encode_frame(&err, &mut out).unwrap();
         stream.write_all(&out).await.unwrap();
 
         let result = client_task.await.unwrap();
-        assert!(matches!(result, Err(DaemonError::ServerError { code: 2, .. })));
+        assert!(matches!(result, Err(DaemonError::ProtocolError { .. })));
+    }
+
+    #[tokio::test]
+    async fn handshake_fails_on_missing_capabilities() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("test.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let client_task = tokio::spawn({
+            let sock = sock.clone();
+            async move { DaemonConnection::connect(&sock).await }
+        });
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = stream.read_buf(&mut buf).await.unwrap();
+            assert!(n > 0);
+            if decode_frame::<v3::ClientHello>(&mut buf).is_ok() {
+                break;
+            }
+        }
+        // Send a ServerHello with no capabilities — client should reject.
+        let server_hello = v3::ServerHello {
+            negotiated_protocol_version: v3_handshake::V3_PROTOCOL_VERSION,
+            server_id: uuid_to_bytes(Uuid::new_v4()),
+            server_version: "0.1.0".into(),
+            capabilities: vec![],
+        };
+        let mut out = BytesMut::new();
+        encode_frame(&server_hello, &mut out).unwrap();
+        stream.write_all(&out).await.unwrap();
+
+        let result = client_task.await.unwrap();
+        assert!(matches!(result, Err(DaemonError::ProtocolError { .. })));
     }
 
     #[tokio::test]
@@ -722,7 +830,7 @@ mod tests {
             let sock = sock.clone();
             async move {
                 let mut conn = DaemonConnection::connect(&sock).await.unwrap();
-                conn.recv().await
+                conn.recv_envelope().await
             }
         });
 
@@ -758,14 +866,18 @@ mod tests {
             if n == 0 {
                 break;
             }
-            if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
-                match msg.msg {
-                    Some(proto::client_message::Msg::Input(input)) => {
-                        assert_eq!(input.data, &b"hello"[..]);
+            if let Ok(env) = decode_frame::<v3::ClientEnvelope>(&mut buf) {
+                match env.command {
+                    Some(v3::client_envelope::Command::TerminalInput(input)) => {
+                        if let Some(v3::terminal_input::Kind::Raw(raw)) = input.kind {
+                            assert_eq!(raw.data, &b"hello"[..]);
+                        } else {
+                            panic!("expected RawInput kind");
+                        }
                         assert_eq!(bytes_to_uuid(&input.runtime_id).unwrap(), runtime_id);
                         assert_eq!(bytes_to_uuid(&input.pane_id).unwrap(), pane_id);
                     }
-                    other => panic!("expected Input, got {other:?}"),
+                    other => panic!("expected TerminalInput, got {other:?}"),
                 }
                 break;
             }
@@ -799,13 +911,13 @@ mod tests {
             if n == 0 {
                 break;
             }
-            if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
-                match msg.msg {
-                    Some(proto::client_message::Msg::Resize(resize)) => {
+            if let Ok(env) = decode_frame::<v3::ClientEnvelope>(&mut buf) {
+                match env.command {
+                    Some(v3::client_envelope::Command::ResizePane(resize)) => {
                         assert_eq!(resize.cols, 120);
                         assert_eq!(resize.rows, 40);
                     }
-                    other => panic!("expected Resize, got {other:?}"),
+                    other => panic!("expected ResizePane, got {other:?}"),
                 }
                 break;
             }
@@ -836,9 +948,11 @@ mod tests {
             if n == 0 {
                 break;
             }
-            if let Ok(msg) = decode_frame::<proto::ClientMessage>(&mut buf) {
-                match msg.msg {
-                    Some(proto::client_message::Msg::Ping(ping)) => assert_eq!(ping.nonce, 99),
+            if let Ok(env) = decode_frame::<v3::ClientEnvelope>(&mut buf) {
+                match env.command {
+                    Some(v3::client_envelope::Command::Ping(ping)) => {
+                        assert_eq!(ping.nonce, 99);
+                    }
                     other => panic!("expected Ping, got {other:?}"),
                 }
                 break;
@@ -851,25 +965,32 @@ mod tests {
     #[test]
     fn extract_pane_id_from_delta() {
         let pane_id = Uuid::new_v4();
-        let msg = proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+        let env = v3::ServerEnvelope {
+            request_id: 0,
+            payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
                 runtime_id: uuid_to_bytes(Uuid::new_v4()),
                 pane_id: uuid_to_bytes(pane_id),
+                pane_output_seq: 1,
                 data: bytes::Bytes::new(),
             })),
         };
-        assert_eq!(extract_pane_id(&msg), Some(pane_id));
+        assert_eq!(extract_pane_id(&env), Some(pane_id));
     }
 
     #[test]
     fn extract_pane_id_from_error_is_none() {
-        let msg = proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Error(proto::Error {
-                code: 1,
+        let env = v3::ServerEnvelope {
+            request_id: 0,
+            payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
+                kind: v3::ErrorKind::Internal as i32,
                 message: "test".into(),
+                operation: String::new(),
+                retryable: false,
+                user_action_required: false,
+                retry_after_seconds: 0,
             })),
         };
-        assert_eq!(extract_pane_id(&msg), None);
+        assert_eq!(extract_pane_id(&env), None);
     }
 
     #[tokio::test]

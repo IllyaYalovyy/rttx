@@ -1,4 +1,5 @@
 use crate::daemon::DaemonError;
+use rttx_proto::v3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,6 +30,15 @@ impl WorkspacePolicy {
         match self {
             Self::Persistent => rttx_proto::proto::RuntimePolicy::Persistent as i32,
             Self::Ephemeral => rttx_proto::proto::RuntimePolicy::Ephemeral as i32,
+        }
+    }
+
+    /// Wire value for v3 daemon session creation.
+    #[must_use]
+    pub const fn as_v3_proto(self) -> i32 {
+        match self {
+            Self::Persistent => rttx_proto::v3::RuntimePolicy::Persistent as i32,
+            Self::Ephemeral => rttx_proto::v3::RuntimePolicy::Ephemeral as i32,
         }
     }
 }
@@ -260,6 +270,16 @@ pub fn classify_connection_problem(error: &DaemonError) -> ConnectionProblem {
     match error {
         DaemonError::VersionMismatch { .. } => ConnectionProblem::VersionMismatch,
         DaemonError::AttachBlocked(_) => ConnectionProblem::OwnershipConflict,
+        DaemonError::ProtocolError { kind, message, .. } => match kind {
+            v3::ErrorKind::RuntimeNotFound => ConnectionProblem::SessionMissing,
+            v3::ErrorKind::OwnershipConflict | v3::ErrorKind::TakeoverRequired => {
+                ConnectionProblem::OwnershipConflict
+            }
+            v3::ErrorKind::ProtocolMismatch | v3::ErrorKind::UnsupportedCapability => {
+                ConnectionProblem::Protocol(message.clone())
+            }
+            _ => ConnectionProblem::UserActionRequired(message.clone()),
+        },
         DaemonError::ServerError { code, .. } if *code == 4 => ConnectionProblem::SessionMissing,
         DaemonError::ServerError { code, message } if *code == 8 => {
             ConnectionProblem::UserActionRequired(message.clone())

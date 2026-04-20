@@ -2430,28 +2430,28 @@ fn inventory_loaded_recovers_missing_managed_workspace() {
 
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::proto::RuntimeInfo {
+        runtimes: vec![rttx_proto::v3::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(runtime_id),
             name: "Recovered Workspace".into(),
             pane_count: 1,
-            has_attached_client: false,
-            active_pane_id: Some(rttx_proto::uuid_to_bytes(pane_id)),
-            panes: vec![rttx_proto::proto::PaneInfo {
+            has_write_owner: false,
+            read_only_client_count: 0,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
+            current_client_role: rttx_proto::v3::RuntimeClientRole::Unattached as i32,
+            panes: vec![rttx_proto::v3::PaneInfo {
                 id: rttx_proto::uuid_to_bytes(pane_id),
                 title: "Shell".into(),
                 cwd: "/srv/project".into(),
                 cols: 120,
                 rows: 40,
                 exit_status: None,
-                reconstructed: true,
+                reconstructed: false,
             }],
-            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
-            attached_client_count: 0,
+            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
             reconstructed: true,
-            revision: 7,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Unattached as i32,
-            has_write_owner: false,
-            read_only_client_count: 0,
+            runtime_revision: 7,
         }],
     });
 
@@ -2523,28 +2523,28 @@ fn inventory_loaded_skips_workspace_for_known_runtime() {
 
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::proto::RuntimeInfo {
+        runtimes: vec![rttx_proto::v3::RuntimeInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
             name: "Recovered Workspace".into(),
             pane_count: 1,
-            has_attached_client: false,
-            active_pane_id: None,
-            panes: vec![rttx_proto::proto::PaneInfo {
+            has_write_owner: false,
+            read_only_client_count: 0,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
+            current_client_role: rttx_proto::v3::RuntimeClientRole::Unattached as i32,
+            panes: vec![rttx_proto::v3::PaneInfo {
                 id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
                 title: "Shell".into(),
                 cwd: "/srv/project".into(),
                 cols: 120,
                 rows: 40,
                 exit_status: None,
-                reconstructed: true,
+                reconstructed: false,
             }],
-            policy: rttx_proto::proto::RuntimePolicy::Persistent as i32,
-            attached_client_count: 0,
+            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
             reconstructed: true,
-            revision: 7,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Unattached as i32,
-            has_write_owner: false,
-            read_only_client_count: 0,
+            runtime_revision: 7,
         }],
     });
 
@@ -2606,24 +2606,23 @@ fn managed_workspace_recovery_does_not_steal_visible_session_from_selected_row()
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
         workspace_id: recovered_session.uuid.clone(),
         runtime_id: runtime_id.to_string(),
-        snapshot: rttx_proto::proto::Snapshot {
+        snapshot: rttx_proto::v3::RuntimeSnapshot {
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-            panes: vec![rttx_proto::proto::PaneSnapshot {
+            runtime_revision: 7,
+            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                pane_output_seq: 0,
                 title: "Shell".into(),
                 cwd: "/srv/project".into(),
                 cols: 120,
                 rows: 40,
-                scrollback: bytes::Bytes::from_static(b"restored output"),
                 exit_status: None,
-                bracketed_paste_mode: false,
-                application_cursor_keys: false,
-                application_keypad: false,
-                mouse_tracking_mode: 0,
-                sgr_mouse_mode: false,
+                terminal_modes: None,
+                scrollback_tail: bytes::Bytes::from_static(b"restored output"),
+                total_scrollback_bytes: 15,
+                scrollback_complete: true,
             }],
-            revision: 7,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
         },
     });
     pump_events(50);
@@ -2891,7 +2890,7 @@ fn runtime_terminated_event_clears_runtime_id_but_keeps_workspace() {
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::RuntimeTerminated {
         workspace_id: session_state.uuid.clone(),
         runtime_id,
-        reason: rttx_proto::proto::RuntimeTerminationReason::Explicit,
+        reason: rttx_proto::v3::RuntimeTerminationReason::Explicit,
     });
 
     let state = window.imp().state.borrow();
@@ -2942,7 +2941,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::RuntimeTerminated {
         workspace_id: session_state.uuid.clone(),
         runtime_id,
-        reason: rttx_proto::proto::RuntimeTerminationReason::Explicit,
+        reason: rttx_proto::v3::RuntimeTerminationReason::Explicit,
     });
     window.save_state();
 
@@ -3186,24 +3185,23 @@ fn retry_workspace_connection_sets_connecting_and_rebuilds_on_open() {
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
-        snapshot: rttx_proto::proto::Snapshot {
+        snapshot: rttx_proto::v3::RuntimeSnapshot {
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-            panes: vec![rttx_proto::proto::PaneSnapshot {
+            runtime_revision: 5,
+            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                pane_output_seq: 0,
                 title: "shell".into(),
                 cwd: "/home/user".into(),
                 cols: 80,
                 rows: 24,
-                scrollback: bytes::Bytes::from_static(b"reconnected"),
                 exit_status: None,
-                bracketed_paste_mode: false,
-                application_cursor_keys: false,
-                application_keypad: false,
-                mouse_tracking_mode: 0,
-                sgr_mouse_mode: false,
+                terminal_modes: None,
+                scrollback_tail: bytes::Bytes::from_static(b"reconnected"),
+                total_scrollback_bytes: 11,
+                scrollback_complete: true,
             }],
-            revision: 5,
-            current_client_role: rttx_proto::proto::RuntimeClientRole::Writer as i32,
         },
     });
     pump_events(50);
@@ -3305,13 +3303,14 @@ fn cwd_changed_updates_layout_node() {
     }
 
     // Dispatch a CwdChanged message.
-    let msg = rttx_proto::proto::ServerMessage {
-        msg: Some(rttx_proto::proto::server_message::Msg::CwdChanged(
-            rttx_proto::proto::CwdChanged {
+    let msg = rttx_proto::v3::ServerEnvelope {
+        request_id: 0,
+        payload: Some(rttx_proto::v3::server_envelope::Payload::CwdChanged(
+            rttx_proto::v3::CwdChanged {
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
                 pane_id: rttx_proto::uuid_to_bytes(runtime_pane_id),
                 cwd: "/tmp/updated".into(),
-                revision: 1,
+                runtime_revision: 1,
             },
         )),
     };
@@ -3375,13 +3374,14 @@ fn managed_pane_exit_marks_visible_pane_exited() {
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
 
-    let msg = rttx_proto::proto::ServerMessage {
-        msg: Some(rttx_proto::proto::server_message::Msg::PaneExited(
-            rttx_proto::proto::PaneExited {
+    let msg = rttx_proto::v3::ServerEnvelope {
+        request_id: 0,
+        payload: Some(rttx_proto::v3::server_envelope::Payload::PaneExited(
+            rttx_proto::v3::PaneExited {
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
                 pane_id: rttx_proto::uuid_to_bytes(runtime_pane_id),
                 status: 0,
-                revision: 2,
+                runtime_revision: 2,
             },
         )),
     };
@@ -5838,14 +5838,12 @@ fn restore_managed_snapshot_feeds_scrollback_and_cwd_to_pane() {
         layout_terminal_uuid: layout_uuid.to_string(),
         title: "vim main.rs".to_string(),
         cwd: "/home/user/project".to_string(),
-        scrollback: bytes::Bytes::from_static(b"$ cargo build\r\nCompiling rttx\r\n"),
+        pane_output_seq: 0,
+        scrollback_tail: bytes::Bytes::from_static(b"$ cargo build\r\nCompiling rttx\r\n"),
+        scrollback_complete: true,
         cols: 120,
         rows: 40,
-        bracketed_paste_mode: true,
-        application_cursor_keys: false,
-        application_keypad: false,
-        mouse_tracking_mode: 0,
-        sgr_mouse_mode: false,
+        terminal_modes: None,
     };
     window.restore_managed_snapshot(&restore);
 
@@ -5889,14 +5887,12 @@ fn restore_managed_snapshot_skips_missing_pane() {
         layout_terminal_uuid: "nonexistent-pane".to_string(),
         title: String::new(),
         cwd: "/tmp".to_string(),
-        scrollback: bytes::Bytes::new(),
+        pane_output_seq: 0,
+        scrollback_tail: bytes::Bytes::new(),
+        scrollback_complete: true,
         cols: 80,
         rows: 24,
-        bracketed_paste_mode: false,
-        application_cursor_keys: false,
-        application_keypad: false,
-        mouse_tracking_mode: 0,
-        sgr_mouse_mode: false,
+        terminal_modes: None,
     };
     window.restore_managed_snapshot(&restore);
 
@@ -5937,14 +5933,12 @@ fn restore_managed_snapshot_sets_daemon_title_when_no_custom_title() {
         layout_terminal_uuid: layout_uuid.to_string(),
         title: "daemon-reported-title".to_string(),
         cwd: "/tmp".to_string(),
-        scrollback: bytes::Bytes::new(),
+        pane_output_seq: 0,
+        scrollback_tail: bytes::Bytes::new(),
+        scrollback_complete: true,
         cols: 80,
         rows: 24,
-        bracketed_paste_mode: false,
-        application_cursor_keys: false,
-        application_keypad: false,
-        mouse_tracking_mode: 0,
-        sgr_mouse_mode: false,
+        terminal_modes: None,
     };
     window.restore_managed_snapshot(&restore);
 
@@ -6139,14 +6133,12 @@ fn apply_transition_snapshot_restore_feeds_pane_data() {
             layout_terminal_uuid: layout_uuid.to_string(),
             title: "htop".to_string(),
             cwd: "/var/log".to_string(),
-            scrollback: bytes::Bytes::from_static(b"log output\r\n"),
+            pane_output_seq: 0,
+            scrollback_tail: bytes::Bytes::from_static(b"log output\r\n"),
+            scrollback_complete: true,
             cols: 80,
             rows: 24,
-            bracketed_paste_mode: false,
-            application_cursor_keys: false,
-            application_keypad: false,
-            mouse_tracking_mode: 0,
-            sgr_mouse_mode: false,
+            terminal_modes: None,
         }],
         connected_layout_terminals: vec![layout_uuid.to_string()],
         ..Default::default()
