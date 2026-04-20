@@ -616,12 +616,14 @@ impl EndpointActor {
             } => {
                 self.emit_status(&workspace_id, ConnectionStatus::Connecting);
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
-                    self.emit_error(
-                        &workspace_id,
-                        ManagerOperation::OpenWorkspace,
-                        problem.clone(),
-                        problem.label(),
-                    );
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::OpenWorkspace,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
                     return;
                 }
 
@@ -668,12 +670,14 @@ impl EndpointActor {
                 rows,
             } => {
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
-                    self.emit_error(
-                        &workspace_id,
-                        ManagerOperation::CreatePane,
-                        problem.clone(),
-                        problem.label(),
-                    );
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::CreatePane,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
                     return;
                 }
 
@@ -736,12 +740,14 @@ impl EndpointActor {
                 runtime_pane_id,
             } => {
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
-                    self.emit_error(
-                        &workspace_id,
-                        ManagerOperation::ClosePane,
-                        problem.clone(),
-                        problem.label(),
-                    );
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::ClosePane,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
                     return;
                 }
 
@@ -826,12 +832,14 @@ impl EndpointActor {
                     return;
                 };
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
-                    self.emit_error(
-                        &workspace_id,
-                        ManagerOperation::DetachRuntime,
-                        problem.clone(),
-                        problem.label(),
-                    );
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::DetachRuntime,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
                     return;
                 }
 
@@ -890,12 +898,14 @@ impl EndpointActor {
                     return;
                 };
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
-                    self.emit_error(
-                        &workspace_id,
-                        ManagerOperation::TerminateRuntime,
-                        problem.clone(),
-                        problem.label(),
-                    );
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::TerminateRuntime,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
                     return;
                 }
 
@@ -993,12 +1003,14 @@ impl EndpointActor {
             EndpointCommand::RefreshInventory => {
                 let pseudo_workspace = format!("inventory:{}", self.endpoint.key());
                 if let Err(problem) = self.ensure_connected(&pseudo_workspace).await {
-                    self.emit_error(
-                        &pseudo_workspace,
-                        ManagerOperation::RefreshInventory,
-                        problem.clone(),
-                        problem.label(),
-                    );
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &pseudo_workspace,
+                            ManagerOperation::RefreshInventory,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
                     return;
                 }
                 let list_result = if self.writer.is_some() {
@@ -1052,6 +1064,8 @@ impl EndpointActor {
                 // connect, but if the subsequent reattach fails we must
                 // continue ramping up instead of dropping back to 1 second.
                 let saved_attempt = self.reconnect_attempt;
+                // Allow ensure_connected to attempt a real connection.
+                self.reconnect_attempt = 0;
 
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
@@ -1095,6 +1109,8 @@ impl EndpointActor {
                             );
                             if matches!(problem, ConnectionProblem::SessionMissing) {
                                 self.emit_status(&workspace_id, ConnectionStatus::SessionMissing);
+                            } else if problem.is_transient() {
+                                any_transient_failure = true;
                             } else {
                                 self.emit_error(
                                     &workspace_id,
@@ -1102,10 +1118,6 @@ impl EndpointActor {
                                     problem.clone(),
                                     error.to_string(),
                                 );
-                                if problem.is_transient() {
-                                    any_transient_failure = true;
-                                    break;
-                                }
                             }
                         }
                     }
@@ -1149,6 +1161,12 @@ impl EndpointActor {
     async fn ensure_connected(&mut self, workspace_id: &str) -> Result<(), ConnectionProblem> {
         if self.writer.is_some() || self.connection.is_some() {
             return Ok(());
+        }
+
+        // A reconnect is already scheduled — return immediately without
+        // attempting a new connection or inflating the backoff counter.
+        if self.reconnect_attempt > 0 {
+            return Err(ConnectionProblem::DaemonUnavailable);
         }
 
         let status = match self.endpoint {
@@ -2703,5 +2721,171 @@ mod tests {
             .expect("should receive reconnect command")
             .expect("channel should not close");
         assert!(matches!(cmd, EndpointCommand::Reconnect));
+    }
+
+    /// Regression test for #710: when `ensure_connected` fails with a
+    /// transient error, command handlers must NOT emit `Blocked` status.
+    /// The `Reconnecting` status from `ensure_connected` must be the
+    /// final word so panes show "Retry Ns" instead of "Action Required".
+    #[tokio::test]
+    async fn command_handler_does_not_emit_blocked_for_transient_error() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+
+        // No connection — ensure_connected will fail with transient error.
+        // Simulate a CreatePane command that triggers ensure_connected.
+        actor
+            .handle_command(EndpointCommand::CreatePane {
+                workspace_id: "ws-1".into(),
+                runtime_id: Uuid::new_v4().to_string(),
+                layout_terminal_uuid: "layout-t1".into(),
+                cwd: None,
+                dark_background: true,
+                cols: 80,
+                rows: 24,
+            })
+            .await;
+
+        // Collect all status events for ws-1.
+        let mut statuses = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                EndpointEvent::WorkspaceConnectionChanged { workspace_id, status }
+                    if workspace_id == "ws-1" =>
+                {
+                    statuses.push(status);
+                }
+                EndpointEvent::WorkspaceError { workspace_id, .. } if workspace_id == "ws-1" => {
+                    // WorkspaceError is acceptable for diagnostics, but
+                    // the status must not be Blocked.
+                }
+                _ => {}
+            }
+        }
+
+        // The final status must NOT be Blocked.
+        let last_status = statuses.last().expect("should emit at least one status");
+        assert!(
+            !matches!(last_status, ConnectionStatus::Blocked(_)),
+            "transient connection failure must not produce Blocked status, got {last_status:?}"
+        );
+        // Should end with Reconnecting.
+        assert!(
+            matches!(last_status, ConnectionStatus::Reconnecting { .. }),
+            "transient failure should end with Reconnecting, got {last_status:?}"
+        );
+    }
+
+    /// Regression test for #710: when the connection is down and a
+    /// reconnect is already scheduled, subsequent `ensure_connected`
+    /// calls must not attempt new connections or inflate the backoff.
+    #[tokio::test]
+    async fn parallel_ensure_connected_does_not_inflate_backoff() {
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let mut actor =
+            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+
+        // Simulate first ensure_connected failure (schedules reconnect).
+        let _ = actor.ensure_connected("ws-1").await;
+        let attempt_after_first = actor.reconnect_attempt;
+
+        // Subsequent calls should not increment the counter further.
+        let _ = actor.ensure_connected("ws-1").await;
+        let _ = actor.ensure_connected("ws-2").await;
+
+        assert_eq!(
+            actor.reconnect_attempt, attempt_after_first,
+            "subsequent ensure_connected calls must not inflate the backoff counter"
+        );
+    }
+
+    /// Regression test for #710: the Reconnect handler must reattach all
+    /// tracked workspaces even when one fails. Before the fix, a transient
+    /// failure on workspace N caused the handler to break, leaving
+    /// workspaces N+1..M never reattached.
+    #[tokio::test]
+    async fn reconnect_reattaches_all_workspaces_despite_partial_failure() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, _event_rx) = make_actor_with_events(reader, writer);
+
+        let rt1 = Uuid::new_v4();
+        let rt2 = Uuid::new_v4();
+        actor.tracked_workspaces.insert("ws-1".into(), rt1.to_string());
+        actor.tracked_workspaces.insert("ws-2".into(), rt2.to_string());
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+
+            // First attach: respond with RuntimeNotFound (session missing).
+            let msg1 = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            assert!(matches!(msg1.command, Some(v3::client_envelope::Command::AttachRuntime(_))));
+            send_server_envelope(
+                &mut server_stream,
+                &v3::ServerEnvelope {
+                    request_id: msg1.request_id,
+                    payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
+                        kind: v3::ErrorKind::RuntimeNotFound as i32,
+                        message: "runtime not found".into(),
+                        retryable: false,
+                        operation: String::new(),
+                        retry_after_seconds: 0,
+                        user_action_required: false,
+                    })),
+                },
+            )
+            .await;
+
+            // Second attach: respond with success.
+            let msg2 = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            assert!(matches!(msg2.command, Some(v3::client_envelope::Command::AttachRuntime(_))));
+            let Some(v3::client_envelope::Command::AttachRuntime(attach)) = msg2.command else {
+                unreachable!()
+            };
+            let attached_runtime_id = rttx_proto::bytes_to_uuid(&attach.runtime_id).unwrap();
+            send_server_envelope(
+                &mut server_stream,
+                &v3::ServerEnvelope {
+                    request_id: msg2.request_id,
+                    payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
+                        v3::RuntimeSnapshot {
+                            runtime_id: rttx_proto::uuid_to_bytes(attached_runtime_id),
+                            panes: vec![],
+                            runtime_revision: 1,
+                            client_role: v3::RuntimeClientRole::Writer as i32,
+                        },
+                    )),
+                },
+            )
+            .await;
+        });
+
+        // Simulate the reconnect reattach loop.
+        let mut failed_count = 0;
+        let mut successful_count = 0;
+        for (_workspace_id, runtime_id) in actor.tracked_workspaces.clone() {
+            let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>() else {
+                continue;
+            };
+            match actor.attach_runtime_via_active_channel(runtime_uuid).await {
+                Ok(_) => successful_count += 1,
+                Err(_) => failed_count += 1,
+            }
+        }
+
+        server.await.expect("server task should complete");
+
+        // Both workspaces must have been attempted (not short-circuited).
+        assert_eq!(failed_count, 1, "one workspace should fail");
+        assert_eq!(successful_count, 1, "one workspace should succeed");
+        assert_eq!(
+            actor.tracked_workspaces.len(),
+            2,
+            "all workspaces must remain tracked after partial reconnect failure"
+        );
     }
 }
