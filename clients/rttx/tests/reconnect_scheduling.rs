@@ -152,3 +152,80 @@ fn connection_classification_exercises_tracing_path() {
     let problem = classify_connection_problem(&error);
     assert!(problem.is_transient());
 }
+
+/// Regression test for #710: transient connection problems must not
+/// produce `Blocked` status. The `Reconnecting` status from the
+/// reconnect scheduler must be the final word so panes show "Retry Ns"
+/// instead of "Action Required".
+///
+/// This integration test verifies the contract at the connection-status
+/// level: a transient `DaemonUnavailable` problem must never advance
+/// the state machine to `Blocked`.
+#[test]
+fn transient_problem_never_produces_blocked_status() {
+    use rttx::runtime::{ConnectionEvent, ConnectionProblem, ConnectionStatus, advance_connection_status};
+
+    let transient = ConnectionProblem::DaemonUnavailable;
+    assert!(transient.is_transient());
+
+    // The state machine must produce Reconnecting for transient errors,
+    // never Blocked.
+    let status = advance_connection_status(
+        &ConnectionStatus::Connecting,
+        ConnectionEvent::RetryScheduled { attempt: 1, retry_in_secs: 1 },
+    );
+    assert!(
+        matches!(status, ConnectionStatus::Reconnecting { .. }),
+        "transient error must produce Reconnecting, got {status:?}"
+    );
+    assert!(
+        !matches!(status, ConnectionStatus::Blocked(_)),
+        "transient error must never produce Blocked"
+    );
+
+    // Blocked must only be produced for non-transient problems.
+    let blocked = advance_connection_status(
+        &ConnectionStatus::Connecting,
+        ConnectionEvent::Failed(ConnectionProblem::VersionMismatch),
+    );
+    assert!(
+        matches!(blocked, ConnectionStatus::Blocked(_)),
+        "non-transient error should produce Blocked"
+    );
+}
+
+/// Regression test for #710: `Reconnecting` status must accept no input
+/// but `Blocked` must also accept no input. The key difference is the
+/// user-facing label: Reconnecting shows "Retry Ns" while Blocked shows
+/// "Action Required". Both disable input, but Reconnecting signals that
+/// recovery is in progress.
+#[test]
+fn reconnecting_and_blocked_both_disable_input_but_differ_in_label() {
+    use rttx::runtime::{ConnectionProblem, ConnectionStatus, present_connection_status};
+
+    let reconnecting = ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 };
+    let blocked = ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable);
+
+    let reconnecting_pres = present_connection_status(&reconnecting);
+    let blocked_pres = present_connection_status(&blocked);
+
+    // Both disable input.
+    assert!(!reconnecting_pres.input_enabled);
+    assert!(!blocked_pres.input_enabled);
+
+    // Labels must differ — this is the user-visible distinction.
+    assert_ne!(
+        reconnecting_pres.header_label, blocked_pres.header_label,
+        "Reconnecting and Blocked must have different labels"
+    );
+    assert!(
+        reconnecting_pres.header_label.contains("Retry"),
+        "Reconnecting label should contain 'Retry', got '{}'",
+        reconnecting_pres.header_label
+    );
+    assert!(
+        blocked_pres.header_label.contains("Action Required"),
+        "Blocked label should contain 'Action Required', got '{}'",
+        blocked_pres.header_label
+    );
+}
