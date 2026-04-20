@@ -12,4 +12,5 @@ pub mod runtime;
 pub mod screen;
 pub mod serialization;
 pub mod server;
+pub mod state;
 pub mod single_instance;
