@@ -16,10 +16,7 @@ fn trim_trailing_whitespace(text: &str) -> String {
 /// Copy the terminal selection to the system clipboard, trimming trailing
 /// whitespace per line when the preference is enabled.
 pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
-    let prefs = crate::store::default_store()
-        .load_preferences()
-        .into_value()
-        .unwrap_or_default();
+    let prefs = crate::store::default_store().load_preferences().into_value().unwrap_or_default();
     if !prefs.trim_trailing_whitespace_on_copy {
         vte.copy_clipboard_format(vte4::Format::Text);
         return;

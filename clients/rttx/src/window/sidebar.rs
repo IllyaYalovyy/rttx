@@ -34,10 +34,8 @@ impl Window {
 
     /// Rebuild the host selector dropdown model from saved hosts + workspace endpoints.
     pub(super) fn rebuild_host_selector_model(&self, select_key: Option<&str>) {
-        let saved_hosts = crate::store::default_store()
-            .load_hosts()
-            .into_value()
-            .unwrap_or_default();
+        let saved_hosts =
+            crate::store::default_store().load_hosts().into_value().unwrap_or_default();
         let state = self.imp().state.borrow();
 
         let mut keys: Vec<String> = Vec::new();
@@ -85,10 +83,8 @@ impl Window {
 
         let query = imp.sidebar_search_entry.text();
         let saved = crate::store::default_store().load_places();
-        let saved_hosts = crate::store::default_store()
-            .load_hosts()
-            .into_value()
-            .unwrap_or_default();
+        let saved_hosts =
+            crate::store::default_store().load_hosts().into_value().unwrap_or_default();
         let selected_key = self.selected_host_key();
 
         let any_shown = selected_key.as_ref().map_or_else(
@@ -223,10 +219,8 @@ impl Window {
 
         let query = imp.sidebar_search_entry.text();
         let all_commands = crate::store::default_store().load_commands();
-        let saved_hosts = crate::store::default_store()
-            .load_hosts()
-            .into_value()
-            .unwrap_or_default();
+        let saved_hosts =
+            crate::store::default_store().load_hosts().into_value().unwrap_or_default();
         let selected_key = self.selected_host_key();
 
         let any_shown = selected_key.as_ref().map_or_else(
@@ -384,10 +378,7 @@ impl Window {
             }
         }
         let store = crate::store::default_store();
-        let (places, commands) = store
-            .load_library()
-            .into_value()
-            .unwrap_or_default();
+        let (places, commands) = store.load_library().into_value().unwrap_or_default();
         for p in places {
             for tag in &p.host_tags {
                 if !keys.contains(tag) {

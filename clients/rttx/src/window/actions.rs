@@ -6,10 +6,8 @@ type ActionCallback = fn(&Window);
 
 impl Window {
     pub(super) fn setup_actions(&self, app: &adw::Application) {
-        let prefs = crate::store::default_store()
-            .load_preferences()
-            .into_value()
-            .unwrap_or_default();
+        let prefs =
+            crate::store::default_store().load_preferences().into_value().unwrap_or_default();
         let overrides = &prefs.keyboard_shortcuts;
 
         let actions: &[(&str, ActionCallback)] = &[
@@ -361,10 +359,8 @@ impl Window {
         let Some(uuid) = self.focused_terminal_uuid() else { return };
         let Some(terminal) = self.terminal_handle(&uuid) else { return };
 
-        let prefs = crate::store::default_store()
-            .load_preferences()
-            .into_value()
-            .unwrap_or_default();
+        let prefs =
+            crate::store::default_store().load_preferences().into_value().unwrap_or_default();
         if !prefs.paste_guard {
             Self::execute_paste(&terminal, self, &uuid);
             return;
