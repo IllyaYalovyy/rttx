@@ -142,3 +142,92 @@ const fn default_reconnect_delay_secs() -> u32 {
 const fn default_paste_guard_threshold() -> usize {
     200
 }
+
+// ── Conversions to/from the existing domain type ────────────
+
+impl From<PreferencesV1> for crate::preferences::Preferences {
+    fn from(v1: PreferencesV1) -> Self {
+        Self {
+            font: v1.font,
+            color_scheme: "default".into(),
+            terminal_theme_mode: match v1.terminal_theme_mode {
+                TerminalThemeMode::System => crate::preferences::TerminalThemeMode::System,
+                TerminalThemeMode::Light => crate::preferences::TerminalThemeMode::Light,
+                TerminalThemeMode::Dark => crate::preferences::TerminalThemeMode::Dark,
+            },
+            light_color_scheme: v1.light_color_scheme,
+            dark_color_scheme: v1.dark_color_scheme,
+            scrollback_lines: v1.scrollback_lines,
+            show_headerbar: v1.show_headerbar,
+            scroll_on_keystroke: v1.scroll_on_keystroke,
+            scroll_on_output: v1.scroll_on_output,
+            audible_bell: v1.audible_bell,
+            visual_bell: v1.visual_bell,
+            smart_clipboard: v1.smart_clipboard,
+            trim_trailing_whitespace_on_copy: v1.trim_trailing_whitespace_on_copy,
+            default_session_folder: match v1.default_session_folder {
+                DefaultSessionFolder::Home => crate::preferences::DefaultSessionFolder::Home,
+                DefaultSessionFolder::CurrentSession => {
+                    crate::preferences::DefaultSessionFolder::CurrentSession
+                }
+                DefaultSessionFolder::Custom(s) => {
+                    crate::preferences::DefaultSessionFolder::Custom(s)
+                }
+            },
+            pane_navigation_keys: match v1.pane_navigation_keys {
+                PaneNavigationKeys::AltArrow => crate::preferences::PaneNavigationKeys::AltArrow,
+                PaneNavigationKeys::CtrlShiftArrow => {
+                    crate::preferences::PaneNavigationKeys::CtrlShiftArrow
+                }
+            },
+            keyboard_shortcuts: v1.keyboard_shortcuts,
+            auto_start_daemon: v1.auto_start_daemon,
+            reconnect_delay_secs: v1.reconnect_delay_secs,
+            paste_guard: v1.paste_guard,
+            paste_guard_threshold: v1.paste_guard_threshold,
+        }
+    }
+}
+
+impl From<&crate::preferences::Preferences> for PreferencesV1 {
+    fn from(prefs: &crate::preferences::Preferences) -> Self {
+        Self {
+            font: prefs.font.clone(),
+            terminal_theme_mode: match prefs.terminal_theme_mode {
+                crate::preferences::TerminalThemeMode::System => TerminalThemeMode::System,
+                crate::preferences::TerminalThemeMode::Light => TerminalThemeMode::Light,
+                crate::preferences::TerminalThemeMode::Dark => TerminalThemeMode::Dark,
+            },
+            light_color_scheme: prefs.light_color_scheme.clone(),
+            dark_color_scheme: prefs.dark_color_scheme.clone(),
+            scrollback_lines: prefs.scrollback_lines,
+            show_headerbar: prefs.show_headerbar,
+            scroll_on_keystroke: prefs.scroll_on_keystroke,
+            scroll_on_output: prefs.scroll_on_output,
+            audible_bell: prefs.audible_bell,
+            visual_bell: prefs.visual_bell,
+            smart_clipboard: prefs.smart_clipboard,
+            trim_trailing_whitespace_on_copy: prefs.trim_trailing_whitespace_on_copy,
+            default_session_folder: match &prefs.default_session_folder {
+                crate::preferences::DefaultSessionFolder::Home => DefaultSessionFolder::Home,
+                crate::preferences::DefaultSessionFolder::CurrentSession => {
+                    DefaultSessionFolder::CurrentSession
+                }
+                crate::preferences::DefaultSessionFolder::Custom(s) => {
+                    DefaultSessionFolder::Custom(s.clone())
+                }
+            },
+            pane_navigation_keys: match prefs.pane_navigation_keys {
+                crate::preferences::PaneNavigationKeys::AltArrow => PaneNavigationKeys::AltArrow,
+                crate::preferences::PaneNavigationKeys::CtrlShiftArrow => {
+                    PaneNavigationKeys::CtrlShiftArrow
+                }
+            },
+            keyboard_shortcuts: prefs.keyboard_shortcuts.clone(),
+            auto_start_daemon: prefs.auto_start_daemon,
+            reconnect_delay_secs: prefs.reconnect_delay_secs,
+            paste_guard: prefs.paste_guard,
+            paste_guard_threshold: prefs.paste_guard_threshold,
+        }
+    }
+}
