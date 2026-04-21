@@ -257,6 +257,16 @@ impl Server {
                     }
                 }
             }
+
+            // Sweep orphaned runtime directories (RFC-022 §7).
+            let known_ids: std::collections::HashSet<Uuid> = result
+                .runtimes
+                .iter()
+                .map(|rf| rf.spec.id)
+                .chain(result.failed_ids.iter().copied())
+                .collect();
+            crate::state::cleanup::sweep_orphans(&state_dir, &known_ids);
+
             if total > 0 || result.failed_ids.is_empty() {
                 return;
             }
@@ -530,6 +540,10 @@ impl Server {
                 let _ = kill_tx.send(());
             }
         }
+
+        // Remove the runtime's on-disk directory in a background thread.
+        let state_dir = self.os.state_dir();
+        crate::state::cleanup::remove_runtime_dir_background(&state_dir, runtime_id);
 
         let msg = ClientMsg::V2(protocol::runtime_terminated(runtime_id, final_revision, reason));
         self.broadcast_to_clients(attached_client_ids, exclude_client_id, &msg);
