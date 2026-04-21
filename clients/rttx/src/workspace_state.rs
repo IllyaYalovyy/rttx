@@ -1910,4 +1910,23 @@ mod tests {
             "live dismissed ID should be retained"
         );
     }
+
+    #[test]
+    fn store_preferences_conversion_preserves_all_fields() {
+        use crate::store::models::preferences::PreferencesV1;
+
+        let prefs = crate::preferences::Preferences {
+            font: "Hack 11".into(),
+            scrollback_lines: 5000,
+            smart_clipboard: true,
+            paste_guard_threshold: 512,
+            ..Default::default()
+        };
+        let v1: PreferencesV1 = (&prefs).into();
+        let round_tripped: crate::preferences::Preferences = v1.into();
+        assert_eq!(round_tripped.font, "Hack 11");
+        assert_eq!(round_tripped.scrollback_lines, 5000);
+        assert!(round_tripped.smart_clipboard);
+        assert_eq!(round_tripped.paste_guard_threshold, 512);
+    }
 }
