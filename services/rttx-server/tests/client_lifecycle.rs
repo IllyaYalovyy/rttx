@@ -46,6 +46,7 @@ async fn reconnect_restores_scrollback() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;
@@ -222,6 +223,7 @@ async fn restart_preserves_runtime_count_and_scrollback() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;

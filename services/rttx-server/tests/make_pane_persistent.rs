@@ -55,6 +55,7 @@ async fn make_pane_persistent_flow() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     })
     .await;

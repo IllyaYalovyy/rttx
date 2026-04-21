@@ -934,6 +934,7 @@ async fn create_pane_with_invalid_uuid_returns_invalid_parameter() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
@@ -968,6 +969,7 @@ async fn create_pane_without_write_access_returns_ownership_error() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     let resp = Server::handle_message(&server, reader, msg).await.unwrap();
@@ -991,6 +993,7 @@ async fn create_pane_nonexistent_runtime_returns_runtime_not_found() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();

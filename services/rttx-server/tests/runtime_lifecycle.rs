@@ -145,6 +145,7 @@ async fn create_and_close_pane() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&create_pane).await;

@@ -151,6 +151,7 @@ async fn create_pane_in_nonexistent_session_returns_error() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&msg).await;
@@ -422,6 +423,7 @@ async fn attach_and_create_pane(client: &mut TestClient, runtime_id: &[u8]) -> V
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&msg).await;

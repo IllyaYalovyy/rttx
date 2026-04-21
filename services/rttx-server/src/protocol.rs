@@ -105,6 +105,7 @@ fn pane_info(pane: &Pane) -> proto::PaneInfo {
         rows: u32::from(pane.rows),
         exit_status: pane.exit_status,
         reconstructed: pane.reconstructed,
+        no_persist: pane.no_persist,
     }
 }
 
@@ -452,6 +453,7 @@ fn v3_runtime_info_for(client_id: Uuid, rt: &Runtime, has_inventory_v2: bool) ->
                         rows: u32::from(pane.rows),
                         exit_status: pane.exit_status,
                         reconstructed: pane.reconstructed,
+                        no_persist: pane.no_persist,
                     },
                 )
             })

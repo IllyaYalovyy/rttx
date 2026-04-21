@@ -113,6 +113,9 @@ pub struct PaneSpecV1 {
     pub cols: u16,
     /// Terminal rows.
     pub rows: u16,
+    /// When true, scrollback and history are not flushed to disk (RFC-022 §9).
+    #[serde(default)]
+    pub no_persist: bool,
 }
 
 /// Per-runtime command history entry.
@@ -164,6 +167,10 @@ pub struct ScreenSnapshotV1 {
     /// Bounded by the visible viewport size, not the full scrollback.
     /// Future iterations may replace this with a cell-grid model.
     pub screen_bytes: Vec<u8>,
+    /// When true, this snapshot belongs to a no-persist pane and must be
+    /// excluded from export or sync operations (RFC-022 §9).
+    #[serde(default)]
+    pub confidential: bool,
 }
 
 /// Terminal mode flags captured at snapshot time.
@@ -207,6 +214,7 @@ mod tests {
             exit_status: None,
             cols: 80,
             rows: 24,
+            no_persist: false,
         }
     }
 
@@ -278,6 +286,7 @@ mod tests {
                 focus_reporting: false,
             },
             screen_bytes: b"hello world\r\n".to_vec(),
+            confidential: false,
         }
     }
 
@@ -418,6 +427,7 @@ mod tests {
             exit_status: None,
             cols: 120,
             rows: 40,
+            no_persist: false,
         };
         let json = serde_json::to_string_pretty(&pane).unwrap();
         let recovered: PaneSpecV1 = serde_json::from_str(&json).unwrap();
@@ -448,6 +458,7 @@ mod tests {
                 focus_reporting: false,
             },
             screen_bytes: vec![],
+            confidential: false,
         };
         let json = serde_json::to_string_pretty(&snap).unwrap();
         let recovered: ScreenSnapshotV1 = serde_json::from_str(&json).unwrap();
@@ -476,9 +487,53 @@ mod tests {
                 focus_reporting: true,
             },
             screen_bytes: vec![0x1b, b'[', b'H'],
+            confidential: false,
         };
         let json = serde_json::to_string_pretty(&snap).unwrap();
         let recovered: ScreenSnapshotV1 = serde_json::from_str(&json).unwrap();
         assert_eq!(snap.modes, recovered.modes);
+    }
+
+    // ── Backward compatibility: no_persist / confidential default ────
+
+    #[test]
+    fn pane_spec_without_no_persist_field_defaults_to_false() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "cwd": "/tmp",
+            "title": "bash",
+            "exit_status": null,
+            "cols": 80,
+            "rows": 24
+        }"#;
+        let recovered: PaneSpecV1 = serde_json::from_str(json).unwrap();
+        assert!(!recovered.no_persist);
+    }
+
+    #[test]
+    fn pane_spec_with_no_persist_true_round_trips() {
+        let mut pane = sample_pane_spec();
+        pane.no_persist = true;
+        let json = serde_json::to_string_pretty(&pane).unwrap();
+        let recovered: PaneSpecV1 = serde_json::from_str(&json).unwrap();
+        assert!(recovered.no_persist);
+    }
+
+    #[test]
+    fn screen_snapshot_without_confidential_field_defaults_to_false() {
+        let snap = sample_screen_snapshot();
+        let mut val: serde_json::Value = serde_json::to_value(&snap).unwrap();
+        val.as_object_mut().unwrap().remove("confidential");
+        let recovered: ScreenSnapshotV1 = serde_json::from_value(val).unwrap();
+        assert!(!recovered.confidential);
+    }
+
+    #[test]
+    fn screen_snapshot_with_confidential_true_round_trips() {
+        let mut snap = sample_screen_snapshot();
+        snap.confidential = true;
+        let json = serde_json::to_string_pretty(&snap).unwrap();
+        let recovered: ScreenSnapshotV1 = serde_json::from_str(&json).unwrap();
+        assert!(recovered.confidential);
     }
 }

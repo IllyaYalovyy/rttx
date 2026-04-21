@@ -25,6 +25,7 @@ fn test_pane(title: &str, cwd: &str, exit_status: Option<i32>) -> v3::PaneInfo {
         rows: 24,
         exit_status,
         reconstructed: false,
+        no_persist: false,
     })
 }
 

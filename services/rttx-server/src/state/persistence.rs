@@ -226,6 +226,7 @@ mod tests {
                     exit_status: None,
                     cols: 80,
                     rows: 24,
+                    no_persist: false,
                 }],
                 active_pane_id: None,
                 command_history: vec![HistoryEntryV1 {
@@ -403,6 +404,7 @@ mod tests {
                 focus_reporting: false,
             },
             screen_bytes: b"hello world\r\n$ ".to_vec(),
+            confidential: false,
         }
     }
 

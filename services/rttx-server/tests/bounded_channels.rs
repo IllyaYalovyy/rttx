@@ -34,6 +34,7 @@ async fn slow_client_does_not_block_server() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     })
     .await;

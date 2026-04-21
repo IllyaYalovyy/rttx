@@ -52,6 +52,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;
@@ -181,6 +182,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
                     dark_background: None,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             })
             .await;
@@ -275,6 +277,7 @@ async fn failed_close_pane_returns_error_without_revision_change() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;

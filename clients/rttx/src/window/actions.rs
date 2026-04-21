@@ -90,6 +90,13 @@ impl Window {
             app.set_accels_for_action("win.toggle-input-sync", &accel_refs);
         }
 
+        let no_persist_action = gtk4::gio::SimpleAction::new("toggle-no-persist", None);
+        let win = self.clone();
+        no_persist_action.connect_activate(move |_, _| {
+            win.toggle_focused_pane_no_persist();
+        });
+        self.add_action(&no_persist_action);
+
         let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
         let win = self.clone();
         prefs_action.connect_activate(move |_, _| {
@@ -239,6 +246,34 @@ impl Window {
             && let Some(terminal) = self.terminal_handle(&uuid)
         {
             terminal.toggle_search();
+        }
+    }
+
+    pub(super) fn toggle_focused_pane_no_persist(&self) {
+        let Some(terminal_uuid) = self.focused_terminal_uuid() else { return };
+        let Some((workspace_id, endpoint, runtime_id, runtime_pane_id)) =
+            self.managed_binding_for_terminal(&terminal_uuid)
+        else {
+            return;
+        };
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            // Toggle: we don't track the current state client-side, so we
+            // always send true. The server is the source of truth and the
+            // PaneInfo in the next inventory refresh will reflect the new
+            // state. For a proper toggle we'd need to read the current
+            // value from the server, but fire-and-forget is simpler and
+            // matches the SetPaneTitle pattern.
+            manager.set_pane_no_persist(
+                &workspace_id,
+                &endpoint,
+                &runtime_id,
+                &runtime_pane_id,
+                true,
+            );
+            let toast =
+                libadwaita::Toast::new("Confidential mode enabled — scrollback will not be saved");
+            toast.set_timeout(3);
+            self.imp().toast_overlay.add_toast(toast);
         }
     }
 

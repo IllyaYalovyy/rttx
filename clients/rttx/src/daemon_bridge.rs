@@ -45,6 +45,7 @@ pub enum ManagerOperation {
     SendInput,
     ResizePane,
     RenameRuntime,
+    SetPaneNoPersist,
 }
 
 /// Event emitted back onto the GTK main loop from an endpoint actor.
@@ -114,6 +115,7 @@ enum EndpointCommand {
         dark_background: bool,
         cols: u32,
         rows: u32,
+        no_persist: bool,
     },
     ClosePane {
         workspace_id: String,
@@ -151,6 +153,12 @@ enum EndpointCommand {
         workspace_id: String,
         runtime_id: String,
         name: String,
+    },
+    SetPaneNoPersist {
+        workspace_id: String,
+        runtime_id: String,
+        runtime_pane_id: String,
+        no_persist: bool,
     },
     Shutdown,
 }
@@ -261,6 +269,7 @@ impl EndpointConnectionManager {
         cwd: Option<String>,
         dark_background: bool,
         initial_size: (u32, u32),
+        no_persist: bool,
     ) {
         let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::CreatePane {
             workspace_id: workspace_id.to_string(),
@@ -270,6 +279,7 @@ impl EndpointConnectionManager {
             dark_background,
             cols: initial_size.0,
             rows: initial_size.1,
+            no_persist,
         });
     }
 
@@ -366,6 +376,23 @@ impl EndpointConnectionManager {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             name: name.to_string(),
+        });
+    }
+
+    /// Toggle the `no_persist` flag on a pane.
+    pub fn set_pane_no_persist(
+        &self,
+        workspace_id: &str,
+        endpoint: &RuntimeEndpoint,
+        runtime_id: &str,
+        runtime_pane_id: &str,
+        no_persist: bool,
+    ) {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::SetPaneNoPersist {
+            workspace_id: workspace_id.to_string(),
+            runtime_id: runtime_id.to_string(),
+            runtime_pane_id: runtime_pane_id.to_string(),
+            no_persist,
         });
     }
 }
@@ -652,6 +679,7 @@ impl EndpointActor {
                             dark_background: true,
                             cols: 0,
                             rows: 0,
+                            no_persist: false,
                         });
                     } else {
                         self.emit_status(&workspace_id, ConnectionStatus::Connected);
@@ -668,6 +696,7 @@ impl EndpointActor {
                 dark_background,
                 cols,
                 rows,
+                no_persist,
             } => {
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
                     if !problem.is_transient() {
@@ -695,6 +724,7 @@ impl EndpointActor {
                     dark_background: Some(dark_background),
                     cols,
                     rows,
+                    no_persist: if no_persist { Some(true) } else { None },
                 });
                 match self.send_and_read(msg, false).await {
                     Ok(response) => match response.payload {
@@ -1148,6 +1178,43 @@ impl EndpointActor {
                         runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                         name,
                     })),
+                };
+                let _ = self.send_message(&env).await;
+            }
+            EndpointCommand::SetPaneNoPersist {
+                workspace_id,
+                runtime_id,
+                runtime_pane_id,
+                no_persist,
+            } => {
+                let Some(runtime_uuid) = parse_uuid(
+                    &workspace_id,
+                    ManagerOperation::SetPaneNoPersist,
+                    &runtime_id,
+                    &self.event_tx,
+                ) else {
+                    return;
+                };
+                let Some(pane_uuid) = parse_uuid(
+                    &workspace_id,
+                    ManagerOperation::SetPaneNoPersist,
+                    &runtime_pane_id,
+                    &self.event_tx,
+                ) else {
+                    return;
+                };
+                if self.ensure_connected(&workspace_id).await.is_err() {
+                    return;
+                }
+                let env = v3::ClientEnvelope {
+                    request_id: 0,
+                    command: Some(v3::client_envelope::Command::SetPaneNoPersist(
+                        v3::SetPaneNoPersist {
+                            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                            pane_id: rttx_proto::uuid_to_bytes(pane_uuid),
+                            no_persist,
+                        },
+                    )),
                 };
                 let _ = self.send_message(&env).await;
             }
@@ -2746,6 +2813,7 @@ mod tests {
                 dark_background: true,
                 cols: 80,
                 rows: 24,
+                no_persist: false,
             })
             .await;
 

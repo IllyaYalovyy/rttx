@@ -18,6 +18,7 @@ async fn create_pane_with_appearance(
                 dark_background,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;

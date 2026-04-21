@@ -639,6 +639,7 @@ mod tests {
             rows: 40,
             exit_status: None,
             reconstructed: true,
+            no_persist: false,
         }
     }
 

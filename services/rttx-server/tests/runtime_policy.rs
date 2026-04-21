@@ -158,6 +158,7 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
                     dark_background: None,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             })
             .await;

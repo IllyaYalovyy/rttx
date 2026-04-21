@@ -454,6 +454,16 @@ impl Runtime {
         Some(self.revision())
     }
 
+    /// Update a pane's `no_persist` flag and return the resulting runtime revision.
+    pub fn set_pane_no_persist(&mut self, pane_id: Uuid, no_persist: bool) -> Option<u64> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        if pane.no_persist != no_persist {
+            pane.no_persist = no_persist;
+            self.bump_revision();
+        }
+        Some(self.revision())
+    }
+
     /// Record a CWD change detected by `feed_output` and bump revision.
     pub fn set_pane_cwd(&mut self, pane_id: Uuid, _cwd: &str) -> Option<u64> {
         self.panes.get(&pane_id)?;
@@ -526,6 +536,7 @@ impl Runtime {
                     exit_status: p.exit_status,
                     cols: p.cols,
                     rows: p.rows,
+                    no_persist: p.no_persist,
                 }
             })
             .collect();
@@ -573,6 +584,7 @@ impl Runtime {
                 pane.title.clone_from(&ps.title);
                 pane.exit_status = ps.exit_status;
                 pane.reconstructed = true;
+                pane.no_persist = ps.no_persist;
                 (ps.id, pane)
             })
             .collect();
@@ -1033,5 +1045,53 @@ mod tests {
         runtime.set_pane_title(pane_id, "shell".into());
         runtime.rename("test".into());
         assert!(!runtime.is_dirty(), "no-op mutations should not dirty the runtime");
+    }
+
+    #[test]
+    fn set_pane_no_persist_toggles_flag_and_bumps_revision() {
+        let mut runtime = Runtime::new("test".into());
+        let pane_id = Uuid::new_v4();
+        runtime.add_pane(Pane::new(pane_id, 80, 24));
+        let rev_before = runtime.revision();
+
+        let rev = runtime.set_pane_no_persist(pane_id, true).unwrap();
+        assert!(rev > rev_before);
+        assert!(runtime.panes[&pane_id].no_persist);
+
+        // Setting same value is a no-op.
+        let rev2 = runtime.set_pane_no_persist(pane_id, true).unwrap();
+        assert_eq!(rev, rev2);
+    }
+
+    #[test]
+    fn set_pane_no_persist_returns_none_for_missing_pane() {
+        let mut runtime = Runtime::new("test".into());
+        assert!(runtime.set_pane_no_persist(Uuid::new_v4(), true).is_none());
+    }
+
+    #[test]
+    fn no_persist_pane_persisted_in_runtime_file() {
+        let mut runtime = Runtime::new("test".into());
+        let pane_id = Uuid::new_v4();
+        let mut pane = Pane::new(pane_id, 80, 24);
+        pane.no_persist = true;
+        runtime.add_pane(pane);
+
+        let rf = runtime.to_runtime_file();
+        let pane_spec = &rf.spec.panes[0];
+        assert!(pane_spec.no_persist);
+    }
+
+    #[test]
+    fn no_persist_restored_from_runtime_file() {
+        let mut runtime = Runtime::new("test".into());
+        let pane_id = Uuid::new_v4();
+        let mut pane = Pane::new(pane_id, 80, 24);
+        pane.no_persist = true;
+        runtime.add_pane(pane);
+
+        let rf = runtime.to_runtime_file();
+        let restored = Runtime::from_runtime_file(&rf);
+        assert!(restored.panes[&pane_id].no_persist);
     }
 }

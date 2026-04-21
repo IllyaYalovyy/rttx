@@ -249,6 +249,7 @@ pub async fn create_pane_with_cwd(
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;

@@ -188,6 +188,7 @@ mod tests {
                 focus_reporting: false,
             },
             screen_bytes: vec![],
+            confidential: false,
         };
         serde_json::to_string_pretty(&snap).unwrap()
     }

@@ -28,6 +28,7 @@ pub struct PaneInfoParams {
     pub rows: u32,
     pub exit_status: Option<i32>,
     pub reconstructed: bool,
+    pub no_persist: bool,
 }
 
 /// Build a `PaneInfo` message.
@@ -41,6 +42,7 @@ pub fn build_pane_info(params: PaneInfoParams) -> v3::PaneInfo {
         rows: params.rows,
         exit_status: params.exit_status,
         reconstructed: params.reconstructed,
+        no_persist: params.no_persist,
     }
 }
 
@@ -185,6 +187,7 @@ mod tests {
             rows: 24,
             exit_status,
             reconstructed: false,
+            no_persist: false,
         })
     }
 
@@ -240,6 +243,7 @@ mod tests {
             rows: 24,
             exit_status: None,
             reconstructed: false,
+            no_persist: false,
         });
         assert_eq!(info.id, uuid_to_bytes(p));
         assert_eq!(info.title, "bash");
@@ -260,6 +264,7 @@ mod tests {
             rows: 40,
             exit_status: Some(0),
             reconstructed: false,
+            no_persist: false,
         });
         assert_eq!(info.exit_status, Some(0));
     }
@@ -274,6 +279,7 @@ mod tests {
             rows: 24,
             exit_status: None,
             reconstructed: true,
+            no_persist: false,
         });
         assert!(info.reconstructed);
     }
@@ -288,6 +294,7 @@ mod tests {
             rows: 40,
             exit_status: Some(1),
             reconstructed: true,
+            no_persist: false,
         });
         let mut buf = BytesMut::new();
         encode_frame(&info, &mut buf).unwrap();

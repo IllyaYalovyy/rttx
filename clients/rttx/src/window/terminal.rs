@@ -331,6 +331,7 @@ impl Window {
                         source_cwd,
                         adw::StyleManager::default().is_dark(),
                         size,
+                        false,
                     );
                 }
             }

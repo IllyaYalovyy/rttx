@@ -600,6 +600,7 @@ impl Window {
                     request.cwd.clone(),
                     adw::StyleManager::default().is_dark(),
                     size,
+                    false,
                 );
             }
         }

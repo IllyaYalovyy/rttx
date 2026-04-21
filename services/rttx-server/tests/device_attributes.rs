@@ -28,6 +28,7 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&create_pane).await;
