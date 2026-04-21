@@ -65,10 +65,7 @@ async fn terminate_runtime_cleans_up_v2_directory() {
 
     // Wait for background cleanup thread.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(
-        !runtime_dir.exists(),
-        "runtime directory should be removed after termination"
-    );
+    assert!(!runtime_dir.exists(), "runtime directory should be removed after termination");
 }
 
 /// On startup, unreferenced runtime directories are moved to .orphans/.
@@ -102,7 +99,11 @@ async fn startup_quarantines_orphaned_runtime_directories() {
             "last_snapshot_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 }
         }
     });
-    std::fs::write(known_dir.join("runtime.json"), serde_json::to_string_pretty(&known_rf).unwrap()).unwrap();
+    std::fs::write(
+        known_dir.join("runtime.json"),
+        serde_json::to_string_pretty(&known_rf).unwrap(),
+    )
+    .unwrap();
 
     // Create an orphan directory (not in daemon index).
     let orphan_dir = runtimes_dir.join(orphan_id.to_string());
@@ -117,7 +118,8 @@ async fn startup_quarantines_orphaned_runtime_directories() {
         "created_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 },
         "last_serialized_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 }
     });
-    std::fs::write(state_dir.join("daemon.json"), serde_json::to_string_pretty(&index).unwrap()).unwrap();
+    std::fs::write(state_dir.join("daemon.json"), serde_json::to_string_pretty(&index).unwrap())
+        .unwrap();
 
     // Start the server — it should sweep orphans during load.
     let (_socket_path, _handle) = start_test_server(tmp.path()).await;
