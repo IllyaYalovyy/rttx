@@ -125,7 +125,10 @@ fn prune_old_orphans(orphans_dir: &Path) {
             let short = &name.to_string_lossy()[..8.min(name.len())];
             match std::fs::remove_dir_all(entry.path()) {
                 Ok(()) => {
-                    tracing::info!("Pruned old orphan {short} (age: {} days)", age.as_secs() / 86400);
+                    tracing::info!(
+                        "Pruned old orphan {short} (age: {} days)",
+                        age.as_secs() / 86400
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to prune orphan {short}: {e}");
@@ -138,10 +141,10 @@ fn prune_old_orphans(orphans_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::RuntimePolicy;
     use crate::state::layout;
     use crate::state::persistence;
     use crate::state::types::*;
-    use crate::runtime::RuntimePolicy;
     use std::collections::HashSet;
     use tempfile::TempDir;
 
