@@ -10,8 +10,8 @@
 //! to load data it does not understand rather than guessing.
 
 use crate::state::types::{
-    DaemonIndexV1, RuntimeFileV1, ScreenSnapshotV1, SchemaVersionEnvelope,
-    DAEMON_INDEX_SCHEMA_VERSION, RUNTIME_FILE_SCHEMA_VERSION, SCREEN_SNAPSHOT_SCHEMA_VERSION,
+    DAEMON_INDEX_SCHEMA_VERSION, DaemonIndexV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1,
+    SCREEN_SNAPSHOT_SCHEMA_VERSION, SchemaVersionEnvelope, ScreenSnapshotV1,
 };
 use std::fmt;
 
@@ -19,17 +19,9 @@ use std::fmt;
 #[derive(Debug)]
 pub enum MigrationError {
     /// The file's `schema_version` is newer than this daemon understands.
-    UnsupportedFutureVersion {
-        file_kind: &'static str,
-        found: u32,
-        max_supported: u32,
-    },
+    UnsupportedFutureVersion { file_kind: &'static str, found: u32, max_supported: u32 },
     /// JSON deserialization failed during migration.
-    DeserializationFailed {
-        file_kind: &'static str,
-        version: u32,
-        source: serde_json::Error,
-    },
+    DeserializationFailed { file_kind: &'static str, version: u32, source: serde_json::Error },
     /// Could not read the `schema_version` envelope.
     InvalidEnvelope { source: serde_json::Error },
 }
@@ -37,22 +29,13 @@ pub enum MigrationError {
 impl fmt::Display for MigrationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedFutureVersion {
-                file_kind,
-                found,
-                max_supported,
-            } => write!(
+            Self::UnsupportedFutureVersion { file_kind, found, max_supported } => write!(
                 f,
                 "{file_kind}: schema_version {found} is newer than max supported {max_supported}"
             ),
-            Self::DeserializationFailed {
-                file_kind,
-                version,
-                source,
-            } => write!(
-                f,
-                "{file_kind}: failed to deserialize schema_version {version}: {source}"
-            ),
+            Self::DeserializationFailed { file_kind, version, source } => {
+                write!(f, "{file_kind}: failed to deserialize schema_version {version}: {source}")
+            }
             Self::InvalidEnvelope { source } => {
                 write!(f, "failed to read schema_version envelope: {source}")
             }
@@ -132,13 +115,11 @@ pub fn load_screen_snapshot(json: &str) -> Result<ScreenSnapshotV1, MigrationErr
             version: 1,
             source: e,
         }),
-        v if v > SCREEN_SNAPSHOT_SCHEMA_VERSION => {
-            Err(MigrationError::UnsupportedFutureVersion {
-                file_kind: "ScreenSnapshot",
-                found: v,
-                max_supported: SCREEN_SNAPSHOT_SCHEMA_VERSION,
-            })
-        }
+        v if v > SCREEN_SNAPSHOT_SCHEMA_VERSION => Err(MigrationError::UnsupportedFutureVersion {
+            file_kind: "ScreenSnapshot",
+            found: v,
+            max_supported: SCREEN_SNAPSHOT_SCHEMA_VERSION,
+        }),
         v => Err(MigrationError::UnsupportedFutureVersion {
             file_kind: "ScreenSnapshot",
             found: v,
@@ -245,11 +226,7 @@ mod tests {
         let err = load_daemon_index(json).unwrap_err();
         assert!(matches!(
             err,
-            MigrationError::UnsupportedFutureVersion {
-                file_kind: "DaemonIndex",
-                found: 99,
-                ..
-            }
+            MigrationError::UnsupportedFutureVersion { file_kind: "DaemonIndex", found: 99, .. }
         ));
     }
 
@@ -259,11 +236,7 @@ mod tests {
         let err = load_runtime_file(json).unwrap_err();
         assert!(matches!(
             err,
-            MigrationError::UnsupportedFutureVersion {
-                file_kind: "RuntimeFile",
-                found: 42,
-                ..
-            }
+            MigrationError::UnsupportedFutureVersion { file_kind: "RuntimeFile", found: 42, .. }
         ));
     }
 
@@ -302,11 +275,7 @@ mod tests {
         let err = load_daemon_index(json).unwrap_err();
         assert!(matches!(
             err,
-            MigrationError::DeserializationFailed {
-                file_kind: "DaemonIndex",
-                version: 1,
-                ..
-            }
+            MigrationError::DeserializationFailed { file_kind: "DaemonIndex", version: 1, .. }
         ));
     }
 
