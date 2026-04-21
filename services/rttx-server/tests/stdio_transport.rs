@@ -17,12 +17,14 @@ async fn start_daemon(
     bin: &str,
     runtime_dir: &std::path::Path,
     cache_dir: &std::path::Path,
+    state_dir: &std::path::Path,
 ) -> tokio::process::Child {
     let child = Command::new(bin)
         .arg("start")
         .arg("--foreground")
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("XDG_CACHE_HOME", cache_dir)
+        .env("XDG_STATE_HOME", state_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -63,15 +65,18 @@ async fn attach_stdio_hello_and_create_runtime() {
     let tmp = TempDir::new().unwrap();
     let runtime_dir = tmp.path().join("runtime");
     let cache_dir = tmp.path().join("cache");
+    let state_dir = tmp.path().join("state");
     tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
     tokio::fs::create_dir_all(&cache_dir).await.unwrap();
+    tokio::fs::create_dir_all(&state_dir).await.unwrap();
 
-    let mut daemon = start_daemon(bin, &runtime_dir, &cache_dir).await;
+    let mut daemon = start_daemon(bin, &runtime_dir, &cache_dir, &state_dir).await;
 
     let mut child = Command::new(bin)
         .arg("attach-stdio")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .env("XDG_CACHE_HOME", &cache_dir)
+        .env("XDG_STATE_HOME", &state_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
