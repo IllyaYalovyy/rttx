@@ -377,8 +377,11 @@ impl Window {
             legacy.dismissed_runtime_ids.extend(cache.dismissed_runtime_ids);
             legacy
         } else {
-            let mut workspaces: Vec<_> =
-                ws_store.workspaces.iter().map(crate::store::models::workspaces::WorkspaceRecord::to_workspace_state).collect();
+            let mut workspaces: Vec<_> = ws_store
+                .workspaces
+                .iter()
+                .map(crate::store::models::workspaces::WorkspaceRecord::to_workspace_state)
+                .collect();
             for ws in &mut workspaces {
                 ws.normalize_runtime_metadata();
             }

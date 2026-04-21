@@ -220,12 +220,7 @@ impl ClientStore {
     #[must_use]
     pub fn load_ui_state(&self) -> LoadOutcome<models::ui::UiState> {
         let path = self.paths.state().join("ui.json");
-        atomic_load(
-            &path,
-            models::ui::SCHEMA,
-            models::ui::CURRENT_VERSION,
-            &self.paths.backups(),
-        )
+        atomic_load(&path, models::ui::SCHEMA, models::ui::CURRENT_VERSION, &self.paths.backups())
     }
 
     /// Save UI state atomically with an envelope wrapper.
@@ -687,10 +682,7 @@ mod tests {
                     ssh_target: "deploy@prod".into(),
                     remote_folder: Some("/srv/app".into()),
                 }),
-                startup: vec![StartupStep::SendText {
-                    text: "make deploy".into(),
-                    execute: true,
-                }],
+                startup: vec![StartupStep::SendText { text: "make deploy".into(), execute: true }],
             },
         );
 
