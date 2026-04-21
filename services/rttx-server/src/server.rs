@@ -288,7 +288,9 @@ impl Server {
             Ok(None) => {
                 tracing::info!(
                     "No persisted state found (v1 or v2). Starting fresh. \
-                     Previous state in $XDG_CACHE_HOME/rttx-server/ (if any) is left untouched."
+                     Daemon state is now stored in {} (RFC-022). \
+                     Previous state in $XDG_CACHE_HOME/rttx-server/ (if any) is left untouched.",
+                    state_dir.display()
                 );
             }
             Err(e) => {

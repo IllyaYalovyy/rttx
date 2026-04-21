@@ -201,7 +201,7 @@ instance:
 | | Production | Development |
 |---|---|---|
 | Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
-| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
+| State | `$XDG_STATE_HOME/rttx/daemon/` | `$XDG_STATE_HOME/rttx-devel/daemon/` |
 | Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
 
 **Managing the daemon:**
@@ -221,9 +221,9 @@ pkill -f "rttx-server.*start"
 
 **Clearing state for a clean test:**
 ```bash
-# Kill daemon, remove all dev state (sessions, scrollback, socket, PID file)
+# Kill daemon, remove all dev state (runtimes, scrollback, socket, PID file)
 pkill -f "rttx-server"
-rm -rf ~/.cache/rttx-server-devel/ $XDG_RUNTIME_DIR/rttx-server-devel/
+rm -rf ~/.local/state/rttx-devel/ ~/.cache/rttx-server-devel/ $XDG_RUNTIME_DIR/rttx-server-devel/
 
 # Also clear GUI session state (sidebar tabs, layout)
 rm -f ~/.config/rttx-devel/sessions.json
@@ -236,7 +236,7 @@ RTTX_DEV_MODE=1 ./target/debug/rttx
 **Clearing production state** (use with caution — kills real sessions):
 ```bash
 pkill -f "rttx-server"
-rm -rf ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
+rm -rf ~/.local/state/rttx/ ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
 rm -f ~/.config/rttx/sessions.json
 ```
 
