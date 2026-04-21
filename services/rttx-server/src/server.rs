@@ -305,9 +305,9 @@ impl Server {
                     let pane_short = short_id(pane.id);
 
                     // Prefer screen snapshot over raw scrollback replay.
-                    if let Some(snap) = crate::state::persistence::load_screen_snapshot(
-                        &state_dir, rt.id, pane.id,
-                    ) {
+                    if let Some(snap) =
+                        crate::state::persistence::load_screen_snapshot(&state_dir, rt.id, pane.id)
+                    {
                         let clean = restart_safe_scrollback(&snap.screen_bytes);
                         tracing::info!(
                             "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes)",
@@ -2161,9 +2161,7 @@ pub async fn serialization_loop(
             .runtimes
             .values()
             .filter(|rt| rt.policy == RuntimePolicy::Persistent && rt.is_dirty())
-            .flat_map(|rt| {
-                rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot()))
-            })
+            .flat_map(|rt| rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot())))
             .collect();
 
         // Check whether the set of persistent runtime IDs changed.
@@ -2263,9 +2261,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         .runtimes
         .values()
         .filter(|rt| rt.policy == RuntimePolicy::Persistent)
-        .flat_map(|rt| {
-            rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot()))
-        })
+        .flat_map(|rt| rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot())))
         .collect();
 
     let ids: Vec<_> = runtime_files.iter().map(|rf| rf.spec.id).collect();
