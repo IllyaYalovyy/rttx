@@ -4,7 +4,7 @@ use libadwaita::prelude::*;
 
 use crate::form_dialog::FormDialog;
 use crate::host_tag_picker::HostTagPicker;
-use crate::places::{self, Place};
+use crate::places::Place;
 use crate::window::Window;
 
 pub fn show_form(parent: &Window, place: Option<&Place>) {
@@ -43,13 +43,13 @@ pub fn show_form(parent: &Window, place: Option<&Place>) {
             }
         };
 
-        let mut items = places::load();
+        let mut items = crate::store::default_store().load_places();
         if let Some(existing) = items.iter_mut().find(|i| i.uuid == place.uuid) {
             *existing = place;
         } else {
             items.push(place);
         }
-        if let Err(e) = places::save(&items) {
+        if let Err(e) = crate::store::default_store().save_places(&items) {
             status_label.set_text(&format!("Failed to save: {e}"));
             return;
         }

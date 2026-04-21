@@ -34,7 +34,10 @@ impl Window {
 
     /// Rebuild the host selector dropdown model from saved hosts + workspace endpoints.
     pub(super) fn rebuild_host_selector_model(&self, select_key: Option<&str>) {
-        let saved_hosts = host::load();
+        let saved_hosts = crate::store::default_store()
+            .load_hosts()
+            .into_value()
+            .unwrap_or_default();
         let state = self.imp().state.borrow();
 
         let mut keys: Vec<String> = Vec::new();
@@ -81,8 +84,11 @@ impl Window {
         }
 
         let query = imp.sidebar_search_entry.text();
-        let saved = places::load();
-        let saved_hosts = host::load();
+        let saved = crate::store::default_store().load_places();
+        let saved_hosts = crate::store::default_store()
+            .load_hosts()
+            .into_value()
+            .unwrap_or_default();
         let selected_key = self.selected_host_key();
 
         let any_shown = selected_key.as_ref().map_or_else(
@@ -216,8 +222,11 @@ impl Window {
         }
 
         let query = imp.sidebar_search_entry.text();
-        let all_commands = commands::load();
-        let saved_hosts = host::load();
+        let all_commands = crate::store::default_store().load_commands();
+        let saved_hosts = crate::store::default_store()
+            .load_hosts()
+            .into_value()
+            .unwrap_or_default();
         let selected_key = self.selected_host_key();
 
         let any_shown = selected_key.as_ref().map_or_else(
@@ -374,14 +383,19 @@ impl Window {
                 keys.push(h.key.clone());
             }
         }
-        for p in places::load() {
+        let store = crate::store::default_store();
+        let (places, commands) = store
+            .load_library()
+            .into_value()
+            .unwrap_or_default();
+        for p in places {
             for tag in &p.host_tags {
                 if !keys.contains(tag) {
                     keys.push(tag.clone());
                 }
             }
         }
-        for c in commands::load() {
+        for c in commands {
             for tag in &c.host_tags {
                 if !keys.contains(tag) {
                     keys.push(tag.clone());
@@ -397,9 +411,9 @@ impl Window {
     }
 
     fn reorder_command(&self, source_uuid: &str, target_uuid: &str) {
-        let mut items = commands::load();
+        let mut items = crate::store::default_store().load_commands();
         commands::reorder(&mut items, source_uuid, target_uuid);
-        let _ = commands::save(&items);
+        let _ = crate::store::default_store().save_commands(&items);
         self.refresh_command_sidebar();
     }
 

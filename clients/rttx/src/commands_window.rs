@@ -2,7 +2,7 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-use crate::commands::{self, CommandRunMode, SavedCommand};
+use crate::commands::{CommandRunMode, SavedCommand};
 use crate::form_dialog::FormDialog;
 use crate::host_tag_picker::HostTagPicker;
 use crate::window::Window;
@@ -65,13 +65,13 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
             }
         };
 
-        let mut items = commands::load();
+        let mut items = crate::store::default_store().load_commands();
         if let Some(existing) = items.iter_mut().find(|i| i.uuid == cmd.uuid) {
             *existing = cmd;
         } else {
             items.push(cmd);
         }
-        if let Err(e) = commands::save(&items) {
+        if let Err(e) = crate::store::default_store().save_commands(&items) {
             status_label.set_text(&format!("Failed to save: {e}"));
             return;
         }

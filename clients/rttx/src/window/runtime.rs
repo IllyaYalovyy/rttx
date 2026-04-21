@@ -252,7 +252,10 @@ impl Window {
             return true;
         }
 
-        let prefs = crate::preferences::load();
+        let prefs = crate::store::default_store()
+            .load_preferences()
+            .into_value()
+            .unwrap_or_default();
         match crate::daemon_bridge::EndpointConnectionManager::new(
             prefs.auto_start_daemon,
             prefs.reconnect_delay_secs,

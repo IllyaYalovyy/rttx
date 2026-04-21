@@ -16,7 +16,10 @@ fn trim_trailing_whitespace(text: &str) -> String {
 /// Copy the terminal selection to the system clipboard, trimming trailing
 /// whitespace per line when the preference is enabled.
 pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
-    let prefs = crate::preferences::load();
+    let prefs = crate::store::default_store()
+        .load_preferences()
+        .into_value()
+        .unwrap_or_default();
     if !prefs.trim_trailing_whitespace_on_copy {
         vte.copy_clipboard_format(vte4::Format::Text);
         return;
@@ -48,7 +51,7 @@ pub const fn should_open_context_menu(mods: gtk4::gdk::ModifierType) -> bool {
 /// Each item triggers `win.open-place` with the place path as parameter.
 pub(crate) fn populate_places_submenu(menu: &gtk4::gio::Menu, host_key: &str) {
     menu.remove_all();
-    let saved = crate::places::load();
+    let saved = crate::store::default_store().load_places();
     let visible = crate::places::visible_for_host(&saved, host_key);
     for place in &visible {
         let item = gtk4::gio::MenuItem::new(Some(&place.display_label()), None);

@@ -50,7 +50,10 @@ impl Window {
     }
 
     pub(crate) fn reapply_terminal_preferences(&self) {
-        let prefs = preferences::load();
+        let prefs = crate::store::default_store()
+            .load_preferences()
+            .into_value()
+            .unwrap_or_default();
 
         // Reapply all keyboard shortcuts from preferences.
         if let Some(app) = self.application().and_downcast::<adw::Application>() {
@@ -86,7 +89,10 @@ impl Window {
     }
 
     pub(super) fn apply_preferences_to_persistent_pane(&self, pane: &PersistentPaneView) {
-        let prefs = preferences::load();
+        let prefs = crate::store::default_store()
+            .load_preferences()
+            .into_value()
+            .unwrap_or_default();
         let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
         pane.vte().set_font(Some(&font_desc));
         pane.vte().set_scrollback_lines(prefs.scrollback_lines);

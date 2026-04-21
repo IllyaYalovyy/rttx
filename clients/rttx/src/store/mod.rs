@@ -147,6 +147,40 @@ impl ClientStore {
         );
         atomic_save(&path, &envelope)
     }
+
+    // ── Convenience: load/save just places or commands ──────
+
+    /// Load only the places from the library document.
+    #[must_use]
+    pub fn load_places(&self) -> Vec<Place> {
+        self.load_library().into_value().map_or_else(Vec::new, |(p, _)| p)
+    }
+
+    /// Load only the commands from the library document.
+    #[must_use]
+    pub fn load_commands(&self) -> Vec<SavedCommand> {
+        self.load_library().into_value().map_or_else(Vec::new, |(_, c)| c)
+    }
+
+    /// Save places, preserving the current commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the atomic write fails.
+    pub fn save_places(&self, places: &[Place]) -> std::io::Result<()> {
+        let commands = self.load_commands();
+        self.save_library(places, &commands)
+    }
+
+    /// Save commands, preserving the current places.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the atomic write fails.
+    pub fn save_commands(&self, commands: &[SavedCommand]) -> std::io::Result<()> {
+        let places = self.load_places();
+        self.save_library(&places, commands)
+    }
 }
 
 impl<T> LoadOutcome<T> {

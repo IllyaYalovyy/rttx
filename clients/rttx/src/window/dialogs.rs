@@ -119,9 +119,10 @@ impl Window {
             "Delete Command?",
             "The command will be permanently removed.",
             move || {
-                let mut items = commands::load();
+                let store = crate::store::default_store();
+                let mut items = store.load_commands();
                 items.retain(|c| c.uuid != uuid);
-                if let Err(e) = commands::save(&items) {
+                if let Err(e) = store.save_commands(&items) {
                     tracing::error!("Failed to delete command: {e}");
                 }
                 win.refresh_command_sidebar();
@@ -132,9 +133,10 @@ impl Window {
     pub(super) fn confirm_delete_place(&self, uuid: String) {
         let win = self.clone();
         self.confirm_delete("Delete Place?", "The place will be permanently removed.", move || {
-            let mut items = places::load();
+            let store = crate::store::default_store();
+            let mut items = store.load_places();
             items.retain(|p| p.uuid != uuid);
-            if let Err(e) = places::save(&items) {
+            if let Err(e) = store.save_places(&items) {
                 tracing::error!("Failed to delete place: {e}");
             }
             win.refresh_place_sidebar();
@@ -142,9 +144,10 @@ impl Window {
     }
 
     pub(super) fn confirm_delete_host(&self, host_key: String) {
-        let saved_hosts = host::load();
-        let saved_places = places::load();
-        let saved_commands = commands::load();
+        let store = crate::store::default_store();
+        let saved_hosts = store.load_hosts().into_value().unwrap_or_default();
+        let saved_places = store.load_places();
+        let saved_commands = store.load_commands();
         let affected = host::deletion_affected(&host_key, &saved_places, &saved_commands);
 
         if affected.is_empty() {
@@ -153,9 +156,10 @@ impl Window {
                 "Delete Host?",
                 "The host will be permanently removed.",
                 move || {
-                    let mut hosts = host::load();
+                    let store = crate::store::default_store();
+                    let mut hosts = store.load_hosts().into_value().unwrap_or_default();
                     hosts.retain(|h| h.key != host_key);
-                    if let Err(e) = host::save(&hosts) {
+                    if let Err(e) = store.save_hosts(&hosts) {
                         tracing::error!("Failed to delete host: {e}");
                     }
                     win.rebuild_host_selector_model(None);
@@ -266,9 +270,10 @@ impl Window {
                 .map(|(uuid, _)| uuid.clone())
                 .collect();
 
-            let hosts = host::load();
-            let places_data = places::load();
-            let commands_data = commands::load();
+            let store = crate::store::default_store();
+            let hosts = store.load_hosts().into_value().unwrap_or_default();
+            let places_data = store.load_places();
+            let commands_data = store.load_commands();
             let (new_hosts, new_places, new_commands) = host::apply_deletion_cleanup(
                 &host_key,
                 &hosts,
@@ -277,14 +282,11 @@ impl Window {
                 &place_uuids,
                 &command_uuids,
             );
-            if let Err(e) = host::save(&new_hosts) {
+            if let Err(e) = store.save_hosts(&new_hosts) {
                 tracing::error!("Failed to save hosts: {e}");
             }
-            if let Err(e) = places::save(&new_places) {
-                tracing::error!("Failed to save places: {e}");
-            }
-            if let Err(e) = commands::save(&new_commands) {
-                tracing::error!("Failed to save commands: {e}");
+            if let Err(e) = store.save_library(&new_places, &new_commands) {
+                tracing::error!("Failed to save library: {e}");
             }
             win.rebuild_host_selector_model(None);
             win.refresh_place_sidebar();
@@ -336,14 +338,15 @@ impl Window {
                 return;
             }
             let new_host = host::Host::remote(ssh_target);
-            let mut hosts = host::load();
+            let store = crate::store::default_store();
+            let mut hosts = store.load_hosts().into_value().unwrap_or_default();
             if hosts.iter().any(|h| h.key == new_host.key) {
                 win.show_toast(&format!("Host \"{}\" already exists", new_host.name));
                 dialog_ref.close();
                 return;
             }
             hosts.push(new_host.clone());
-            if let Err(e) = host::save(&hosts) {
+            if let Err(e) = store.save_hosts(&hosts) {
                 tracing::error!("Failed to save hosts: {e}");
                 win.show_toast("Failed to save host");
                 dialog_ref.close();
@@ -619,7 +622,8 @@ impl Window {
         };
 
         let new_host = host::Host::remote(&ssh_target);
-        let mut hosts = host::load();
+        let store = crate::store::default_store();
+        let mut hosts = store.load_hosts().into_value().unwrap_or_default();
 
         if hosts.iter().any(|h| h.key == new_host.key) {
             self.show_toast(&format!("Host \"{}\" is already saved", new_host.name));
@@ -627,7 +631,7 @@ impl Window {
         }
 
         hosts.push(new_host.clone());
-        if let Err(e) = host::save(&hosts) {
+        if let Err(e) = store.save_hosts(&hosts) {
             tracing::error!("Failed to save hosts: {e}");
             self.show_toast("Failed to save host");
             return;
@@ -657,9 +661,10 @@ impl Window {
 
         let place = crate::places::Place::from_cwd(&cwd, host_tags);
         let label = place.display_label();
-        let mut places = crate::places::load();
+        let store = crate::store::default_store();
+        let mut places = store.load_places();
         places.push(place);
-        if let Err(e) = crate::places::save(&places) {
+        if let Err(e) = store.save_places(&places) {
             tracing::error!("Failed to save places: {e}");
             self.show_toast("Failed to save place");
             return;

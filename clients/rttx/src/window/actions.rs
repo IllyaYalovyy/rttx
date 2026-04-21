@@ -6,7 +6,10 @@ type ActionCallback = fn(&Window);
 
 impl Window {
     pub(super) fn setup_actions(&self, app: &adw::Application) {
-        let prefs = crate::preferences::load();
+        let prefs = crate::store::default_store()
+            .load_preferences()
+            .into_value()
+            .unwrap_or_default();
         let overrides = &prefs.keyboard_shortcuts;
 
         let actions: &[(&str, ActionCallback)] = &[
@@ -114,7 +117,7 @@ impl Window {
         let win = self.clone();
         edit_command_action.connect_activate(move |_, param| {
             let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
-            let all_commands = commands::load();
+            let all_commands = crate::store::default_store().load_commands();
             if let Some(command) = all_commands.iter().find(|c| c.uuid == uuid) {
                 crate::commands_window::show_form(&win, Some(command));
             }
@@ -137,7 +140,7 @@ impl Window {
         let win = self.clone();
         edit_place_action.connect_activate(move |_, param| {
             let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
-            let all_places = places::load();
+            let all_places = crate::store::default_store().load_places();
             if let Some(place) = all_places.iter().find(|p| p.uuid == uuid) {
                 crate::places_window::show_form(&win, Some(place));
             }
@@ -358,7 +361,10 @@ impl Window {
         let Some(uuid) = self.focused_terminal_uuid() else { return };
         let Some(terminal) = self.terminal_handle(&uuid) else { return };
 
-        let prefs = crate::preferences::load();
+        let prefs = crate::store::default_store()
+            .load_preferences()
+            .into_value()
+            .unwrap_or_default();
         if !prefs.paste_guard {
             Self::execute_paste(&terminal, self, &uuid);
             return;
@@ -378,7 +384,11 @@ impl Window {
                 _ => None,
             };
 
-            let threshold = crate::preferences::load().paste_guard_threshold;
+            let threshold = crate::store::default_store()
+                .load_preferences()
+                .into_value()
+                .unwrap_or_default()
+                .paste_guard_threshold;
             match decide(clipboard_text, threshold, is_direct) {
                 PasteGuardDecision::Paste | PasteGuardDecision::FallThroughToVte => {
                     if let Some(terminal) = win.terminal_handle(&terminal_uuid) {
