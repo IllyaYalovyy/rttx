@@ -489,6 +489,110 @@ impl Runtime {
             last_active_at: self.last_active_at,
         }
     }
+
+    /// Build a v2 `RuntimeFileV1` for per-runtime persistence.
+    #[must_use]
+    pub fn to_runtime_file(&self) -> crate::state::types::RuntimeFileV1 {
+        use crate::state::types::{
+            HistoryEntryV1, PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1,
+            RuntimeInstanceV1, RuntimeSpecV1,
+        };
+
+        let panes = self
+            .panes
+            .values()
+            .map(|p| {
+                let cwd = p.cwd.clone().or_else(|| p.read_proc_cwd());
+                PaneSpecV1 {
+                    id: p.id,
+                    cwd,
+                    title: p.title.clone(),
+                    exit_status: p.exit_status,
+                    cols: p.cols,
+                    rows: p.rows,
+                }
+            })
+            .collect();
+
+        let command_history = self
+            .command_history
+            .iter()
+            .map(|h| HistoryEntryV1 {
+                command: h.command.clone(),
+                cwd: h.cwd.clone(),
+                timestamp: h.timestamp,
+                pane_id: h.pane_id,
+            })
+            .collect();
+
+        RuntimeFileV1 {
+            schema_version: RUNTIME_FILE_SCHEMA_VERSION,
+            spec: RuntimeSpecV1 {
+                id: self.id,
+                name: self.name.clone(),
+                policy: self.policy,
+                created_at: self.created_at,
+                panes,
+                active_pane_id: self.active_pane_id,
+                command_history,
+            },
+            instance: RuntimeInstanceV1 {
+                revision: self.revision,
+                last_active_at: self.last_active_at,
+                last_snapshot_at: SystemTime::now(),
+            },
+        }
+    }
+
+    /// Resurrect a runtime from a v2 `RuntimeFileV1`.
+    #[must_use]
+    pub fn from_runtime_file(rf: &crate::state::types::RuntimeFileV1) -> Self {
+        let panes: HashMap<Uuid, Pane> = rf
+            .spec
+            .panes
+            .iter()
+            .map(|ps| {
+                let mut pane = Pane::new(ps.id, ps.cols, ps.rows);
+                pane.cwd.clone_from(&ps.cwd);
+                pane.title.clone_from(&ps.title);
+                pane.exit_status = ps.exit_status;
+                pane.reconstructed = true;
+                (ps.id, pane)
+            })
+            .collect();
+
+        let command_history: Vec<HistoryEntry> = rf
+            .spec
+            .command_history
+            .iter()
+            .map(|h| HistoryEntry {
+                command: h.command.clone(),
+                cwd: h.cwd.clone(),
+                timestamp: h.timestamp,
+                pane_id: h.pane_id,
+            })
+            .collect();
+
+        let command_history = if command_history.len() > MAX_COMMAND_HISTORY {
+            command_history[command_history.len() - MAX_COMMAND_HISTORY..].to_vec()
+        } else {
+            command_history
+        };
+
+        Self {
+            id: rf.spec.id,
+            name: rf.spec.name.clone(),
+            active_pane_id: rf.spec.active_pane_id,
+            command_history,
+            policy: rf.spec.policy,
+            reconstructed: true,
+            revision: rf.instance.revision.max(default_runtime_revision()),
+            created_at: rf.spec.created_at,
+            last_active_at: rf.instance.last_active_at,
+            attached_clients: HashMap::new(),
+            panes,
+        }
+    }
 }
 
 /// Serializable runtime state for disk persistence.
@@ -789,5 +893,51 @@ mod tests {
             restored.command_history[0].command, "cmd-200",
             "oldest entries should be dropped on load"
         );
+    }
+
+    #[test]
+    fn runtime_file_v2_round_trip() {
+        let mut runtime = Runtime::new("v2-test".into());
+        runtime.policy = RuntimePolicy::Persistent;
+        let pane = Pane::new(Uuid::new_v4(), 100, 30);
+        let pane_id = pane.id;
+        runtime.add_pane(pane);
+        runtime.add_history_entry(HistoryEntry {
+            command: "cargo build".into(),
+            cwd: "/project".into(),
+            timestamp: std::time::SystemTime::now(),
+            pane_id,
+        });
+
+        let rf = runtime.to_runtime_file();
+        assert_eq!(rf.spec.id, runtime.id);
+        assert_eq!(rf.spec.name, "v2-test");
+        assert_eq!(rf.spec.panes.len(), 1);
+        assert_eq!(rf.spec.panes[0].id, pane_id);
+        assert_eq!(rf.spec.panes[0].cols, 100);
+        assert_eq!(rf.spec.command_history.len(), 1);
+        assert_eq!(rf.instance.revision, runtime.revision());
+
+        let restored = Runtime::from_runtime_file(&rf);
+        assert_eq!(restored.id, runtime.id);
+        assert_eq!(restored.name, "v2-test");
+        assert_eq!(restored.policy, RuntimePolicy::Persistent);
+        assert!(restored.reconstructed);
+        assert_eq!(restored.revision(), runtime.revision());
+        assert!(restored.panes.contains_key(&pane_id));
+        assert_eq!(restored.panes[&pane_id].cols, 100);
+        assert_eq!(restored.panes[&pane_id].rows, 30);
+        assert_eq!(restored.command_history.len(), 1);
+        assert_eq!(restored.command_history[0].command, "cargo build");
+    }
+
+    #[test]
+    fn from_runtime_file_truncates_oversized_history() {
+        let mut runtime = Runtime::new("hist-test".into());
+        runtime.command_history = (0..MAX_COMMAND_HISTORY + 50).map(make_history_entry).collect();
+
+        let rf = runtime.to_runtime_file();
+        let restored = Runtime::from_runtime_file(&rf);
+        assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
     }
 }

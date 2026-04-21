@@ -228,21 +228,62 @@ impl Server {
     }
 
     /// Load persisted state and resurrect runtimes.
+    ///
+    /// Tries v2 per-runtime files first. If no v2 state exists, falls back
+    /// to the v1 monolithic `state.json`. On first v2 startup with neither
+    /// present, starts clean with a loud log line.
     pub fn load_persisted_state(&mut self) {
+        let state_dir = self.os.state_dir();
+
+        // Try v2 per-runtime layout first.
+        if let Some(result) = crate::state::persistence::load_all(&state_dir) {
+            let total = result.runtimes.len() + result.failed_ids.len();
+            tracing::info!(
+                "Loaded {} persisted runtimes from v2 state ({} failed)",
+                result.runtimes.len(),
+                result.failed_ids.len()
+            );
+            let cache_dir = self.os.cache_dir();
+            for rf in &result.runtimes {
+                let rt = Runtime::from_runtime_file(rf);
+                let runtime_id = rt.id;
+                self.runtimes.insert(rt.id, rt);
+                // Set scrollback log paths (still in cache_dir for now).
+                if let Some(rt) = self.runtimes.get_mut(&runtime_id) {
+                    for pane in rt.panes.values_mut() {
+                        pane.scrollback_log_path = Some(serialization::scrollback_log_path(
+                            &cache_dir, runtime_id, pane.id,
+                        ));
+                    }
+                }
+            }
+            if total > 0 || result.failed_ids.is_empty() {
+                return;
+            }
+        }
+
+        // Fall back to v1 monolithic state.json.
         let state_path = default_state_path(&self.os.cache_dir());
         match load_state(&state_path) {
             Ok(Some(state)) => {
-                tracing::info!("Loaded {} persisted runtimes", state.runtimes.len());
+                tracing::info!(
+                    "No v2 state found; loaded {} runtimes from v1 state.json",
+                    state.runtimes.len()
+                );
                 for ps in &state.runtimes {
                     let rt = Runtime::from_persisted(ps);
                     self.runtimes.insert(rt.id, rt);
                 }
             }
             Ok(None) => {
-                tracing::info!("No persisted state found, starting fresh");
+                tracing::info!(
+                    "No persisted state found (v1 or v2). Starting fresh. \
+                     Previous state in $XDG_CACHE_HOME/rttx-server/ (if any) is left untouched."
+                );
             }
             Err(e) => {
-                tracing::error!("Failed to load persisted state: {e}");
+                tracing::error!("Failed to load v1 persisted state: {e}");
+                tracing::info!("Starting fresh due to load failure");
             }
         }
     }
@@ -2042,6 +2083,9 @@ fn spawn_pty_read_loop(
 
 /// Run the serialization loop, writing state to disk every `interval`.
 ///
+/// Uses v2 per-runtime files with symlink-based backup. Also writes the
+/// v1 monolithic `state.json` for backward compatibility during transition.
+///
 /// Stops when the shutdown signal fires.
 pub async fn serialization_loop(
     server: Arc<Mutex<Server>>,
@@ -2061,6 +2105,7 @@ pub async fn serialization_loop(
 
         let mut s = server.lock().await;
         let cache_dir = s.os.cache_dir();
+        let state_dir = s.os.state_dir();
 
         let runtime_ids: Vec<_> = s.runtimes.keys().copied().collect();
         for runtime_id in runtime_ids {
@@ -2083,12 +2128,33 @@ pub async fn serialization_loop(
             s.log_diagnostics();
         }
 
+        // Collect v2 runtime files for persistent runtimes.
+        let runtime_files: Vec<_> = s
+            .runtimes
+            .values()
+            .filter(|rt| rt.policy == RuntimePolicy::Persistent)
+            .map(Runtime::to_runtime_file)
+            .collect();
+
+        // Also write v1 for backward compat during transition.
         let snapshot = s.build_snapshot();
-        let state_path = default_state_path(&cache_dir);
+        let v1_path = default_state_path(&cache_dir);
         drop(s);
 
-        if let Err(e) = write_state_atomic(&snapshot, &state_path) {
-            tracing::error!("Failed to serialize state: {e}");
+        // Write v2 per-runtime files.
+        let ids: Vec<_> = runtime_files.iter().map(|rf| rf.spec.id).collect();
+        if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &ids) {
+            tracing::error!("Failed to write v2 daemon index: {e}");
+        }
+        for rf in &runtime_files {
+            if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
+                tracing::error!("Failed to write v2 runtime {}: {e}", short_id(rf.spec.id));
+            }
+        }
+
+        // Write v1 monolithic state.json.
+        if let Err(e) = write_state_atomic(&snapshot, &v1_path) {
+            tracing::error!("Failed to serialize v1 state: {e}");
         }
     }
 }
@@ -2097,6 +2163,7 @@ pub async fn serialization_loop(
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut s = server.lock().await;
     let cache_dir = s.os.cache_dir();
+    let state_dir = s.os.state_dir();
 
     for rt in s.runtimes.values_mut() {
         let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
@@ -2110,14 +2177,33 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         }
     }
 
+    // Write v2 per-runtime files.
+    let runtime_files: Vec<_> = s
+        .runtimes
+        .values()
+        .filter(|rt| rt.policy == RuntimePolicy::Persistent)
+        .map(Runtime::to_runtime_file)
+        .collect();
+
+    let ids: Vec<_> = runtime_files.iter().map(|rf| rf.spec.id).collect();
+    if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &ids) {
+        tracing::error!("Failed to write v2 daemon index on shutdown: {e}");
+    }
+    for rf in &runtime_files {
+        if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
+            tracing::error!("Failed to write v2 runtime {} on shutdown: {e}", short_id(rf.spec.id));
+        }
+    }
+
+    // Also write v1 for backward compat.
     let snapshot = s.build_snapshot();
     let state_path = default_state_path(&cache_dir);
     drop(s);
 
     if let Err(e) = write_state_atomic(&snapshot, &state_path) {
-        tracing::error!("Failed to persist final state: {e}");
+        tracing::error!("Failed to persist final v1 state: {e}");
     } else {
-        tracing::info!("Final state persisted");
+        tracing::info!("Final state persisted (v1 + v2)");
     }
 }
 

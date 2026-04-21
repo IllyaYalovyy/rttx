@@ -4,6 +4,8 @@
 //! RFC-022. The v1 monolithic `state.json` path helpers remain in
 //! [`crate::serialization`] until the migration is complete.
 
+pub mod io;
 pub mod layout;
 pub mod migrations;
+pub mod persistence;
 pub mod types;
