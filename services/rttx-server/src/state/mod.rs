@@ -5,3 +5,5 @@
 //! [`crate::serialization`] until the migration is complete.
 
 pub mod layout;
+pub mod migrations;
+pub mod types;
