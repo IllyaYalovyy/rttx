@@ -1904,3 +1904,111 @@ async fn v3_snapshot_includes_terminal_modes() {
         panic!("expected RuntimeSnapshot");
     }
 }
+
+// ── Runtime directory cleanup tests ─────────────────────────────
+
+#[derive(Debug)]
+struct TempOs {
+    runtime: PathBuf,
+    cache: PathBuf,
+    state: PathBuf,
+}
+
+impl OsInterface for TempOs {
+    fn runtime_dir(&self) -> PathBuf {
+        self.runtime.clone()
+    }
+    fn cache_dir(&self) -> PathBuf {
+        self.cache.clone()
+    }
+    fn state_dir(&self) -> PathBuf {
+        self.state.clone()
+    }
+}
+
+fn temp_os(tmp: &std::path::Path) -> TempOs {
+    let runtime = tmp.join("runtime");
+    let cache = tmp.join("cache");
+    let state = tmp.join("state");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    TempOs { runtime, cache, state }
+}
+
+#[tokio::test]
+#[traced_test]
+async fn terminate_runtime_removes_state_directory() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let os = temp_os(tmp.path());
+    let state_dir = os.state_dir();
+    let mut server = Server::new(Box::new(os));
+
+    let mut rt = Runtime::new("cleanup-test".into());
+    let runtime_id = rt.id;
+    let pane = Pane::new(Uuid::new_v4(), 80, 24);
+    rt.add_pane(pane);
+    server.runtimes.insert(runtime_id, rt);
+
+    // Persist the runtime to disk so there's a directory to clean up.
+    let rf = server.runtimes[&runtime_id].to_runtime_file();
+    crate::state::persistence::save_runtime(&state_dir, &rf).unwrap();
+    let dir = crate::state::layout::runtime_dir(&state_dir, runtime_id);
+    assert!(dir.exists());
+
+    server.terminate_runtime(runtime_id, 1, TerminationReason::Explicit, None);
+
+    // Wait for background cleanup thread.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!dir.exists());
+}
+
+#[test]
+#[traced_test]
+fn load_persisted_state_sweeps_orphans() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let os = temp_os(tmp.path());
+    let state_dir = os.state_dir();
+
+    let known_id = Uuid::new_v4();
+    let orphan_id = Uuid::new_v4();
+
+    // Create runtime files for both.
+    let known_rf = crate::state::types::RuntimeFileV1 {
+        schema_version: crate::state::types::RUNTIME_FILE_SCHEMA_VERSION,
+        spec: crate::state::types::RuntimeSpecV1 {
+            id: known_id,
+            name: "known".into(),
+            policy: RuntimePolicy::Persistent,
+            created_at: std::time::SystemTime::now(),
+            panes: vec![],
+            active_pane_id: None,
+            command_history: vec![],
+        },
+        instance: crate::state::types::RuntimeInstanceV1 {
+            revision: 1,
+            last_active_at: std::time::SystemTime::now(),
+            last_snapshot_at: std::time::SystemTime::now(),
+        },
+    };
+    crate::state::persistence::save_runtime(&state_dir, &known_rf).unwrap();
+
+    // Create orphan directory (not in daemon index).
+    let orphan_dir = crate::state::layout::runtime_dir(&state_dir, orphan_id);
+    std::fs::create_dir_all(&orphan_dir).unwrap();
+    std::fs::write(orphan_dir.join("runtime.json"), "{}").unwrap();
+
+    // Save daemon index referencing only the known runtime.
+    crate::state::persistence::save_daemon_index(&state_dir, &[known_id]).unwrap();
+
+    let mut server = Server::new(Box::new(os));
+    server.load_persisted_state();
+
+    // Known runtime should be loaded.
+    assert!(server.runtimes.contains_key(&known_id));
+
+    // Orphan should have been moved to .orphans/.
+    assert!(!orphan_dir.exists());
+    let orphan_dest = crate::state::layout::orphans_dir(&state_dir).join(orphan_id.to_string());
+    assert!(orphan_dest.exists());
+}

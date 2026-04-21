@@ -35,6 +35,9 @@ const SCROLLBACK_DIR: &str = "scrollback";
 /// Subdirectory for per-pane shell history.
 const HISTORY_DIR: &str = "history";
 
+/// Subdirectory for orphaned runtime directories awaiting pruning.
+const ORPHANS_DIR: &str = ".orphans";
+
 /// Path to the top-level daemon index file.
 #[must_use]
 pub fn daemon_index(state_dir: &Path) -> PathBuf {
@@ -75,6 +78,12 @@ pub fn scrollback_log(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> Path
 #[must_use]
 pub fn history_file(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> PathBuf {
     runtime_dir(state_dir, runtime_id).join(HISTORY_DIR).join(format!("{pane_id}.hist"))
+}
+
+/// Path to the `.orphans/` directory inside `runtimes/`.
+#[must_use]
+pub fn orphans_dir(state_dir: &Path) -> PathBuf {
+    runtimes_dir(state_dir).join(ORPHANS_DIR)
 }
 
 #[cfg(test)]
@@ -145,6 +154,12 @@ mod tests {
         assert!(p.to_string_lossy().contains("/history/"));
         assert!(p.to_string_lossy().ends_with(".hist"));
         assert!(p.starts_with(runtime_dir(Path::new(STATE), rt)));
+    }
+
+    #[test]
+    fn orphans_dir_path() {
+        let p = orphans_dir(Path::new(STATE));
+        assert_eq!(p, Path::new("/xdg/state/rttx/daemon/runtimes/.orphans"));
     }
 
     #[test]
