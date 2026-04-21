@@ -177,7 +177,7 @@ $XDG_CONFIG_HOME/rttx/
   library.json
   schemes/
 
-$XDG_STATE_HOME/rttx/
+$XDG_STATE_HOME/rttx/client/
   workspaces.json
   ui.json
   migrations.json
@@ -198,6 +198,10 @@ Location rules:
 - Cache contains data that can be deleted without data loss.
 - If `XDG_STATE_HOME` is unavailable, use the platform-standard fallback `~/.local/state/rttx`.
 - Custom color schemes remain user configuration under `schemes/`.
+- The `client/` subdirectory under `$XDG_STATE_HOME/rttx/` isolates client state from daemon
+  state (`daemon/`), which is owned by RFC-022. Path helpers for both subdirectories are already
+  implemented (`config::state_dir_path()` for the client, `OsInterface::state_dir()` for the
+  daemon).
 
 ### 2. Document Envelope
 
@@ -224,6 +228,11 @@ Envelope rules:
 - Unsupported future `version` values are rejected with a clear user-visible error.
 - Older supported `version` values are migrated in memory and then rewritten using the latest
   version.
+
+Note: RFC-022's daemon files use a simpler flat format with a bare `schema_version: u32` at the
+top level (no `schema` string, no `data` wrapper). The richer client envelope is intentional:
+client documents span multiple domains and benefit from a self-describing `schema` field, while
+daemon files are always loaded by the daemon from known paths where the domain is implicit.
 
 ### 3. Canonical Documents
 
@@ -405,6 +414,11 @@ Required write flow:
 3. Rename the current file to a last-good backup when replacing an existing document.
 4. Rename the temporary file into place.
 5. Fsync the parent directory where supported.
+
+This is intentionally simpler than RFC-022's symlink-based `.bak` pattern. The daemon writes
+per-runtime files on a 5-second tick and needs the symlink to avoid a window where neither the
+live file nor the backup exists. The client writes infrequently (on user action or shutdown), so
+the simpler rename-to-backup + rename-into-place sequence is sufficient.
 
 Load behavior:
 
@@ -617,12 +631,24 @@ directory for custom color schemes.
 
 ### Relationship to RFC-022
 
-RFC-022 (Daemon State Storage) proposes a parallel redesign for the daemon
-side, also targeting `$XDG_STATE_HOME/rttx/`. The two RFCs share the same XDG
-base directory but govern different subdirectories: RFC-022 covers daemon-owned
-runtime state, while RFC-023 covers client-owned configuration and UI state.
-Implementation should coordinate the directory layout to avoid conflicts.
-RFC-022 is also in Draft status with no implementation started.
+RFC-022 (Daemon State Storage) is Accepted and fully implemented (PRs #726–#735).
+It owns `$XDG_STATE_HOME/rttx/daemon/` for per-runtime state files, screen
+snapshots, and scrollback logs. This RFC owns `$XDG_STATE_HOME/rttx/client/`
+for workspace, UI, and migration state. The directory coordination landed in
+PR #726; path helpers for both subdirectories are already in the codebase
+(`config::state_dir_path()` for the client, `OsInterface::state_dir()` for
+the daemon).
+
+Key design differences between the two storage layers:
+
+- **Envelope format**: RFC-022 uses a flat `schema_version: u32` at the top
+  level; this RFC uses a richer envelope with `schema`, `version`, and
+  diagnostic fields. The difference is intentional (see §2).
+- **Atomic writes**: RFC-022 uses a symlink-based `.bak` pattern for
+  high-frequency daemon writes; this RFC uses a simpler rename-to-backup
+  pattern for infrequent client writes (see §4).
+- **Migration**: RFC-022 has no v1 migration (clean start on v2). This RFC
+  provides a one-time importer from legacy client files (see §5).
 
 ---
 
@@ -687,8 +713,8 @@ RFC-022 is also in Draft status with no implementation started.
   one-workspace-one-endpoint rule that this RFC's storage model serves
 - [RFC-021: Client/Server Protocol v3](./RFC-021-client-server-protocol-v3.md) (Review) —
   protocol evolution that may affect `runtime_ref` storage location (Q2)
-- [RFC-022: Daemon State Storage](./RFC-022-daemon-state-storage.md) (Draft) —
-  parallel daemon-side storage redesign sharing `$XDG_STATE_HOME/rttx/`
+- [RFC-022: Daemon State Storage](./RFC-022-daemon-state-storage.md) (Accepted, Implemented) —
+  daemon-side storage redesign sharing `$XDG_STATE_HOME/rttx/`; owns `daemon/` subdirectory
 - `clients/rttx/src/config.rs` — profile and path configuration
 - `clients/rttx/src/session/mod.rs` — current `WindowState` persistence
 - `clients/rttx/src/session/state.rs` — `SessionState`, `SessionMode`, `WorkspaceRuntime`
