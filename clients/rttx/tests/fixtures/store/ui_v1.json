@@ -1,0 +1,16 @@
+{
+  "schema": "rttx.client.ui",
+  "version": 1,
+  "app_version": "0.4.4",
+  "written_at": "2026-04-21T00:00:00Z",
+  "data": {
+    "window_width": 1280,
+    "window_height": 720,
+    "is_maximized": false,
+    "left_sidebar_width": 250,
+    "right_sidebar_width": 350,
+    "left_sidebar_visible": true,
+    "right_sidebar_visible": false,
+    "selected_right_tool": "commands"
+  }
+}

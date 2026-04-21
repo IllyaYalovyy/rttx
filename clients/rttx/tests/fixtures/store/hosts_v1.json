@@ -1,0 +1,24 @@
+{
+  "schema": "rttx.client.hosts",
+  "version": 1,
+  "app_version": "0.4.4",
+  "written_at": "2026-04-21T00:00:00Z",
+  "data": {
+    "hosts": [
+      {
+        "key": "devbox.example.com",
+        "name": "Dev Box",
+        "kind": "remote",
+        "ssh_target": "user@devbox.example.com",
+        "labels": ["work", "dev"]
+      },
+      {
+        "key": "prod.example.com",
+        "name": "Production",
+        "kind": "remote",
+        "ssh_target": "deploy@prod.example.com",
+        "labels": []
+      }
+    ]
+  }
+}
