@@ -255,10 +255,12 @@ class TestEnvironment:
         self.runtime_dir = os.path.join(self.root_dir, "run")
         self.config_home = os.path.join(self.root_dir, "config")
         self.cache_home = os.path.join(self.root_dir, "cache")
+        self.state_home = os.path.join(self.root_dir, "state")
         self.extra_env = extra_env or {}
         os.makedirs(self.runtime_dir, mode=0o700, exist_ok=True)
         os.makedirs(self.config_home, exist_ok=True)
         os.makedirs(self.cache_home, exist_ok=True)
+        os.makedirs(self.state_home, exist_ok=True)
         self.wayland_socket = f"{WAYLAND_SOCKET}-{uuid.uuid4().hex[:8]}"
         self._weston: subprocess.Popen | None = None
         self._daemon: subprocess.Popen | None = None
@@ -299,6 +301,7 @@ class TestEnvironment:
         env["XDG_RUNTIME_DIR"] = self.runtime_dir
         env["XDG_CONFIG_HOME"] = self.config_home
         env["XDG_CACHE_HOME"] = self.cache_home
+        env["XDG_STATE_HOME"] = self.state_home
         env["NO_AT_BRIDGE"] = "0"
         env["PATH"] = os.path.join(TARGET_DIR, "debug") + os.pathsep + env["PATH"]
         env.pop("GTK_A11Y", None)
@@ -425,11 +428,17 @@ class TestEnvironment:
         self.start_daemon()
 
     def clear_saved_state(self) -> None:
-        """Remove the GUI sessions file so startup recovery uses daemon inventory."""
-        try:
-            os.remove(self.sessions_file)
-        except FileNotFoundError:
-            pass
+        """Remove the GUI sessions file and new store documents so startup uses defaults."""
+        for path in [
+            self.sessions_file,
+            os.path.join(self.state_home, DEV_CONFIG_DIR, "client", "workspaces.json"),
+            os.path.join(self.state_home, DEV_CONFIG_DIR, "client", "ui.json"),
+            os.path.join(self.cache_home, DEV_CONFIG_DIR, "runtime-cache.json"),
+        ]:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
     def cleanup(self) -> None:
         """Stop all managed processes and remove the private temp roots."""
