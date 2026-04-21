@@ -6,7 +6,9 @@
 use crate::state::io::write_with_backup;
 use crate::state::layout;
 use crate::state::migrations::{self, MigrationError};
-use crate::state::types::{DAEMON_INDEX_SCHEMA_VERSION, DaemonIndexV1, RuntimeFileV1};
+use crate::state::types::{
+    DAEMON_INDEX_SCHEMA_VERSION, DaemonIndexV1, RuntimeFileV1, ScreenSnapshotV1,
+};
 use std::path::Path;
 use std::time::SystemTime;
 use uuid::Uuid;
@@ -136,6 +138,44 @@ pub fn save_runtime(state_dir: &Path, runtime_file: &RuntimeFileV1) -> std::io::
     write_with_backup(&path, &json)
 }
 
+/// Save a screen snapshot for a pane to disk.
+pub fn save_screen_snapshot(
+    state_dir: &Path,
+    runtime_id: Uuid,
+    snapshot: &ScreenSnapshotV1,
+) -> std::io::Result<()> {
+    let path = layout::screen_snapshot(state_dir, runtime_id, snapshot.pane_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(snapshot).map_err(std::io::Error::other)?;
+    std::fs::write(&path, json)?;
+    Ok(())
+}
+
+/// Load a screen snapshot for a pane from disk.
+///
+/// Returns `None` if the file does not exist or is corrupt. A corrupt
+/// snapshot is not fatal — the pane resurrects with a blank screen.
+pub fn load_screen_snapshot(
+    state_dir: &Path,
+    runtime_id: Uuid,
+    pane_id: Uuid,
+) -> Option<ScreenSnapshotV1> {
+    let path = layout::screen_snapshot(state_dir, runtime_id, pane_id);
+    let json = std::fs::read_to_string(&path).ok()?;
+    match serde_json::from_str::<ScreenSnapshotV1>(&json) {
+        Ok(snap) => Some(snap),
+        Err(e) => {
+            tracing::warn!(
+                "Corrupt screen snapshot for pane {}: {e} — starting with blank screen",
+                &pane_id.to_string()[..8]
+            );
+            None
+        }
+    }
+}
+
 /// Remove a runtime's directory from disk.
 pub fn remove_runtime_dir(state_dir: &Path, runtime_id: Uuid) -> std::io::Result<()> {
     let dir = layout::runtime_dir(state_dir, runtime_id);
@@ -167,7 +207,7 @@ mod tests {
     use crate::runtime::RuntimePolicy;
     use crate::state::types::{
         HistoryEntryV1, PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1, RuntimeInstanceV1,
-        RuntimeSpecV1,
+        RuntimeSpecV1, SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot,
     };
     use tempfile::TempDir;
 
@@ -340,5 +380,64 @@ mod tests {
         let result = load_all(state_dir).unwrap();
         assert_eq!(result.runtimes.len(), 1);
         assert_eq!(result.runtimes[0].spec.id, rt_id);
+    }
+
+    fn sample_screen_snapshot(pane_id: Uuid) -> ScreenSnapshotV1 {
+        ScreenSnapshotV1 {
+            schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
+            pane_id,
+            cols: 80,
+            rows: 24,
+            cursor_row: 5,
+            cursor_col: 10,
+            cursor_visible: true,
+            title: Some("bash".into()),
+            cwd: Some("/home/user".into()),
+            pane_output_seq: 42,
+            modes: TerminalModeSnapshot {
+                bracketed_paste: true,
+                application_cursor_keys: false,
+                application_keypad: false,
+                mouse_tracking_mode: 0,
+                sgr_mouse: false,
+                focus_reporting: false,
+            },
+            screen_bytes: b"hello world\r\n$ ".to_vec(),
+        }
+    }
+
+    #[test]
+    fn screen_snapshot_save_and_load_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let state_dir = tmp.path();
+        let rt_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+        let snap = sample_screen_snapshot(pane_id);
+
+        save_screen_snapshot(state_dir, rt_id, &snap).unwrap();
+        let loaded = load_screen_snapshot(state_dir, rt_id, pane_id).unwrap();
+        assert_eq!(snap, loaded);
+    }
+
+    #[test]
+    fn screen_snapshot_load_returns_none_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let result = load_screen_snapshot(tmp.path(), Uuid::new_v4(), Uuid::new_v4());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn screen_snapshot_load_returns_none_when_corrupt() {
+        let tmp = TempDir::new().unwrap();
+        let state_dir = tmp.path();
+        let rt_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+
+        let path = layout::screen_snapshot(state_dir, rt_id, pane_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not valid json").unwrap();
+
+        let result = load_screen_snapshot(state_dir, rt_id, pane_id);
+        assert!(result.is_none());
     }
 }

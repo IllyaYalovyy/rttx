@@ -297,21 +297,36 @@ impl Server {
     pub async fn reconstruct_runtimes(server: &Arc<Mutex<Self>>) {
         let panes_to_reconstruct: Vec<(Uuid, Uuid, String, Option<String>, u16, u16)> = {
             let mut s = server.lock().await;
+            let state_dir = s.os.state_dir();
 
             for rt in s.runtimes.values_mut() {
                 let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
                 for pane in rt.panes.values_mut() {
-                    // Replay scrollback log into the pane screen.
+                    let pane_short = short_id(pane.id);
+
+                    // Prefer screen snapshot over raw scrollback replay.
+                    if let Some(snap) = crate::state::persistence::load_screen_snapshot(
+                        &state_dir, rt.id, pane.id,
+                    ) {
+                        let clean = restart_safe_scrollback(&snap.screen_bytes);
+                        tracing::info!(
+                            "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes)",
+                            clean.len(),
+                        );
+                        pane.screen.feed(clean);
+                        continue;
+                    }
+
+                    // Fall back to scrollback log replay.
                     if let Some(ref log_path) = pane.scrollback_log_path
                         && log_path.exists()
                     {
-                        let pane_short = short_id(pane.id);
                         match std::fs::read(log_path) {
                             Ok(data) => {
                                 let restart_safe = restart_safe_scrollback(&data);
                                 let clean = strip_client_queries(restart_safe);
                                 tracing::info!(
-                                    "Replaying {} bytes of scrollback for pane {pane_short} in runtime {label}",
+                                    "Replaying {} bytes of scrollback for pane {pane_short} in runtime {label} (no snapshot)",
                                     clean.len(),
                                 );
                                 pane.screen.feed(&clean);
@@ -2141,6 +2156,16 @@ pub async fn serialization_loop(
             .map(Runtime::to_runtime_file)
             .collect();
 
+        // Collect screen snapshots for all panes in dirty persistent runtimes.
+        let screen_snapshots: Vec<(Uuid, _)> = s
+            .runtimes
+            .values()
+            .filter(|rt| rt.policy == RuntimePolicy::Persistent && rt.is_dirty())
+            .flat_map(|rt| {
+                rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot()))
+            })
+            .collect();
+
         // Check whether the set of persistent runtime IDs changed.
         let mut current_ids: Vec<Uuid> = s
             .runtimes
@@ -2170,6 +2195,19 @@ pub async fn serialization_loop(
         for rf in &dirty_runtime_files {
             if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
                 tracing::error!("Failed to write v2 runtime {}: {e}", short_id(rf.spec.id));
+            }
+        }
+
+        // Write screen snapshots for dirty runtimes.
+        for (runtime_id, snap) in &screen_snapshots {
+            if let Err(e) =
+                crate::state::persistence::save_screen_snapshot(&state_dir, *runtime_id, snap)
+            {
+                tracing::error!(
+                    "Failed to write screen snapshot for pane {} in runtime {}: {e}",
+                    short_id(snap.pane_id),
+                    short_id(*runtime_id)
+                );
             }
         }
 
@@ -2220,6 +2258,16 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         .map(Runtime::to_runtime_file)
         .collect();
 
+    // Collect screen snapshots for all persistent panes.
+    let screen_snapshots: Vec<(Uuid, _)> = s
+        .runtimes
+        .values()
+        .filter(|rt| rt.policy == RuntimePolicy::Persistent)
+        .flat_map(|rt| {
+            rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot()))
+        })
+        .collect();
+
     let ids: Vec<_> = runtime_files.iter().map(|rf| rf.spec.id).collect();
     if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &ids) {
         tracing::error!("Failed to write v2 daemon index on shutdown: {e}");
@@ -2227,6 +2275,16 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     for rf in &runtime_files {
         if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
             tracing::error!("Failed to write v2 runtime {} on shutdown: {e}", short_id(rf.spec.id));
+        }
+    }
+    for (runtime_id, snap) in &screen_snapshots {
+        if let Err(e) =
+            crate::state::persistence::save_screen_snapshot(&state_dir, *runtime_id, snap)
+        {
+            tracing::error!(
+                "Failed to write screen snapshot for pane {} on shutdown: {e}",
+                short_id(snap.pane_id)
+            );
         }
     }
 

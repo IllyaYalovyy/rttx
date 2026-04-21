@@ -5,6 +5,7 @@
 
 use crate::screen::{PaneScreen, strip_client_queries};
 use crate::serialization::scrollback_log_path;
+use crate::state::types::{SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,9 @@ const DEFAULT_MAX_SCROLLBACK: usize = 10 * 1024 * 1024;
 
 /// Default on-disk scrollback log byte limit per pane (10 MB).
 const DEFAULT_MAX_SCROLLBACK_LOG: u64 = 10 * 1024 * 1024;
+
+/// Number of rotated scrollback segments to keep (RFC-022 §4).
+const SCROLLBACK_ROTATE_KEEP: u32 = 3;
 
 /// Maximum bytes sent in a snapshot to a reconnecting client (256 KB).
 ///
@@ -140,11 +144,8 @@ impl Pane {
         self.pending_flush = Vec::new();
         self.scrollback_log_path = Some(path.clone());
 
-        // Cap the file size.
-        let meta = std::fs::metadata(&path)?;
-        if meta.len() > DEFAULT_MAX_SCROLLBACK_LOG {
-            truncate_log_tail(&path, DEFAULT_MAX_SCROLLBACK_LOG)?;
-        }
+        // Rotate when the file exceeds the cap.
+        rotate_scrollback_log(&path, DEFAULT_MAX_SCROLLBACK_LOG, SCROLLBACK_ROTATE_KEEP)?;
 
         Ok(())
     }
@@ -211,16 +212,67 @@ impl Pane {
             rows: self.rows,
         }
     }
+
+    /// Build a deterministic screen snapshot for on-disk persistence (RFC-022 §4).
+    #[must_use]
+    pub fn to_screen_snapshot(&self) -> ScreenSnapshotV1 {
+        let (cursor_row, cursor_col) = self.screen.cursor_position();
+        let screen_bytes = self.screen.snapshot_bytes(MAX_SNAPSHOT_BYTES).to_vec();
+        ScreenSnapshotV1 {
+            schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
+            pane_id: self.id,
+            cols: self.cols,
+            rows: self.rows,
+            cursor_row: cursor_row as u16,
+            cursor_col: cursor_col as u16,
+            cursor_visible: self.screen.cursor_visible(),
+            title: self.title.clone(),
+            cwd: self.cwd.clone().or_else(|| self.read_proc_cwd()),
+            pane_output_seq: self.output_seq,
+            modes: TerminalModeSnapshot {
+                bracketed_paste: self.screen.bracketed_paste_mode(),
+                application_cursor_keys: self.screen.application_cursor_keys(),
+                application_keypad: self.screen.application_keypad(),
+                mouse_tracking_mode: self.screen.mouse_tracking_mode(),
+                sgr_mouse: self.screen.sgr_mouse_mode(),
+                focus_reporting: self.screen.focus_event_mode(),
+            },
+            screen_bytes,
+        }
+    }
 }
 
-/// Truncate a log file to keep only the last `max_bytes` bytes.
+/// Rotate a scrollback log file when it exceeds `max_bytes`.
 ///
-/// Reads the tail, rewrites the file. This is `O(max_bytes)` but runs at most
-/// once per flush cycle and only when the file exceeds the cap.
-fn truncate_log_tail(path: &Path, max_bytes: u64) -> Result<(), std::io::Error> {
-    let data = std::fs::read(path)?;
-    let keep_from = data.len().saturating_sub(max_bytes as usize);
-    std::fs::write(path, &data[keep_from..])?;
+/// Renames `log` → `log.1`, `log.1` → `log.2`, etc., keeping at most
+/// `keep` rotated segments. The caller creates a fresh `log` on the next
+/// append. This avoids the mid-escape-sequence corruption caused by the
+/// old byte-boundary truncation approach (RFC-022 §4).
+fn rotate_scrollback_log(path: &Path, max_bytes: u64, keep: u32) -> Result<(), std::io::Error> {
+    let meta = std::fs::metadata(path)?;
+    if meta.len() <= max_bytes {
+        return Ok(());
+    }
+
+    // Shift existing segments: .3 → deleted, .2 → .3, .1 → .2
+    for i in (1..keep).rev() {
+        let src = path.with_extension(format!("log.{i}"));
+        let dst = path.with_extension(format!("log.{}", i + 1));
+        if src.exists() {
+            std::fs::rename(&src, &dst)?;
+        }
+    }
+
+    // Delete the oldest segment if it exceeds keep count.
+    let oldest = path.with_extension(format!("log.{}", keep + 1));
+    if oldest.exists() {
+        std::fs::remove_file(&oldest)?;
+    }
+
+    // Current log → .1
+    let first_rotated = path.with_extension("log.1");
+    std::fs::rename(path, &first_rotated)?;
+
     Ok(())
 }
 
@@ -359,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_scrollback_caps_file_size() {
+    fn flush_scrollback_rotates_when_exceeding_cap() {
         let tmp = tempfile::TempDir::new().unwrap();
         let session_id = Uuid::new_v4();
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
@@ -370,23 +422,60 @@ mod tests {
             pane.feed_output(&chunk);
             pane.flush_scrollback(tmp.path(), session_id).unwrap();
         }
-        // 4 * 4 MB = 16 MB written, cap is 10 MB.
+        // After 16 MB written with 10 MB cap, rotation should have occurred.
         let log_path = pane.scrollback_log_path.as_ref().unwrap();
-        let size = std::fs::metadata(log_path).unwrap().len();
-        assert!(
-            size <= DEFAULT_MAX_SCROLLBACK_LOG,
-            "scrollback log {size} bytes exceeds cap {DEFAULT_MAX_SCROLLBACK_LOG}"
-        );
-        assert!(size > 0, "scrollback log should not be empty");
+        let rotated = log_path.with_extension("log.1");
+        assert!(rotated.exists(), "rotated segment .1 should exist");
     }
 
     #[test]
-    fn truncate_log_tail_keeps_end() {
+    fn rotate_scrollback_log_shifts_segments() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("scrollback").join("test.log");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // Create a file exceeding the cap.
+        std::fs::write(&path, vec![b'A'; 100]).unwrap();
+        rotate_scrollback_log(&path, 50, 3).unwrap();
+
+        // Original should be gone (renamed to .1).
+        assert!(!path.exists());
+        assert!(path.with_extension("log.1").exists());
+
+        // Create a new log and rotate again.
+        std::fs::write(&path, vec![b'B'; 100]).unwrap();
+        rotate_scrollback_log(&path, 50, 3).unwrap();
+
+        assert!(!path.exists());
+        assert!(path.with_extension("log.1").exists());
+        assert!(path.with_extension("log.2").exists());
+    }
+
+    #[test]
+    fn rotate_scrollback_log_respects_keep_limit() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("test.log");
-        std::fs::write(&path, b"AAABBBCCC").unwrap();
-        truncate_log_tail(&path, 3).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"CCC");
+
+        for i in 0..6 {
+            std::fs::write(&path, vec![b'A' + i; 100]).unwrap();
+            rotate_scrollback_log(&path, 50, 3).unwrap();
+        }
+
+        // Should keep at most 3 rotated segments.
+        assert!(path.with_extension("log.1").exists());
+        assert!(path.with_extension("log.2").exists());
+        assert!(path.with_extension("log.3").exists());
+        assert!(!path.with_extension("log.4").exists());
+    }
+
+    #[test]
+    fn rotate_scrollback_log_noop_when_under_cap() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("test.log");
+        std::fs::write(&path, b"small").unwrap();
+        rotate_scrollback_log(&path, 100, 3).unwrap();
+        assert!(path.exists());
+        assert!(!path.with_extension("log.1").exists());
     }
 
     #[test]
@@ -524,5 +613,77 @@ mod tests {
         let content = std::fs::read(log_path).unwrap();
         // Scrollback log should not contain DSR/DA1/DA2 query sequences.
         assert_eq!(content, b"line1\r\nline2\r\n");
+    }
+
+    #[test]
+    fn to_screen_snapshot_captures_pane_state() {
+        let mut pane = Pane::new(Uuid::new_v4(), 120, 40);
+        pane.feed_output(b"\x1b]0;my-title\x07");
+        pane.feed_output(b"\x1b]7;file://localhost/home/user\x07");
+        pane.feed_output(b"hello world\r\n");
+        pane.feed_output(b"\x1b[?2004h"); // bracketed paste
+
+        let snap = pane.to_screen_snapshot();
+        assert_eq!(snap.pane_id, pane.id);
+        assert_eq!(snap.cols, 120);
+        assert_eq!(snap.rows, 40);
+        assert_eq!(snap.title.as_deref(), Some("my-title"));
+        assert_eq!(snap.cwd.as_deref(), Some("/home/user"));
+        assert!(snap.modes.bracketed_paste);
+        assert!(!snap.screen_bytes.is_empty());
+        assert_eq!(snap.schema_version, SCREEN_SNAPSHOT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn to_screen_snapshot_captures_cursor_position() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"line1\r\nline2\r\nXYZ");
+
+        let snap = pane.to_screen_snapshot();
+        assert_eq!(snap.cursor_row, 2);
+        assert_eq!(snap.cursor_col, 3);
+    }
+
+    #[test]
+    fn to_screen_snapshot_captures_all_terminal_modes() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"\x1b[?2004h"); // bracketed paste
+        pane.feed_output(b"\x1b[?1h"); // application cursor keys
+        pane.feed_output(b"\x1b="); // application keypad
+        pane.feed_output(b"\x1b[?1003h"); // any-event mouse
+        pane.feed_output(b"\x1b[?1006h"); // SGR mouse
+        pane.feed_output(b"\x1b[?1004h"); // focus reporting
+        pane.feed_output(b"\x1b[?25l"); // hide cursor
+
+        let snap = pane.to_screen_snapshot();
+        assert!(snap.modes.bracketed_paste);
+        assert!(snap.modes.application_cursor_keys);
+        assert!(snap.modes.application_keypad);
+        assert_eq!(snap.modes.mouse_tracking_mode, 1003);
+        assert!(snap.modes.sgr_mouse);
+        assert!(snap.modes.focus_reporting);
+        assert!(!snap.cursor_visible);
+    }
+
+    #[test]
+    fn to_screen_snapshot_screen_bytes_bounded_by_max_snapshot() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        // Feed more than MAX_SNAPSHOT_BYTES.
+        let big = vec![b'X'; MAX_SNAPSHOT_BYTES + 1024];
+        pane.feed_output(&big);
+
+        let snap = pane.to_screen_snapshot();
+        assert!(snap.screen_bytes.len() <= MAX_SNAPSHOT_BYTES);
+    }
+
+    #[test]
+    fn to_screen_snapshot_round_trips_through_json() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"test data\r\n");
+
+        let snap = pane.to_screen_snapshot();
+        let json = serde_json::to_string_pretty(&snap).unwrap();
+        let recovered: ScreenSnapshotV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(snap, recovered);
     }
 }
