@@ -2015,3 +2015,18 @@ fn load_persisted_state_sweeps_orphans() {
     let orphan_dest = crate::state::layout::orphans_dir(&state_dir).join(orphan_id.to_string());
     assert!(orphan_dest.exists());
 }
+
+#[test]
+#[traced_test]
+fn fresh_start_log_includes_state_directory_path() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let os = temp_os(tmp.path());
+    let expected_state_dir = os.state_dir().to_string_lossy().to_string();
+    let mut server = Server::new(Box::new(os));
+    server.load_persisted_state();
+
+    assert!(
+        logs_contain(&expected_state_dir),
+        "first-run log should include the state directory path"
+    );
+}

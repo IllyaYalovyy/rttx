@@ -183,8 +183,8 @@ rttx (GTK GUI)                         rttx-server (daemon)
     |                                      |
     |--- Unix socket ----> rttx-server     |--- PTYs (bash, zsh, ...)
     |    (local daemon)        |           |
-    |                          |           |--- state.json (periodic)
-    |--- SSH tunnel -------->(protocol)    |--- scrollback/*.log
+    |                          |           |--- runtimes/<id>/runtime.json
+    |--- SSH tunnel -------->(protocol)    |--- runtimes/<id>/scrollback/*.log
 ```
 
 `rttx-server` decouples runtime lifetime from GUI lifetime. rttx workspaces attach and detach
@@ -219,12 +219,16 @@ Reconciliation between the GUI and daemon is non-destructive:
 
 State is written to disk continuously, not just on shutdown:
 
-- **`state.json`** (every 1 second, atomic write) — runtime metadata, pane CWD/title/dimensions
-- **`scrollback/<session>/<pane>.log`** (every 1 second, append-only) — raw terminal bytes
+- **`runtimes/<id>/runtime.json`** (dirty-flag driven) — per-runtime metadata, pane CWD/title/dimensions
+- **`runtimes/<id>/scrollback/<pane>.log`** (append-only, rotated) — raw terminal bytes
+- **`runtimes/<id>/screen/<pane>.snap`** — deterministic screen snapshot for reconnect
 
-On daemon restart: metadata is loaded, scrollback logs are replayed into pane screens, fresh shells
-are spawned in saved working directories. Clients attaching after restart receive a snapshot
-containing the replayed scrollback plus live output from the new shell.
+State lives under `$XDG_STATE_HOME/rttx/daemon/` (default `~/.local/state/rttx/daemon/`), not in
+the cache directory, so it survives cache cleanup.
+
+On daemon restart: metadata is loaded, screen snapshots restore the visible viewport, and fresh
+shells are spawned in saved working directories. Clients attaching after restart receive a snapshot
+containing the restored screen plus live output from the new shell.
 
 ### Wire protocol
 
@@ -319,7 +323,7 @@ mode uses completely separate paths:
 |---|---|---|
 | App ID | `io.github.IllyaYalovyy.rttx` | `io.github.IllyaYalovyy.rttx.Devel` |
 | Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
-| State | `$XDG_CACHE_HOME/rttx-server/` | `$XDG_CACHE_HOME/rttx-server-devel/` |
+| State | `$XDG_STATE_HOME/rttx/daemon/` | `$XDG_STATE_HOME/rttx-devel/daemon/` |
 | Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
 | Log level | info | debug |
 

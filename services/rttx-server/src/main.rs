@@ -102,7 +102,11 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     if dev_mode {
         tracing::info!("Running in DEVELOPMENT mode");
-        tracing::debug!(runtime_dir = %runtime_dir.display(), cache_dir = %os.cache_dir().display());
+        tracing::debug!(
+            runtime_dir = %runtime_dir.display(),
+            state_dir = %os.state_dir().display(),
+            cache_dir = %os.cache_dir().display(),
+        );
     }
 
     // Write PID file in foreground mode (daemonize writes it in daemon mode).
