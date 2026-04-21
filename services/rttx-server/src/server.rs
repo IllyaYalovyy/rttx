@@ -2086,6 +2086,10 @@ fn spawn_pty_read_loop(
 /// Uses v2 per-runtime files with symlink-based backup. Also writes the
 /// v1 monolithic `state.json` for backward compatibility during transition.
 ///
+/// Dirty-flag optimization (RFC-022 §5): only runtimes where
+/// `revision > persisted_revision` are written. The daemon index is
+/// rewritten only when the set of runtime IDs changes.
+///
 /// Stops when the shutdown signal fires.
 pub async fn serialization_loop(
     server: Arc<Mutex<Server>>,
@@ -2094,6 +2098,7 @@ pub async fn serialization_loop(
 ) {
     let mut ticker = tokio::time::interval(interval);
     let mut diagnostics_counter = 0u64;
+    let mut last_persisted_ids: Vec<Uuid> = Vec::new();
     loop {
         tokio::select! {
             _ = ticker.tick() => {}
@@ -2128,28 +2133,55 @@ pub async fn serialization_loop(
             s.log_diagnostics();
         }
 
-        // Collect v2 runtime files for persistent runtimes.
-        let runtime_files: Vec<_> = s
+        // Collect v2 runtime files only for dirty persistent runtimes.
+        let dirty_runtime_files: Vec<_> = s
+            .runtimes
+            .values()
+            .filter(|rt| rt.policy == RuntimePolicy::Persistent && rt.is_dirty())
+            .map(Runtime::to_runtime_file)
+            .collect();
+
+        // Check whether the set of persistent runtime IDs changed.
+        let mut current_ids: Vec<Uuid> = s
             .runtimes
             .values()
             .filter(|rt| rt.policy == RuntimePolicy::Persistent)
-            .map(Runtime::to_runtime_file)
+            .map(|rt| rt.id)
             .collect();
+        current_ids.sort();
+        let index_changed = current_ids != last_persisted_ids;
 
         // Also write v1 for backward compat during transition.
         let snapshot = s.build_snapshot();
         let v1_path = default_state_path(&cache_dir);
         drop(s);
 
-        // Write v2 per-runtime files.
-        let ids: Vec<_> = runtime_files.iter().map(|rf| rf.spec.id).collect();
-        if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &ids) {
-            tracing::error!("Failed to write v2 daemon index: {e}");
+        // Write v2 daemon index only when runtime IDs changed.
+        if index_changed {
+            if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &current_ids) {
+                tracing::error!("Failed to write v2 daemon index: {e}");
+            } else {
+                last_persisted_ids = current_ids;
+            }
         }
-        for rf in &runtime_files {
+
+        // Write only dirty runtimes.
+        let written_ids: Vec<Uuid> = dirty_runtime_files.iter().map(|rf| rf.spec.id).collect();
+        for rf in &dirty_runtime_files {
             if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
                 tracing::error!("Failed to write v2 runtime {}: {e}", short_id(rf.spec.id));
             }
+        }
+
+        // Mark successfully written runtimes as persisted.
+        if !written_ids.is_empty() {
+            let mut s = server.lock().await;
+            for id in &written_ids {
+                if let Some(rt) = s.runtimes.get_mut(id) {
+                    rt.mark_persisted();
+                }
+            }
+            drop(s);
         }
 
         // Write v1 monolithic state.json.
@@ -2160,6 +2192,9 @@ pub async fn serialization_loop(
 }
 
 /// Persist final state and flush all scrollback to disk.
+///
+/// Writes all persistent runtimes unconditionally (ignoring dirty flags)
+/// because this is the last chance before shutdown.
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut s = server.lock().await;
     let cache_dir = s.os.cache_dir();
@@ -2177,7 +2212,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         }
     }
 
-    // Write v2 per-runtime files.
+    // Write v2 per-runtime files (all persistent, not just dirty).
     let runtime_files: Vec<_> = s
         .runtimes
         .values()
@@ -2192,6 +2227,13 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     for rf in &runtime_files {
         if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
             tracing::error!("Failed to write v2 runtime {} on shutdown: {e}", short_id(rf.spec.id));
+        }
+    }
+
+    // Mark all as persisted.
+    for rt in s.runtimes.values_mut() {
+        if rt.policy == RuntimePolicy::Persistent {
+            rt.mark_persisted();
         }
     }
 
