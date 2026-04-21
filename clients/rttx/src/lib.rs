@@ -14,6 +14,7 @@ pub mod places_window;
 pub mod preferences;
 pub mod runtime;
 pub mod shortcuts;
+pub mod store;
 pub mod workspace;
 pub mod workspace_state;
 
