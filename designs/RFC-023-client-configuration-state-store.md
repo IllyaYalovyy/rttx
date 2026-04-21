@@ -2,7 +2,7 @@
 
 | Field         | Value  |
 |---------------|--------|
-| Status        | Review |
+| Status        | Accepted |
 | Author(s)     | jd2023 |
 | Supersedes    | -      |
 | Superseded by | -      |
