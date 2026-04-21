@@ -65,10 +65,7 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
         let runtimes = list_runtimes(&mut c).await;
         // The backup was written before the second runtime was added,
         // so it may contain 1 runtime (from the first index write).
-        assert!(
-            !runtimes.is_empty(),
-            "daemon should recover runtimes from backup index"
-        );
+        assert!(!runtimes.is_empty(), "daemon should recover runtimes from backup index");
         assert!(
             runtimes.iter().any(|r| r.name == "index-fallback"),
             "first runtime should survive via backup"
@@ -118,7 +115,10 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
         c.handshake().await;
 
         let runtimes = list_runtimes(&mut c).await;
-        assert!(runtimes.is_empty(), "daemon should start fresh when both index copies are corrupt");
+        assert!(
+            runtimes.is_empty(),
+            "daemon should start fresh when both index copies are corrupt"
+        );
     }
 }
 
@@ -242,12 +242,8 @@ async fn multiple_mutations_coalesce_into_single_write() {
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for initial write.
-    wait_for_state_containing(
-        &tmp.path().join("cache"),
-        "coalesce-test",
-        Duration::from_secs(10),
-    )
-    .await;
+    wait_for_state_containing(&tmp.path().join("cache"), "coalesce-test", Duration::from_secs(10))
+        .await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let rt_path = layout::runtime_file(&state_dir, runtime_id);
@@ -334,10 +330,7 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
                 // Verify rotated segments exist and the oldest is bounded.
                 // SCROLLBACK_ROTATE_KEEP = 3, so .log.4 should not exist.
                 let seg4 = scrollback_dir.join(format!("{pane_id}.log.4"));
-                assert!(
-                    !seg4.exists(),
-                    "segment .log.4 should not exist (keep limit is 3)"
-                );
+                assert!(!seg4.exists(), "segment .log.4 should not exist (keep limit is 3)");
             }
         }
     }
@@ -364,11 +357,8 @@ async fn startup_prunes_old_orphans() {
         "created_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 },
         "last_serialized_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 }
     });
-    std::fs::write(
-        state_dir.join("daemon.json"),
-        serde_json::to_string_pretty(&index).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(state_dir.join("daemon.json"), serde_json::to_string_pretty(&index).unwrap())
+        .unwrap();
 
     // Pre-seed .orphans/ with an old entry (31 days ago).
     let orphans_dir = layout::orphans_dir(&state_dir);
