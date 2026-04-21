@@ -80,7 +80,7 @@ fn populate_places(
         container.remove(&child);
     }
 
-    let saved = places::load();
+    let saved = crate::store::default_store().load_places();
     let visible = places::visible_for_host(&saved, host_key);
 
     let mut has_builtin = false;

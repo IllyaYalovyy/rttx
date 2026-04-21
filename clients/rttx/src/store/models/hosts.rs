@@ -34,3 +34,34 @@ pub struct HostCatalog {
     #[serde(default)]
     pub hosts: Vec<HostRecord>,
 }
+
+// ── Conversions to/from the existing domain type ────────────
+
+impl From<HostRecord> for crate::host::Host {
+    fn from(rec: HostRecord) -> Self {
+        Self {
+            key: rec.key,
+            name: rec.name,
+            kind: match rec.kind {
+                HostKind::Local => crate::host::HostKind::Local,
+                HostKind::Remote => crate::host::HostKind::Remote,
+            },
+            ssh_target: rec.ssh_target,
+        }
+    }
+}
+
+impl From<&crate::host::Host> for HostRecord {
+    fn from(host: &crate::host::Host) -> Self {
+        Self {
+            key: host.key.clone(),
+            name: host.name.clone(),
+            kind: match host.kind {
+                crate::host::HostKind::Local => HostKind::Local,
+                crate::host::HostKind::Remote => HostKind::Remote,
+            },
+            ssh_target: host.ssh_target.clone(),
+            labels: Vec::new(),
+        }
+    }
+}

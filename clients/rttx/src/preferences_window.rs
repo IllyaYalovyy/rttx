@@ -8,12 +8,12 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::color_scheme;
-use crate::preferences::{self, DefaultSessionFolder, Preferences, TerminalThemeMode};
+use crate::preferences::{DefaultSessionFolder, Preferences, TerminalThemeMode};
 use crate::shortcuts::{self, DEFAULT_SHORTCUTS};
 
 /// Build and present the preferences window.
 pub fn show(parent: &impl IsA<gtk4::Window>) {
-    let prefs = preferences::load();
+    let prefs = crate::store::default_store().load_preferences().into_value().unwrap_or_default();
     let window = adw::PreferencesWindow::new();
     window.set_transient_for(Some(parent.as_ref()));
     window.set_modal(true);
@@ -268,7 +268,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             paste_guard: paste_guard_row.is_active(),
             paste_guard_threshold: prefs.paste_guard_threshold,
         };
-        if let Err(e) = preferences::save(&new_prefs) {
+        if let Err(e) = crate::store::default_store().save_preferences(&new_prefs) {
             tracing::error!("Failed to save preferences: {e}");
         }
         if let Ok(win) = parent_window.clone().downcast::<crate::window::Window>() {

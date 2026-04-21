@@ -91,7 +91,8 @@ impl Window {
 
     fn connect_terminal_signals(&self, term: &TerminalWidget) {
         {
-            let prefs = preferences::load();
+            let prefs =
+                crate::store::default_store().load_preferences().into_value().unwrap_or_default();
             let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
             let is_dark = adw::StyleManager::default().is_dark();
             let effective_name = prefs.effective_color_scheme_name(is_dark);

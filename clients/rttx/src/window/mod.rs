@@ -569,7 +569,7 @@ impl Window {
     }
 
     pub(super) fn refresh_host_menus(&self) {
-        let saved = host::load();
+        let saved = crate::store::default_store().load_hosts().into_value().unwrap_or_default();
 
         let mut keys: Vec<String> = vec![host::LOCAL_KEY.into()];
         for h in &saved {
@@ -618,12 +618,14 @@ impl Window {
     }
 
     fn new_workspace_for_host(&self, host_key: &str) {
-        let host = host::resolve(host_key, &host::load());
+        let hosts = crate::store::default_store().load_hosts().into_value().unwrap_or_default();
+        let host = host::resolve(host_key, &hosts);
         crate::new_workspace_dialog::show(self, &host);
     }
 
     fn connect_for_host(&self, host_key: &str) {
-        let host = host::resolve(host_key, &host::load());
+        let hosts = crate::store::default_store().load_hosts().into_value().unwrap_or_default();
+        let host = host::resolve(host_key, &hosts);
         self.request_connect_existing(&host);
     }
 
@@ -785,7 +787,8 @@ impl Window {
     }
 
     fn resolve_default_session_folder(&self) -> Option<String> {
-        let prefs = preferences::load();
+        let prefs =
+            crate::store::default_store().load_preferences().into_value().unwrap_or_default();
         match prefs.default_session_folder {
             preferences::DefaultSessionFolder::Home => None,
             preferences::DefaultSessionFolder::CurrentSession => {

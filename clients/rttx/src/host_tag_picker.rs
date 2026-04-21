@@ -27,7 +27,8 @@ impl HostTagPicker {
     /// Build a picker from saved hosts, pre-checking `selected_tags`.
     #[must_use]
     pub fn new(selected_tags: &[String]) -> Self {
-        Self::with_hosts(&host::load(), selected_tags)
+        let hosts = crate::store::default_store().load_hosts().into_value().unwrap_or_default();
+        Self::with_hosts(&hosts, selected_tags)
     }
 
     /// Build a picker from an explicit host list, pre-checking `selected_tags`.
