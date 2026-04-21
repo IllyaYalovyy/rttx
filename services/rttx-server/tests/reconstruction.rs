@@ -42,6 +42,7 @@ async fn reconstruct_session_after_restart() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         };
         client.send(&create_pane).await;
@@ -168,6 +169,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
                     dark_background: None,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             })
             .await;

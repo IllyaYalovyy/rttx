@@ -210,6 +210,7 @@ mod tests {
                     dark_background: None,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             },
             proto::ClientMessage {
@@ -284,6 +285,7 @@ mod tests {
                             rows: 40,
                             exit_status: None,
                             reconstructed: true,
+                            no_persist: false,
                         }],
                         policy: proto::RuntimePolicy::Persistent as i32,
                         attached_client_count: 1,
@@ -435,6 +437,7 @@ mod tests {
                     dark_background: dark,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             };
             let mut buf = BytesMut::new();
@@ -460,6 +463,7 @@ mod tests {
                     dark_background: None,
                     cols,
                     rows,
+                    no_persist: None,
                 })),
             };
             let mut buf = BytesMut::new();
@@ -824,6 +828,7 @@ mod v3_envelope_tests {
                     dark_background: Some(true),
                     cols: 80,
                     rows: 24,
+                    no_persist: None,
                 })),
             },
             v3::ClientEnvelope {
@@ -1181,6 +1186,7 @@ mod v3_envelope_tests {
                 rows: 24,
                 exit_status: None,
                 reconstructed: false,
+                no_persist: false,
             }],
         };
         let mut buf = BytesMut::new();

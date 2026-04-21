@@ -258,6 +258,7 @@ message PaneInfo {
   uint32 rows = 5;
   optional int32 exit_status = 6;
   bool reconstructed = 7;
+  bool no_persist = 8;
 }
 
 // ─── Snapshots ───────────────────────────────────────────────────────
@@ -291,6 +292,7 @@ message CreatePane {
   optional bool dark_background = 3;
   uint32 cols = 4;
   uint32 rows = 5;
+  optional bool no_persist = 6;
 }
 
 message ClosePane {
@@ -309,6 +311,12 @@ message SetPaneTitle {
   bytes runtime_id = 1;
   bytes pane_id = 2;
   string title = 3;
+}
+
+message SetPaneNoPersist {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  bool no_persist = 3;
 }
 
 // ─── Pane lifecycle — events ─────────────────────────────────────────
@@ -459,6 +467,7 @@ message ClientEnvelope {
     ClosePane close_pane = 31;
     ResizePane resize_pane = 32;
     SetPaneTitle set_pane_title = 33;
+    SetPaneNoPersist set_pane_no_persist = 34;
 
     // Recovery (OPT_RESYNC)
     ResyncRuntime resync_runtime = 50;

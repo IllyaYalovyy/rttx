@@ -18,6 +18,7 @@ async fn create_pane_with_size(
                 dark_background: None,
                 cols,
                 rows,
+                no_persist: None,
             })),
         })
         .await;

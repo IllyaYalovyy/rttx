@@ -305,7 +305,16 @@ impl Server {
     /// `Arc<Mutex<>>` so we can spawn PTY read loops.
     #[allow(clippy::significant_drop_tightening)]
     pub async fn reconstruct_runtimes(server: &Arc<Mutex<Self>>) {
-        let panes_to_reconstruct: Vec<(Uuid, Uuid, String, Option<String>, u16, u16)> = {
+        #[allow(clippy::type_complexity)]
+        let panes_to_reconstruct: Vec<(
+            Uuid,
+            Uuid,
+            String,
+            Option<String>,
+            u16,
+            u16,
+            bool,
+        )> = {
             let mut s = server.lock().await;
             let state_dir = s.os.state_dir();
 
@@ -364,7 +373,15 @@ impl Server {
                 .flat_map(|rt| {
                     let name = rt.name.clone();
                     rt.panes.values().map(move |pane| {
-                        (rt.id, pane.id, name.clone(), pane.cwd.clone(), pane.cols, pane.rows)
+                        (
+                            rt.id,
+                            pane.id,
+                            name.clone(),
+                            pane.cwd.clone(),
+                            pane.cols,
+                            pane.rows,
+                            pane.no_persist,
+                        )
                     })
                 })
                 .collect()
@@ -376,19 +393,23 @@ impl Server {
 
         tracing::info!("Reconstructing {} panes", panes_to_reconstruct.len());
 
-        for (runtime_id, pane_id, runtime_name, cwd, cols, rows) in panes_to_reconstruct {
+        for (runtime_id, pane_id, runtime_name, cwd, cols, rows, no_persist) in panes_to_reconstruct
+        {
             let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
             let pane_short = short_id(pane_id);
             let pty_result = {
                 let s = server.lock().await;
-                let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
-                if let Some(parent) = hist.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                let mut env = vec![];
+                if no_persist {
+                    env.push(("HISTFILE".into(), "/dev/null".into()));
+                } else {
+                    let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+                    if let Some(parent) = hist.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
                 }
-                let env = vec![
-                    ("HISTFILE".into(), hist.to_string_lossy().into_owned()),
-                    ("COLORFGBG".into(), "15;0".into()),
-                ];
+                env.push(("COLORFGBG".into(), "15;0".into()));
                 let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
                 s.engine.spawn_pane(pane_id, &config)
             };
@@ -771,6 +792,7 @@ impl Server {
                 };
 
                 let pane_id = Uuid::new_v4();
+                let no_persist = req.no_persist.unwrap_or(false);
                 let (pty_result, runtime_label, cols, rows) = {
                     let s = server.lock().await;
                     let Some(rt) = s.runtimes.get(&runtime_id) else {
@@ -786,16 +808,20 @@ impl Server {
                         ));
                     }
                     let label = s.runtime_label(runtime_id);
-                    let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
-                    if let Some(parent) = hist.parent() {
-                        let _ = std::fs::create_dir_all(parent);
+                    let mut env = vec![];
+                    if no_persist {
+                        env.push(("HISTFILE".into(), "/dev/null".into()));
+                    } else {
+                        let hist =
+                            serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+                        if let Some(parent) = hist.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
                     }
                     let colorfgbg =
                         if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
-                    let env = vec![
-                        ("HISTFILE".into(), hist.to_string_lossy().into_owned()),
-                        ("COLORFGBG".into(), colorfgbg.into()),
-                    ];
+                    env.push(("COLORFGBG".into(), colorfgbg.into()));
                     let cwd = req.cwd;
                     let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
                     let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
@@ -819,6 +845,7 @@ impl Server {
                             };
                             let mut pane = Pane::new(pane_id, cols, rows);
                             pane.child_pid = child_pid;
+                            pane.no_persist = no_persist;
                             rt.add_pane(pane);
                             let revision = rt.revision();
                             let name = rt.name.clone();
@@ -1191,6 +1218,10 @@ impl Server {
 
             v3::client_envelope::Command::SetPaneTitle(req) => {
                 Self::handle_v3_set_pane_title(server, client_id, req).await
+            }
+
+            v3::client_envelope::Command::SetPaneNoPersist(req) => {
+                Self::handle_v3_set_pane_no_persist(server, client_id, req).await
             }
 
             v3::client_envelope::Command::RenameRuntime(req) => {
@@ -1659,6 +1690,7 @@ impl Server {
             }
         };
         let pane_id = Uuid::new_v4();
+        let no_persist = req.no_persist.unwrap_or(false);
         let (pty_result, runtime_label, cols, rows) = {
             let s = server.lock().await;
             let Some(rt) = s.runtimes.get(&runtime_id) else {
@@ -1682,15 +1714,18 @@ impl Server {
                 ));
             }
             let label = s.runtime_label(runtime_id);
-            let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
-            if let Some(parent) = hist.parent() {
-                let _ = std::fs::create_dir_all(parent);
+            let mut env = vec![];
+            if no_persist {
+                env.push(("HISTFILE".into(), "/dev/null".into()));
+            } else {
+                let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+                if let Some(parent) = hist.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
             }
             let colorfgbg = if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
-            let env = vec![
-                ("HISTFILE".into(), hist.to_string_lossy().into_owned()),
-                ("COLORFGBG".into(), colorfgbg.into()),
-            ];
+            env.push(("COLORFGBG".into(), colorfgbg.into()));
             let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
             let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
             let config = PaneSpawnConfig { command: vec![], cwd: req.cwd, env, cols, rows };
@@ -1716,6 +1751,7 @@ impl Server {
                     };
                     let mut pane = Pane::new(pane_id, cols, rows);
                     pane.child_pid = child_pid;
+                    pane.no_persist = no_persist;
                     rt.add_pane(pane);
                     let revision = rt.revision();
                     let name = rt.name.clone();
@@ -1933,6 +1969,22 @@ impl Server {
             return None;
         }
         let _ = rt.set_pane_title(pane_id, req.title);
+        None
+    }
+
+    async fn handle_v3_set_pane_no_persist(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        req: v3::SetPaneNoPersist,
+    ) -> Option<v3::ServerEnvelope> {
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
+        let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
+        let mut s = server.lock().await;
+        let rt = s.runtimes.get_mut(&runtime_id)?;
+        if !rt.client_has_write_access(client_id) {
+            return None;
+        }
+        let _ = rt.set_pane_no_persist(pane_id, req.no_persist);
         None
     }
 }

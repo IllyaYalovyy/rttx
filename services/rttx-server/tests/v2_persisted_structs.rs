@@ -62,6 +62,7 @@ fn runtime_file_persists_and_loads_via_migration_chain() {
         exit_status: None,
         cols: 120,
         rows: 40,
+        no_persist: false,
     };
     let original = RuntimeFileV1 {
         schema_version: RUNTIME_FILE_SCHEMA_VERSION,
@@ -111,6 +112,7 @@ fn screen_snapshot_persists_and_loads_via_migration_chain() {
             focus_reporting: false,
         },
         screen_bytes: vec![0x1b, b'[', b'2', b'J'],
+        confidential: false,
     };
     let recovered = write_and_load_screen_snapshot(&original);
     assert_eq!(original, recovered);

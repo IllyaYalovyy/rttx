@@ -70,6 +70,7 @@ async fn readers_observe_pane_created_push() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;

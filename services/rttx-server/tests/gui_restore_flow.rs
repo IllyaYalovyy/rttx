@@ -46,6 +46,7 @@ async fn gui_restore_flow_no_duplicates() {
                     dark_background: None,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             })
             .await;

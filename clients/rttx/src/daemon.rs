@@ -399,6 +399,7 @@ impl DaemonConnection {
         dark_background: Option<bool>,
         cols: u32,
         rows: u32,
+        no_persist: bool,
     ) -> Result<Uuid, DaemonError> {
         let response = self
             .request(v3::client_envelope::Command::CreatePane(v3::CreatePane {
@@ -407,6 +408,7 @@ impl DaemonConnection {
                 dark_background,
                 cols,
                 rows,
+                no_persist: if no_persist { Some(true) } else { None },
             }))
             .await?;
         match response.payload {

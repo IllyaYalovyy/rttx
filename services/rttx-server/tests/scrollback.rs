@@ -34,6 +34,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&create_pane).await;
@@ -128,6 +129,7 @@ async fn scrollback_log_capped_at_max_size() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&create_pane).await;
@@ -214,6 +216,7 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
             dark_background: None,
             cols: 0,
             rows: 0,
+            no_persist: None,
         })),
     };
     client.send(&create_pane).await;

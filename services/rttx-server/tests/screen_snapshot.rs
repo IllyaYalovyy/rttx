@@ -51,6 +51,7 @@ async fn serialization_writes_screen_snapshots() {
             runtime_id: runtime_id_bytes.clone(),
             cols: 80,
             rows: 24,
+            no_persist: None,
             ..Default::default()
         })),
     })
@@ -101,6 +102,7 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
                 exit_status: None,
                 cols: 80,
                 rows: 24,
+                no_persist: false,
             }],
             active_pane_id: None,
             command_history: vec![],

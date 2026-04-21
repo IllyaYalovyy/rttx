@@ -1328,6 +1328,7 @@ fn v3_send_discipline_core_commands_always_allowed() {
             dark_background: Some(true),
             cols: 80,
             rows: 24,
+            no_persist: None,
         }),
         v3::client_envelope::Command::ClosePane(v3::ClosePane {
             runtime_id: rt.clone(),
@@ -1673,6 +1674,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         dark_background: Some(true),
         cols: 80,
         rows: 24,
+        no_persist: None,
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_ne!(req.request_id, 0);

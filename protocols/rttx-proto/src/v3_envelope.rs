@@ -48,6 +48,7 @@ pub fn is_fire_and_forget(command: &v3::client_envelope::Command) -> bool {
         v3::client_envelope::Command::TerminalInput(_)
             | v3::client_envelope::Command::ResizePane(_)
             | v3::client_envelope::Command::SetPaneTitle(_)
+            | v3::client_envelope::Command::SetPaneNoPersist(_)
             | v3::client_envelope::Command::Shutdown(_)
     )
 }
@@ -235,6 +236,7 @@ mod tests {
             dark_background: None,
             cols: 80,
             rows: 24,
+            no_persist: None,
         });
         assert!(!is_fire_and_forget(&cmd));
     }

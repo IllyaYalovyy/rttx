@@ -136,6 +136,7 @@ fn ping_answered_during_pty_output() {
                     dark_background: Some(true),
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             })
             .await;

@@ -131,6 +131,7 @@ async fn read_only_attach_cannot_mutate_runtime() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;

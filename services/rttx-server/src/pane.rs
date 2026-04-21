@@ -65,6 +65,8 @@ pub struct Pane {
     pub child_pid: Option<u32>,
     /// Monotonic output sequence counter for v3 `OutputDelta` continuity.
     pub output_seq: u64,
+    /// When true, scrollback and history are not flushed to disk (RFC-022 §9).
+    pub no_persist: bool,
 }
 
 impl Pane {
@@ -84,6 +86,7 @@ impl Pane {
             pending_flush: Vec::new(),
             child_pid: None,
             output_seq: 0,
+            no_persist: false,
         }
     }
 
@@ -124,12 +127,20 @@ impl Pane {
     /// Appends only the bytes received since the last flush. If the file
     /// exceeds `DEFAULT_MAX_SCROLLBACK_LOG` bytes after appending, the file
     /// is truncated to keep only the tail.
+    ///
+    /// No-persist panes skip the disk write entirely; pending bytes are
+    /// discarded so the in-memory buffer does not grow unboundedly.
     pub fn flush_scrollback(
         &mut self,
         cache_dir: &Path,
         session_id: Uuid,
     ) -> Result<(), std::io::Error> {
         if self.pending_flush.is_empty() {
+            return Ok(());
+        }
+
+        if self.no_persist {
+            self.pending_flush = Vec::new();
             return Ok(());
         }
 
@@ -238,6 +249,7 @@ impl Pane {
                 focus_reporting: self.screen.focus_event_mode(),
             },
             screen_bytes,
+            confidential: self.no_persist,
         }
     }
 }
@@ -685,5 +697,50 @@ mod tests {
         let json = serde_json::to_string_pretty(&snap).unwrap();
         let recovered: ScreenSnapshotV1 = serde_json::from_str(&json).unwrap();
         assert_eq!(snap, recovered);
+    }
+
+    // ── no_persist tests ────────────────────────────────────────────
+
+    #[test]
+    fn no_persist_pane_skips_scrollback_flush() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.no_persist = true;
+        pane.feed_output(b"secret data");
+        assert!(pane.has_pending_flush());
+
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+
+        assert!(!pane.has_pending_flush());
+        assert!(pane.scrollback_log_path.is_none());
+        // No file should have been created.
+        let scrollback_dir = tmp.path().join("scrollback");
+        assert!(!scrollback_dir.exists());
+    }
+
+    #[test]
+    fn no_persist_pane_snapshot_is_confidential() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.no_persist = true;
+        pane.feed_output(b"hello");
+
+        let snap = pane.to_screen_snapshot();
+        assert!(snap.confidential);
+    }
+
+    #[test]
+    fn normal_pane_snapshot_is_not_confidential() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello");
+
+        let snap = pane.to_screen_snapshot();
+        assert!(!snap.confidential);
+    }
+
+    #[test]
+    fn no_persist_defaults_to_false() {
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert!(!pane.no_persist);
     }
 }

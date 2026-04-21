@@ -214,6 +214,7 @@ mod imp {
             pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
             pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
             pane_section.append(Some("Rotate Layout"), Some("win.rotate-layout"));
+            pane_section.append(Some("Confidential Mode"), Some("win.toggle-no-persist"));
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
             session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));

@@ -35,6 +35,7 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
                 dark_background: None,
                 cols: 0,
                 rows: 0,
+                no_persist: None,
             })),
         })
         .await;
@@ -190,6 +191,7 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
                     dark_background: None,
                     cols: 0,
                     rows: 0,
+                    no_persist: None,
                 })),
             })
             .await;

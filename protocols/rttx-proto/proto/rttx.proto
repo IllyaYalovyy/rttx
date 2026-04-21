@@ -48,6 +48,7 @@ message CreatePane {
     optional bool dark_background = 3;
     uint32 cols = 4;
     uint32 rows = 5;
+    optional bool no_persist = 6;
 }
 
 message ClosePane {
@@ -112,6 +113,7 @@ message PaneInfo {
     uint32 rows = 5;
     optional int32 exit_status = 6;
     bool reconstructed = 7;
+    bool no_persist = 8;
 }
 
 message RuntimeInfo {
