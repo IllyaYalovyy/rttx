@@ -201,6 +201,9 @@ pub struct Runtime {
     pub reconstructed: bool,
     /// Monotonic revision for meaningful runtime mutations.
     pub revision: u64,
+    /// Revision at which this runtime was last successfully written to disk.
+    /// When `revision > persisted_revision`, the runtime has unsaved changes.
+    persisted_revision: u64,
     /// When this runtime was created.
     pub created_at: SystemTime,
     /// When this runtime was last active.
@@ -223,6 +226,7 @@ impl Runtime {
             policy: RuntimePolicy::Persistent,
             reconstructed: false,
             revision: default_runtime_revision(),
+            persisted_revision: 0,
             created_at: now,
             last_active_at: now,
             attached_clients: HashMap::new(),
@@ -261,6 +265,7 @@ impl Runtime {
             policy: persisted.policy,
             reconstructed: true,
             revision: persisted.revision.max(default_runtime_revision()),
+            persisted_revision: persisted.revision.max(default_runtime_revision()),
             created_at: persisted.created_at,
             last_active_at: persisted.last_active_at,
             attached_clients: HashMap::new(),
@@ -276,6 +281,17 @@ impl Runtime {
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Whether this runtime has unsaved changes since the last persist.
+    #[must_use]
+    pub const fn is_dirty(&self) -> bool {
+        self.revision > self.persisted_revision
+    }
+
+    /// Mark this runtime as successfully persisted at its current revision.
+    pub const fn mark_persisted(&mut self) {
+        self.persisted_revision = self.revision;
     }
 
     /// Add a pane to this runtime.
@@ -587,6 +603,7 @@ impl Runtime {
             policy: rf.spec.policy,
             reconstructed: true,
             revision: rf.instance.revision.max(default_runtime_revision()),
+            persisted_revision: rf.instance.revision.max(default_runtime_revision()),
             created_at: rf.spec.created_at,
             last_active_at: rf.instance.last_active_at,
             attached_clients: HashMap::new(),
@@ -939,5 +956,82 @@ mod tests {
         let rf = runtime.to_runtime_file();
         let restored = Runtime::from_runtime_file(&rf);
         assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
+    }
+
+    // ── Dirty-flag (persisted_revision) tests ───────────────────
+
+    #[test]
+    fn new_runtime_is_dirty() {
+        let runtime = Runtime::new("test".into());
+        assert!(runtime.is_dirty(), "new runtime should be dirty (never persisted)");
+    }
+
+    #[test]
+    fn mark_persisted_clears_dirty_flag() {
+        let mut runtime = Runtime::new("test".into());
+        assert!(runtime.is_dirty());
+        runtime.mark_persisted();
+        assert!(!runtime.is_dirty());
+    }
+
+    #[test]
+    fn mutation_after_persist_makes_dirty_again() {
+        let mut runtime = Runtime::new("test".into());
+        runtime.mark_persisted();
+        assert!(!runtime.is_dirty());
+
+        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        assert!(runtime.is_dirty(), "mutation should make runtime dirty again");
+    }
+
+    #[test]
+    fn from_persisted_is_clean() {
+        let mut runtime = Runtime::new("test".into());
+        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        let persisted = runtime.to_persisted();
+        let restored = Runtime::from_persisted(&persisted);
+        assert!(!restored.is_dirty(), "restored runtime should be clean");
+    }
+
+    #[test]
+    fn from_runtime_file_is_clean() {
+        let mut runtime = Runtime::new("test".into());
+        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        let rf = runtime.to_runtime_file();
+        let restored = Runtime::from_runtime_file(&rf);
+        assert!(!restored.is_dirty(), "restored runtime should be clean");
+    }
+
+    #[test]
+    fn multiple_mutations_stay_dirty_until_persisted() {
+        let mut runtime = Runtime::new("test".into());
+        runtime.mark_persisted();
+
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let pane_id = pane.id;
+        runtime.add_pane(pane);
+        runtime.rename("renamed".into());
+        runtime.set_pane_title(pane_id, "title".into());
+        assert!(runtime.is_dirty());
+
+        runtime.mark_persisted();
+        assert!(!runtime.is_dirty());
+    }
+
+    #[test]
+    fn idempotent_operations_do_not_dirty() {
+        let mut runtime = Runtime::new("test".into());
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let pane_id = pane.id;
+        runtime.add_pane(pane);
+        runtime.set_pane_title(pane_id, "shell".into());
+        runtime.mark_persisted();
+        assert!(!runtime.is_dirty());
+
+        // Same size, same title, same name — no revision bump.
+        runtime.resize_pane(pane_id, 80, 24);
+        runtime.set_pane_title(pane_id, "shell".into());
+        runtime.rename("test".into());
+        assert!(!runtime.is_dirty(), "no-op mutations should not dirty the runtime");
     }
 }

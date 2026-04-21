@@ -49,7 +49,8 @@ async fn serialization_writes_v2_runtime_files() {
     assert!(result.failed_ids.is_empty());
 }
 
-/// After two serialization ticks, the .bak symlink and .prev file exist.
+/// After two daemon index writes (triggered by runtime ID changes), the
+/// .bak symlink and .prev file exist.
 #[tokio::test]
 async fn serialization_creates_backup_symlink() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -58,6 +59,7 @@ async fn serialization_creates_backup_symlink() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
+    // First runtime — triggers first daemon index write.
     c.send(&proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
             name: "bak-test".into(),
@@ -70,9 +72,21 @@ async fn serialization_creates_backup_symlink() {
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
-    // Wait for at least 2 serialization ticks (1s interval in tests).
+    // Wait for first serialization tick.
     wait_for_state_containing(&tmp.path().join("cache"), "bak-test", Duration::from_secs(10)).await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Second runtime — changes runtime IDs, triggers second daemon index write.
+    c.send(&proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            name: "bak-test-2".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    })
+    .await;
+    let _ = c.recv().await; // RuntimeCreated
+
+    // Wait for second serialization tick to write the updated index.
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let index_path = layout::daemon_index(&state_dir);
