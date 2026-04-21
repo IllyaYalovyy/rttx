@@ -6,6 +6,7 @@
 
 mod envelope;
 mod io;
+pub mod models;
 mod paths;
 
 pub use envelope::{DocumentEnvelope, Schema};

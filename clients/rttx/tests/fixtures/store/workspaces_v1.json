@@ -1,0 +1,79 @@
+{
+  "schema": "rttx.client.workspaces",
+  "version": 1,
+  "app_version": "0.4.4",
+  "written_at": "2026-04-21T00:00:00Z",
+  "data": {
+    "active_workspace_id": "ws-001",
+    "workspaces": [
+      {
+        "id": "ws-001",
+        "name": "Development",
+        "user_renamed": true,
+        "endpoint_key": "local",
+        "policy": "persistent",
+        "runtime_ref": {
+          "runtime_id": "rt-abc-123",
+          "attachment_kind": "created"
+        },
+        "layout": {
+          "split": {
+            "orientation": "horizontal",
+            "ratio": 0.5,
+            "first": {
+              "terminal": {
+                "uuid": "pane-001",
+                "cwd": "/home/user/projects"
+              }
+            },
+            "second": {
+              "terminal": {
+                "uuid": "pane-002",
+                "cwd": "/home/user/projects/rttx"
+              }
+            }
+          }
+        },
+        "active_pane_id": "pane-001",
+        "input_sync": "off",
+        "color": "blue",
+        "pane_recovery": {
+          "pane-001": {
+            "source": "empty-shell",
+            "startup": []
+          },
+          "pane-002": {
+            "source": { "command": { "title": "cargo watch" } },
+            "target": { "local-folder": { "path": "/home/user/projects/rttx" } },
+            "startup": [
+              { "send-text": { "text": "cargo watch -x test", "execute": true } }
+            ]
+          }
+        }
+      },
+      {
+        "id": "ws-002",
+        "name": "Remote Server",
+        "user_renamed": true,
+        "endpoint_key": "devbox.example.com",
+        "policy": "ephemeral",
+        "layout": {
+          "terminal": {
+            "uuid": "pane-003",
+            "cwd": "/var/log"
+          }
+        },
+        "active_pane_id": "pane-003",
+        "input_sync": "off",
+        "color": "green",
+        "pane_recovery": {
+          "pane-003": {
+            "source": "manual",
+            "target": { "remote-shell": { "ssh_target": "user@devbox.example.com", "remote_folder": "/var/log" } },
+            "startup": []
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "schema": "rttx.client.runtime_cache",
+  "version": 1,
+  "app_version": "0.4.4",
+  "written_at": "2026-04-21T00:00:00Z",
+  "data": {
+    "dismissed_runtime_ids": ["rt-old-001", "rt-old-002"]
+  }
+}

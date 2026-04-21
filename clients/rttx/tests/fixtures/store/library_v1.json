@@ -1,0 +1,45 @@
+{
+  "schema": "rttx.client.library",
+  "version": 1,
+  "app_version": "0.4.4",
+  "written_at": "2026-04-21T00:00:00Z",
+  "data": {
+    "places": [
+      {
+        "id": "place-001",
+        "name": "Projects",
+        "path": "/home/user/projects",
+        "host_tags": []
+      },
+      {
+        "id": "place-002",
+        "name": "Remote Logs",
+        "path": "/var/log",
+        "host_tags": ["devbox.example.com"]
+      }
+    ],
+    "commands": [
+      {
+        "id": "cmd-001",
+        "title": "Git Status",
+        "body": "git status",
+        "default_run_mode": "run",
+        "host_tags": []
+      },
+      {
+        "id": "cmd-002",
+        "title": "Tail Syslog",
+        "body": "tail -f /var/log/syslog",
+        "default_run_mode": "run",
+        "host_tags": ["devbox.example.com"]
+      },
+      {
+        "id": "cmd-003",
+        "title": "Docker PS",
+        "body": "docker ps --format 'table {{.Names}}\\t{{.Status}}'",
+        "default_run_mode": "insert",
+        "host_tags": []
+      }
+    ]
+  }
+}

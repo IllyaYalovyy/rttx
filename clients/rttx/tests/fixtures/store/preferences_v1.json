@@ -1,0 +1,29 @@
+{
+  "schema": "rttx.client.preferences",
+  "version": 1,
+  "app_version": "0.4.4",
+  "written_at": "2026-04-21T00:00:00Z",
+  "data": {
+    "font": "JetBrains Mono 14",
+    "terminal_theme_mode": "dark",
+    "light_color_scheme": "Daybreak",
+    "dark_color_scheme": "Nightfall",
+    "scrollback_lines": 20000,
+    "show_headerbar": true,
+    "scroll_on_keystroke": true,
+    "scroll_on_output": false,
+    "audible_bell": false,
+    "visual_bell": true,
+    "smart_clipboard": true,
+    "trim_trailing_whitespace_on_copy": true,
+    "default_session_folder": "current-session",
+    "pane_navigation_keys": "alt-arrow",
+    "keyboard_shortcuts": {
+      "split-horizontal": ["<Ctrl><Shift>e"]
+    },
+    "auto_start_daemon": true,
+    "reconnect_delay_secs": 5,
+    "paste_guard": true,
+    "paste_guard_threshold": 300
+  }
+}
