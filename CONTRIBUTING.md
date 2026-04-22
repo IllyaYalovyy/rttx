@@ -201,8 +201,10 @@ instance:
 | | Production | Development |
 |---|---|---|
 | Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
-| State | `$XDG_STATE_HOME/rttx/daemon/` | `$XDG_STATE_HOME/rttx-devel/daemon/` |
 | Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
+| Client state | `$XDG_STATE_HOME/rttx/client/` | `$XDG_STATE_HOME/rttx-devel/client/` |
+| Daemon state | `$XDG_STATE_HOME/rttx/daemon/` | `$XDG_STATE_HOME/rttx-devel/daemon/` |
+| Cache | `$XDG_CACHE_HOME/rttx/` | `$XDG_CACHE_HOME/rttx-devel/` |
 
 **Managing the daemon:**
 ```bash
@@ -223,10 +225,10 @@ pkill -f "rttx-server.*start"
 ```bash
 # Kill daemon, remove all dev state (runtimes, scrollback, socket, PID file)
 pkill -f "rttx-server"
-rm -rf ~/.local/state/rttx-devel/ ~/.cache/rttx-server-devel/ $XDG_RUNTIME_DIR/rttx-server-devel/
+rm -rf ~/.local/state/rttx-devel/ ~/.cache/rttx-devel/ ~/.cache/rttx-server-devel/ $XDG_RUNTIME_DIR/rttx-server-devel/
 
-# Also clear GUI session state (sidebar tabs, layout)
-rm -f ~/.config/rttx-devel/sessions.json
+# Also clear GUI config (preferences, hosts, library, schemes)
+rm -rf ~/.config/rttx-devel/
 
 # Then rebuild and run
 cargo build -p rttx --no-default-features --features vte-0_76
@@ -236,8 +238,8 @@ RTTX_DEV_MODE=1 ./target/debug/rttx
 **Clearing production state** (use with caution — kills real sessions):
 ```bash
 pkill -f "rttx-server"
-rm -rf ~/.local/state/rttx/ ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
-rm -f ~/.config/rttx/sessions.json
+rm -rf ~/.local/state/rttx/ ~/.cache/rttx/ ~/.cache/rttx-server/ $XDG_RUNTIME_DIR/rttx-server/
+rm -rf ~/.config/rttx/
 ```
 
 **Production install of the daemon:**
@@ -304,6 +306,34 @@ without a comment explaining why the specific lint does not apply.
   confirmation.
 - Errors visible to the user are surfaced as `adw::Toast` notifications, not modal dialogs or
   console output.
+
+### Client persistence (`ClientStore`)
+
+All client-side persistence goes through the `ClientStore` API (`src/store/`). Do not read or
+write config/state files directly from UI modules.
+
+`ClientStore` uses versioned JSON documents with schema envelopes (RFC-023). Each document has a
+`schema` identifier, a `version` number, and a typed `data` payload. Writes are atomic
+(temp + fsync + rename). Loads recover from malformed files by falling back to the last-good
+backup.
+
+Store locations follow XDG conventions:
+
+| Root | Purpose | Documents |
+|---|---|---|
+| `$XDG_CONFIG_HOME/rttx/` | Durable user choices | `preferences.json`, `hosts.json`, `library.json`, `schemes/` |
+| `$XDG_STATE_HOME/rttx/client/` | Restorable application state | `workspaces.json`, `ui.json`, `migrations.json`, `backups/` |
+| `$XDG_CACHE_HOME/rttx/` | Disposable runtime data | `runtime-cache.json` |
+
+Key rules:
+
+- Use `ClientStore::load_*` / `save_*` methods, not raw file I/O.
+- Store paths are injectable via `StorePaths` for tests.
+- New persisted fields must use `#[serde(default)]` for backward compatibility.
+- New documents require a schema identifier and version in the envelope.
+- `SessionMode` is import-only — new code must not create canonical `SessionMode` records.
+
+See `designs/RFC-023-client-configuration-state-store.md` for the full design.
 
 ---
 
