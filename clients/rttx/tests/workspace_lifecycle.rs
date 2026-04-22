@@ -1391,3 +1391,28 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
     assert_eq!(modes.mouse_mode, rttx_proto::v3::MouseMode::Normal as i32);
     assert!(modes.sgr_mouse);
 }
+
+/// Serialized workspace state must not contain the legacy `mode` field.
+/// The `runtime` struct carries endpoint and policy; `mode` is import-only.
+#[test]
+fn serialized_managed_workspace_omits_legacy_mode_field() {
+    use rttx::runtime::WorkspacePolicy;
+    use rttx::workspace::{WindowState, WorkspaceState};
+
+    let session = WorkspaceState::new_managed_remote(
+        "Remote".into(),
+        "build-host",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let state = WindowState {
+        workspaces: vec![session],
+        active_workspace_index: 0,
+        ..WindowState::default()
+    };
+    let json = serde_json::to_string(&state).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let ws = &value["workspaces"][0];
+    assert!(ws.get("mode").is_none(), "mode must not appear in serialized state");
+    assert!(ws.get("runtime").is_some(), "runtime must be present in serialized state");
+}
