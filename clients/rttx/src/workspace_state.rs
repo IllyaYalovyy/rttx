@@ -188,7 +188,6 @@ impl WindowState {
                     self.workspaces.iter_mut().find(|session| session.uuid == *workspace_id)
                 {
                     session.runtime.runtime_id = None;
-                    session.sync_legacy_mode_from_runtime();
                 }
                 transition.connection_status_updates.push(ConnectionStatusUpdate {
                     workspace_id: workspace_id.clone(),
@@ -371,7 +370,6 @@ impl WindowState {
 
         session.runtime.runtime_id = Some(runtime_id.to_string());
         session.runtime.bind_runtime_pane(layout_terminal_uuid, runtime_pane_id);
-        session.sync_legacy_mode_from_runtime();
         true
     }
 
@@ -403,7 +401,6 @@ impl WindowState {
 
         let had_runtime_id = session.runtime.runtime_id.is_some();
         session.runtime.runtime_id = Some(runtime_id.to_string());
-        session.sync_legacy_mode_from_runtime();
 
         let layout_terminal_uuids = session.layout.terminal_uuids();
         let runtime_pane_uuids =
@@ -555,7 +552,6 @@ fn recovered_managed_workspace(
         session.runtime.pending_layout_panes.clear();
     }
 
-    session.sync_legacy_mode_from_runtime();
     Some(session)
 }
 
@@ -744,7 +740,10 @@ mod tests {
             Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
         );
         assert!(!session.runtime.is_layout_pane_pending("pane-1"));
-        assert_eq!(session.mode.daemon_runtime_id(), Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),);
+        assert_eq!(
+            session.runtime.runtime_id.as_deref(),
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
     }
 
     #[test]
@@ -1928,5 +1927,24 @@ mod tests {
         assert_eq!(round_tripped.scrollback_lines, 5000);
         assert!(round_tripped.smart_clipboard);
         assert_eq!(round_tripped.paste_guard_threshold, 512);
+    }
+
+    #[test]
+    fn runtime_operations_do_not_write_legacy_mode() {
+        use crate::workspace::WorkspaceMode;
+
+        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
+
+        // Simulate pane creation — mode must stay Direct.
+        state.apply_managed_pane_created("ws-1", "pane-1", "rt-1", "daemon-pane-1");
+        assert_eq!(state.workspaces[0].mode, WorkspaceMode::Direct);
+
+        // Simulate runtime termination — mode must stay Direct.
+        let _ = state.reconcile_endpoint_event(&EndpointEvent::RuntimeTerminated {
+            workspace_id: "ws-1".into(),
+            runtime_id: "rt-1".into(),
+            reason: rttx_proto::v3::RuntimeTerminationReason::Explicit,
+        });
+        assert_eq!(state.workspaces[0].mode, WorkspaceMode::Direct);
     }
 }

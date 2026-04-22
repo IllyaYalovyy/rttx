@@ -447,7 +447,6 @@ impl WorkspaceRecord {
             zoomed_terminal_uuid: self.zoomed_pane_id.clone(),
             user_renamed: self.user_renamed,
         };
-        ws.sync_legacy_mode_from_runtime();
         ws.normalize_active_terminal();
         ws
     }

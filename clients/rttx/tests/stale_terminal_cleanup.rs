@@ -57,7 +57,6 @@ fn managed_session(layout: LayoutNode, runtime_id: &str) -> WorkspaceState {
         &session.layout.terminal_uuids(),
     );
     session.runtime.runtime_id = Some(runtime_id.into());
-    session.sync_legacy_mode_from_runtime();
     session
 }
 
