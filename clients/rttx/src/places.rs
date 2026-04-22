@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-use crate::config;
+use std::path::Path;
 
 /// A saved navigation target — a directory path scoped to one or more hosts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,21 +93,6 @@ pub fn matches_query(place: &Place, query: &str) -> bool {
 }
 
 // ── Persistence ─────────────────────────────────────────────────
-
-fn places_path() -> PathBuf {
-    let mut path = config::config_dir_path();
-    path.push("places.json");
-    path
-}
-
-#[must_use]
-pub fn load() -> Vec<Place> {
-    load_from(&places_path())
-}
-
-pub fn save(places: &[Place]) -> Result<(), Box<dyn std::error::Error>> {
-    save_to(places, &places_path())
-}
 
 #[must_use]
 pub fn load_from(path: &Path) -> Vec<Place> {

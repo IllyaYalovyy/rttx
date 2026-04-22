@@ -451,11 +451,3 @@ impl WorkspaceRecord {
         ws
     }
 }
-
-impl From<&state::WindowState> for WorkspaceStore {
-    fn from(ws: &state::WindowState) -> Self {
-        let active_workspace_id =
-            ws.workspaces.get(ws.active_workspace_index).map(|s| s.uuid.clone());
-        Self { active_workspace_id, workspaces: ws.workspaces.iter().map(Into::into).collect() }
-    }
-}

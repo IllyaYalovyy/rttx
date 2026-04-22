@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-use crate::config;
+use std::path::Path;
 
 /// Reserved host key for the local machine.
 pub const LOCAL_KEY: &str = "local";
@@ -94,21 +92,6 @@ fn strip_ssh_user(target: &str) -> &str {
 }
 
 // ── Persistence ─────────────────────────────────────────────────
-
-fn hosts_path() -> PathBuf {
-    let mut path = config::config_dir_path();
-    path.push("hosts.json");
-    path
-}
-
-#[must_use]
-pub fn load() -> Vec<Host> {
-    load_from(&hosts_path())
-}
-
-pub fn save(hosts: &[Host]) -> Result<(), Box<dyn std::error::Error>> {
-    save_to(hosts, &hosts_path())
-}
 
 #[must_use]
 pub fn load_from(path: &Path) -> Vec<Host> {

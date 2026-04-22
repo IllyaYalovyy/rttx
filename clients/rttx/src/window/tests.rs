@@ -2,6 +2,67 @@ use super::*;
 use crate::workspace::PaneTarget;
 use std::time::{Duration, Instant};
 
+fn config_dir() -> std::path::PathBuf {
+    crate::config::config_dir_path()
+}
+
+fn store() -> crate::store::ClientStore {
+    crate::store::default_store()
+}
+
+/// Load workspace state from the new store, reconstructing `WindowState`.
+fn load_saved_window_state() -> WindowState {
+    let store = store();
+    let ws_store = store.load_workspaces().into_value().unwrap_or_default();
+    let ui = store.load_ui_state().into_value().unwrap_or_default();
+    let cache = store.load_runtime_cache().into_value().unwrap_or_default();
+    let workspaces: Vec<_> = ws_store
+        .workspaces
+        .iter()
+        .map(crate::store::models::workspaces::WorkspaceRecord::to_workspace_state)
+        .collect();
+    let active_workspace_index = ws_store
+        .active_workspace_id
+        .as_ref()
+        .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
+        .unwrap_or(0);
+    WindowState {
+        workspaces,
+        active_workspace_index,
+        width: ui.window_width,
+        height: ui.window_height,
+        is_maximized: ui.is_maximized,
+        left_sidebar_width: ui.left_sidebar_width,
+        right_sidebar_width: ui.right_sidebar_width,
+        dismissed_runtime_ids: cache.dismissed_runtime_ids,
+    }
+}
+
+/// Save a `WindowState` through the `ClientStore` for test setup.
+fn save_window_state_to_store(state: &WindowState) {
+    let store = store();
+    let active_workspace_id =
+        state.workspaces.get(state.active_workspace_index).map(|s| s.uuid.clone());
+    let ws_store = crate::store::models::workspaces::WorkspaceStore {
+        active_workspace_id,
+        workspaces: state.workspaces.iter().map(Into::into).collect(),
+    };
+    let ui = crate::store::models::ui::UiState {
+        window_width: state.width,
+        window_height: state.height,
+        is_maximized: state.is_maximized,
+        left_sidebar_width: state.left_sidebar_width,
+        right_sidebar_width: state.right_sidebar_width,
+        ..Default::default()
+    };
+    let cache = crate::store::models::runtime_cache::RuntimeCache {
+        dismissed_runtime_ids: state.dismissed_runtime_ids.clone(),
+    };
+    store.save_workspaces(&ws_store).unwrap();
+    store.save_ui_state(&ui).unwrap();
+    store.save_runtime_cache(&cache).unwrap();
+}
+
 macro_rules! require_display {
     () => {
         if !crate::test_helpers::ensure_gtk() {
@@ -412,7 +473,7 @@ fn utility_sidebar_shows_and_filters_commands() {
 
     let run = crate::commands::SavedCommand::new("Restart app", "systemctl restart app");
     let insert = crate::commands::SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
-    crate::commands::save(&[run, insert]).unwrap();
+    crate::commands::save_to(&[run, insert], &config_dir().join("commands.json")).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.utility-command-sidebar-tests")
@@ -518,7 +579,7 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
         }],
         ..WindowState::default()
     };
-    crate::workspace::save_window_state(&state).unwrap();
+    save_window_state_to_store(&state);
 
     let app =
         adw::Application::builder().application_id("com.illya.rttx.recovery-failure-tests").build();
@@ -713,7 +774,7 @@ fn save_and_restart_restores_active_terminal_in_active_session() {
     first_window.save_state();
     first_window.close();
 
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     assert_eq!(
         saved_state.workspaces[0].active_terminal_uuid.as_deref(),
         Some(second_uuid.as_str()),
@@ -1050,7 +1111,7 @@ fn save_and_restart_restores_user_resized_pane_ratios() {
     first_window.save_state();
     first_window.close();
 
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     let LayoutNode::Split { ratio: saved_ratio, .. } = &saved_state.workspaces[0].layout else {
         panic!("saved layout should remain split after resize");
     };
@@ -1134,7 +1195,7 @@ fn save_state_updates_nested_terminal_cwds() {
     drop(terminals);
 
     window.save_state();
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
 
     let LayoutNode::Split { first, second, .. } = &saved_state.workspaces[0].layout else {
         panic!("saved layout should stay split");
@@ -1184,7 +1245,7 @@ fn save_and_restart_restores_custom_terminal_title() {
     term.set_custom_title(Some("Editor"));
 
     first_window.save_state();
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     assert_eq!(
         saved_state.workspaces[0].layout.terminal_custom_title(&terminal_uuid).as_deref(),
         Some("Editor"),
@@ -1290,7 +1351,7 @@ fn save_and_restart_restores_nested_user_resized_pane_ratios() {
     first_window.save_state();
     first_window.close();
 
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     let LayoutNode::Split { ratio: saved_outer_ratio, second, .. } =
         &saved_state.workspaces[0].layout
     else {
@@ -1397,7 +1458,7 @@ fn rename_runtime_updates_sidebar_and_saved_state() {
     assert_eq!(session_row.title().as_str(), "Renamed Session");
 
     window.save_state();
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     assert_eq!(saved_state.workspaces[0].name, "Renamed Session");
     assert!(saved_state.workspaces[0].user_renamed);
 
@@ -1521,7 +1582,7 @@ fn smart_clipboard_preference_reaches_live_terminals() {
 
     let mut prefs = preferences::Preferences::default();
     prefs.smart_clipboard = true;
-    preferences::save(&prefs).unwrap();
+    preferences::save_to(&prefs, &config_dir().join("preferences.json")).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.smart-clipboard-preferences-tests")
@@ -1540,7 +1601,7 @@ fn smart_clipboard_preference_reaches_live_terminals() {
     assert!(terminal.smart_clipboard_enabled_for_test());
 
     prefs.smart_clipboard = false;
-    preferences::save(&prefs).unwrap();
+    preferences::save_to(&prefs, &config_dir().join("preferences.json")).unwrap();
     window.reapply_terminal_preferences();
     assert!(!terminal.smart_clipboard_enabled_for_test());
 
@@ -2655,7 +2716,7 @@ fn load_state_keeps_selected_row_and_visible_session_in_sync() {
 
     let first_uuid = "workspace-1".to_string();
     let second_uuid = "workspace-2".to_string();
-    crate::workspace::save_window_state(&WindowState {
+    save_window_state_to_store(&WindowState {
         active_workspace_index: 1,
         workspaces: vec![
             WorkspaceState {
@@ -2686,8 +2747,7 @@ fn load_state_keeps_selected_row_and_visible_session_in_sync() {
             },
         ],
         ..WindowState::default()
-    })
-    .unwrap();
+    });
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.restore-selection-sync-tests")
@@ -2838,7 +2898,7 @@ fn save_state_persists_detached_workspace_runtime_binding() {
     });
     window.save_state();
 
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     let saved_session = saved_state
         .workspaces
         .iter()
@@ -2947,7 +3007,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
     });
     window.save_state();
 
-    let saved_state = workspace::load_window_state();
+    let saved_state = load_saved_window_state();
     let saved_session = saved_state
         .workspaces
         .iter()
@@ -3223,10 +3283,10 @@ fn bell_preferences_applied_to_managed_pane() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     // Save preferences with bells disabled.
-    let mut prefs = preferences::load();
+    let mut prefs = preferences::load_from(&config_dir().join("preferences.json"));
     prefs.audible_bell = false;
     prefs.visual_bell = false;
-    let _ = preferences::save(&prefs);
+    let _ = preferences::save_to(&prefs, &config_dir().join("preferences.json"));
 
     let app = adw::Application::builder().application_id("com.illya.rttx.bell-pref-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
@@ -3834,7 +3894,11 @@ fn command_sidebar_filters_by_selected_host() {
     let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
     remote_cmd.host_tags = vec!["example.com".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save(&[local_cmd, remote_cmd, global_cmd]).unwrap();
+    crate::commands::save_to(
+        &[local_cmd, remote_cmd, global_cmd],
+        &config_dir().join("commands.json"),
+    )
+    .unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-host-filter-tests")
@@ -3873,7 +3937,11 @@ fn command_sidebar_groups_by_host_in_all_hosts_view() {
     let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
     remote_cmd.host_tags = vec!["example.com".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save(&[local_cmd, remote_cmd, global_cmd]).unwrap();
+    crate::commands::save_to(
+        &[local_cmd, remote_cmd, global_cmd],
+        &config_dir.join("commands.json"),
+    )
+    .unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-all-hosts-sections-test")
@@ -3914,7 +3982,8 @@ fn command_sidebar_shows_sections_for_specific_host() {
     let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
     local_cmd.host_tags = vec!["local".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save(&[local_cmd, global_cmd]).unwrap();
+    crate::commands::save_to(&[local_cmd, global_cmd], &config_dir().join("commands.json"))
+        .unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-host-sections-test")
@@ -3951,7 +4020,7 @@ fn command_sidebar_only_global_section_when_no_host_commands() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save(&[global_cmd]).unwrap();
+    crate::commands::save_to(&[global_cmd], &config_dir().join("commands.json")).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-global-only-test")
@@ -4132,7 +4201,7 @@ fn add_current_host_saves_remote_host() {
     window.do_add_current_host();
 
     // Verify host was saved
-    let hosts = crate::host::load();
+    let hosts = crate::host::load_from(&config_dir().join("hosts.json"));
     assert!(hosts.iter().any(|h| h.key == "builder.example.com"), "host should be saved");
 
     window.close();
@@ -4159,7 +4228,7 @@ fn add_current_host_skips_duplicate() {
 
     // Pre-save the host
     let existing = crate::host::Host::remote("deploy@builder.example.com");
-    crate::host::save(&[existing]).unwrap();
+    crate::host::save_to(&[existing], &config_dir().join("hosts.json")).unwrap();
 
     // Add a remote managed workspace and switch to it
     let remote_session = WorkspaceState::new_managed_remote(
@@ -4182,7 +4251,7 @@ fn add_current_host_skips_duplicate() {
     // Trigger the action — should not duplicate
     window.do_add_current_host();
 
-    let hosts = crate::host::load();
+    let hosts = crate::host::load_from(&config_dir().join("hosts.json"));
     assert_eq!(
         hosts.iter().filter(|h| h.key == "builder.example.com").count(),
         1,
@@ -4217,7 +4286,7 @@ fn add_current_host_noop_for_local_session() {
     // Trigger the action — should not save anything
     window.do_add_current_host();
 
-    let hosts = crate::host::load();
+    let hosts = crate::host::load_from(&config_dir().join("hosts.json"));
     assert!(hosts.is_empty(), "no host should be saved for a local session");
 
     window.close();
@@ -4252,7 +4321,7 @@ fn add_current_path_to_places_saves_place_with_derived_name() {
 
     window.do_add_current_path_to_places();
 
-    let places = crate::places::load();
+    let places = crate::places::load_from(&config_dir().join("places.json"));
     assert_eq!(places.len(), 1, "one place should be saved");
     assert_eq!(places[0].name, "rttx");
     assert_eq!(places[0].path, "/home/user/projects/rttx");
@@ -4288,7 +4357,7 @@ fn add_current_path_to_places_noop_without_cwd() {
 
     window.do_add_current_path_to_places();
 
-    let places = crate::places::load();
+    let places = crate::places::load_from(&config_dir().join("places.json"));
     assert!(places.is_empty(), "no place should be saved when CWD is unknown");
 
     window.close();
@@ -4343,7 +4412,7 @@ fn add_current_path_to_places_tags_remote_host() {
 
     window.do_add_current_path_to_places();
 
-    let places = crate::places::load();
+    let places = crate::places::load_from(&config_dir().join("places.json"));
     assert_eq!(places.len(), 1, "one place should be saved");
     assert_eq!(places[0].name, "app");
     assert_eq!(places[0].path, "/srv/app");
@@ -5373,7 +5442,7 @@ fn close_last_managed_workspace_persists_clean_state() {
     pump_events(50);
 
     // Reload persisted state and verify the closed session is gone.
-    let saved = crate::workspace::load_window_state();
+    let saved = load_saved_window_state();
     assert!(
         !saved.workspaces.iter().any(|s| s.uuid == session_uuid),
         "persisted state must not contain the closed managed workspace"
@@ -5642,7 +5711,7 @@ fn save_and_restart_full_session_persistence_roundtrip() {
     first_window.close();
 
     // Verify saved state on disk.
-    let saved = workspace::load_window_state();
+    let saved = load_saved_window_state();
     assert_eq!(saved.workspaces.len(), 3, "saved state should have 3 workspaces");
     let saved_order: Vec<&str> = saved.workspaces.iter().map(|s| s.uuid.as_str()).collect();
     assert_eq!(
@@ -6364,9 +6433,9 @@ fn reapply_preferences_updates_keyboard_shortcut_accels() {
     assert!(accels.iter().any(|a| a == "F11"), "fullscreen should default to F11, got: {accels:?}");
 
     // Override fullscreen to Ctrl+Shift+F11 via preferences.
-    let mut prefs = crate::preferences::load();
+    let mut prefs = crate::preferences::load_from(&config_dir().join("preferences.json"));
     prefs.keyboard_shortcuts.insert("fullscreen".into(), vec!["<Ctrl><Shift>F11".into()]);
-    crate::preferences::save(&prefs).unwrap();
+    crate::preferences::save_to(&prefs, &config_dir().join("preferences.json")).unwrap();
 
     window.reapply_terminal_preferences();
 
