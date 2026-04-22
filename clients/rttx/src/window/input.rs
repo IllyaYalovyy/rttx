@@ -92,6 +92,7 @@ impl Window {
         let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
         pane.vte().set_font(Some(&font_desc));
         pane.vte().set_scrollback_lines(prefs.scrollback_lines);
+        pane.vte().set_scroll_on_keystroke(prefs.scroll_on_keystroke);
         pane.vte().set_audible_bell(prefs.audible_bell);
         pane.set_visual_bell(prefs.visual_bell);
         pane.set_smart_clipboard(prefs.smart_clipboard);

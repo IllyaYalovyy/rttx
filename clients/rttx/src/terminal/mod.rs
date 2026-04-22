@@ -869,6 +869,27 @@ mod tests {
         assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, ctrl), Some(vec![0x03]),);
         assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::d, ctrl), Some(vec![0x04]),);
     }
+
+    /// Keys that produce `ForwardToPty` in managed mode are the ones that
+    /// trigger scroll-to-bottom when the user types in a scrolled-up pane.
+    /// Regression for #753.
+    #[test]
+    fn managed_forward_to_pty_keys_trigger_scroll_on_keystroke() {
+        let typing_keys: &[(gtk4::gdk::Key, gtk4::gdk::ModifierType)] = &[
+            (gtk4::gdk::Key::a, gtk4::gdk::ModifierType::empty()),
+            (gtk4::gdk::Key::Return, gtk4::gdk::ModifierType::empty()),
+            (gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK),
+            (gtk4::gdk::Key::Up, gtk4::gdk::ModifierType::empty()),
+        ];
+        for (key, mods) in typing_keys {
+            let action =
+                terminal_key_action(TerminalInputBackend::Managed, *key, *mods, false, false);
+            assert!(
+                matches!(action, TerminalKeyAction::ForwardToPty(_)),
+                "{key:?}+{mods:?} must produce ForwardToPty (scroll-on-keystroke trigger)"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
