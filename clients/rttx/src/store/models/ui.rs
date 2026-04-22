@@ -58,3 +58,22 @@ const fn default_left_sidebar_width() -> i32 {
 const fn default_right_sidebar_width() -> i32 {
     320
 }
+
+// ── Conversions from domain types ───────────────────────────────
+
+use crate::workspace::state;
+
+impl From<&state::WindowState> for UiState {
+    fn from(ws: &state::WindowState) -> Self {
+        Self {
+            window_width: ws.width,
+            window_height: ws.height,
+            is_maximized: ws.is_maximized,
+            left_sidebar_width: ws.left_sidebar_width,
+            right_sidebar_width: ws.right_sidebar_width,
+            left_sidebar_visible: false,
+            right_sidebar_visible: false,
+            selected_right_tool: None,
+        }
+    }
+}

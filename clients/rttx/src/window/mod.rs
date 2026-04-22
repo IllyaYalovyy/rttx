@@ -363,7 +363,45 @@ impl Window {
     }
 
     fn load_state(&self) {
-        let state = workspace::load_window_state();
+        let store = crate::store::default_store();
+
+        // Load workspace state from the new store, falling back to legacy.
+        let ws_store = store.load_workspaces().into_value().unwrap_or_default();
+        let ui = store.load_ui_state().into_value().unwrap_or_default();
+        let cache = store.load_runtime_cache().into_value().unwrap_or_default();
+
+        let state = if ws_store.workspaces.is_empty() {
+            // No new-format workspaces — try legacy sessions.json
+            let mut legacy = workspace::load_window_state();
+            // Merge any cache data from the new store
+            legacy.dismissed_runtime_ids.extend(cache.dismissed_runtime_ids);
+            legacy
+        } else {
+            let mut workspaces: Vec<_> = ws_store
+                .workspaces
+                .iter()
+                .map(crate::store::models::workspaces::WorkspaceRecord::to_workspace_state)
+                .collect();
+            for ws in &mut workspaces {
+                ws.normalize_runtime_metadata();
+            }
+            let active_workspace_index = ws_store
+                .active_workspace_id
+                .as_ref()
+                .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
+                .unwrap_or(0);
+            WindowState {
+                workspaces,
+                active_workspace_index,
+                width: ui.window_width,
+                height: ui.window_height,
+                is_maximized: ui.is_maximized,
+                left_sidebar_width: ui.left_sidebar_width,
+                right_sidebar_width: ui.right_sidebar_width,
+                dismissed_runtime_ids: cache.dismissed_runtime_ids,
+            }
+        };
+
         let active_index =
             state.active_workspace_index.min(state.workspaces.len().saturating_sub(1));
         let is_maximized = state.is_maximized;
@@ -478,6 +516,21 @@ impl Window {
 
         if let Err(e) = workspace::save_window_state(&state) {
             tracing::error!("Failed to save window state: {e}");
+        }
+
+        // Also save to the new store documents.
+        let store = crate::store::default_store();
+        let ws_store: crate::store::models::workspaces::WorkspaceStore = (&state).into();
+        let ui: crate::store::models::ui::UiState = (&state).into();
+        let cache: crate::store::models::runtime_cache::RuntimeCache = (&state).into();
+        if let Err(e) = store.save_workspaces(&ws_store) {
+            tracing::error!("Failed to save workspaces: {e}");
+        }
+        if let Err(e) = store.save_ui_state(&ui) {
+            tracing::error!("Failed to save UI state: {e}");
+        }
+        if let Err(e) = store.save_runtime_cache(&cache) {
+            tracing::error!("Failed to save runtime cache: {e}");
         }
     }
 

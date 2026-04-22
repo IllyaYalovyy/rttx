@@ -181,6 +181,91 @@ impl ClientStore {
         let places = self.load_places();
         self.save_library(&places, commands)
     }
+
+    // ── Workspaces ──────────────────────────────────────────
+
+    /// Load workspaces through the envelope-aware loader with malformed-file recovery.
+    #[must_use]
+    pub fn load_workspaces(&self) -> LoadOutcome<models::workspaces::WorkspaceStore> {
+        let path = self.paths.state().join("workspaces.json");
+        atomic_load(
+            &path,
+            models::workspaces::SCHEMA,
+            models::workspaces::CURRENT_VERSION,
+            &self.paths.backups(),
+        )
+    }
+
+    /// Save workspaces atomically with an envelope wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the atomic write fails.
+    pub fn save_workspaces(
+        &self,
+        store: &models::workspaces::WorkspaceStore,
+    ) -> std::io::Result<()> {
+        let path = self.paths.state().join("workspaces.json");
+        let envelope = DocumentEnvelope::new(
+            models::workspaces::SCHEMA,
+            models::workspaces::CURRENT_VERSION,
+            store.clone(),
+        );
+        atomic_save(&path, &envelope)
+    }
+
+    // ── UI State ────────────────────────────────────────────
+
+    /// Load UI state through the envelope-aware loader with malformed-file recovery.
+    #[must_use]
+    pub fn load_ui_state(&self) -> LoadOutcome<models::ui::UiState> {
+        let path = self.paths.state().join("ui.json");
+        atomic_load(&path, models::ui::SCHEMA, models::ui::CURRENT_VERSION, &self.paths.backups())
+    }
+
+    /// Save UI state atomically with an envelope wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the atomic write fails.
+    pub fn save_ui_state(&self, ui: &models::ui::UiState) -> std::io::Result<()> {
+        let path = self.paths.state().join("ui.json");
+        let envelope =
+            DocumentEnvelope::new(models::ui::SCHEMA, models::ui::CURRENT_VERSION, ui.clone());
+        atomic_save(&path, &envelope)
+    }
+
+    // ── Runtime Cache ───────────────────────────────────────
+
+    /// Load runtime cache through the envelope-aware loader with malformed-file recovery.
+    #[must_use]
+    pub fn load_runtime_cache(&self) -> LoadOutcome<models::runtime_cache::RuntimeCache> {
+        let path = self.paths.cache().join("runtime-cache.json");
+        atomic_load(
+            &path,
+            models::runtime_cache::SCHEMA,
+            models::runtime_cache::CURRENT_VERSION,
+            &self.paths.backups(),
+        )
+    }
+
+    /// Save runtime cache atomically with an envelope wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the atomic write fails.
+    pub fn save_runtime_cache(
+        &self,
+        cache: &models::runtime_cache::RuntimeCache,
+    ) -> std::io::Result<()> {
+        let path = self.paths.cache().join("runtime-cache.json");
+        let envelope = DocumentEnvelope::new(
+            models::runtime_cache::SCHEMA,
+            models::runtime_cache::CURRENT_VERSION,
+            cache.clone(),
+        );
+        atomic_save(&path, &envelope)
+    }
 }
 
 impl<T> LoadOutcome<T> {
@@ -374,5 +459,258 @@ mod tests {
             LoadOutcome::UnsupportedVersion { found: 5, max_supported: 1 };
         let mapped = unsupported.map(|v| v + 1);
         assert!(matches!(mapped, LoadOutcome::UnsupportedVersion { found: 5, max_supported: 1 }));
+    }
+
+    // ── Workspaces ──────────────────────────────────────────
+
+    #[test]
+    fn workspaces_round_trip_through_store() {
+        let (_tmp, store) = test_store();
+        let ws = models::workspaces::WorkspaceStore {
+            active_workspace_id: Some("ws-1".into()),
+            workspaces: vec![models::workspaces::WorkspaceRecord {
+                id: "ws-1".into(),
+                name: "Editor".into(),
+                user_renamed: true,
+                endpoint_key: "local".into(),
+                policy: models::workspaces::WorkspacePolicy::Persistent,
+                runtime_ref: Some(models::workspaces::RuntimeRef {
+                    runtime_id: "rt-1".into(),
+                    attachment_kind: models::workspaces::RuntimeAttachmentKind::Created,
+                }),
+                layout: models::workspaces::LayoutNode::Terminal {
+                    uuid: "t-1".into(),
+                    profile: None,
+                    cwd: Some("/home/user".into()),
+                    custom_title: Some("vim".into()),
+                },
+                active_pane_id: Some("t-1".into()),
+                zoomed_pane_id: None,
+                input_sync: models::workspaces::InputSyncState::Off,
+                color: models::workspaces::WorkspaceColor::Green,
+                pane_recovery: std::collections::BTreeMap::new(),
+            }],
+        };
+        store.save_workspaces(&ws).unwrap();
+        let loaded = store.load_workspaces().into_value().unwrap();
+        assert_eq!(loaded.active_workspace_id, Some("ws-1".into()));
+        assert_eq!(loaded.workspaces.len(), 1);
+        assert_eq!(loaded.workspaces[0].name, "Editor");
+        assert!(loaded.workspaces[0].user_renamed);
+        assert_eq!(loaded.workspaces[0].runtime_ref.as_ref().unwrap().runtime_id, "rt-1");
+    }
+
+    #[test]
+    fn workspaces_missing_file_returns_default() {
+        let (_tmp, store) = test_store();
+        let outcome = store.load_workspaces();
+        assert!(matches!(outcome, LoadOutcome::Default(_)));
+        let ws = outcome.into_value().unwrap();
+        assert!(ws.workspaces.is_empty());
+    }
+
+    #[test]
+    fn workspaces_malformed_file_recovers_to_default() {
+        let (_tmp, store) = test_store();
+        let path = store.paths.state().join("workspaces.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "bad json").unwrap();
+        let outcome = store.load_workspaces();
+        assert!(matches!(outcome, LoadOutcome::DefaultAfterFailure(_)));
+    }
+
+    // ── UI State ────────────────────────────────────────────
+
+    #[test]
+    fn ui_state_round_trip_through_store() {
+        let (_tmp, store) = test_store();
+        let ui = models::ui::UiState {
+            window_width: 1920,
+            window_height: 1080,
+            is_maximized: true,
+            left_sidebar_width: 300,
+            right_sidebar_width: 400,
+            ..models::ui::UiState::default()
+        };
+        store.save_ui_state(&ui).unwrap();
+        let loaded = store.load_ui_state().into_value().unwrap();
+        assert_eq!(loaded.window_width, 1920);
+        assert_eq!(loaded.window_height, 1080);
+        assert!(loaded.is_maximized);
+        assert_eq!(loaded.left_sidebar_width, 300);
+        assert_eq!(loaded.right_sidebar_width, 400);
+    }
+
+    #[test]
+    fn ui_state_missing_file_returns_default() {
+        let (_tmp, store) = test_store();
+        let outcome = store.load_ui_state();
+        assert!(matches!(outcome, LoadOutcome::Default(_)));
+        let ui = outcome.into_value().unwrap();
+        assert_eq!(ui.window_width, 900);
+        assert_eq!(ui.window_height, 600);
+    }
+
+    #[test]
+    fn ui_state_malformed_file_recovers_to_default() {
+        let (_tmp, store) = test_store();
+        let path = store.paths.state().join("ui.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not json").unwrap();
+        let outcome = store.load_ui_state();
+        assert!(matches!(outcome, LoadOutcome::DefaultAfterFailure(_)));
+    }
+
+    // ── Runtime Cache ───────────────────────────────────────
+
+    #[test]
+    fn runtime_cache_round_trip_through_store() {
+        let (_tmp, store) = test_store();
+        let cache = models::runtime_cache::RuntimeCache {
+            dismissed_runtime_ids: ["rt-1".into(), "rt-2".into()].into_iter().collect(),
+        };
+        store.save_runtime_cache(&cache).unwrap();
+        let loaded = store.load_runtime_cache().into_value().unwrap();
+        assert_eq!(loaded.dismissed_runtime_ids.len(), 2);
+        assert!(loaded.dismissed_runtime_ids.contains("rt-1"));
+        assert!(loaded.dismissed_runtime_ids.contains("rt-2"));
+    }
+
+    #[test]
+    fn runtime_cache_missing_file_returns_default() {
+        let (_tmp, store) = test_store();
+        let outcome = store.load_runtime_cache();
+        assert!(matches!(outcome, LoadOutcome::Default(_)));
+        assert!(outcome.into_value().unwrap().dismissed_runtime_ids.is_empty());
+    }
+
+    #[test]
+    fn runtime_cache_deletion_is_non_fatal() {
+        let (_tmp, store) = test_store();
+        let cache = models::runtime_cache::RuntimeCache {
+            dismissed_runtime_ids: std::iter::once("rt-1".into()).collect(),
+        };
+        store.save_runtime_cache(&cache).unwrap();
+        // Delete the file
+        let path = store.paths.cache().join("runtime-cache.json");
+        std::fs::remove_file(&path).unwrap();
+        // Load should return default, not error
+        let outcome = store.load_runtime_cache();
+        assert!(matches!(outcome, LoadOutcome::Default(_)));
+        assert!(outcome.into_value().unwrap().dismissed_runtime_ids.is_empty());
+    }
+
+    // ── Domain conversion round-trips ───────────────────────
+
+    #[test]
+    fn workspace_state_round_trips_through_store_model() {
+        use crate::workspace::state::WorkspaceState;
+
+        let ws = WorkspaceState::new("Editor".into());
+        let record: models::workspaces::WorkspaceRecord = (&ws).into();
+        let restored = record.to_workspace_state();
+
+        assert_eq!(restored.uuid, ws.uuid);
+        assert_eq!(restored.name, ws.name);
+        assert_eq!(restored.layout.terminal_uuids(), ws.layout.terminal_uuids());
+    }
+
+    #[test]
+    fn managed_workspace_round_trips_through_store_model() {
+        use crate::runtime::{RuntimeEndpoint, WorkspacePolicy};
+        use crate::workspace::state::WorkspaceState;
+
+        let ws = WorkspaceState::new_managed_remote(
+            "Remote".into(),
+            "deploy@example.com",
+            WorkspacePolicy::Persistent,
+            Some("/srv/app".into()),
+        );
+        let record: models::workspaces::WorkspaceRecord = (&ws).into();
+
+        assert_eq!(record.endpoint_key, "example.com");
+        assert!(record.runtime_ref.is_none()); // no runtime_id yet
+        assert_eq!(record.policy, models::workspaces::WorkspacePolicy::Persistent);
+
+        let restored = record.to_workspace_state();
+        assert!(restored.runtime.is_managed());
+        assert_eq!(
+            restored.runtime.endpoint,
+            RuntimeEndpoint::Remote { host: "example.com".into() }
+        );
+    }
+
+    #[test]
+    fn window_state_splits_into_three_store_documents() {
+        use crate::workspace::state::WindowState;
+
+        let mut state = WindowState {
+            width: 1920,
+            height: 1080,
+            is_maximized: true,
+            left_sidebar_width: 250,
+            right_sidebar_width: 350,
+            ..WindowState::default()
+        };
+        state.dismissed_runtime_ids.insert("dismissed-1".into());
+
+        let ws_store: models::workspaces::WorkspaceStore = (&state).into();
+        let ui: models::ui::UiState = (&state).into();
+        let cache: models::runtime_cache::RuntimeCache = (&state).into();
+
+        assert_eq!(ws_store.workspaces.len(), 1);
+        assert_eq!(ui.window_width, 1920);
+        assert_eq!(ui.window_height, 1080);
+        assert!(ui.is_maximized);
+        assert_eq!(ui.left_sidebar_width, 250);
+        assert_eq!(ui.right_sidebar_width, 350);
+        assert!(cache.dismissed_runtime_ids.contains("dismissed-1"));
+    }
+
+    #[test]
+    fn workspace_with_recovery_round_trips_through_store() {
+        use crate::workspace::recovery::{PaneRecovery, PaneSource, PaneTarget, StartupStep};
+        use crate::workspace::state::WorkspaceState;
+
+        let mut ws = WorkspaceState::new("Ops".into());
+        let terminal_uuid = ws.layout.terminal_uuids().into_iter().next().unwrap();
+        ws.set_recovery(
+            &terminal_uuid,
+            PaneRecovery {
+                source: PaneSource::Command { title: "Deploy".into() },
+                target: Some(PaneTarget::RemoteShell {
+                    ssh_target: "deploy@prod".into(),
+                    remote_folder: Some("/srv/app".into()),
+                }),
+                startup: vec![StartupStep::SendText { text: "make deploy".into(), execute: true }],
+            },
+        );
+
+        let record: models::workspaces::WorkspaceRecord = (&ws).into();
+        let restored = record.to_workspace_state();
+
+        let recovery = restored.recovery_for(&terminal_uuid).unwrap();
+        assert!(matches!(recovery.source, PaneSource::Command { ref title } if title == "Deploy"));
+        assert!(matches!(
+            recovery.target,
+            Some(PaneTarget::RemoteShell { ref ssh_target, .. }) if ssh_target == "deploy@prod"
+        ));
+        assert_eq!(recovery.startup.len(), 1);
+    }
+
+    #[test]
+    fn split_layout_round_trips_through_store_model() {
+        use crate::test_helpers::{hsplit, term};
+        use crate::workspace::state::WorkspaceState;
+
+        let mut ws = WorkspaceState::new("Split".into());
+        ws.layout = hsplit(term("t1"), term("t2"));
+
+        let record: models::workspaces::WorkspaceRecord = (&ws).into();
+        let restored = record.to_workspace_state();
+
+        assert_eq!(restored.layout.terminal_count(), 2);
+        assert!(restored.layout.contains_terminal("t1"));
+        assert!(restored.layout.contains_terminal("t2"));
     }
 }
