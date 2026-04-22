@@ -181,3 +181,51 @@ fn feed_snapshot_scrolls_to_bottom_after_reconnect() {
 
     window.close();
 }
+
+/// Typing in a scrolled-up daemon-backed pane must scroll the viewport to
+/// the bottom so the user can see what they are typing. VTE's built-in
+/// `scroll_on_keystroke` has no effect because keystrokes are intercepted
+/// before reaching VTE's native input handler. Regression for #753.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn typing_scrolls_to_bottom_in_managed_pane() {
+    require_display!();
+
+    let pane = PersistentPaneView::new("type-scroll-1", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 480);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(100);
+
+    let connected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Connected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    pane.connect_input(|_| {});
+
+    feed_scrollback(&pane, 200);
+    pump_events(100);
+
+    // Scroll up.
+    let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+    let bottom = adj.upper() - adj.page_size();
+    assert!(bottom > 0.0, "scrollback should be large enough to scroll");
+    adj.set_value(0.0);
+    pump_events(50);
+    assert!(adj.value() < bottom - 1.0, "viewport should be scrolled up");
+
+    // Type Ctrl+D (ForwardToPty).
+    let _ = pane.emit_input_key_for_test(gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK);
+    pump_events(50);
+
+    let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+    let bottom = adj.upper() - adj.page_size();
+    assert!(
+        (adj.value() - bottom).abs() < 1.0,
+        "typing must scroll to bottom; got {} expected ~{bottom}",
+        adj.value()
+    );
+
+    window.close();
+}
