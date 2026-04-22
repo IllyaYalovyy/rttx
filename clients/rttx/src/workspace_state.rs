@@ -1933,8 +1933,7 @@ mod tests {
     fn runtime_operations_do_not_write_legacy_mode() {
         use crate::workspace::WorkspaceMode;
 
-        let mut state =
-            window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
+        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
 
         // Simulate pane creation — mode must stay Direct.
         state.apply_managed_pane_created("ws-1", "pane-1", "rt-1", "daemon-pane-1");
