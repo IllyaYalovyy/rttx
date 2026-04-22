@@ -107,7 +107,7 @@ pub struct WorkspaceState {
     pub active_terminal_uuid: Option<String>,
     #[serde(default)]
     pub input_sync: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub mode: WorkspaceMode,
     #[serde(default)]
     pub runtime: WorkspaceRuntime,
@@ -162,7 +162,6 @@ impl WorkspaceState {
         let mut session = Self::new_with_initial_cwd(name, initial_cwd);
         let layout_terminal_uuids = session.layout.terminal_uuids();
         session.runtime = WorkspaceRuntime::managed_local(policy, &layout_terminal_uuids);
-        session.sync_legacy_mode_from_runtime();
         session
     }
 
@@ -176,7 +175,6 @@ impl WorkspaceState {
         let mut session = Self::new_with_initial_cwd(name, initial_cwd);
         let layout_terminal_uuids = session.layout.terminal_uuids();
         session.runtime = WorkspaceRuntime::managed_remote(host, policy, &layout_terminal_uuids);
-        session.sync_legacy_mode_from_runtime();
         session
     }
 
@@ -236,21 +234,6 @@ impl WorkspaceState {
         }
 
         self.runtime.ensure_placeholder_bindings(&self.layout.terminal_uuids());
-        self.sync_legacy_mode_from_runtime();
-    }
-
-    pub fn sync_legacy_mode_from_runtime(&mut self) {
-        self.mode = if self.runtime.is_managed() {
-            let daemon_runtime_id = self.runtime.runtime_id.clone().unwrap_or_default();
-            match &self.runtime.endpoint {
-                RuntimeEndpoint::Local => WorkspaceMode::Persistent { daemon_runtime_id },
-                RuntimeEndpoint::Remote { host } => {
-                    WorkspaceMode::RemotePersistent { host: host.clone(), daemon_runtime_id }
-                }
-            }
-        } else {
-            WorkspaceMode::Direct
-        };
     }
 
     pub fn set_recovery(&mut self, terminal_uuid: &str, recovery: PaneRecovery) {
@@ -465,50 +448,28 @@ mod tests {
     }
 
     #[test]
-    fn session_mode_default_is_direct() {
-        let session = WorkspaceState::new("Test".into());
-        assert_eq!(session.mode, WorkspaceMode::Direct);
-        assert!(!session.mode.is_persistent());
-        assert!(session.mode.daemon_runtime_id().is_none());
-        assert!(session.mode.host().is_none());
-        assert!(!session.uses_managed_runtime());
+    fn mode_is_not_written_to_json() {
+        let session =
+            WorkspaceState::new_managed_local("Test".into(), WorkspacePolicy::Persistent, None);
+        assert!(session.runtime.is_managed());
+        let json = serde_json::to_string(&session).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value.get("mode").is_none(),
+            "mode must not be serialized — it is import-only for legacy files"
+        );
     }
 
     #[test]
-    fn session_mode_persistent_accessors() {
-        let mode = WorkspaceMode::Persistent { daemon_runtime_id: "ds1".into() };
-        assert!(mode.is_persistent());
-        assert_eq!(mode.daemon_runtime_id(), Some("ds1"));
-        assert!(mode.host().is_none());
-    }
-
-    #[test]
-    fn session_mode_remote_persistent_accessors() {
-        let mode = WorkspaceMode::RemotePersistent {
-            host: "user@devbox".into(),
-            daemon_runtime_id: "ds2".into(),
-        };
-        assert!(mode.is_persistent());
-        assert_eq!(mode.daemon_runtime_id(), Some("ds2"));
-        assert_eq!(mode.host(), Some("user@devbox"));
-    }
-
-    #[test]
-    fn session_mode_roundtrips_through_json() {
-        for mode in [
-            WorkspaceMode::Direct,
-            WorkspaceMode::Persistent { daemon_runtime_id: "abc-123".into() },
-            WorkspaceMode::RemotePersistent {
-                host: "admin@prod".into(),
-                daemon_runtime_id: "def-456".into(),
-            },
-        ] {
-            let mut session = WorkspaceState::new("Test".into());
-            session.mode = mode.clone();
-            let json = serde_json::to_string(&session).unwrap();
-            let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
-            assert_eq!(restored.mode, mode);
-        }
+    fn legacy_mode_still_deserializes_for_import() {
+        let json = r#"{
+            "uuid": "s1",
+            "name": "Legacy",
+            "layout": {"Terminal": {"uuid": "t1"}},
+            "mode": {"persistent": {"daemon_runtime_id": "rt-1"}}
+        }"#;
+        let session: WorkspaceState = serde_json::from_str(json).unwrap();
+        assert_eq!(session.mode, WorkspaceMode::Persistent { daemon_runtime_id: "rt-1".into() });
     }
 
     #[test]
@@ -526,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_session_in_window_state_roundtrips() {
+    fn persistent_session_in_window_state_roundtrips_via_runtime() {
         let mut session = WorkspaceState::new("Persistent".into());
         session.mode = WorkspaceMode::Persistent { daemon_runtime_id: "ds-1".into() };
         session.normalize_runtime_metadata();
@@ -541,10 +502,15 @@ mod tests {
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: WindowState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.workspaces[0].mode, WorkspaceMode::Direct);
+        assert_eq!(
+            restored.workspaces[0].mode,
+            WorkspaceMode::Direct,
+            "mode is no longer serialized"
+        );
         assert_eq!(
             restored.workspaces[1].mode,
-            WorkspaceMode::Persistent { daemon_runtime_id: "ds-1".into() }
+            WorkspaceMode::Direct,
+            "mode is no longer serialized"
         );
         assert!(restored.workspaces[1].runtime.is_managed());
         assert_eq!(restored.workspaces[1].runtime.runtime_id.as_deref(), Some("ds-1"));
@@ -824,7 +790,7 @@ mod module_boundary_tests {
     }
 
     #[test]
-    fn new_managed_remote_sets_endpoint_and_mode() {
+    fn new_managed_remote_sets_endpoint_and_runtime() {
         let session = WorkspaceState::new_managed_remote(
             "Work".into(),
             "server.example.com",
@@ -837,13 +803,7 @@ mod module_boundary_tests {
             RuntimeEndpoint::Remote { host: "server.example.com".into() }
         );
         assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
-        assert_eq!(
-            session.mode,
-            WorkspaceMode::RemotePersistent {
-                host: "server.example.com".into(),
-                daemon_runtime_id: String::new(),
-            }
-        );
+        assert_eq!(session.mode, WorkspaceMode::Direct, "mode is no longer written");
         assert_eq!(
             session.layout.terminal_cwd(&session.layout.terminal_uuids()[0]).as_deref(),
             Some("/home/user")

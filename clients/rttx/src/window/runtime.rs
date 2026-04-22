@@ -1023,7 +1023,6 @@ impl Window {
             };
             let previous_endpoint = session.runtime.endpoint.clone();
             session.runtime.endpoint = RuntimeEndpoint::Remote { host };
-            session.sync_legacy_mode_from_runtime();
             (session.clone(), previous_endpoint)
         };
 

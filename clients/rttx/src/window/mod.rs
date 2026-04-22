@@ -484,7 +484,6 @@ impl Window {
             }
             session.prune_recovery();
             session.normalize_active_terminal();
-            session.sync_legacy_mode_from_runtime();
             session.zoomed_terminal_uuid = None;
         }
 

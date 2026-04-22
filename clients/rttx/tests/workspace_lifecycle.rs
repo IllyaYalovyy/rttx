@@ -558,7 +558,7 @@ fn remote_managed_session_persists_and_restores() {
         restored.runtime.endpoint,
         RuntimeEndpoint::Remote { host: "dev@build-host".into() }
     );
-    assert!(matches!(restored.mode, WorkspaceMode::RemotePersistent { .. }));
+    assert_eq!(restored.mode, WorkspaceMode::Direct, "mode is no longer serialized");
     assert_eq!(
         restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
         Some("/home/dev/project")
@@ -588,9 +588,9 @@ fn remote_host_creates_managed_remote_session() {
 
 /// Updating a remote workspace endpoint must change the host and sync mode.
 #[test]
-fn update_remote_endpoint_changes_host_and_mode() {
+fn update_remote_endpoint_changes_host() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::workspace::{WorkspaceMode, WorkspaceState};
+    use rttx::workspace::WorkspaceState;
 
     let mut session = WorkspaceState::new_managed_remote(
         "Remote".into(),
@@ -600,16 +600,12 @@ fn update_remote_endpoint_changes_host_and_mode() {
     );
 
     session.runtime.endpoint = RuntimeEndpoint::Remote { host: "new-host.example.com".into() };
-    session.sync_legacy_mode_from_runtime();
 
     assert_eq!(
         session.runtime.endpoint,
         RuntimeEndpoint::Remote { host: "new-host.example.com".into() }
     );
-    assert!(matches!(
-        session.mode,
-        WorkspaceMode::RemotePersistent { ref host, .. } if host == "new-host.example.com"
-    ));
+    assert!(session.runtime.is_managed());
 }
 
 /// Splitting a pane in a remote managed session must preserve the remote
@@ -1215,7 +1211,6 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     session.runtime.bind_runtime_pane("pane-1", "daemon-1");
     session.runtime.bind_runtime_pane("pane-2", "daemon-2");
     session.runtime.bind_runtime_pane("pane-3", "daemon-3");
-    session.sync_legacy_mode_from_runtime();
 
     let state = WindowState {
         active_workspace_index: 0,

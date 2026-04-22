@@ -407,7 +407,8 @@ impl Window {
             crate::runtime::workspace_menu_items(&crate::runtime::WorkspaceMenuContext {
                 is_remote: matches!(session.runtime.endpoint, RuntimeEndpoint::Remote { .. }),
                 is_managed: session.uses_managed_runtime(),
-                is_persistent: session.mode.is_persistent(),
+                is_persistent: session.runtime.is_managed()
+                    && matches!(session.runtime.policy, WorkspacePolicy::Persistent),
                 is_attached: session.runtime.runtime_id.is_some(),
                 is_disconnected: disconnected,
             })
