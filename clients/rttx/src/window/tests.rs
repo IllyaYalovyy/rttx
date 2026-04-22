@@ -3894,7 +3894,11 @@ fn command_sidebar_filters_by_selected_host() {
     let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
     remote_cmd.host_tags = vec!["example.com".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(&[local_cmd, remote_cmd, global_cmd], &config_dir().join("commands.json")).unwrap();
+    crate::commands::save_to(
+        &[local_cmd, remote_cmd, global_cmd],
+        &config_dir().join("commands.json"),
+    )
+    .unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-host-filter-tests")
@@ -3933,7 +3937,11 @@ fn command_sidebar_groups_by_host_in_all_hosts_view() {
     let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
     remote_cmd.host_tags = vec!["example.com".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(&[local_cmd, remote_cmd, global_cmd], &config_dir.join("commands.json")).unwrap();
+    crate::commands::save_to(
+        &[local_cmd, remote_cmd, global_cmd],
+        &config_dir.join("commands.json"),
+    )
+    .unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-all-hosts-sections-test")
@@ -3974,7 +3982,8 @@ fn command_sidebar_shows_sections_for_specific_host() {
     let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
     local_cmd.host_tags = vec!["local".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(&[local_cmd, global_cmd], &config_dir().join("commands.json")).unwrap();
+    crate::commands::save_to(&[local_cmd, global_cmd], &config_dir().join("commands.json"))
+        .unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-host-sections-test")

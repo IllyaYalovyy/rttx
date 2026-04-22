@@ -58,5 +58,3 @@ const fn default_left_sidebar_width() -> i32 {
 const fn default_right_sidebar_width() -> i32 {
     320
 }
-
-

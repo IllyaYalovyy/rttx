@@ -18,5 +18,3 @@ pub struct RuntimeCache {
     #[serde(default)]
     pub dismissed_runtime_ids: BTreeSet<String>,
 }
-
-
