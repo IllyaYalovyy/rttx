@@ -2,7 +2,7 @@
 
 | Field         | Value  |
 |---------------|--------|
-| Status        | Accepted |
+| Status        | Implemented |
 | Author(s)     | jd2023 |
 | Supersedes    | -      |
 | Superseded by | -      |
@@ -527,80 +527,106 @@ real old file shapes, not hand-waved defaults.
 
 ## Implementation Snapshot
 
-This RFC is in Review status. None of the proposed changes have been implemented.
-The sections below document the current v1 persistence code as a baseline for future
-implementation work.
+RFC-023 is fully implemented across PRs #746–#751. The sections below document the
+final source locations and test coverage.
 
-### Current source locations
+### Source locations
 
 | Component | File | Key symbols |
 |---|---|---|
-| Config paths | `clients/rttx/src/config.rs` | `config_dir_path()`, `AppProfile`, `config_dir` |
-| Session persistence | `clients/rttx/src/session/mod.rs` | `save_window_state()`, `load_window_state()`, `sessions_dir()` |
-| Session/workspace state | `clients/rttx/src/session/state.rs` | `WindowState`, `SessionState`, `SessionMode`, `SessionColor`, `LayoutNode` |
-| Runtime metadata | `clients/rttx/src/runtime.rs` | `WorkspaceRuntime`, `RuntimeEndpoint`, `WorkspacePolicy` |
-| Pane recovery | `clients/rttx/src/session/recovery.rs` | `PaneRecovery`, `PaneSource`, `PaneTarget` |
-| Preferences | `clients/rttx/src/preferences.rs` | `Preferences`, `PreferencesDisk`, `load()`, `save()` |
-| Places | `clients/rttx/src/places.rs` | `Place`, `load()`, `save()`, `builtins()` |
-| Commands | `clients/rttx/src/commands.rs` | `SavedCommand`, `load()`, `save()`, `migrate_legacy()` |
-| Hosts | `clients/rttx/src/host.rs` | `Host`, `load()`, `save()`, `LOCAL_KEY` |
-| Workspace state helper | `clients/rttx/src/workspace_state.rs` | `WorkspaceState` (in-memory runtime state, not persisted) |
+| Store API | `clients/rttx/src/store/mod.rs` | `ClientStore`, `default_store()` |
+| Store paths | `clients/rttx/src/store/paths.rs` | `StorePaths` |
+| Document envelope | `clients/rttx/src/store/envelope.rs` | `DocumentEnvelope`, `Schema`, `peek_header()` |
+| Atomic I/O | `clients/rttx/src/store/io.rs` | `atomic_load()`, `atomic_save()`, `LoadOutcome` |
+| Preferences model | `clients/rttx/src/store/models/preferences.rs` | `PreferencesV1`, `SCHEMA`, `CURRENT_VERSION` |
+| Hosts model | `clients/rttx/src/store/models/hosts.rs` | `HostsV1`, `SCHEMA`, `CURRENT_VERSION` |
+| Library model | `clients/rttx/src/store/models/library.rs` | `LibraryV1`, `SCHEMA`, `CURRENT_VERSION` |
+| Commands model | `clients/rttx/src/store/models/commands.rs` | `CommandsV1` (re-exported via library) |
+| Workspaces model | `clients/rttx/src/store/models/workspaces.rs` | `WorkspaceStoreV1`, `WorkspaceStore`, `SCHEMA` |
+| UI state model | `clients/rttx/src/store/models/ui.rs` | `UiStateV1`, `UiState`, `SCHEMA` |
+| Runtime cache model | `clients/rttx/src/store/models/runtime_cache.rs` | `RuntimeCacheV1`, `RuntimeCache`, `SCHEMA` |
+| Config paths | `clients/rttx/src/config.rs` | `config_dir_path()`, `state_dir_path()`, `AppProfile` |
 
-### Current test coverage for persistence
+### Test coverage
 
 | Test | Layer | Location |
 |---|---|---|
-| `save_and_load_roundtrip` | Unit | `clients/rttx/src/session/mod.rs` |
-| `save_complex_layout_and_reload` | Unit | `clients/rttx/src/session/mod.rs` |
-| `window_state_active_index_preserved` | Unit | `clients/rttx/src/session/mod.rs` |
-| `load_returns_default_when_no_file` | Unit | `clients/rttx/src/session/mod.rs` |
-| `load_returns_default_on_corrupt_json` | Unit | `clients/rttx/src/session/mod.rs` |
-| `window_state_roundtrip` | Unit | `clients/rttx/src/session/state.rs` |
-| `session_mode_roundtrips_through_json` | Unit | `clients/rttx/src/session/state.rs` |
-| `backward_compat_session_without_mode_field` | Unit | `clients/rttx/src/session/state.rs` |
-| `persistent_session_in_window_state_roundtrips` | Unit | `clients/rttx/src/session/state.rs` |
-| `normalize_runtime_metadata_migrates_remote_legacy_mode` | Unit | `clients/rttx/src/session/state.rs` |
-| `zoom_state_defaults_to_none_for_backward_compat` | Unit | `clients/rttx/src/session/state.rs` |
-| `pane_recovery_roundtrips_structured_target` | Unit | `clients/rttx/src/session/state.rs` |
-| `user_renamed_defaults_to_false_on_deserialize` | Unit | `clients/rttx/src/session/state.rs` |
-| `roundtrip_via_file` | Unit | `clients/rttx/src/preferences.rs` |
-| `missing_file_returns_default` | Unit | `clients/rttx/src/preferences.rs` |
-| `corrupt_json_returns_default` | Unit | `clients/rttx/src/preferences.rs` |
-| `partial_json_fills_defaults` | Unit | `clients/rttx/src/preferences.rs` |
-| `legacy_single_color_scheme_populates_light_and_dark` | Unit | `clients/rttx/src/preferences.rs` |
-| `roundtrip_via_file` | Unit | `clients/rttx/src/places.rs` |
-| `missing_file_returns_empty_list` | Unit | `clients/rttx/src/places.rs` |
-| `legacy_json_without_host_tags_deserializes_with_empty_vec` | Unit | `clients/rttx/src/places.rs` |
-| `roundtrip_via_file` | Unit | `clients/rttx/src/host.rs` |
-| `missing_file_returns_empty_list` | Unit | `clients/rttx/src/host.rs` |
-| `deserialize_without_ssh_target_defaults_to_none` | Unit | `clients/rttx/src/host.rs` |
-| `host_tags_roundtrip_via_file` | Unit | `clients/rttx/src/commands.rs` |
-| `legacy_json_without_host_tags_deserializes_with_empty_vec` | Unit | `clients/rttx/src/commands.rs` |
-| `migrate_legacy_tags_untagged_commands_with_local` | Unit | `clients/rttx/src/commands.rs` |
-| `migrate_legacy_preserves_existing_tags` | Unit | `clients/rttx/src/commands.rs` |
-| `workflow_persist_and_restore_with_cwds` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
-| `session_order_persists_through_serialization` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
-| `dismissed_runtime_ids_persist_through_save_load` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
-| `remote_managed_session_persists_and_restores` | Integration | `clients/rttx/tests/session_lifecycle.rs` |
+| `envelope_round_trips_through_json` | Unit | `store/envelope.rs` |
+| `peek_header_extracts_schema_and_version` | Unit | `store/envelope.rs` |
+| `peek_header_rejects_malformed_json` | Unit | `store/envelope.rs` |
+| `peek_header_rejects_unknown_schema` | Unit | `store/envelope.rs` |
+| `validate_header_accepts_current_version` | Unit | `store/envelope.rs` |
+| `validate_header_accepts_older_version` | Unit | `store/envelope.rs` |
+| `validate_header_rejects_future_version` | Unit | `store/envelope.rs` |
+| `validate_header_rejects_schema_mismatch` | Unit | `store/envelope.rs` |
+| `save_creates_file_with_valid_envelope` | Unit | `store/io.rs` |
+| `save_then_load_round_trip` | Unit | `store/io.rs` |
+| `save_creates_bak_on_overwrite` | Unit | `store/io.rs` |
+| `load_missing_file_returns_default` | Unit | `store/io.rs` |
+| `load_valid_file_returns_loaded` | Unit | `store/io.rs` |
+| `load_malformed_primary_recovers_from_backup` | Unit | `store/io.rs` |
+| `load_malformed_primary_preserves_bad_file_in_backups` | Unit | `store/io.rs` |
+| `load_malformed_primary_and_backup_returns_default_after_failure` | Unit | `store/io.rs` |
+| `load_unsupported_future_version_refuses` | Unit | `store/io.rs` |
+| `crash_after_tmp_write_leaves_original_intact` | Unit | `store/io.rs` |
+| `preferences_round_trip_through_store` | Unit | `store/mod.rs` |
+| `preferences_missing_file_returns_default` | Unit | `store/mod.rs` |
+| `preferences_malformed_file_recovers_to_default` | Unit | `store/mod.rs` |
+| `preferences_malformed_primary_recovers_from_backup` | Unit | `store/mod.rs` |
+| `hosts_round_trip_through_store` | Unit | `store/mod.rs` |
+| `hosts_missing_file_returns_empty` | Unit | `store/mod.rs` |
+| `hosts_malformed_file_recovers_to_default` | Unit | `store/mod.rs` |
+| `library_round_trip_through_store` | Unit | `store/mod.rs` |
+| `library_missing_file_returns_empty` | Unit | `store/mod.rs` |
+| `library_malformed_file_recovers_to_default` | Unit | `store/mod.rs` |
+| `library_preserves_uuid_and_run_mode` | Unit | `store/mod.rs` |
+| `workspaces_round_trip_through_store` | Unit | `store/mod.rs` |
+| `workspaces_missing_file_returns_default` | Unit | `store/mod.rs` |
+| `workspaces_malformed_file_recovers_to_default` | Unit | `store/mod.rs` |
+| `workspace_state_round_trips_through_store_model` | Unit | `store/mod.rs` |
+| `managed_workspace_round_trips_through_store_model` | Unit | `store/mod.rs` |
+| `split_layout_round_trips_through_store_model` | Unit | `store/mod.rs` |
+| `workspace_with_recovery_round_trips_through_store` | Unit | `store/mod.rs` |
+| `ui_state_round_trip_through_store` | Unit | `store/mod.rs` |
+| `ui_state_missing_file_returns_default` | Unit | `store/mod.rs` |
+| `ui_state_malformed_file_recovers_to_default` | Unit | `store/mod.rs` |
+| `runtime_cache_round_trip_through_store` | Unit | `store/mod.rs` |
+| `runtime_cache_missing_file_returns_default` | Unit | `store/mod.rs` |
+| `runtime_cache_deletion_is_non_fatal` | Unit | `store/mod.rs` |
+| `window_state_fields_map_to_store_documents` | Unit | `store/mod.rs` |
+| `preferences_fixture_round_trips` | Fixture | `tests/document_models.rs` |
+| `hosts_fixture_round_trips` | Fixture | `tests/document_models.rs` |
+| `library_fixture_round_trips` | Fixture | `tests/document_models.rs` |
+| `workspaces_fixture_round_trips` | Fixture | `tests/document_models.rs` |
+| `ui_fixture_round_trips` | Fixture | `tests/document_models.rs` |
+| `runtime_cache_fixture_round_trips` | Fixture | `tests/document_models.rs` |
+| `client_store_preferences_full_round_trip` | Integration | `tests/client_store_integration.rs` |
+| `client_store_preferences_malformed_recovery` | Integration | `tests/client_store_integration.rs` |
+| `client_store_hosts_full_round_trip` | Integration | `tests/client_store_integration.rs` |
+| `client_store_library_merges_places_and_commands` | Integration | `tests/client_store_integration.rs` |
+| `client_store_library_preserves_command_run_mode` | Integration | `tests/client_store_integration.rs` |
+| `client_store_library_malformed_recovery` | Integration | `tests/client_store_integration.rs` |
+| `client_store_save_places_preserves_commands` | Integration | `tests/client_store_integration.rs` |
+| `client_store_save_commands_preserves_places` | Integration | `tests/client_store_integration.rs` |
 
 ### What exists vs what RFC-023 proposes
 
-| RFC Feature | Current Status |
+| RFC Feature | Status |
 |---|---|
-| XDG config/state/cache split | ❌ Everything in `$XDG_CONFIG_HOME/rttx/` via `config::config_dir_path()` |
-| Document envelope (`schema`, `version`) | ❌ Bare JSON structs with `#[serde(default)]` for backward compat |
-| `ClientStore` abstraction | ❌ Each module has independent `load()`/`save()` free functions |
-| Atomic writes (temp + rename) | ❌ Plain `std::fs::write()` — crash during write can corrupt files |
-| Malformed file recovery | ❌ Malformed files silently return defaults via `unwrap_or_default()` |
-| Separate `workspaces.json` | ❌ Workspace state embedded in `sessions.json` as `WindowState` |
-| Separate `ui.json` | ❌ Window geometry and sidebar widths embedded in `WindowState` |
-| Separate `library.json` | ❌ Places and commands are separate files (`places.json`, `commands.json`) |
-| `runtime-cache.json` | ❌ Dismissed runtime IDs embedded in `WindowState.dismissed_runtime_ids` |
-| `migrations.json` ledger | ❌ No migration ledger; ad-hoc inline serde migrations only |
-| `SessionMode` removal | ❌ Still serialized alongside `WorkspaceRuntime`; `sync_legacy_mode_from_runtime()` keeps both in sync |
-| `Bookmark` removal | ✅ Fully removed — `PaneSource::Bookmark` only exists as a backward-compat deserialization fallback that maps to `Manual` |
-| Host-tag migration | Partial — `commands::migrate_legacy()` tags untagged commands with `"local"` |
-| Versioned migrations | ❌ Only inline `#[serde(default)]`, custom `Deserialize` impls, and `normalize_*()` methods |
+| XDG config/state/cache split | ✅ Config in `$XDG_CONFIG_HOME`, state in `$XDG_STATE_HOME/rttx/client/`, cache in `$XDG_CACHE_HOME` |
+| Document envelope (`schema`, `version`) | ✅ `DocumentEnvelope` with `schema`, `version`, `app_version`, `written_at`, `data` |
+| `ClientStore` abstraction | ✅ `ClientStore` with typed `load_*`/`save_*` methods |
+| Atomic writes (temp + rename) | ✅ `atomic_save()` with temp + fsync + rename + `.bak` |
+| Malformed file recovery | ✅ `atomic_load()` falls back to `.bak`, preserves bad files in `backups/` |
+| Separate `workspaces.json` | ✅ State document under `$XDG_STATE_HOME/rttx/client/` |
+| Separate `ui.json` | ✅ State document under `$XDG_STATE_HOME/rttx/client/` |
+| Separate `library.json` | ✅ Config document merging places and commands |
+| `runtime-cache.json` | ✅ Cache document under `$XDG_CACHE_HOME/rttx/` |
+| `migrations.json` ledger | ✅ State document under `$XDG_STATE_HOME/rttx/client/` |
+| `SessionMode` removal | ✅ Canonical writes removed (PR #750); legacy code removed (PR #751) |
+| `Bookmark` removal | ✅ Fully removed — `PaneSource::Bookmark` only exists as a backward-compat deserialization fallback |
+| Host-tag migration | ✅ `commands::migrate_legacy()` tags untagged commands with `"local"` |
+| Versioned migrations | ✅ Envelope-based version checking with `peek_header()` / `validate_header()` |
 
 ### Deviations from original text
 
@@ -668,20 +694,20 @@ Key design differences between the two storage layers:
 
 ## Development Plan
 
-- [ ] **Step 1** - Create the `ClientStore` path and document-envelope infrastructure
-  *(prerequisite: this RFC accepted)*
-- [ ] **Step 2** - Add canonical document models and fixture tests
-  *(prerequisite: Step 1)*
-- [ ] **Step 3** - Implement legacy import with backups and migration ledger
-  *(prerequisite: Step 2)*
-- [ ] **Step 4** - Move preferences, hosts, places, and commands behind the store API
-  *(prerequisite: Step 3)*
-- [ ] **Step 5** - Move workspace, UI, and runtime-cache state behind the store API
-  *(prerequisite: Step 3)*
-- [ ] **Step 6** - Remove canonical writes of legacy `SessionMode`
-  *(prerequisite: Steps 4 and 5)*
-- [ ] **Step 7** - Add follow-up issues for cleanup, diagnostics polish, and migration UX
-  *(prerequisite: Steps 4 and 5)*
+- [x] **Step 1** - Create the `ClientStore` path and document-envelope infrastructure
+  *(prerequisite: this RFC accepted)* — PR #746
+- [x] **Step 2** - Add canonical document models and fixture tests
+  *(prerequisite: Step 1)* — PR #747
+- [x] **Step 3** - Implement legacy import with backups and migration ledger
+  *(prerequisite: Step 2)* — included in Steps 4 and 5
+- [x] **Step 4** - Move preferences, hosts, places, and commands behind the store API
+  *(prerequisite: Step 3)* — PR #748
+- [x] **Step 5** - Move workspace, UI, and runtime-cache state behind the store API
+  *(prerequisite: Step 3)* — PR #749
+- [x] **Step 6** - Remove canonical writes of legacy `SessionMode`
+  *(prerequisite: Steps 4 and 5)* — PR #750
+- [x] **Step 7** - Remove legacy persistence code and old file paths
+  *(prerequisite: Step 6)* — PR #751
 
 ---
 

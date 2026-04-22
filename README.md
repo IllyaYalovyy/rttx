@@ -217,14 +217,27 @@ Reconciliation between the GUI and daemon is non-destructive:
 
 ### Persistence model
 
-State is written to disk continuously, not just on shutdown:
+The client and daemon persist state in separate XDG-appropriate locations:
+
+**Client** (GUI) — uses versioned JSON documents with schema envelopes (RFC-023):
+
+| Location | Contents |
+|---|---|
+| `$XDG_CONFIG_HOME/rttx/` | `preferences.json`, `hosts.json`, `library.json`, `schemes/` |
+| `$XDG_STATE_HOME/rttx/client/` | `workspaces.json`, `ui.json`, `migrations.json`, `backups/` |
+| `$XDG_CACHE_HOME/rttx/` | `runtime-cache.json` |
+
+Config holds durable user choices, state holds restorable application state, and cache holds
+disposable runtime data that can be deleted without data loss.
+
+**Daemon** (`rttx-server`) — writes state continuously, not just on shutdown:
 
 - **`runtimes/<id>/runtime.json`** (dirty-flag driven) — per-runtime metadata, pane CWD/title/dimensions
 - **`runtimes/<id>/scrollback/<pane>.log`** (append-only, rotated) — raw terminal bytes
 - **`runtimes/<id>/screen/<pane>.snap`** — deterministic screen snapshot for reconnect
 
-State lives under `$XDG_STATE_HOME/rttx/daemon/` (default `~/.local/state/rttx/daemon/`), not in
-the cache directory, so it survives cache cleanup.
+Daemon state lives under `$XDG_STATE_HOME/rttx/daemon/` (default `~/.local/state/rttx/daemon/`),
+not in the cache directory, so it survives cache cleanup.
 
 On daemon restart: metadata is loaded, screen snapshots restore the visible viewport, and fresh
 shells are spawned in saved working directories. Clients attaching after restart receive a snapshot
@@ -323,8 +336,10 @@ mode uses completely separate paths:
 |---|---|---|
 | App ID | `io.github.IllyaYalovyy.rttx` | `io.github.IllyaYalovyy.rttx.Devel` |
 | Socket | `$XDG_RUNTIME_DIR/rttx-server/v1/` | `$XDG_RUNTIME_DIR/rttx-server-devel/v1/` |
-| State | `$XDG_STATE_HOME/rttx/daemon/` | `$XDG_STATE_HOME/rttx-devel/daemon/` |
 | Config | `$XDG_CONFIG_HOME/rttx/` | `$XDG_CONFIG_HOME/rttx-devel/` |
+| Client state | `$XDG_STATE_HOME/rttx/client/` | `$XDG_STATE_HOME/rttx-devel/client/` |
+| Daemon state | `$XDG_STATE_HOME/rttx/daemon/` | `$XDG_STATE_HOME/rttx-devel/daemon/` |
+| Cache | `$XDG_CACHE_HOME/rttx/` | `$XDG_CACHE_HOME/rttx-devel/` |
 | Log level | info | debug |
 
 ```bash
