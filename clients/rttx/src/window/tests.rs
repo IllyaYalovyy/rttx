@@ -2961,10 +2961,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
     );
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id, None);
-    assert_eq!(
-        saved_session.mode,
-        crate::workspace::WorkspaceMode::Direct,
-    );
+    assert_eq!(saved_session.mode, crate::workspace::WorkspaceMode::Direct,);
     assert_eq!(
         saved_session.runtime.pane_bindings.get("managed-pane").map(String::as_str),
         Some("managed-pane")
