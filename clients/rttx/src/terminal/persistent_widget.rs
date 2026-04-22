@@ -747,6 +747,20 @@ impl PersistentPaneView {
         (vte.column_count() as u16, vte.row_count() as u16)
     }
 
+    /// Scroll VTE to the bottom of the scrollback buffer.
+    ///
+    /// Used to implement scroll-on-keystroke for managed panes, where VTE's
+    /// built-in `scroll_on_keystroke` property has no effect because keystrokes
+    /// are intercepted before reaching VTE's native input handler.
+    fn scroll_to_bottom_if_enabled(&self) {
+        if !self.imp().vte.is_scroll_on_keystroke() {
+            return;
+        }
+        if let Some(adj) = self.imp().vte.vadjustment() {
+            adj.set_value(adj.upper() - adj.page_size());
+        }
+    }
+
     /// Connect a callback for keyboard and mouse input.
     ///
     /// The callback receives the raw terminal bytes to send to the daemon.
@@ -795,6 +809,7 @@ impl PersistentPaneView {
             if let Some(pane) = im_pane_weak.upgrade()
                 && pane.imp().accepts_input.get()
             {
+                pane.scroll_to_bottom_if_enabled();
                 im_forward(text.as_bytes());
             }
         });
@@ -829,6 +844,7 @@ impl PersistentPaneView {
                 }
                 TerminalKeyAction::ForwardToPty(bytes) => {
                     if pane.imp().accepts_input.get() {
+                        pane.scroll_to_bottom_if_enabled();
                         forward_input(&bytes);
                     }
                     glib::Propagation::Stop
@@ -2205,6 +2221,122 @@ mod tests {
         assert!(
             (restored - saved).abs() < 1.0,
             "restored scroll position should be near saved {saved}, got {restored}"
+        );
+
+        window.close();
+    }
+
+    /// Regression for #753: typing in a scrolled-up managed pane must scroll
+    /// the viewport to the bottom so the user can see what they are typing.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn scroll_to_bottom_on_keystroke_in_managed_pane() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("scroll-key-1", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 480);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(100);
+
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.connect_input(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes.to_vec());
+        });
+
+        // Feed enough lines to create scrollback.
+        let mut data = Vec::new();
+        for i in 0..200 {
+            data.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        pane.feed_snapshot(&data);
+        pump_events(100);
+
+        // Scroll up from the bottom.
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        let bottom = adj.upper() - adj.page_size();
+        assert!(bottom > 0.0, "scrollback should be large enough to scroll");
+        adj.set_value(0.0);
+        pump_events(50);
+        assert!(
+            adj.value() < bottom - 1.0,
+            "viewport should be scrolled up, got {} expected near 0",
+            adj.value()
+        );
+
+        // Type a character — Ctrl+D sends ForwardToPty(0x04).
+        pane.emit_input_key_for_test(
+            gtk4::gdk::Key::d,
+            gtk4::gdk::ModifierType::CONTROL_MASK,
+        );
+        pump_events(50);
+
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        let bottom = adj.upper() - adj.page_size();
+        assert!(
+            (adj.value() - bottom).abs() < 1.0,
+            "typing should scroll to bottom; got {} expected ~{bottom}",
+            adj.value()
+        );
+
+        window.close();
+    }
+
+    /// Regression for #753: when `scroll_on_keystroke` is disabled, typing
+    /// must NOT scroll the viewport.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn no_scroll_on_keystroke_when_preference_disabled() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("scroll-key-2", "runtime-1");
+        pane.vte().set_scroll_on_keystroke(false);
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 480);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(100);
+
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.connect_input(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes.to_vec());
+        });
+
+        // Feed enough lines to create scrollback.
+        let mut data = Vec::new();
+        for i in 0..200 {
+            data.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        pane.feed_snapshot(&data);
+        pump_events(100);
+
+        // Scroll up from the bottom.
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        adj.set_value(0.0);
+        pump_events(50);
+        let scrolled_pos = adj.value();
+
+        // Type a character.
+        pane.emit_input_key_for_test(
+            gtk4::gdk::Key::d,
+            gtk4::gdk::ModifierType::CONTROL_MASK,
+        );
+        pump_events(50);
+
+        let adj = pane.vte().vadjustment().expect("vadjustment should exist");
+        assert!(
+            (adj.value() - scrolled_pos).abs() < 1.0,
+            "with scroll_on_keystroke disabled, viewport should stay at {scrolled_pos}; got {}",
+            adj.value()
         );
 
         window.close();
