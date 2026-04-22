@@ -19,12 +19,4 @@ pub struct RuntimeCache {
     pub dismissed_runtime_ids: BTreeSet<String>,
 }
 
-// ── Conversions from domain types ───────────────────────────────
 
-use crate::workspace::state;
-
-impl From<&state::WindowState> for RuntimeCache {
-    fn from(ws: &state::WindowState) -> Self {
-        Self { dismissed_runtime_ids: ws.dismissed_runtime_ids.clone() }
-    }
-}

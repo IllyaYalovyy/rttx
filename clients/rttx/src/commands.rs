@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-use crate::config;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -87,21 +85,6 @@ pub fn migrate_legacy(commands: &mut [SavedCommand]) {
             command.host_tags.push(crate::host::LOCAL_KEY.into());
         }
     }
-}
-
-fn commands_path() -> PathBuf {
-    let mut path = config::config_dir_path();
-    path.push("commands.json");
-    path
-}
-
-#[must_use]
-pub fn load() -> Vec<SavedCommand> {
-    load_from(&commands_path())
-}
-
-pub fn save(commands: &[SavedCommand]) -> Result<(), Box<dyn std::error::Error>> {
-    save_to(commands, &commands_path())
 }
 
 #[must_use]

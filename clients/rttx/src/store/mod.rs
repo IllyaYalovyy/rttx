@@ -641,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn window_state_splits_into_three_store_documents() {
+    fn window_state_fields_map_to_store_documents() {
         use crate::workspace::state::WindowState;
 
         let mut state = WindowState {
@@ -654,9 +654,23 @@ mod tests {
         };
         state.dismissed_runtime_ids.insert("dismissed-1".into());
 
-        let ws_store: models::workspaces::WorkspaceStore = (&state).into();
-        let ui: models::ui::UiState = (&state).into();
-        let cache: models::runtime_cache::RuntimeCache = (&state).into();
+        let active_workspace_id =
+            state.workspaces.get(state.active_workspace_index).map(|s| s.uuid.clone());
+        let ws_store = models::workspaces::WorkspaceStore {
+            active_workspace_id,
+            workspaces: state.workspaces.iter().map(Into::into).collect(),
+        };
+        let ui = models::ui::UiState {
+            window_width: state.width,
+            window_height: state.height,
+            is_maximized: state.is_maximized,
+            left_sidebar_width: state.left_sidebar_width,
+            right_sidebar_width: state.right_sidebar_width,
+            ..Default::default()
+        };
+        let cache = models::runtime_cache::RuntimeCache {
+            dismissed_runtime_ids: state.dismissed_runtime_ids.clone(),
+        };
 
         assert_eq!(ws_store.workspaces.len(), 1);
         assert_eq!(ui.window_width, 1920);

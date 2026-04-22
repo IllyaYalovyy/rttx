@@ -1,7 +1,12 @@
-//! Persisted session and window state.
+//! Session and window state types.
 //!
-//! `WorkspaceState` and `WindowState` are serialized to `sessions.json`.
-//! Changes here must preserve backward compatibility via `#[serde(default)]`.
+//! `WorkspaceState` is the in-memory representation of a single workspace.
+//! `WindowState` is the in-memory aggregate used by the window; persistence
+//! is handled by `ClientStore` (RFC-023).
+//!
+//! Legacy `sessions.json` files are still readable for one-time import.
+//! Changes to `WorkspaceState` must preserve backward compatibility via
+//! `#[serde(default)]` for that import path.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

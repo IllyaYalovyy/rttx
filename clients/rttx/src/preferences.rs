@@ -1,10 +1,8 @@
 /// User preferences, persisted as JSON in `XDG_CONFIG_HOME/rttx/preferences.json`.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use crate::color_scheme;
-use crate::config;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -255,29 +253,6 @@ impl From<PreferencesDisk> for Preferences {
 
 fn parse_preferences_json(data: &str) -> Preferences {
     serde_json::from_str::<PreferencesDisk>(data).map(Into::into).unwrap_or_default()
-}
-
-fn prefs_path() -> PathBuf {
-    let mut path = config::config_dir_path();
-    path.push("preferences.json");
-    path
-}
-
-#[must_use]
-pub fn load() -> Preferences {
-    let path = prefs_path();
-    std::fs::read_to_string(path)
-        .map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
-}
-
-pub fn save(prefs: &Preferences) -> Result<(), Box<dyn std::error::Error>> {
-    let path = prefs_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(prefs)?;
-    std::fs::write(&path, json)?;
-    Ok(())
 }
 
 #[must_use]

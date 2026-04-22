@@ -18,19 +18,10 @@ pub fn workspaces_dir() -> Option<PathBuf> {
     Some(config::config_dir_path())
 }
 
-/// Save the current window state to a JSON file.
-pub fn save_window_state(state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(mut path) = workspaces_dir() else {
-        return Ok(());
-    };
-    fs::create_dir_all(&path)?;
-    path.push("sessions.json");
-    let json = serde_json::to_string_pretty(state)?;
-    fs::write(path, json)?;
-    Ok(())
-}
-
-/// Load the window state from the JSON file, or return default.
+/// Load the legacy window state from `sessions.json`, or return default.
+///
+/// Used only for one-time import when the new store is empty.
+/// New code should use `ClientStore` instead.
 #[must_use]
 pub fn load_window_state() -> WindowState {
     let Some(mut path) = workspaces_dir() else {
