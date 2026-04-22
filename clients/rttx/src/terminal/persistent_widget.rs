@@ -2270,10 +2270,7 @@ mod tests {
         );
 
         // Type a character — Ctrl+D sends ForwardToPty(0x04).
-        pane.emit_input_key_for_test(
-            gtk4::gdk::Key::d,
-            gtk4::gdk::ModifierType::CONTROL_MASK,
-        );
+        pane.emit_input_key_for_test(gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK);
         pump_events(50);
 
         let adj = pane.vte().vadjustment().expect("vadjustment should exist");
@@ -2326,10 +2323,7 @@ mod tests {
         let scrolled_pos = adj.value();
 
         // Type a character.
-        pane.emit_input_key_for_test(
-            gtk4::gdk::Key::d,
-            gtk4::gdk::ModifierType::CONTROL_MASK,
-        );
+        pane.emit_input_key_for_test(gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK);
         pump_events(50);
 
         let adj = pane.vte().vadjustment().expect("vadjustment should exist");
