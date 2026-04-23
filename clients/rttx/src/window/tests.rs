@@ -6620,3 +6620,13 @@ fn c4_split_preserves_child_exited_handler_identity() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn paste_guard_dialog_defaults_to_paste() {
+    require_display!();
+    let analysis = crate::terminal::paste_guard::analyse("line1\nline2\nline3");
+    let dialog = super::dialogs::build_paste_guard_dialog(&analysis);
+    assert_eq!(dialog.default_response().as_deref(), Some("paste"));
+    assert_eq!(dialog.close_response(), "cancel");
+}
