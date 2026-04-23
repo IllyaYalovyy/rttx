@@ -78,16 +78,17 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     )
     .await;
 
-    // Check that scrollback log exists in the cache directory.
-    let scrollback_dir = tmp.path().join("cache").join("scrollback");
-    assert!(scrollback_dir.exists(), "scrollback directory should exist");
+    // Check that scrollback log exists in the state directory (RFC-022 layout).
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
+    assert!(runtimes_dir.exists(), "runtimes directory should exist");
 
-    // Find the log file (we don't know the exact UUIDs, but there should be exactly one).
+    // Find the log file under runtimes/<id>/scrollback/<pane>.log.
     let mut log_files = Vec::new();
-    for session_dir in std::fs::read_dir(&scrollback_dir).unwrap() {
-        let session_dir = session_dir.unwrap().path();
-        if session_dir.is_dir() {
-            for entry in std::fs::read_dir(&session_dir).unwrap() {
+    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
+        let runtime_dir = runtime_dir.unwrap().path();
+        let scrollback_dir = runtime_dir.join("scrollback");
+        if scrollback_dir.is_dir() {
+            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
                 let entry = entry.unwrap().path();
                 if entry.extension().is_some_and(|ext| ext == "log") {
                     log_files.push(entry);
@@ -100,6 +101,82 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
 
     let content = std::fs::read_to_string(&log_files[0]).unwrap();
     assert!(content.contains(marker), "expected '{marker}' in scrollback log, got: {content}");
+}
+
+/// Scrollback must be written under `state_dir` (not `cache_dir`) so cache
+/// cleaners cannot delete user data.
+#[tokio::test]
+async fn scrollback_written_to_state_dir_not_cache_dir() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    client.handshake().await;
+
+    let create = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            name: "path-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    client.send(&create).await;
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
+
+    let create_pane = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            runtime_id: runtime_id.clone(),
+            cwd: None,
+            dark_background: None,
+            cols: 0,
+            rows: 0,
+            no_persist: None,
+        })),
+    };
+    client.send(&create_pane).await;
+    let pane_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+        other => panic!("expected PaneCreated, got {other:?}"),
+    };
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    client.send(&attach).await;
+    match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::Snapshot(_)) => {}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
+    client.drain(Duration::from_millis(500)).await;
+
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            runtime_id: runtime_id.clone(),
+            pane_id: pane_id.clone(),
+            data: bytes::Bytes::from_static(b"echo PATH_LOCATION_TEST\n"),
+        })),
+    };
+    client.send(&input).await;
+
+    wait_for_state_containing(&tmp.path().join("cache"), "path-test", Duration::from_secs(10))
+        .await;
+
+    // Scrollback must NOT appear in the cache directory.
+    let cache_scrollback = tmp.path().join("cache").join("scrollback");
+    assert!(
+        !cache_scrollback.exists(),
+        "scrollback directory must not exist under cache_dir: {}",
+        cache_scrollback.display()
+    );
+
+    // Scrollback MUST appear under state_dir/runtimes/<id>/scrollback/.
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
+    assert!(runtimes_dir.exists(), "runtimes directory should exist under state_dir");
 }
 
 #[tokio::test]
@@ -164,13 +241,26 @@ async fn scrollback_log_capped_at_max_size() {
     // Wait for command to finish + serialization ticks to flush and cap.
     tokio::time::sleep(Duration::from_secs(8)).await;
 
-    // Find the scrollback log file.
-    let scrollback_dir = tmp.path().join("cache").join("scrollback");
+    // Find the scrollback log file in the state directory.
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
+
+    // Wait for the runtimes directory to appear (scrollback flush creates it).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !runtimes_dir.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "runtimes directory did not appear at {}",
+            runtimes_dir.display()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
     let mut log_files = Vec::new();
-    for session_dir in std::fs::read_dir(&scrollback_dir).unwrap() {
-        let session_dir = session_dir.unwrap().path();
-        if session_dir.is_dir() {
-            for entry in std::fs::read_dir(&session_dir).unwrap() {
+    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
+        let runtime_dir = runtime_dir.unwrap().path();
+        let scrollback_dir = runtime_dir.join("scrollback");
+        if scrollback_dir.is_dir() {
+            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
                 let entry = entry.unwrap().path();
                 if entry.extension().is_some_and(|ext| ext == "log") {
                     log_files.push(entry);
@@ -256,13 +346,14 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     // Extra wait for the scrollback flush after the DSR-producing command.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Find the scrollback log file.
-    let scrollback_dir = tmp.path().join("cache").join("scrollback");
+    // Find the scrollback log file in the state directory.
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
     let mut log_files = Vec::new();
-    for session_dir in std::fs::read_dir(&scrollback_dir).unwrap() {
-        let session_dir = session_dir.unwrap().path();
-        if session_dir.is_dir() {
-            for entry in std::fs::read_dir(&session_dir).unwrap() {
+    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
+        let runtime_dir = runtime_dir.unwrap().path();
+        let scrollback_dir = runtime_dir.join("scrollback");
+        if scrollback_dir.is_dir() {
+            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
                 let entry = entry.unwrap().path();
                 if entry.extension().is_some_and(|ext| ext == "log") {
                     log_files.push(entry);

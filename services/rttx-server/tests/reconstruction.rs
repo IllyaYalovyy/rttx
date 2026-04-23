@@ -384,11 +384,11 @@ async fn pane_gets_unique_histfile() {
 /// Sync gate evidence: history path must be unique per pane.
 #[test]
 fn history_path_unique_per_pane() {
-    let cache = std::path::Path::new("/tmp/test-cache");
+    let state = std::path::Path::new("/tmp/test-state");
     let session = uuid::Uuid::new_v4();
     let p1 = uuid::Uuid::new_v4();
     let p2 = uuid::Uuid::new_v4();
-    let h1 = rttx_server::serialization::history_path(cache, session, p1);
-    let h2 = rttx_server::serialization::history_path(cache, session, p2);
+    let h1 = rttx_server::state::layout::history_file(state, session, p1);
+    let h2 = rttx_server::state::layout::history_file(state, session, p2);
     assert_ne!(h1, h2);
 }

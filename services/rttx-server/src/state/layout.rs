@@ -187,24 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn v2_paths_are_disjoint_from_v1_paths() {
-        let rt = Uuid::new_v4();
-        let pane = Uuid::new_v4();
-        let cache = Path::new("/xdg/cache/rttx-server");
-        let state = Path::new(STATE);
-
-        let v1_scrollback = crate::serialization::scrollback_log_path(cache, rt, pane);
-        let v2_scrollback = scrollback_log(state, rt, pane);
-        assert_ne!(v1_scrollback, v2_scrollback);
-        assert!(!v2_scrollback.starts_with(cache));
-
-        let v1_history = crate::serialization::history_path(cache, rt, pane);
-        let v2_history = history_file(state, rt, pane);
-        assert_ne!(v1_history, v2_history);
-        assert!(!v2_history.starts_with(cache));
-    }
-
-    #[test]
     fn all_pane_artifacts_share_runtime_dir_prefix() {
         let rt = Uuid::new_v4();
         let pane = Uuid::new_v4();

@@ -4,7 +4,7 @@
 //! process and an in-memory screen state.
 
 use crate::screen::{PaneScreen, strip_client_queries};
-use crate::serialization::scrollback_log_path;
+use crate::state::layout::scrollback_log;
 use crate::state::types::{SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -132,7 +132,7 @@ impl Pane {
     /// discarded so the in-memory buffer does not grow unboundedly.
     pub fn flush_scrollback(
         &mut self,
-        cache_dir: &Path,
+        state_dir: &Path,
         session_id: Uuid,
     ) -> Result<(), std::io::Error> {
         if self.pending_flush.is_empty() {
@@ -144,7 +144,7 @@ impl Pane {
             return Ok(());
         }
 
-        let path = scrollback_log_path(cache_dir, session_id, self.id);
+        let path = scrollback_log(state_dir, session_id, self.id);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -368,6 +368,26 @@ mod tests {
         assert!(log_path.exists());
         let content = std::fs::read(log_path).unwrap();
         assert_eq!(content, b"hello world");
+    }
+
+    #[test]
+    fn flush_scrollback_writes_to_runtime_dir_not_cache_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let runtime_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"data");
+
+        pane.flush_scrollback(tmp.path(), runtime_id).unwrap();
+
+        let log_path = pane.scrollback_log_path.as_ref().unwrap();
+        let expected = tmp
+            .path()
+            .join("runtimes")
+            .join(runtime_id.to_string())
+            .join("scrollback")
+            .join(format!("{}.log", pane.id));
+        assert_eq!(log_path, &expected);
+        assert!(log_path.exists());
     }
 
     #[test]
