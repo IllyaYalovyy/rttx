@@ -679,18 +679,7 @@ impl Window {
         use crate::terminal::paste_guard::{analyse, flatten_to_single_line};
 
         let analysis = analyse(text);
-        let body = format!(
-            "{} lines, {} bytes\n\n{}",
-            analysis.line_count, analysis.byte_len, analysis.preview
-        );
-
-        let alert = adw::AlertDialog::new(Some("Confirm Paste"), Some(&body));
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("single-line", "Paste as Single Line");
-        alert.add_response("paste", "Paste");
-        alert.set_response_appearance("paste", adw::ResponseAppearance::Suggested);
-        alert.set_default_response(Some("cancel"));
-        alert.set_close_response("cancel");
+        let alert = build_paste_guard_dialog(&analysis);
 
         let win = self.clone();
         let uuid = terminal_uuid.to_string();
@@ -710,4 +699,24 @@ impl Window {
         });
         alert.present(Some(self));
     }
+}
+
+/// Build the paste guard confirmation dialog.
+///
+/// Extracted so the dialog configuration can be tested without a full Window.
+pub(crate) fn build_paste_guard_dialog(
+    analysis: &crate::terminal::paste_guard::PasteAnalysis,
+) -> adw::AlertDialog {
+    let body = format!(
+        "{} lines, {} bytes\n\n{}",
+        analysis.line_count, analysis.byte_len, analysis.preview
+    );
+    let alert = adw::AlertDialog::new(Some("Confirm Paste"), Some(&body));
+    alert.add_response("cancel", "Cancel");
+    alert.add_response("single-line", "Paste as Single Line");
+    alert.add_response("paste", "Paste");
+    alert.set_response_appearance("paste", adw::ResponseAppearance::Suggested);
+    alert.set_default_response(Some("paste"));
+    alert.set_close_response("cancel");
+    alert
 }

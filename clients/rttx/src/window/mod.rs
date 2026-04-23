@@ -30,7 +30,7 @@ use crate::workspace_state::{EndpointEventTransition, WorkspacePaneRestore};
 use std::collections::HashMap;
 
 mod actions;
-mod dialogs;
+pub(crate) mod dialogs;
 mod input;
 mod runtime;
 mod sidebar;
