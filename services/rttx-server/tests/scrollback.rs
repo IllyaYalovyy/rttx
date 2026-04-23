@@ -78,16 +78,17 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     )
     .await;
 
-    // Check that scrollback log exists in the cache directory.
-    let scrollback_dir = tmp.path().join("cache").join("scrollback");
-    assert!(scrollback_dir.exists(), "scrollback directory should exist");
+    // Check that scrollback log exists in the state directory (RFC-022 layout).
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
+    assert!(runtimes_dir.exists(), "runtimes directory should exist");
 
-    // Find the log file (we don't know the exact UUIDs, but there should be exactly one).
+    // Find the log file under runtimes/<id>/scrollback/<pane>.log.
     let mut log_files = Vec::new();
-    for session_dir in std::fs::read_dir(&scrollback_dir).unwrap() {
-        let session_dir = session_dir.unwrap().path();
-        if session_dir.is_dir() {
-            for entry in std::fs::read_dir(&session_dir).unwrap() {
+    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
+        let runtime_dir = runtime_dir.unwrap().path();
+        let scrollback_dir = runtime_dir.join("scrollback");
+        if scrollback_dir.is_dir() {
+            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
                 let entry = entry.unwrap().path();
                 if entry.extension().is_some_and(|ext| ext == "log") {
                     log_files.push(entry);
@@ -164,13 +165,26 @@ async fn scrollback_log_capped_at_max_size() {
     // Wait for command to finish + serialization ticks to flush and cap.
     tokio::time::sleep(Duration::from_secs(8)).await;
 
-    // Find the scrollback log file.
-    let scrollback_dir = tmp.path().join("cache").join("scrollback");
+    // Find the scrollback log file in the state directory.
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
+
+    // Wait for the runtimes directory to appear (scrollback flush creates it).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !runtimes_dir.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "runtimes directory did not appear at {}",
+            runtimes_dir.display()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
     let mut log_files = Vec::new();
-    for session_dir in std::fs::read_dir(&scrollback_dir).unwrap() {
-        let session_dir = session_dir.unwrap().path();
-        if session_dir.is_dir() {
-            for entry in std::fs::read_dir(&session_dir).unwrap() {
+    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
+        let runtime_dir = runtime_dir.unwrap().path();
+        let scrollback_dir = runtime_dir.join("scrollback");
+        if scrollback_dir.is_dir() {
+            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
                 let entry = entry.unwrap().path();
                 if entry.extension().is_some_and(|ext| ext == "log") {
                     log_files.push(entry);
@@ -256,13 +270,14 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     // Extra wait for the scrollback flush after the DSR-producing command.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Find the scrollback log file.
-    let scrollback_dir = tmp.path().join("cache").join("scrollback");
+    // Find the scrollback log file in the state directory.
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
     let mut log_files = Vec::new();
-    for session_dir in std::fs::read_dir(&scrollback_dir).unwrap() {
-        let session_dir = session_dir.unwrap().path();
-        if session_dir.is_dir() {
-            for entry in std::fs::read_dir(&session_dir).unwrap() {
+    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
+        let runtime_dir = runtime_dir.unwrap().path();
+        let scrollback_dir = runtime_dir.join("scrollback");
+        if scrollback_dir.is_dir() {
+            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
                 let entry = entry.unwrap().path();
                 if entry.extension().is_some_and(|ext| ext == "log") {
                     log_files.push(entry);

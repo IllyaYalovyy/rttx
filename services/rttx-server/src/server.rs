@@ -15,7 +15,7 @@ use crate::runtime::{
     RuntimePolicy, TerminationReason,
 };
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
-use crate::serialization::{self, ServerState, default_state_path, load_state, write_state_atomic};
+use crate::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
 use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -243,16 +243,14 @@ impl Server {
                 result.runtimes.len(),
                 result.failed_ids.len()
             );
-            let cache_dir = self.os.cache_dir();
             for rf in &result.runtimes {
                 let rt = Runtime::from_runtime_file(rf);
                 let runtime_id = rt.id;
                 self.runtimes.insert(rt.id, rt);
-                // Set scrollback log paths (still in cache_dir for now).
                 if let Some(rt) = self.runtimes.get_mut(&runtime_id) {
                     for pane in rt.panes.values_mut() {
-                        pane.scrollback_log_path = Some(serialization::scrollback_log_path(
-                            &cache_dir, runtime_id, pane.id,
+                        pane.scrollback_log_path = Some(crate::state::layout::scrollback_log(
+                            &state_dir, runtime_id, pane.id,
                         ));
                     }
                 }
@@ -405,7 +403,8 @@ impl Server {
                 if no_persist {
                     env.push(("HISTFILE".into(), "/dev/null".into()));
                 } else {
-                    let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+                    let hist =
+                        crate::state::layout::history_file(&s.os.state_dir(), runtime_id, pane_id);
                     if let Some(parent) = hist.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
@@ -814,8 +813,11 @@ impl Server {
                     if no_persist {
                         env.push(("HISTFILE".into(), "/dev/null".into()));
                     } else {
-                        let hist =
-                            serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+                        let hist = crate::state::layout::history_file(
+                            &s.os.state_dir(),
+                            runtime_id,
+                            pane_id,
+                        );
                         if let Some(parent) = hist.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
@@ -1720,7 +1722,8 @@ impl Server {
             if no_persist {
                 env.push(("HISTFILE".into(), "/dev/null".into()));
             } else {
-                let hist = serialization::history_path(&s.os.cache_dir(), runtime_id, pane_id);
+                let hist =
+                    crate::state::layout::history_file(&s.os.state_dir(), runtime_id, pane_id);
                 if let Some(parent) = hist.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -2192,15 +2195,15 @@ pub async fn serialization_loop(
         }
 
         let mut s = server.lock().await;
-        let cache_dir = s.os.cache_dir();
         let state_dir = s.os.state_dir();
+        let cache_dir = s.os.cache_dir();
 
         let runtime_ids: Vec<_> = s.runtimes.keys().copied().collect();
         for runtime_id in runtime_ids {
             if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
                 let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 for pane in rt.panes.values_mut() {
-                    if let Err(e) = pane.flush_scrollback(&cache_dir, runtime_id) {
+                    if let Err(e) = pane.flush_scrollback(&state_dir, runtime_id) {
                         tracing::error!(
                             "Failed to flush scrollback for pane {} in runtime {label}: {e}",
                             short_id(pane.id)
@@ -2301,13 +2304,13 @@ pub async fn serialization_loop(
 /// because this is the last chance before shutdown.
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut s = server.lock().await;
-    let cache_dir = s.os.cache_dir();
     let state_dir = s.os.state_dir();
+    let cache_dir = s.os.cache_dir();
 
     for rt in s.runtimes.values_mut() {
         let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
         for pane in rt.panes.values_mut() {
-            if let Err(e) = pane.flush_scrollback(&cache_dir, rt.id) {
+            if let Err(e) = pane.flush_scrollback(&state_dir, rt.id) {
                 tracing::error!(
                     "Failed to flush scrollback for pane {} in runtime {label}: {e}",
                     short_id(pane.id)
