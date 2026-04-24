@@ -1173,6 +1173,38 @@ mod tests {
         assert!(modes.bracketed_paste);
     }
 
+    /// Snapshot with `focus_reporting` and `cursor_hidden` propagates through
+    /// reconciliation so the restore path can re-apply them. #765.
+    #[test]
+    fn reconcile_snapshot_carries_focus_and_cursor_modes() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let terminal_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term(&terminal_uuid))]);
+
+        let mut snap = pane_snapshot(&terminal_uuid, "htop", "/home", b"");
+        snap.terminal_modes = Some(v3::TerminalModeState {
+            focus_reporting: true,
+            cursor_hidden: true,
+            alternate_screen: true,
+            ..Default::default()
+        });
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "workspace-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![snap]),
+        });
+
+        let modes = transition.pane_snapshot_restores[0]
+            .terminal_modes
+            .as_ref()
+            .expect("modes present");
+        assert!(modes.focus_reporting);
+        assert!(modes.cursor_hidden);
+        assert!(modes.alternate_screen);
+    }
+
     #[test]
     fn reconcile_endpoint_event_pane_created_updates_binding_and_requests_recovery() {
         let mut state =

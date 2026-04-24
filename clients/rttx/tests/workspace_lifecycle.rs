@@ -1386,6 +1386,7 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
     assert!(restore.scrollback_complete);
     let modes = restore.terminal_modes.as_ref().expect("modes should be present");
     assert!(modes.bracketed_paste);
+    assert!(modes.focus_reporting);
     assert!(modes.application_cursor_keys);
     assert!(modes.alternate_screen);
     assert_eq!(modes.mouse_mode, rttx_proto::v3::MouseMode::Normal as i32);
