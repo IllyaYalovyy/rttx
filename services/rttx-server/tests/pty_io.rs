@@ -298,6 +298,33 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
 
     let mut client = TestClient::connect(&sock).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
+
+    // Wait for the shell to produce at least one Delta (prompt), so we know
+    // it is ready to accept input.  A fixed drain(500ms) is not enough on
+    // machines with heavy shell startup files.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for shell prompt");
+        match client.try_recv(remaining).await {
+            Some(msg) if matches!(msg.msg, Some(proto::server_message::Msg::Delta(_))) => break,
+            Some(_) => {}
+            None => panic!("timed out waiting for shell prompt"),
+        }
+    }
+    // Drain any remaining startup output.
+    client.drain(Duration::from_millis(300)).await;
+
+    // Send a newline first to ensure the input line is empty, then Ctrl+D.
+    client
+        .send(&proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Input(proto::Input {
+                runtime_id: runtime_id.clone(),
+                pane_id: pane_id.clone(),
+                data: bytes::Bytes::from_static(b"\n"),
+            })),
+        })
+        .await;
     client.drain(Duration::from_millis(500)).await;
 
     client
@@ -310,7 +337,7 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
         })
         .await;
 
-    let msgs = client.drain(Duration::from_secs(3)).await;
+    let msgs = client.drain(Duration::from_secs(10)).await;
     let exited = msgs.iter().find_map(|m| match &m.msg {
         Some(proto::server_message::Msg::PaneExited(pe)) => Some(pe.clone()),
         _ => None,
