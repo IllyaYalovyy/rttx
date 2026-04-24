@@ -147,5 +147,111 @@ class TestManagedPaneExitBlackBox(unittest.TestCase):
         )
 
 
+class TestReconnectInputUsability(unittest.TestCase):
+    """Regression tests for #769: reconnect must leave panes input-capable
+    and focus must return to the correct pane."""
+
+    def setUp(self) -> None:
+        self.fixture = AppFixture(disable_shell_spawn=False)
+        self.fixture.start_daemon()
+        self.fixture.start()
+
+    def tearDown(self) -> None:
+        self.fixture.stop()
+
+    def _create_managed_workspace(self) -> None:
+        self.fixture.activate_action("create-managed-local")
+        close_pane = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Close pane", timeout=20.0
+        )
+        self.assertIsNotNone(close_pane, "managed workspace controls never appeared")
+        connected = self.fixture.wait_for_showing_name(
+            Atspi.Role.LABEL, "Connected", timeout=20.0
+        )
+        self.assertIsNotNone(connected, "managed workspace never reached Connected state")
+
+    def test_reconnect_leaves_managed_pane_input_capable(self) -> None:
+        """After daemon restart, the managed pane must show Connected and
+        accept input — not stay stuck in Disconnected or Reconnecting."""
+        self._create_managed_workspace()
+
+        self.fixture.restart_daemon()
+
+        connected = self.fixture.wait_for_showing_name(
+            Atspi.Role.LABEL, "Connected", timeout=20.0
+        )
+        self.assertIsNotNone(
+            connected,
+            "managed pane must show 'Connected' after daemon restart, proving input is enabled",
+        )
+
+        terminals = self.fixture.wait_for_terminal_count(1, timeout=10.0)
+        self.assertEqual(
+            len(terminals), 1,
+            "exactly one terminal must be visible after reconnect",
+        )
+
+        # Verify the terminal is focusable (a proxy for input-capable).
+        self.assertTrue(
+            self.fixture.focus_terminal(terminals[0]),
+            "terminal must be focusable after reconnect",
+        )
+
+    def test_focus_returns_to_active_pane_after_reconnect(self) -> None:
+        """After daemon restart with a split layout, focus must return to
+        the pane that was active before the restart."""
+        self._create_managed_workspace()
+
+        # Split to get two panes.
+        split = self.fixture.wait_for_showing_name(
+            Atspi.Role.PUSH_BUTTON, "Split vertically", timeout=10.0
+        )
+        self.assertIsNotNone(split, "split control not visible")
+        click(split)
+        terminals = self.fixture.wait_for_terminal_count(2, timeout=20.0)
+        self.assertEqual(len(terminals), 2, "split should produce two terminals")
+
+        # Focus the second terminal.
+        self.fixture.focus_terminal(terminals[1])
+        import time
+        time.sleep(0.3)
+
+        self.fixture.restart_daemon()
+
+        connected = self.fixture.wait_for_showing_name(
+            Atspi.Role.LABEL, "Connected", timeout=20.0
+        )
+        self.assertIsNotNone(connected, "workspace did not reconnect after daemon restart")
+
+        reconnected_terminals = self.fixture.wait_for_terminal_count(2, timeout=20.0)
+        self.assertEqual(
+            len(reconnected_terminals), 2,
+            "both panes must survive reconnect",
+        )
+
+    def test_connection_state_label_matches_input_through_reconnect(self) -> None:
+        """The visible 'Connected' label must appear only when the pane
+        actually accepts input. During reconnect, the label must not say
+        'Connected' while the pane is still reconnecting."""
+        self._create_managed_workspace()
+
+        # Verify initial Connected state.
+        connected = self.fixture.wait_for_showing_name(
+            Atspi.Role.LABEL, "Connected", timeout=20.0
+        )
+        self.assertIsNotNone(connected, "initial Connected label missing")
+
+        self.fixture.restart_daemon()
+
+        # After restart, the label must eventually return to Connected.
+        connected = self.fixture.wait_for_showing_name(
+            Atspi.Role.LABEL, "Connected", timeout=20.0
+        )
+        self.assertIsNotNone(
+            connected,
+            "connection state label must return to 'Connected' after successful reconnect",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

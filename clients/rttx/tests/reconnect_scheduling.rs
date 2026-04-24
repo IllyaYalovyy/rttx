@@ -231,3 +231,73 @@ fn reconnecting_and_blocked_both_disable_input_but_differ_in_label() {
         blocked_pres.header_label
     );
 }
+
+/// Regression test for #769: `Connected` and `Recovered` must enable input;
+/// all other statuses must disable it. This is the pure-state contract that
+/// the GTK layer relies on to gate keyboard and mouse forwarding.
+#[test]
+fn connected_and_recovered_enable_input_all_others_disable() {
+    use rttx::runtime::{ConnectionStatus, present_connection_status};
+
+    let input_enabled_statuses = [ConnectionStatus::Connected, ConnectionStatus::Recovered];
+    for status in &input_enabled_statuses {
+        let p = present_connection_status(status);
+        assert!(p.input_enabled, "{status:?} must enable input, got input_enabled=false");
+    }
+
+    let input_disabled_statuses: Vec<ConnectionStatus> = vec![
+        ConnectionStatus::Starting,
+        ConnectionStatus::Connecting,
+        ConnectionStatus::Disconnected,
+        ConnectionStatus::SessionMissing,
+        ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 5 },
+        ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+        ConnectionStatus::Blocked(ConnectionProblem::VersionMismatch),
+    ];
+    for status in &input_disabled_statuses {
+        let p = present_connection_status(status);
+        assert!(!p.input_enabled, "{status:?} must disable input, got input_enabled=true");
+    }
+}
+
+/// Regression test for #769: every `ConnectionStatus` variant must produce
+/// a non-empty `header_label` in its presentation. A blank label would
+/// leave the pane header visually inconsistent with the actual state.
+#[test]
+fn all_connection_statuses_produce_non_empty_header_label() {
+    use rttx::runtime::{ConnectionStatus, present_connection_status};
+
+    let statuses: Vec<ConnectionStatus> = vec![
+        ConnectionStatus::Starting,
+        ConnectionStatus::Connecting,
+        ConnectionStatus::Connected,
+        ConnectionStatus::Recovered,
+        ConnectionStatus::Disconnected,
+        ConnectionStatus::SessionMissing,
+        ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 },
+        ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+        ConnectionStatus::Blocked(ConnectionProblem::VersionMismatch),
+        ConnectionStatus::Blocked(ConnectionProblem::OwnershipConflict),
+        ConnectionStatus::Blocked(ConnectionProblem::PermissionDenied),
+    ];
+    for status in &statuses {
+        let p = present_connection_status(status);
+        assert!(!p.header_label.is_empty(), "{status:?} must produce a non-empty header_label");
+    }
+}
+
+/// Regression test for #769: the `header_label` for `Connected` and
+/// `Recovered` must be identical ("Connected") so the user sees a
+/// stable label after reconnect, not a transient "Recovered" flash.
+#[test]
+fn connected_and_recovered_share_same_header_label() {
+    use rttx::runtime::{ConnectionStatus, present_connection_status};
+
+    let connected = present_connection_status(&ConnectionStatus::Connected);
+    let recovered = present_connection_status(&ConnectionStatus::Recovered);
+    assert_eq!(
+        connected.header_label, recovered.header_label,
+        "Connected and Recovered must show the same label to the user"
+    );
+    assert_eq!(connected.header_label, "Connected");
+}
