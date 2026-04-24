@@ -8,7 +8,9 @@
 //! This is the required regression layer for future terminal input fixes
 //! (see GitHub issue #464).
 
+use rttx::terminal::TerminalModes;
 use rttx::terminal::encode_terminal_key_input_for_test as encode;
+use rttx::terminal::encode_terminal_key_input_with_modes_for_test as encode_with_modes;
 
 type Mods = gtk4::gdk::ModifierType;
 type Key = gtk4::gdk::Key;
@@ -384,4 +386,165 @@ fn modifier_parameter_values_follow_xterm_convention() {
         let actual = encode(Key::Up, *mods);
         assert_eq!(actual.as_deref(), Some(*expected), "Up + {mods:?} modifier param");
     }
+}
+
+// ── Application cursor mode (DECCKM) ───────────────────────────
+
+fn assert_mode_parity(modes: TerminalModes, cases: &[(Key, Mods, &[u8])]) {
+    for (key, mods, expected) in cases {
+        let actual = encode_with_modes(*key, *mods, modes);
+        assert_eq!(
+            actual.as_deref(),
+            Some(*expected),
+            "mode parity mismatch for {key:?} + {mods:?} (modes={modes:?}): expected {expected:?}, got {actual:?}"
+        );
+    }
+}
+
+const APP_CURSOR: TerminalModes =
+    TerminalModes { application_cursor_keys: true, application_keypad: false };
+
+#[test]
+fn app_cursor_arrows_use_ss3() {
+    assert_mode_parity(
+        APP_CURSOR,
+        &[
+            (Key::Up, NONE, b"\x1bOA"),
+            (Key::Down, NONE, b"\x1bOB"),
+            (Key::Right, NONE, b"\x1bOC"),
+            (Key::Left, NONE, b"\x1bOD"),
+        ],
+    );
+}
+
+#[test]
+fn app_cursor_home_end_use_ss3() {
+    assert_mode_parity(APP_CURSOR, &[(Key::Home, NONE, b"\x1bOH"), (Key::End, NONE, b"\x1bOF")]);
+}
+
+#[test]
+fn app_cursor_modified_arrows_still_use_csi() {
+    assert_mode_parity(
+        APP_CURSOR,
+        &[
+            (Key::Up, CTRL, b"\x1b[1;5A"),
+            (Key::Down, SHIFT, b"\x1b[1;2B"),
+            (Key::Right, ALT, b"\x1b[1;3C"),
+            (Key::Left, CTRL.union(SHIFT), b"\x1b[1;6D"),
+        ],
+    );
+}
+
+#[test]
+fn app_cursor_keypad_nav_uses_ss3() {
+    assert_mode_parity(
+        APP_CURSOR,
+        &[
+            (Key::KP_Up, NONE, b"\x1bOA"),
+            (Key::KP_Down, NONE, b"\x1bOB"),
+            (Key::KP_Right, NONE, b"\x1bOC"),
+            (Key::KP_Left, NONE, b"\x1bOD"),
+            (Key::KP_Home, NONE, b"\x1bOH"),
+            (Key::KP_End, NONE, b"\x1bOF"),
+        ],
+    );
+}
+
+#[test]
+fn normal_mode_arrows_use_csi() {
+    let normal = TerminalModes::default();
+    assert_mode_parity(
+        normal,
+        &[
+            (Key::Up, NONE, b"\x1b[A"),
+            (Key::Down, NONE, b"\x1b[B"),
+            (Key::Right, NONE, b"\x1b[C"),
+            (Key::Left, NONE, b"\x1b[D"),
+        ],
+    );
+}
+
+// ── Application keypad mode (DECKPAM) ──────────────────────────
+
+const APP_KEYPAD: TerminalModes =
+    TerminalModes { application_cursor_keys: false, application_keypad: true };
+
+#[test]
+fn app_keypad_digits_use_ss3() {
+    assert_mode_parity(
+        APP_KEYPAD,
+        &[
+            (Key::KP_0, NONE, b"\x1bOp"),
+            (Key::KP_1, NONE, b"\x1bOq"),
+            (Key::KP_2, NONE, b"\x1bOr"),
+            (Key::KP_3, NONE, b"\x1bOs"),
+            (Key::KP_4, NONE, b"\x1bOt"),
+            (Key::KP_5, NONE, b"\x1bOu"),
+            (Key::KP_6, NONE, b"\x1bOv"),
+            (Key::KP_7, NONE, b"\x1bOw"),
+            (Key::KP_8, NONE, b"\x1bOx"),
+            (Key::KP_9, NONE, b"\x1bOy"),
+        ],
+    );
+}
+
+#[test]
+fn app_keypad_operators_use_ss3() {
+    assert_mode_parity(
+        APP_KEYPAD,
+        &[
+            (Key::KP_Add, NONE, b"\x1bOk"),
+            (Key::KP_Subtract, NONE, b"\x1bOm"),
+            (Key::KP_Multiply, NONE, b"\x1bOj"),
+            (Key::KP_Divide, NONE, b"\x1bOo"),
+            (Key::KP_Decimal, NONE, b"\x1bOn"),
+        ],
+    );
+}
+
+#[test]
+fn app_keypad_enter_uses_ss3() {
+    assert_mode_parity(APP_KEYPAD, &[(Key::KP_Enter, NONE, b"\x1bOM")]);
+}
+
+#[test]
+fn normal_keypad_digits_produce_ascii() {
+    let normal = TerminalModes::default();
+    assert_mode_parity(
+        normal,
+        &[(Key::KP_0, NONE, b"0"), (Key::KP_5, NONE, b"5"), (Key::KP_9, NONE, b"9")],
+    );
+}
+
+#[test]
+fn app_keypad_printable_keys_unchanged() {
+    assert_mode_parity(
+        APP_KEYPAD,
+        &[(Key::a, NONE, b"a"), (Key::z, NONE, b"z"), (Key::space, NONE, b" ")],
+    );
+}
+
+// ── Both modes active ──────────────────────────────────────────
+
+const BOTH_MODES: TerminalModes =
+    TerminalModes { application_cursor_keys: true, application_keypad: true };
+
+#[test]
+fn both_modes_arrows_use_ss3_and_keypad_uses_ss3() {
+    assert_mode_parity(
+        BOTH_MODES,
+        &[
+            (Key::Up, NONE, b"\x1bOA"),
+            (Key::KP_0, NONE, b"\x1bOp"),
+            (Key::KP_Enter, NONE, b"\x1bOM"),
+        ],
+    );
+}
+
+#[test]
+fn both_modes_modified_arrows_still_use_csi() {
+    assert_mode_parity(
+        BOTH_MODES,
+        &[(Key::Up, CTRL, b"\x1b[1;5A"), (Key::Left, SHIFT, b"\x1b[1;2D")],
+    );
 }

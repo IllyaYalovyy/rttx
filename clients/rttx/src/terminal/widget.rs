@@ -171,6 +171,7 @@ mod imp {
                     state,
                     vte.has_selection(),
                     term.imp().smart_clipboard.get(),
+                    crate::terminal::TerminalModes::default(),
                 ) {
                     TerminalKeyAction::CopySelection => {
                         crate::terminal::copy_to_clipboard(&vte);
@@ -728,10 +729,15 @@ impl TerminalWidget {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::{TerminalInputBackend, TerminalKeyAction, terminal_key_action};
+    use crate::terminal::{
+        TerminalInputBackend, TerminalKeyAction, TerminalModes, terminal_key_action,
+    };
     use gtk4::glib;
     use gtk4::prelude::*;
     use gtk4::subclass::prelude::ObjectSubclassIsExt;
+
+    const DEFAULT_MODES: TerminalModes =
+        TerminalModes { application_cursor_keys: false, application_keypad: false };
 
     /// Verify that the RESET constant inside `reset_terminal_state()` contains
     /// the expected escape sequences without requiring a live VTE widget.
@@ -771,6 +777,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 true,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -781,6 +788,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -795,6 +803,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -805,6 +814,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -815,6 +825,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -831,6 +842,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | pointer_mask,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -843,6 +855,7 @@ mod tests {
                     | pointer_mask,
                 true,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::CopySelection
         );

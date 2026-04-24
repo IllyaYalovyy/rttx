@@ -35,6 +35,8 @@ mod imp {
         pub accepts_input: Cell<bool>,
         pub exited: Cell<bool>,
         pub bracketed_paste_mode: Cell<bool>,
+        pub application_cursor_keys: Cell<bool>,
+        pub application_keypad: Cell<bool>,
         pub input_connected: Cell<bool>,
         pub resize_connected: Cell<bool>,
         pub input_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
@@ -69,6 +71,8 @@ mod imp {
                 accepts_input: Cell::default(),
                 exited: Cell::default(),
                 bracketed_paste_mode: Cell::default(),
+                application_cursor_keys: Cell::default(),
+                application_keypad: Cell::default(),
                 input_connected: Cell::default(),
                 resize_connected: Cell::default(),
                 input_key_controller: RefCell::default(),
@@ -545,6 +549,21 @@ impl PersistentPaneView {
         self.imp().bracketed_paste_mode.set(enabled);
     }
 
+    /// Update terminal interaction modes from a `TerminalModeChanged` event.
+    pub fn set_application_modes(&self, cursor_keys: bool, keypad: bool) {
+        self.imp().application_cursor_keys.set(cursor_keys);
+        self.imp().application_keypad.set(keypad);
+    }
+
+    /// Current terminal modes for key encoding.
+    #[must_use]
+    pub fn terminal_modes(&self) -> crate::terminal::TerminalModes {
+        crate::terminal::TerminalModes {
+            application_cursor_keys: self.imp().application_cursor_keys.get(),
+            application_keypad: self.imp().application_keypad.get(),
+        }
+    }
+
     /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
     /// that may have been lost when the mode-setting sequence fell outside the
     /// retained snapshot tail.
@@ -555,6 +574,8 @@ impl PersistentPaneView {
         mouse_tracking_mode: u32,
         sgr_mouse_mode: bool,
     ) {
+        self.imp().application_cursor_keys.set(application_cursor_keys);
+        self.imp().application_keypad.set(application_keypad);
         let vte = &self.imp().vte;
         if application_cursor_keys {
             vte.feed(b"\x1b[?1h");
@@ -828,6 +849,7 @@ impl PersistentPaneView {
                 state,
                 pane.vte().has_selection(),
                 pane.imp().smart_clipboard.get(),
+                pane.terminal_modes(),
             ) {
                 TerminalKeyAction::CopySelection => {
                     crate::terminal::copy_to_clipboard(pane.vte());
@@ -1192,6 +1214,10 @@ fn csi_response_len(data: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use crate::terminal::TerminalModes;
+    const DEFAULT_MODES: TerminalModes =
+        TerminalModes { application_cursor_keys: false, application_keypad: false };
+
     use super::*;
     use crate::runtime::present_connection_status;
     use std::cell::RefCell;
@@ -1289,6 +1315,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 true,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -1299,6 +1326,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -1310,6 +1338,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1321,6 +1350,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -1337,6 +1367,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | pointer_mask,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -1349,6 +1380,7 @@ mod tests {
                     | pointer_mask,
                 true,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -1363,6 +1395,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1375,6 +1408,7 @@ mod tests {
                     | gtk4::gdk::ModifierType::ALT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1385,6 +1419,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1395,6 +1430,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1409,6 +1445,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x03])
         );
@@ -1419,6 +1456,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x16])
         );
@@ -1429,6 +1467,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x04])
         );
@@ -1439,6 +1478,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x18])
         );
@@ -1892,6 +1932,41 @@ mod tests {
         // feed the appropriate escape sequences into VTE.
         pane.restore_interaction_modes(true, true, 1003, true);
         // No panic means VTE accepted the sequences.
+    }
+
+    /// `set_application_modes` updates tracked mode state for key encoding. #767.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn set_application_modes_updates_terminal_modes() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("mode-1", "runtime-1");
+        let modes = pane.terminal_modes();
+        assert!(!modes.application_cursor_keys);
+        assert!(!modes.application_keypad);
+
+        pane.set_application_modes(true, false);
+        let modes = pane.terminal_modes();
+        assert!(modes.application_cursor_keys);
+        assert!(!modes.application_keypad);
+
+        pane.set_application_modes(false, true);
+        let modes = pane.terminal_modes();
+        assert!(!modes.application_cursor_keys);
+        assert!(modes.application_keypad);
+    }
+
+    /// `restore_interaction_modes` also updates tracked mode state. #767.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_interaction_modes_updates_tracked_modes() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("restore-mode-1", "runtime-1");
+        pane.restore_interaction_modes(true, true, 0, false);
+        let modes = pane.terminal_modes();
+        assert!(modes.application_cursor_keys);
+        assert!(modes.application_keypad);
     }
 
     #[test]
