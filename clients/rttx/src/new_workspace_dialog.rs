@@ -178,19 +178,15 @@ pub fn resolve_place_path_public(path: &str) -> Option<String> {
     resolve_place_path(path)
 }
 
-/// Resolve `~` to the actual home directory for local paths.
+/// Resolve a place path for use as a working directory.
+///
+/// Tilde prefixes are preserved so the remote shell resolves `~` on the
+/// correct host.  Expanding locally would substitute the *local* home
+/// directory, which does not exist on a remote machine.
 fn resolve_place_path(path: &str) -> Option<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed == "~" {
         return None; // Home — let the shell decide
-    }
-    if trimmed == "/" {
-        return Some("/".into());
-    }
-    if let Some(rest) = trimmed.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return Some(format!("{home}/{rest}"));
     }
     Some(trimmed.into())
 }
@@ -220,12 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_tilde_prefix_expands_home() {
-        let result = resolve_place_path("~/projects");
-        assert!(result.is_some());
-        let resolved = result.unwrap();
-        assert!(resolved.ends_with("/projects"));
-        assert!(!resolved.starts_with('~'));
+    fn resolve_tilde_prefix_preserves_tilde() {
+        assert_eq!(resolve_place_path("~/projects"), Some("~/projects".into()));
+    }
+
+    #[test]
+    fn resolve_tilde_bin_preserves_tilde() {
+        assert_eq!(resolve_place_path("~/bin/"), Some("~/bin/".into()));
     }
 
     #[test]

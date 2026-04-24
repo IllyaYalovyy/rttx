@@ -4486,6 +4486,48 @@ fn open_place_action_resolves_tilde_path() {
 }
 
 #[test]
+#[ignore = "requires isolated GTK harness"]
+fn open_place_preserves_tilde_prefix_path() {
+    require_display!();
+
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.open-place-tilde-prefix-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid.clone()));
+
+    // ~/bin should NOT be expanded to /home/user/bin — the shell resolves ~.
+    window.open_place_in_current_pane("~/bin");
+
+    let term = window
+        .imp()
+        .terminals
+        .borrow()
+        .get(&terminal_uuid)
+        .cloned()
+        .expect("terminal should exist");
+    assert_eq!(
+        term.pending_shell_inputs_for_test(),
+        vec!["cd ~/bin\n"],
+        "tilde-prefix path must be preserved for remote host compatibility"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
 fn visible_session_host_key_defaults_to_local() {
     // The underlying logic defaults to LOCAL_KEY when no visible session is found.
     assert_eq!(crate::host::LOCAL_KEY, "local");
