@@ -36,7 +36,6 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
         "workspace-1".into(),
         1,
         1,
-        5,
         1,
         vec![p1, p2],
     );
@@ -49,7 +48,6 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
         pty_writer_count: 1,
         total_raw_bytes: 4096,
         total_pending_flush: 128,
-        total_command_history: 5,
         runtimes: vec![rt1],
     });
 
@@ -111,7 +109,6 @@ fn v3_diagnostics_empty_server_report() {
         pty_writer_count: 0,
         total_raw_bytes: 0,
         total_pending_flush: 0,
-        total_command_history: 0,
         runtimes: vec![],
     });
     let resp_env = v3_diagnostics::build_diagnostics_report_response(req_env.request_id, report);

@@ -74,8 +74,10 @@ pub struct RuntimeSpecV1 {
     pub panes: Vec<PaneSpecV1>,
     /// Active pane ID within this runtime.
     pub active_pane_id: Option<Uuid>,
-    /// Per-runtime command history.
-    pub command_history: Vec<HistoryEntryV1>,
+    /// Ignored — retained only for backward-compatible deserialization of
+    /// state files written before the field was removed.
+    #[serde(default, skip_serializing)]
+    pub command_history: Vec<serde_json::Value>,
 }
 
 /// Semi-durable instance data — revision counters and timestamps.
@@ -116,19 +118,6 @@ pub struct PaneSpecV1 {
     /// When true, scrollback and history are not flushed to disk (RFC-022 §9).
     #[serde(default)]
     pub no_persist: bool,
-}
-
-/// Per-runtime command history entry.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HistoryEntryV1 {
-    /// The command text.
-    pub command: String,
-    /// Working directory when the command was run.
-    pub cwd: String,
-    /// When the command was executed.
-    pub timestamp: SystemTime,
-    /// Which pane the command was run in.
-    pub pane_id: Uuid,
 }
 
 // ── Screen snapshot ─────────────────────────────────────────────────
@@ -218,15 +207,6 @@ mod tests {
         }
     }
 
-    fn sample_history_entry() -> HistoryEntryV1 {
-        HistoryEntryV1 {
-            command: "ls -la".into(),
-            cwd: "/home/user".into(),
-            timestamp: SystemTime::now(),
-            pane_id: Uuid::new_v4(),
-        }
-    }
-
     fn sample_runtime_spec() -> RuntimeSpecV1 {
         RuntimeSpecV1 {
             id: Uuid::new_v4(),
@@ -235,7 +215,7 @@ mod tests {
             created_at: SystemTime::now(),
             panes: vec![sample_pane_spec()],
             active_pane_id: None,
-            command_history: vec![sample_history_entry()],
+            command_history: vec![],
         }
     }
 
@@ -324,14 +304,6 @@ mod tests {
         assert_eq!(original, recovered);
     }
 
-    #[test]
-    fn history_entry_round_trip() {
-        let original = sample_history_entry();
-        let json = serde_json::to_string_pretty(&original).unwrap();
-        let recovered: HistoryEntryV1 = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, recovered);
-    }
-
     // ── Schema version field presence ───────────────────────────────
 
     #[test]
@@ -401,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_spec_with_no_panes_or_history() {
+    fn runtime_spec_with_no_panes() {
         let spec = RuntimeSpecV1 {
             id: Uuid::new_v4(),
             name: "empty".into(),
@@ -414,7 +386,6 @@ mod tests {
         let json = serde_json::to_string_pretty(&spec).unwrap();
         let recovered: RuntimeSpecV1 = serde_json::from_str(&json).unwrap();
         assert!(recovered.panes.is_empty());
-        assert!(recovered.command_history.is_empty());
         assert_eq!(recovered.policy, RuntimePolicy::Ephemeral);
     }
 
@@ -535,5 +506,46 @@ mod tests {
         let json = serde_json::to_string_pretty(&snap).unwrap();
         let recovered: ScreenSnapshotV1 = serde_json::from_str(&json).unwrap();
         assert!(recovered.confidential);
+    }
+
+    #[test]
+    fn runtime_spec_deserializes_old_command_history() {
+        let json = r#"{
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "name": "legacy",
+            "policy": "persistent",
+            "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "panes": [],
+            "active_pane_id": null,
+            "command_history": [
+                {"command": "ls", "cwd": "/", "timestamp": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}, "pane_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+            ]
+        }"#;
+        let spec: RuntimeSpecV1 = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.name, "legacy");
+    }
+
+    #[test]
+    fn runtime_spec_deserializes_without_command_history() {
+        let json = r#"{
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "name": "new-format",
+            "policy": "persistent",
+            "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "panes": [],
+            "active_pane_id": null
+        }"#;
+        let spec: RuntimeSpecV1 = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.name, "new-format");
+    }
+
+    #[test]
+    fn runtime_spec_serialization_omits_command_history() {
+        let spec = sample_runtime_spec();
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(
+            !json.contains("command_history"),
+            "new serialization should not include command_history"
+        );
     }
 }

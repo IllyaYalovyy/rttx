@@ -73,12 +73,7 @@ fn runtime_file_persists_and_loads_via_migration_chain() {
             created_at: SystemTime::now(),
             panes: vec![pane],
             active_pane_id: None,
-            command_history: vec![HistoryEntryV1 {
-                command: "cargo build".into(),
-                cwd: "/home/user/project".into(),
-                timestamp: SystemTime::now(),
-                pane_id: Uuid::new_v4(),
-            }],
+            command_history: vec![],
         },
         instance: RuntimeInstanceV1 {
             revision: 7,
@@ -145,4 +140,43 @@ fn future_version_rejected_from_disk() {
     let loaded = std::fs::read_to_string(&path).unwrap();
     let result = load_daemon_index(&loaded);
     assert!(result.is_err());
+}
+
+#[test]
+fn old_runtime_file_with_command_history_loads_through_migration() {
+    let json = r#"{
+        "schema_version": 1,
+        "spec": {
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "name": "legacy-ws",
+            "policy": "persistent",
+            "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "panes": [{
+                "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "cwd": "/home/user",
+                "title": "bash",
+                "exit_status": null,
+                "cols": 80,
+                "rows": 24
+            }],
+            "active_pane_id": null,
+            "command_history": [
+                {
+                    "command": "cargo build",
+                    "cwd": "/home/user/project",
+                    "timestamp": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+                    "pane_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                }
+            ]
+        },
+        "instance": {
+            "revision": 5,
+            "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "last_snapshot_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
+        }
+    }"#;
+    let loaded = load_runtime_file(json).unwrap();
+    assert_eq!(loaded.spec.name, "legacy-ws");
+    assert_eq!(loaded.spec.panes.len(), 1);
+    assert_eq!(loaded.instance.revision, 5);
 }

@@ -206,8 +206,8 @@ mod tests {
     use super::*;
     use crate::runtime::RuntimePolicy;
     use crate::state::types::{
-        HistoryEntryV1, PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1, RuntimeInstanceV1,
-        RuntimeSpecV1, SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot,
+        PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1, RuntimeInstanceV1, RuntimeSpecV1,
+        SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot,
     };
     use tempfile::TempDir;
 
@@ -229,12 +229,7 @@ mod tests {
                     no_persist: false,
                 }],
                 active_pane_id: None,
-                command_history: vec![HistoryEntryV1 {
-                    command: "ls".into(),
-                    cwd: "/".into(),
-                    timestamp: SystemTime::now(),
-                    pane_id: Uuid::new_v4(),
-                }],
+                command_history: vec![],
             },
             instance: RuntimeInstanceV1 {
                 revision: 5,

@@ -3,15 +3,12 @@
 //! A runtime is a named collection of panes with a layout tree. Runtimes
 //! persist across GUI disconnects and can be serialized to disk.
 
-use crate::pane::{HistoryEntry, Pane};
+use crate::pane::Pane;
 use rttx_proto::{proto, v3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use uuid::Uuid;
-
-/// Maximum number of entries retained in per-runtime command history.
-pub const MAX_COMMAND_HISTORY: usize = 1000;
 
 /// Runtime retention policy for a runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -193,8 +190,6 @@ pub struct Runtime {
     pub panes: HashMap<Uuid, Pane>,
     /// The currently focused pane.
     pub active_pane_id: Option<Uuid>,
-    /// Per-runtime command history.
-    pub command_history: Vec<HistoryEntry>,
     /// Runtime retention policy.
     pub policy: RuntimePolicy,
     /// Whether this runtime was resurrected from persisted state.
@@ -222,7 +217,6 @@ impl Runtime {
             name,
             panes: HashMap::new(),
             active_pane_id: None,
-            command_history: Vec::new(),
             policy: RuntimePolicy::Persistent,
             reconstructed: false,
             revision: default_runtime_revision(),
@@ -438,15 +432,6 @@ impl Runtime {
         self.panes.values().find_map(Pane::effective_cwd)
     }
 
-    /// Append a history entry, evicting the oldest if the cap is reached.
-    pub fn add_history_entry(&mut self, entry: HistoryEntry) {
-        self.command_history.push(entry);
-        if self.command_history.len() > MAX_COMMAND_HISTORY {
-            let excess = self.command_history.len() - MAX_COMMAND_HISTORY;
-            self.command_history.drain(..excess);
-        }
-    }
-
     /// Update a pane's exit status and return the resulting runtime revision.
     pub fn set_pane_exit_status(&mut self, pane_id: Uuid, status: Option<i32>) -> Option<u64> {
         let changed = {
@@ -471,8 +456,8 @@ impl Runtime {
     #[must_use]
     pub fn to_runtime_file(&self) -> crate::state::types::RuntimeFileV1 {
         use crate::state::types::{
-            HistoryEntryV1, PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1,
-            RuntimeInstanceV1, RuntimeSpecV1,
+            PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1, RuntimeInstanceV1,
+            RuntimeSpecV1,
         };
 
         let panes = self
@@ -492,17 +477,6 @@ impl Runtime {
             })
             .collect();
 
-        let command_history = self
-            .command_history
-            .iter()
-            .map(|h| HistoryEntryV1 {
-                command: h.command.clone(),
-                cwd: h.cwd.clone(),
-                timestamp: h.timestamp,
-                pane_id: h.pane_id,
-            })
-            .collect();
-
         RuntimeFileV1 {
             schema_version: RUNTIME_FILE_SCHEMA_VERSION,
             spec: RuntimeSpecV1 {
@@ -512,7 +486,7 @@ impl Runtime {
                 created_at: self.created_at,
                 panes,
                 active_pane_id: self.active_pane_id,
-                command_history,
+                command_history: vec![],
             },
             instance: RuntimeInstanceV1 {
                 revision: self.revision,
@@ -540,29 +514,10 @@ impl Runtime {
             })
             .collect();
 
-        let command_history: Vec<HistoryEntry> = rf
-            .spec
-            .command_history
-            .iter()
-            .map(|h| HistoryEntry {
-                command: h.command.clone(),
-                cwd: h.cwd.clone(),
-                timestamp: h.timestamp,
-                pane_id: h.pane_id,
-            })
-            .collect();
-
-        let command_history = if command_history.len() > MAX_COMMAND_HISTORY {
-            command_history[command_history.len() - MAX_COMMAND_HISTORY..].to_vec()
-        } else {
-            command_history
-        };
-
         Self {
             id: rf.spec.id,
             name: rf.spec.name.clone(),
             active_pane_id: rf.spec.active_pane_id,
-            command_history,
             policy: rf.spec.policy,
             reconstructed: true,
             revision: rf.instance.revision.max(default_runtime_revision()),
@@ -743,28 +698,6 @@ mod tests {
         assert_eq!(runtime.revision(), 1);
     }
 
-    fn make_history_entry(i: usize) -> HistoryEntry {
-        HistoryEntry {
-            command: format!("cmd-{i}"),
-            cwd: "/tmp".into(),
-            timestamp: SystemTime::UNIX_EPOCH,
-            pane_id: Uuid::new_v4(),
-        }
-    }
-
-    #[test]
-    fn add_history_entry_caps_at_max() {
-        let mut runtime = Runtime::new("test".into());
-        for i in 0..MAX_COMMAND_HISTORY + 50 {
-            runtime.add_history_entry(make_history_entry(i));
-        }
-        assert_eq!(runtime.command_history.len(), MAX_COMMAND_HISTORY);
-        assert_eq!(
-            runtime.command_history[0].command, "cmd-50",
-            "oldest entries should be evicted"
-        );
-    }
-
     #[test]
     fn runtime_file_v2_round_trip() {
         let mut runtime = Runtime::new("v2-test".into());
@@ -772,12 +705,6 @@ mod tests {
         let pane = Pane::new(Uuid::new_v4(), 100, 30);
         let pane_id = pane.id;
         runtime.add_pane(pane);
-        runtime.add_history_entry(HistoryEntry {
-            command: "cargo build".into(),
-            cwd: "/project".into(),
-            timestamp: std::time::SystemTime::now(),
-            pane_id,
-        });
 
         let rf = runtime.to_runtime_file();
         assert_eq!(rf.spec.id, runtime.id);
@@ -785,7 +712,6 @@ mod tests {
         assert_eq!(rf.spec.panes.len(), 1);
         assert_eq!(rf.spec.panes[0].id, pane_id);
         assert_eq!(rf.spec.panes[0].cols, 100);
-        assert_eq!(rf.spec.command_history.len(), 1);
         assert_eq!(rf.instance.revision, runtime.revision());
 
         let restored = Runtime::from_runtime_file(&rf);
@@ -797,18 +723,6 @@ mod tests {
         assert!(restored.panes.contains_key(&pane_id));
         assert_eq!(restored.panes[&pane_id].cols, 100);
         assert_eq!(restored.panes[&pane_id].rows, 30);
-        assert_eq!(restored.command_history.len(), 1);
-        assert_eq!(restored.command_history[0].command, "cargo build");
-    }
-
-    #[test]
-    fn from_runtime_file_truncates_oversized_history() {
-        let mut runtime = Runtime::new("hist-test".into());
-        runtime.command_history = (0..MAX_COMMAND_HISTORY + 50).map(make_history_entry).collect();
-
-        let rf = runtime.to_runtime_file();
-        let restored = Runtime::from_runtime_file(&rf);
-        assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
     }
 
     // ── Dirty-flag (persisted_revision) tests ───────────────────
