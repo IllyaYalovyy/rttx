@@ -69,12 +69,13 @@ fn send_to_collected(
     runtime_id: Uuid,
     pane_id: Uuid,
     msg: &ClientMsg,
+    pane_output_seq: u64,
 ) -> Vec<Uuid> {
     let mut v3_msg: Option<ClientMsg> = None;
     let mut overflowed = Vec::new();
     for (client_id, sender, protocol) in senders {
         let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
-            v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg))
+            v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg, pane_output_seq))
         } else {
             msg
         };
@@ -95,7 +96,7 @@ fn send_to_collected(
 ///
 /// Falls back to the original v2 message if conversion is not applicable
 /// (e.g., the message is already v3 or is not a push event).
-fn convert_v2_push_to_v3(msg: &ClientMsg) -> ClientMsg {
+fn convert_v2_push_to_v3(msg: &ClientMsg, pane_output_seq: u64) -> ClientMsg {
     let ClientMsg::V2(v2) = msg else {
         return msg.clone();
     };
@@ -108,7 +109,7 @@ fn convert_v2_push_to_v3(msg: &ClientMsg) -> ClientMsg {
                 runtime_id: d.runtime_id.clone(),
                 pane_id: d.pane_id.clone(),
                 data: d.data.clone(),
-                pane_output_seq: 0,
+                pane_output_seq,
             })
         }
         proto::server_message::Msg::TitleChanged(t) => {
@@ -514,7 +515,7 @@ impl Server {
             let outgoing =
                 if matches!(self.client_protocols.get(&client_id), Some(ClientProtocol::V3 { .. }))
                 {
-                    v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg))
+                    v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg, 0))
                 } else {
                     msg
                 };
@@ -2141,7 +2142,7 @@ fn spawn_pty_read_loop(
                             let data = batch.split().freeze();
 
                             // Phase 1: hold lock for state mutation and handle collection.
-                            let (new_cwd, new_title, pending_replies, pty_writer, senders, _output_seq) = {
+                            let (new_cwd, new_title, pending_replies, pty_writer, senders, output_seq) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut s = server.lock().await;
                                 let (new_cwd, new_title, pending_replies, output_seq) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
@@ -2206,15 +2207,15 @@ fn spawn_pty_read_loop(
                             let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
                                 let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data.clone())));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg));
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, output_seq));
                             }
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = ClientMsg::V2(protocol::cwd_changed(runtime_id, pane_id, cwd, revision));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg));
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0));
                             }
                             if let Some((title, revision)) = new_title {
                                 let msg = ClientMsg::V2(protocol::title_changed(runtime_id, pane_id, title, revision));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg));
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0));
                             }
                             if !all_overflows.is_empty() {
                                 all_overflows.sort_unstable();

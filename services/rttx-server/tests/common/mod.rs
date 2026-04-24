@@ -375,3 +375,183 @@ pub async fn wait_for_state_containing(
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
+
+// ── V3 test client ──────────────────────────────────────────────
+
+use rttx_proto::v3;
+
+/// A test client that speaks the v3 protocol over a real Unix socket.
+pub struct TestV3Client {
+    stream: UnixStream,
+    read_buf: BytesMut,
+    request_id: std::sync::atomic::AtomicU64,
+}
+
+impl TestV3Client {
+    /// Connect to the server and perform the v3 handshake.
+    pub async fn connect(path: &Path) -> Self {
+        let stream = UnixStream::connect(path).await.expect("failed to connect to server");
+        let mut client = Self {
+            stream,
+            read_buf: BytesMut::with_capacity(8192),
+            request_id: std::sync::atomic::AtomicU64::new(1),
+        };
+        client.v3_handshake().await;
+        client
+    }
+
+    async fn v3_handshake(&mut self) {
+        let hello = rttx_proto::v3_handshake::build_client_hello(
+            uuid::Uuid::new_v4(),
+            "test-v3",
+            "0.0.0",
+            rttx_proto::v3_handshake::CORE_CAPABILITIES,
+        );
+        let mut buf = BytesMut::new();
+        encode_frame(&hello, &mut buf).expect("encode ClientHello");
+        self.stream.write_all(&buf).await.expect("write ClientHello");
+
+        // Read ServerHello
+        loop {
+            match decode_frame::<v3::ServerHello>(&mut self.read_buf) {
+                Ok(_) => return,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => panic!("decode ServerHello error: {e}"),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await.expect("read");
+            assert!(n > 0, "unexpected EOF during v3 handshake");
+        }
+    }
+
+    fn next_request_id(&self) -> u64 {
+        self.request_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Send a v3 client envelope.
+    pub async fn send(&mut self, env: &v3::ClientEnvelope) {
+        let mut buf = BytesMut::new();
+        encode_frame(env, &mut buf).expect("encode");
+        self.stream.write_all(&buf).await.expect("write");
+    }
+
+    /// Receive a v3 server envelope.
+    pub async fn recv(&mut self) -> v3::ServerEnvelope {
+        loop {
+            match decode_frame::<v3::ServerEnvelope>(&mut self.read_buf) {
+                Ok(env) => return env,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => panic!("decode error: {e}"),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await.expect("read");
+            assert!(n > 0, "unexpected EOF");
+        }
+    }
+
+    /// Receive with timeout.
+    pub async fn recv_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Option<v3::ServerEnvelope> {
+        tokio::time::timeout(timeout, self.recv()).await.ok()
+    }
+
+    /// Create a runtime via v3 and return the `runtime_id` bytes.
+    pub async fn create_runtime(&mut self, name: &str) -> Vec<u8> {
+        let env = v3::ClientEnvelope {
+            request_id: self.next_request_id(),
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                name: name.into(),
+                policy: v3::RuntimePolicy::Persistent as i32,
+            })),
+        };
+        self.send(&env).await;
+        loop {
+            let resp = self.recv().await;
+            match resp.payload {
+                Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => return rc.runtime_id,
+                Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                other => panic!("expected RuntimeCreated, got {other:?}"),
+            }
+        }
+    }
+
+    /// Attach read-write and return the snapshot.
+    pub async fn attach_rw(&mut self, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
+        let env = v3::ClientEnvelope {
+            request_id: self.next_request_id(),
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                runtime_id: runtime_id.to_vec(),
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        };
+        self.send(&env).await;
+        loop {
+            let resp = self.recv().await;
+            match resp.payload {
+                Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => return snap,
+                Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                other => panic!("expected RuntimeSnapshot, got {other:?}"),
+            }
+        }
+    }
+
+    /// Create a pane and return the `pane_id` bytes.
+    pub async fn create_pane(&mut self, runtime_id: &[u8]) -> Vec<u8> {
+        let env = v3::ClientEnvelope {
+            request_id: self.next_request_id(),
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+                runtime_id: runtime_id.to_vec(),
+                cwd: None,
+                dark_background: None,
+                cols: 80,
+                rows: 24,
+                no_persist: None,
+            })),
+        };
+        self.send(&env).await;
+        loop {
+            let resp = self.recv().await;
+            match resp.payload {
+                Some(v3::server_envelope::Payload::PaneCreated(pc)) => return pc.pane_id,
+                Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                other => panic!("expected PaneCreated, got {other:?}"),
+            }
+        }
+    }
+
+    /// Send raw input to a pane.
+    pub async fn send_input(&mut self, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
+        let env = v3::ClientEnvelope {
+            request_id: self.next_request_id(),
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                runtime_id: runtime_id.to_vec(),
+                pane_id: pane_id.to_vec(),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::copy_from_slice(data),
+                })),
+            })),
+        };
+        self.send(&env).await;
+    }
+
+    /// Collect all `OutputDelta` messages within a time window, returning their `pane_output_seq` values.
+    pub async fn collect_output_seqs(&mut self, window: std::time::Duration) -> Vec<u64> {
+        let mut seqs = Vec::new();
+        let deadline = tokio::time::Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match self.recv_timeout(remaining).await {
+                Some(env) => {
+                    if let Some(v3::server_envelope::Payload::OutputDelta(delta)) = env.payload {
+                        seqs.push(delta.pane_output_seq);
+                    }
+                }
+                None => break,
+            }
+        }
+        seqs
+    }
+}

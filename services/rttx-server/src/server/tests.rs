@@ -1471,7 +1471,7 @@ async fn send_to_collected_delivers_messages() {
     let senders = vec![(client_id, tx, None)];
 
     let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"hi")));
-    send_to_collected(&senders, runtime_id, pane_id, &msg);
+    send_to_collected(&senders, runtime_id, pane_id, &msg, 0);
 
     let received = rx.try_recv().unwrap();
     assert!(
@@ -1489,11 +1489,11 @@ async fn send_to_collected_returns_overflowed_clients() {
     let senders = vec![(client_id, tx, None)];
 
     let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"a")));
-    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg);
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0);
     assert!(overflows.is_empty(), "first send should succeed");
 
     // Channel is now full.
-    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg);
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0);
     assert_eq!(overflows.len(), 1, "second send should report overflow");
     assert_eq!(overflows[0], client_id);
     assert!(logs_contain("channel full"));
@@ -1974,6 +1974,22 @@ async fn v3_pane_output_seq_increments_on_feed() {
     assert_eq!(pane.output_seq, 1);
     pane.feed_output(b"world");
     assert_eq!(pane.output_seq, 2);
+}
+
+#[tokio::test]
+async fn v3_convert_delta_carries_pane_output_seq() {
+    let runtime_id = Uuid::new_v4();
+    let pane_id = Uuid::new_v4();
+    let msg =
+        ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"data")));
+    let converted = convert_v2_push_to_v3(&msg, 42);
+    let ClientMsg::V3(env) = converted else {
+        panic!("expected V3 message");
+    };
+    let Some(v3::server_envelope::Payload::OutputDelta(delta)) = env.payload else {
+        panic!("expected OutputDelta");
+    };
+    assert_eq!(delta.pane_output_seq, 42);
 }
 
 #[tokio::test]
