@@ -6,10 +6,10 @@
 //! panics.
 
 use proptest::prelude::*;
-use rttx_server::screen::{restart_safe_scrollback, strip_client_queries, PaneScreen};
-use rttx_server::serialization::{load_state, ServerState};
+use rttx_server::screen::{PaneScreen, restart_safe_scrollback, strip_client_queries};
+use rttx_server::serialization::{ServerState, load_state};
 use rttx_server::state::types::{
-    DaemonIndexV1, RuntimeFileV1, ScreenSnapshotV1, SchemaVersionEnvelope,
+    DaemonIndexV1, RuntimeFileV1, SchemaVersionEnvelope, ScreenSnapshotV1,
 };
 use tempfile::TempDir;
 

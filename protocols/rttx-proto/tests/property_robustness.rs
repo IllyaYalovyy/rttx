@@ -5,7 +5,7 @@
 
 use bytes::BytesMut;
 use proptest::prelude::*;
-use rttx_proto::{bytes_to_uuid, decode_frame, encode_frame, uuid_to_bytes, v3, MAX_MESSAGE_SIZE};
+use rttx_proto::{MAX_MESSAGE_SIZE, bytes_to_uuid, decode_frame, encode_frame, uuid_to_bytes, v3};
 
 // ── Framing: arbitrary bytes never panic ────────────────────────────
 
