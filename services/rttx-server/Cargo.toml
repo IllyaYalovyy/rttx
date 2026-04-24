@@ -67,6 +67,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 anyhow = "1"
 
+[[bin]]
+name = "pty-exerciser"
+path = "src/bin/pty_exerciser.rs"
+
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"
