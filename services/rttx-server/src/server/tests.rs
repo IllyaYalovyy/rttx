@@ -1234,7 +1234,7 @@ async fn rename_runtime_logs_lifecycle_event() {
 
 #[tokio::test]
 #[traced_test]
-async fn broadcast_drops_messages_when_client_channel_is_full() {
+async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
     let server = new_server();
     let client_id = Uuid::new_v4();
     let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
@@ -1253,11 +1253,13 @@ async fn broadcast_drops_messages_when_client_channel_is_full() {
         server.lock().await.broadcast_to_runtime(runtime_id, &msg);
     }
 
-    // Next broadcast should drop the message instead of blocking.
+    // Next broadcast should trigger overflow handling (disconnect v2 client).
     server.lock().await.broadcast_to_runtime(runtime_id, &msg);
 
-    // Channel should still have exactly PUSH_CHANNEL_BOUND messages.
-    drop(server);
+    // Channel should have exactly PUSH_CHANNEL_BOUND messages (overflow was not silently added).
+    let s = server.lock().await;
+    assert!(!s.has_client_sender(client_id), "v2 client sender should be removed on overflow");
+    drop(s);
     let mut count = 0;
     let mut rx = rx;
     while rx.try_recv().is_ok() {
@@ -1462,16 +1464,14 @@ async fn collect_runtime_senders_returns_empty_for_unknown_runtime() {
 
 #[tokio::test]
 async fn send_to_collected_delivers_messages() {
+    let runtime_id = Uuid::new_v4();
+    let pane_id = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel(16);
     let client_id = Uuid::new_v4();
     let senders = vec![(client_id, tx, None)];
 
-    let msg = ClientMsg::V2(protocol::delta(
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        bytes::Bytes::from_static(b"hi"),
-    ));
-    send_to_collected(&senders, &msg);
+    let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"hi")));
+    send_to_collected(&senders, runtime_id, pane_id, &msg);
 
     let received = rx.try_recv().unwrap();
     assert!(
@@ -1481,22 +1481,113 @@ async fn send_to_collected_delivers_messages() {
 
 #[tokio::test]
 #[traced_test]
-async fn send_to_collected_drops_when_channel_full() {
+async fn send_to_collected_returns_overflowed_clients() {
+    let runtime_id = Uuid::new_v4();
+    let pane_id = Uuid::new_v4();
     let (tx, rx) = mpsc::channel(1);
     let client_id = Uuid::new_v4();
     let senders = vec![(client_id, tx, None)];
 
-    let msg = ClientMsg::V2(protocol::delta(
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        bytes::Bytes::from_static(b"a"),
-    ));
-    send_to_collected(&senders, &msg);
-    // Channel is now full.
-    send_to_collected(&senders, &msg);
+    let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"a")));
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg);
+    assert!(overflows.is_empty(), "first send should succeed");
 
+    // Channel is now full.
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg);
+    assert_eq!(overflows.len(), 1, "second send should report overflow");
+    assert_eq!(overflows[0], client_id);
     assert!(logs_contain("channel full"));
     drop(rx);
+}
+
+#[tokio::test]
+#[traced_test]
+async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+
+    let (tx, _push_rx) = mpsc::channel(1);
+    let (resp_tx, mut resp_rx) = mpsc::channel::<ClientMsg>(16);
+    let caps = vec![
+        rttx_proto::v3::Capability::CoreRuntimeLifecycle as i32,
+        rttx_proto::v3::Capability::OptResync as i32,
+    ];
+    {
+        let mut s = server.lock().await;
+        s.client_senders.insert(client_id, tx);
+        s.client_resp_senders.insert(client_id, resp_tx);
+        s.set_client_protocol(client_id, ClientProtocol::V3 { effective_caps: caps });
+    }
+
+    let msg =
+        ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
+    // Fill the push channel.
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    // Overflow — should send StreamOverflow via resp channel.
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+
+    let overflow_msg = resp_rx.try_recv().expect("should receive StreamOverflow via resp channel");
+    match overflow_msg {
+        ClientMsg::V3(env) => match env.payload {
+            Some(rttx_proto::v3::server_envelope::Payload::StreamOverflow(so)) => {
+                assert_eq!(so.runtime_id, rttx_proto::uuid_to_bytes(runtime_id));
+                assert!(so.dropped_count > 0);
+            }
+            other => panic!("expected StreamOverflow payload, got {other:?}"),
+        },
+        ClientMsg::V2(other) => panic!("expected V3 message, got V2({other:?})"),
+    }
+}
+
+#[tokio::test]
+#[traced_test]
+async fn broadcast_overflow_v2_removes_sender() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+
+    let (tx, _push_rx) = mpsc::channel(1);
+    {
+        let mut s = server.lock().await;
+        s.client_senders.insert(client_id, tx);
+    }
+
+    let msg =
+        ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
+    // Fill the push channel.
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    // Overflow — should remove sender (force disconnect).
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+
+    let sender_removed = !server.lock().await.has_client_sender(client_id);
+    assert!(sender_removed, "v2 client sender should be removed on overflow");
+}
+
+#[tokio::test]
+#[traced_test]
+async fn broadcast_overflow_v3_no_resync_removes_sender() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+
+    let caps = vec![rttx_proto::v3::Capability::CoreRuntimeLifecycle as i32];
+    let (tx, _push_rx) = mpsc::channel(1);
+    {
+        let mut s = server.lock().await;
+        s.client_senders.insert(client_id, tx);
+        s.set_client_protocol(client_id, ClientProtocol::V3 { effective_caps: caps });
+    }
+
+    let msg =
+        ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
+    // Fill the push channel.
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    // Overflow — should remove sender (force disconnect).
+    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+
+    let sender_removed = !server.lock().await.has_client_sender(client_id);
+    assert!(sender_removed, "v3 client without OPT_RESYNC should be disconnected on overflow");
 }
 
 // ── PTY read coalescing ─────────────────────────────────────────
