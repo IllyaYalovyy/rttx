@@ -42,7 +42,7 @@ async fn restart_restores_terminal_modes_from_snapshot_metadata() {
 
         // Wait for serialization tick to persist the snapshot.
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "mode-restore",
             Duration::from_secs(10),
         )

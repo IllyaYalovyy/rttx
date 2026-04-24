@@ -34,7 +34,7 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
             create_runtime(&mut c, "index-fallback", proto::RuntimePolicy::Persistent).await;
 
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "index-fallback",
             Duration::from_secs(10),
         )
@@ -88,7 +88,7 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
             create_runtime(&mut c, "doomed-runtime", proto::RuntimePolicy::Persistent).await;
 
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "doomed-runtime",
             Duration::from_secs(10),
         )
@@ -103,10 +103,6 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
     std::fs::write(&index_path, "corrupted primary").unwrap();
     let prev_path = index_path.with_extension("prev");
     std::fs::write(&prev_path, "corrupted backup").unwrap();
-
-    // Also corrupt v1 state.json so the fallback path doesn't load it.
-    let v1_path = tmp.path().join("cache/state.json");
-    std::fs::write(&v1_path, "corrupted v1").unwrap();
 
     // Phase 2: restart — should start fresh (0 runtimes), not crash.
     {
@@ -140,7 +136,7 @@ async fn corrupt_runtime_file_recovers_from_backup() {
 
         // Wait for first write.
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "backup-recovery",
             Duration::from_secs(10),
         )
@@ -192,7 +188,7 @@ async fn loaded_runtime_is_clean_after_restart() {
             create_runtime(&mut c, "clean-after-restart", proto::RuntimePolicy::Persistent).await;
 
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "clean-after-restart",
             Duration::from_secs(10),
         )
@@ -242,7 +238,7 @@ async fn multiple_mutations_coalesce_into_single_write() {
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for initial write.
-    wait_for_state_containing(&tmp.path().join("cache"), "coalesce-test", Duration::from_secs(10))
+    wait_for_state_containing(tmp.path(), "coalesce-test", Duration::from_secs(10))
         .await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
@@ -406,7 +402,7 @@ async fn terminated_runtime_does_not_become_orphan_on_restart() {
 
         // Wait for serialization.
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "terminated-rt",
             Duration::from_secs(10),
         )
@@ -471,7 +467,7 @@ async fn screen_snapshot_survives_restart() {
 
         // Wait for serialization to write snapshot.
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "snap-restart",
             Duration::from_secs(10),
         )
@@ -538,7 +534,7 @@ async fn no_persist_pane_snapshot_is_confidential_via_server() {
 
     // Wait for serialization.
     wait_for_state_containing(
-        &tmp.path().join("cache"),
+        tmp.path(),
         "confidential-snap",
         Duration::from_secs(10),
     )

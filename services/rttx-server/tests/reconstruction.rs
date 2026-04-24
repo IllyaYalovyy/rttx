@@ -74,7 +74,7 @@ async fn reconstruct_session_after_restart() {
 
         // Wait for output and serialization tick (>1s).
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "reconstruct-test",
             Duration::from_secs(10),
         )
@@ -206,7 +206,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
             .await;
 
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "reconstruct-cwd",
             Duration::from_secs(10),
         )
@@ -315,7 +315,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
 
         // Wait for state to contain both directories.
         let dir_a_str = dir_a.to_string_lossy().to_string();
-        wait_for_state_containing(&tmp.path().join("cache"), &dir_a_str, Duration::from_secs(10))
+        wait_for_state_containing(tmp.path(), &dir_a_str, Duration::from_secs(10))
             .await;
 
         handle.abort();

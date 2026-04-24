@@ -140,7 +140,7 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
         client
             .send(&proto::ClientMessage {
                 msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
-                    name: "serialized_at".into(),
+                    name: "e-policy-test".into(),
                     policy: proto::RuntimePolicy::Ephemeral as i32,
                 })),
             })
@@ -167,9 +167,16 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
             Some(proto::server_message::Msg::PaneCreated(_))
         ));
 
+        // Create a persistent runtime as anchor to wait for serialization.
+        let _ = common::create_runtime(
+            &mut client,
+            "e-policy-anchor",
+            proto::RuntimePolicy::Persistent,
+        )
+        .await;
         wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "serialized_at",
+            tmp.path(),
+            "e-policy-anchor",
             Duration::from_secs(10),
         )
         .await;
@@ -183,6 +190,11 @@ async fn ephemeral_runtime_is_not_restored_after_restart() {
         client.handshake().await;
 
         let runtimes = list_runtimes(&mut client).await;
-        assert!(runtimes.is_empty());
+        assert_eq!(
+            runtimes.len(),
+            1,
+            "only the persistent anchor should survive, not the ephemeral runtime"
+        );
+        assert_eq!(runtimes[0].name, "e-policy-anchor");
     }
 }

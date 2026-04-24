@@ -33,7 +33,7 @@ async fn terminate_runtime_cleans_up_v2_directory() {
     };
 
     // Wait for serialization to write the runtime directory.
-    wait_for_state_file(&tmp.path().join("cache"), Duration::from_secs(5)).await;
+    wait_for_state_file(tmp.path(), Duration::from_secs(5)).await;
     // Give the v2 serialization loop time to write.
     tokio::time::sleep(Duration::from_secs(2)).await;
 

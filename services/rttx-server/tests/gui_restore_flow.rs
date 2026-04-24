@@ -88,7 +88,7 @@ async fn gui_restore_flow_no_duplicates() {
         }
 
         // Wait for output.
-        wait_for_state_containing(&tmp.path().join("cache"), "Session", Duration::from_secs(10))
+        wait_for_state_containing(tmp.path(), "Session", Duration::from_secs(10))
             .await;
         let _ = c.drain(Duration::from_millis(500)).await;
     }

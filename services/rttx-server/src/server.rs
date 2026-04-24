@@ -15,7 +15,6 @@ use crate::runtime::{
     RuntimePolicy, TerminationReason,
 };
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
-use crate::serialization::{ServerState, default_state_path, load_state, write_state_atomic};
 use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -247,13 +246,11 @@ impl Server {
 
     /// Load persisted state and resurrect runtimes.
     ///
-    /// Tries v2 per-runtime files first. If no v2 state exists, falls back
-    /// to the v1 monolithic `state.json`. On first v2 startup with neither
-    /// present, starts clean with a loud log line.
+    /// Reads v2 per-runtime files from `$XDG_STATE_HOME/rttx/daemon/`.
+    /// If no v2 state exists, starts clean.
     pub fn load_persisted_state(&mut self) {
         let state_dir = self.os.state_dir();
 
-        // Try v2 per-runtime layout first.
         if let Some(result) = crate::state::persistence::load_all(&state_dir) {
             let total = result.runtimes.len() + result.failed_ids.len();
             tracing::info!(
@@ -288,32 +285,11 @@ impl Server {
             }
         }
 
-        // Fall back to v1 monolithic state.json.
-        let state_path = default_state_path(&self.os.cache_dir());
-        match load_state(&state_path) {
-            Ok(Some(state)) => {
-                tracing::info!(
-                    "No v2 state found; loaded {} runtimes from v1 state.json",
-                    state.runtimes.len()
-                );
-                for ps in &state.runtimes {
-                    let rt = Runtime::from_persisted(ps);
-                    self.runtimes.insert(rt.id, rt);
-                }
-            }
-            Ok(None) => {
-                tracing::info!(
-                    "No persisted state found (v1 or v2). Starting fresh. \
-                     Daemon state is now stored in {} (RFC-022). \
-                     Previous state in $XDG_CACHE_HOME/rttx-server/ (if any) is left untouched.",
-                    state_dir.display()
-                );
-            }
-            Err(e) => {
-                tracing::error!("Failed to load v1 persisted state: {e}");
-                tracing::info!("Starting fresh due to load failure");
-            }
-        }
+        tracing::info!(
+            "No persisted state found. Starting fresh. \
+             Daemon state is stored in {} (RFC-022).",
+            state_dir.display()
+        );
     }
 
     /// Reconstruct resurrected runtimes: replay scrollback logs into pane
@@ -471,21 +447,6 @@ impl Server {
                     }
                 }
             }
-        }
-    }
-
-    /// Build a serializable snapshot of the current state.
-    #[must_use]
-    pub fn build_snapshot(&self) -> ServerState {
-        ServerState {
-            runtimes: self
-                .runtimes
-                .values()
-                .filter(|rt| rt.policy == RuntimePolicy::Persistent)
-                .map(Runtime::to_persisted)
-                .collect(),
-            serialized_at: std::time::SystemTime::now(),
-            server_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 
@@ -2276,8 +2237,7 @@ fn spawn_pty_read_loop(
 
 /// Run the serialization loop, writing state to disk every `interval`.
 ///
-/// Uses v2 per-runtime files with symlink-based backup. Also writes the
-/// v1 monolithic `state.json` for backward compatibility during transition.
+/// Uses v2 per-runtime files with symlink-based backup.
 ///
 /// Dirty-flag optimization (RFC-022 §5): only runtimes where
 /// `revision > persisted_revision` are written. The daemon index is
@@ -2303,7 +2263,6 @@ pub async fn serialization_loop(
 
         let mut s = server.lock().await;
         let state_dir = s.os.state_dir();
-        let cache_dir = s.os.cache_dir();
 
         let runtime_ids: Vec<_> = s.runtimes.keys().copied().collect();
         for runtime_id in runtime_ids {
@@ -2352,9 +2311,6 @@ pub async fn serialization_loop(
         current_ids.sort();
         let index_changed = current_ids != last_persisted_ids;
 
-        // Also write v1 for backward compat during transition.
-        let snapshot = s.build_snapshot();
-        let v1_path = default_state_path(&cache_dir);
         drop(s);
 
         // Write v2 daemon index only when runtime IDs changed.
@@ -2397,11 +2353,6 @@ pub async fn serialization_loop(
             }
             drop(s);
         }
-
-        // Write v1 monolithic state.json.
-        if let Err(e) = write_state_atomic(&snapshot, &v1_path) {
-            tracing::error!("Failed to serialize v1 state: {e}");
-        }
     }
 }
 
@@ -2412,7 +2363,6 @@ pub async fn serialization_loop(
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut s = server.lock().await;
     let state_dir = s.os.state_dir();
-    let cache_dir = s.os.cache_dir();
 
     for rt in s.runtimes.values_mut() {
         let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
@@ -2469,16 +2419,8 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         }
     }
 
-    // Also write v1 for backward compat.
-    let snapshot = s.build_snapshot();
-    let state_path = default_state_path(&cache_dir);
     drop(s);
-
-    if let Err(e) = write_state_atomic(&snapshot, &state_path) {
-        tracing::error!("Failed to persist final v1 state: {e}");
-    } else {
-        tracing::info!("Final state persisted (v1 + v2)");
-    }
+    tracing::info!("Final state persisted");
 }
 
 /// Run the main server loop: accept clients, handle messages, manage PTYs.

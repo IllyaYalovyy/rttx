@@ -234,7 +234,7 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
         ));
 
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "reconstructed-inventory",
             Duration::from_secs(10),
         )

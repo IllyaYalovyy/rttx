@@ -25,7 +25,7 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
 
     // Wait for serialization to write state.
     common::wait_for_state_containing(
-        &tmp.path().join("cache"),
+        tmp.path(),
         "first-run-test",
         Duration::from_secs(10),
     )

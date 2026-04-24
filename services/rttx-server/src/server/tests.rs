@@ -653,25 +653,6 @@ async fn resize_without_write_access_returns_ownership_error() {
     }
 }
 
-// ── build_snapshot ──────────────────────────────────────────────
-
-#[test]
-fn build_snapshot_only_includes_persistent_runtimes() {
-    let mut server = Server::new(Box::new(StubOs));
-
-    let mut persistent = Runtime::new("keep".into());
-    persistent.policy = RuntimePolicy::Persistent;
-    server.runtimes.insert(persistent.id, persistent);
-
-    let mut ephemeral = Runtime::new("discard".into());
-    ephemeral.policy = RuntimePolicy::Ephemeral;
-    server.runtimes.insert(ephemeral.id, ephemeral);
-
-    let snapshot = server.build_snapshot();
-    assert_eq!(snapshot.runtimes.len(), 1);
-    assert_eq!(snapshot.runtimes[0].name, "keep");
-}
-
 // ── Input to nonexistent pane in existing runtime ───────────────
 
 #[tokio::test]
@@ -2136,4 +2117,5 @@ fn fresh_start_log_includes_state_directory_path() {
         logs_contain(&expected_state_dir),
         "first-run log should include the state directory path"
     );
+    assert!(logs_contain("Starting fresh"));
 }

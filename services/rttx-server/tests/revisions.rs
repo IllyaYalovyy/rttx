@@ -212,7 +212,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         }
 
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "restart-revision",
             Duration::from_secs(10),
         )

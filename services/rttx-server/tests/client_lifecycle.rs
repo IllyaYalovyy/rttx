@@ -77,7 +77,7 @@ async fn reconnect_restores_scrollback() {
 
         // Wait for output + serialization tick.
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "lifecycle-test",
             Duration::from_secs(10),
         )
@@ -252,7 +252,7 @@ async fn restart_preserves_runtime_count_and_scrollback() {
 
         // Wait for serialization.
         wait_for_state_containing(
-            &tmp.path().join("cache"),
+            tmp.path(),
             "restart-stable",
             Duration::from_secs(10),
         )

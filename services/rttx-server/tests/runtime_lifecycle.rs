@@ -236,7 +236,7 @@ async fn rename_runtime_persists_across_restart() {
     }
 
     // Wait for state to be persisted with the new name.
-    common::wait_for_state_containing(&tmp.path().join("cache"), "after", Duration::from_secs(5))
+    common::wait_for_state_containing(tmp.path(), "after", Duration::from_secs(5))
         .await;
 
     // Shutdown and restart.
