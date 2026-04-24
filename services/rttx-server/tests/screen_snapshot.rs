@@ -62,8 +62,7 @@ async fn serialization_writes_screen_snapshots() {
     };
 
     // Wait for serialization tick to write state.
-    wait_for_state_containing(&tmp.path().join("cache"), "snap-test", Duration::from_secs(10))
-        .await;
+    wait_for_state_containing(tmp.path(), "snap-test", Duration::from_secs(10)).await;
 
     // Verify screen snapshot file exists.
     let state_dir = tmp.path().join("state/rttx/daemon");

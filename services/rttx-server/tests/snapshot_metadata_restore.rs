@@ -41,12 +41,7 @@ async fn restart_restores_terminal_modes_from_snapshot_metadata() {
         .await;
 
         // Wait for serialization tick to persist the snapshot.
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "mode-restore",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "mode-restore", Duration::from_secs(10)).await;
 
         // Drain output.
         let _ = tokio::time::timeout(Duration::from_millis(500), c.recv()).await;

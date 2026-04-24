@@ -147,30 +147,63 @@ pub async fn start_test_server(
     (socket_path, handle)
 }
 
-/// Wait until the state file exists and has been written at least once.
-/// Polls every 200ms for up to `timeout`.
-pub async fn wait_for_state_file(cache_dir: &std::path::Path, timeout: std::time::Duration) {
-    let state_path = cache_dir.join("state.json");
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if state_path.exists() && std::fs::metadata(&state_path).is_ok_and(|m| m.len() > 2) {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "state file not written within {}ms at {}",
-            timeout.as_millis(),
-            state_path.display()
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-}
-
 // ── Reusable protocol helpers ───────────────────────────────────
 //
 // These cover the most common test operations. All helpers that receive
 // server responses drain interleaved Delta messages so they work
 // reliably on slow CI runners.
+
+/// Wait until the v2 daemon index exists and has been written at least once.
+/// Polls every 200ms for up to `timeout`.
+pub async fn wait_for_state_file(state_dir: &std::path::Path, timeout: std::time::Duration) {
+    let index_path = state_dir.join("state/rttx/daemon/daemon.json");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if index_path.exists() && std::fs::metadata(&index_path).is_ok_and(|m| m.len() > 2) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "v2 daemon index not written within {}ms at {}",
+            timeout.as_millis(),
+            index_path.display()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Wait until any v2 runtime file under the state dir contains a specific
+/// substring. Polls every 200ms for up to `timeout`.
+///
+/// The `base_dir` is the test's temp root (same as passed to
+/// `start_test_server`). The v2 state lives under
+/// `base_dir/state/rttx/daemon/runtimes/`.
+pub async fn wait_for_state_containing(
+    base_dir: &std::path::Path,
+    needle: &str,
+    timeout: std::time::Duration,
+) {
+    let runtimes_dir = base_dir.join("state/rttx/daemon/runtimes");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Ok(entries) = std::fs::read_dir(&runtimes_dir) {
+            for entry in entries.flatten() {
+                let runtime_json = entry.path().join("runtime.json");
+                if let Ok(content) = std::fs::read_to_string(&runtime_json)
+                    && content.contains(needle)
+                {
+                    return;
+                }
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "v2 runtime files under {} never contained '{needle}'",
+            runtimes_dir.display()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
 
 /// Create a session and return its ID.
 pub async fn create_runtime(
@@ -350,30 +383,6 @@ pub async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
             })),
         })
         .await;
-}
-
-/// Wait until the state file contains a specific substring.
-/// Polls every 200ms for up to `timeout`.
-pub async fn wait_for_state_containing(
-    cache_dir: &std::path::Path,
-    needle: &str,
-    timeout: std::time::Duration,
-) {
-    let state_path = cache_dir.join("state.json");
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if state_path.exists()
-            && std::fs::read_to_string(&state_path).is_ok_and(|c| c.contains(needle))
-        {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "state file at {} never contained '{needle}'",
-            state_path.display()
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
 }
 
 // ── V3 test client ──────────────────────────────────────────────

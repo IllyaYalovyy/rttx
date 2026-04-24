@@ -44,15 +44,26 @@ async fn shutdown_stops_server_and_persists_state() {
 
     assert!(result.is_ok(), "server returned error: {result:?}");
 
-    // Verify state was persisted to disk.
-    let state_path = tmp.path().join("cache").join("state.json");
-    assert!(state_path.exists(), "state file was not written on shutdown");
+    // Verify state was persisted to disk (v2 per-runtime files).
+    let state_dir = tmp.path().join("state/rttx/daemon");
+    let index_path = state_dir.join("daemon.json");
+    assert!(index_path.exists(), "v2 daemon index was not written on shutdown");
 
-    let contents = std::fs::read_to_string(&state_path).unwrap();
-    assert!(
-        contents.contains("persist-me"),
-        "persisted state does not contain the session we created"
-    );
+    let runtimes_dir = state_dir.join("runtimes");
+    let mut found = false;
+    if runtimes_dir.exists() {
+        for entry in std::fs::read_dir(&runtimes_dir).unwrap().flatten() {
+            let runtime_json = entry.path().join("runtime.json");
+            if runtime_json.exists() {
+                let contents = std::fs::read_to_string(&runtime_json).unwrap();
+                if contents.contains("persist-me") {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(found, "persisted v2 state does not contain the runtime we created");
 }
 
 #[tokio::test]

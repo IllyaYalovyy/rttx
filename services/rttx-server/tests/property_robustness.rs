@@ -7,11 +7,9 @@
 
 use proptest::prelude::*;
 use rttx_server::screen::{PaneScreen, restart_safe_scrollback, strip_client_queries};
-use rttx_server::serialization::{ServerState, load_state};
 use rttx_server::state::types::{
     DaemonIndexV1, RuntimeFileV1, SchemaVersionEnvelope, ScreenSnapshotV1,
 };
-use tempfile::TempDir;
 
 // ── PaneScreen: arbitrary byte streams never panic ──────────────────
 
@@ -107,17 +105,9 @@ proptest! {
     }
 }
 
-// ── Snapshot/state deserialization: corrupted JSON never panics ──────
+// ── State deserialization: corrupted JSON never panics ───────────────
 
 proptest! {
-    #[test]
-    fn load_state_corrupt_json_never_panics(data in proptest::collection::vec(any::<u8>(), 0..1024)) {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("state.json");
-        std::fs::write(&path, &data).unwrap();
-        let _ = load_state(&path);
-    }
-
     #[test]
     fn daemon_index_corrupt_json_never_panics(data in "\\PC{0,512}") {
         let _: Result<DaemonIndexV1, _> = serde_json::from_str(&data);
@@ -136,11 +126,6 @@ proptest! {
     #[test]
     fn schema_envelope_corrupt_json_never_panics(data in "\\PC{0,512}") {
         let _: Result<SchemaVersionEnvelope, _> = serde_json::from_str(&data);
-    }
-
-    #[test]
-    fn server_state_corrupt_json_never_panics(data in "\\PC{0,512}") {
-        let _: Result<ServerState, _> = serde_json::from_str(&data);
     }
 }
 
@@ -182,26 +167,5 @@ proptest! {
         // Feed the recovered screen bytes into PaneScreen — must not panic.
         let mut pane_screen = PaneScreen::new(8192);
         pane_screen.feed(&recovered.screen_bytes);
-    }
-}
-
-// ── State file: truncated valid JSON ────────────────────────────────
-
-proptest! {
-    #[test]
-    fn load_state_truncated_valid_json_never_panics(cut in 0..200usize) {
-        let state = ServerState {
-            runtimes: vec![],
-            serialized_at: std::time::SystemTime::now(),
-            server_version: "test".into(),
-        };
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        let cut = cut.min(json.len());
-        let truncated = &json[..cut];
-
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("state.json");
-        std::fs::write(&path, truncated).unwrap();
-        let _ = load_state(&path);
     }
 }

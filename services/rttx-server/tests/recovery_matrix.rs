@@ -70,8 +70,7 @@ async fn persistent_daemon_restart_reconstructs_session_and_panes() {
         create_pane(&mut c, &runtime_id).await;
 
         // Wait for serialization tick.
-        wait_for_state_containing(&tmp.path().join("cache"), "p-restart", Duration::from_secs(10))
-            .await;
+        wait_for_state_containing(tmp.path(), "p-restart", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -204,16 +203,14 @@ async fn ephemeral_daemon_restart_does_not_restore_session() {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "serialized_at", proto::RuntimePolicy::Ephemeral).await;
+        let sid = create_runtime(&mut c, "e-restart", proto::RuntimePolicy::Ephemeral).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
 
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "serialized_at",
-            Duration::from_secs(10),
-        )
-        .await;
+        // Create a persistent runtime so we can wait for the serialization
+        // loop to have run at least once (ephemeral runtimes are not persisted).
+        let _ = create_runtime(&mut c, "e-restart-anchor", proto::RuntimePolicy::Persistent).await;
+        wait_for_state_containing(tmp.path(), "e-restart-anchor", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -223,7 +220,12 @@ async fn ephemeral_daemon_restart_does_not_restore_session() {
     c.handshake().await;
 
     let runtimes = list_runtimes(&mut c).await;
-    assert!(runtimes.is_empty(), "ephemeral sessions must not survive restart");
+    assert_eq!(
+        runtimes.len(),
+        1,
+        "only the persistent anchor should survive restart, not the ephemeral runtime"
+    );
+    assert_eq!(runtimes[0].name, "e-restart-anchor");
 }
 
 // ── Ephemeral × Explicit detach ─────────────────────────────────
@@ -272,12 +274,7 @@ async fn persistent_restart_reader_reattaches_after_reconstruction() {
         attach_rw(&mut writer, &runtime_id).await;
         create_pane(&mut writer, &runtime_id).await;
 
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "p-reader-restart",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "p-reader-restart", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

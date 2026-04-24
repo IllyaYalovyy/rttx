@@ -653,25 +653,6 @@ async fn resize_without_write_access_returns_ownership_error() {
     }
 }
 
-// ── build_snapshot ──────────────────────────────────────────────
-
-#[test]
-fn build_snapshot_only_includes_persistent_runtimes() {
-    let mut server = Server::new(Box::new(StubOs));
-
-    let mut persistent = Runtime::new("keep".into());
-    persistent.policy = RuntimePolicy::Persistent;
-    server.runtimes.insert(persistent.id, persistent);
-
-    let mut ephemeral = Runtime::new("discard".into());
-    ephemeral.policy = RuntimePolicy::Ephemeral;
-    server.runtimes.insert(ephemeral.id, ephemeral);
-
-    let snapshot = server.build_snapshot();
-    assert_eq!(snapshot.runtimes.len(), 1);
-    assert_eq!(snapshot.runtimes[0].name, "keep");
-}
-
 // ── Input to nonexistent pane in existing runtime ───────────────
 
 #[tokio::test]
@@ -2136,4 +2117,46 @@ fn fresh_start_log_includes_state_directory_path() {
         logs_contain(&expected_state_dir),
         "first-run log should include the state directory path"
     );
+    assert!(logs_contain("Starting fresh"));
+}
+
+// ── No v1 fallback ──────────────────────────────────────────────
+
+#[test]
+#[traced_test]
+fn v1_state_json_in_cache_dir_is_ignored() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let os = temp_os(tmp.path());
+    let cache_dir = os.cache_dir();
+
+    // Write a v1 state.json with a runtime — should be ignored.
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("state.json"),
+        r#"{
+            "sessions": [{
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "name": "v1-ghost",
+                "panes": [],
+                "active_pane_id": null,
+                "command_history": [],
+                "policy": "persistent",
+                "revision": 1,
+                "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+                "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
+            }],
+            "serialized_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "server_version": "0.3.0"
+        }"#,
+    )
+    .unwrap();
+
+    let mut server = Server::new(Box::new(os));
+    server.load_persisted_state();
+
+    assert!(
+        server.runtimes.is_empty(),
+        "v1 state.json must not be loaded — v1 fallback was removed"
+    );
+    assert!(logs_contain("Starting fresh"));
 }

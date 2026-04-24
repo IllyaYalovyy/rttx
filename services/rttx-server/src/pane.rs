@@ -209,21 +209,6 @@ impl Pane {
         self.exit_status.is_some()
     }
 
-    /// Build a persistable snapshot of this pane.
-    #[must_use]
-    pub fn to_persisted(&self) -> PersistedPane {
-        let cwd = self.cwd.clone().or_else(|| self.read_proc_cwd());
-        PersistedPane {
-            id: self.id,
-            cwd,
-            title: self.title.clone(),
-            scrollback_log_path: self.scrollback_log_path.clone().unwrap_or_default(),
-            exit_status: self.exit_status,
-            cols: self.cols,
-            rows: self.rows,
-        }
-    }
-
     /// Build a deterministic screen snapshot for on-disk persistence (RFC-022 §4).
     #[must_use]
     pub fn to_screen_snapshot(&self) -> ScreenSnapshotV1 {
@@ -301,25 +286,6 @@ fn rotate_scrollback_log(path: &Path, max_bytes: u64, keep: u32) -> Result<(), s
     std::fs::rename(path, &first_rotated)?;
 
     Ok(())
-}
-
-/// Serializable pane state for disk persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedPane {
-    /// Unique pane identifier.
-    pub id: Uuid,
-    /// Last known working directory.
-    pub cwd: Option<String>,
-    /// Pane title.
-    pub title: Option<String>,
-    /// Path to the scrollback log file.
-    pub scrollback_log_path: PathBuf,
-    /// Exit status if the process exited.
-    pub exit_status: Option<i32>,
-    /// Terminal columns.
-    pub cols: u16,
-    /// Terminal rows.
-    pub rows: u16,
 }
 
 /// History entry for per-session command history.
@@ -431,16 +397,6 @@ mod tests {
         assert!(!pane.has_pending_flush());
         pane.flush_scrollback(tmp.path(), session_id).unwrap();
         assert!(pane.scrollback_log_path.is_none());
-    }
-
-    #[test]
-    fn persisted_roundtrip() {
-        let pane = Pane::new(Uuid::new_v4(), 80, 24);
-        let persisted = pane.to_persisted();
-        let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedPane = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovered.id, pane.id);
-        assert_eq!(recovered.cols, 80);
     }
 
     #[test]

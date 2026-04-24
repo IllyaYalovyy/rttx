@@ -1,7 +1,7 @@
 //! Integration tests for v2 per-runtime serialization (RFC-022 Step 3).
 //!
-//! Verifies that the daemon writes per-runtime files with symlink backup,
-//! loads from v2 on restart, and falls back to v1 when no v2 state exists.
+//! Verifies that the daemon writes per-runtime files with symlink backup
+//! and loads from v2 on restart.
 
 mod common;
 
@@ -10,8 +10,7 @@ use rttx_proto::proto;
 use rttx_server::state::{layout, persistence, types::RUNTIME_FILE_SCHEMA_VERSION};
 use std::time::Duration;
 
-/// After creating a persistent runtime, the daemon writes both v1 state.json
-/// and v2 per-runtime files.
+/// After creating a persistent runtime, the daemon writes v2 per-runtime files.
 #[tokio::test]
 async fn serialization_writes_v2_runtime_files() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -33,8 +32,7 @@ async fn serialization_writes_v2_runtime_files() {
     };
 
     // Wait for serialization tick to write state.
-    wait_for_state_containing(&tmp.path().join("cache"), "v2-write-test", Duration::from_secs(10))
-        .await;
+    wait_for_state_containing(tmp.path(), "v2-write-test", Duration::from_secs(10)).await;
 
     // Verify v2 daemon index exists.
     let state_dir = tmp.path().join("state/rttx/daemon");
@@ -73,7 +71,7 @@ async fn serialization_creates_backup_symlink() {
     };
 
     // Wait for first serialization tick.
-    wait_for_state_containing(&tmp.path().join("cache"), "bak-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), "bak-test", Duration::from_secs(10)).await;
 
     // Second runtime — changes runtime IDs, triggers second daemon index write.
     c.send(&proto::ClientMessage {
@@ -121,19 +119,10 @@ async fn restart_prefers_v2_over_v1() {
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "v2-preferred",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "v2-preferred", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-
-    // Corrupt v1 state.json to prove v2 is used.
-    let v1_path = tmp.path().join("cache/state.json");
-    std::fs::write(&v1_path, "corrupted v1").unwrap();
 
     // Phase 2: restart — should load from v2 successfully.
     {
@@ -155,62 +144,7 @@ async fn restart_prefers_v2_over_v1() {
     }
 }
 
-/// When no v2 state exists but v1 does, the daemon falls back to v1.
-#[tokio::test]
-async fn fallback_to_v1_when_no_v2_state() {
-    let tmp = tempfile::TempDir::new().unwrap();
-
-    // Phase 1: create runtime, let serialization write.
-    {
-        let (sock, handle) = start_test_server(tmp.path()).await;
-        let mut c = TestClient::connect(&sock).await;
-        c.handshake().await;
-
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
-                name: "v1-fallback".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
-            })),
-        })
-        .await;
-        let _ = c.recv().await; // RuntimeCreated
-
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "v1-fallback",
-            Duration::from_secs(10),
-        )
-        .await;
-        handle.abort();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    // Remove v2 state directory entirely.
-    let state_dir = tmp.path().join("state");
-    if state_dir.exists() {
-        std::fs::remove_dir_all(&state_dir).unwrap();
-    }
-
-    // Phase 2: restart — should fall back to v1.
-    {
-        let (sock, _handle) = start_test_server(tmp.path()).await;
-        let mut c = TestClient::connect(&sock).await;
-        c.handshake().await;
-
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
-        .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
-        assert_eq!(runtimes.len(), 1);
-        assert_eq!(runtimes[0].name, "v1-fallback");
-    }
-}
-
-/// When neither v1 nor v2 state exists, the daemon starts fresh.
+/// When no v2 state exists, the daemon starts fresh.
 #[tokio::test]
 async fn fresh_start_when_no_state() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -263,12 +197,7 @@ async fn corrupt_v2_runtime_skipped_not_fatal() {
         .await;
         let _ = c.recv().await; // RuntimeCreated
 
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "bad-runtime",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "bad-runtime", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

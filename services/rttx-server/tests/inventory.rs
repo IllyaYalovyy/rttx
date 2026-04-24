@@ -233,12 +233,8 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
             Some(proto::server_message::Msg::TitleChanged(_))
         ));
 
-        wait_for_state_containing(
-            &tmp.path().join("cache"),
-            "reconstructed-inventory",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "reconstructed-inventory", Duration::from_secs(10))
+            .await;
 
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;

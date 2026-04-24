@@ -3,7 +3,7 @@
 //! A runtime is a named collection of panes with a layout tree. Runtimes
 //! persist across GUI disconnects and can be serialized to disk.
 
-use crate::pane::{HistoryEntry, Pane, PersistedPane};
+use crate::pane::{HistoryEntry, Pane};
 use rttx_proto::{proto, v3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -230,46 +230,6 @@ impl Runtime {
             created_at: now,
             last_active_at: now,
             attached_clients: HashMap::new(),
-        }
-    }
-
-    /// Create a runtime from persisted state (resurrection).
-    #[must_use]
-    pub fn from_persisted(persisted: &PersistedRuntime) -> Self {
-        let panes: HashMap<Uuid, Pane> = persisted
-            .panes
-            .iter()
-            .map(|pp| {
-                let mut pane = Pane::new(pp.id, pp.cols, pp.rows);
-                pane.cwd.clone_from(&pp.cwd);
-                pane.title.clone_from(&pp.title);
-                pane.exit_status = pp.exit_status;
-                pane.reconstructed = true;
-                pane.scrollback_log_path = Some(pp.scrollback_log_path.clone());
-                (pp.id, pane)
-            })
-            .collect();
-
-        let command_history = if persisted.command_history.len() > MAX_COMMAND_HISTORY {
-            persisted.command_history[persisted.command_history.len() - MAX_COMMAND_HISTORY..]
-                .to_vec()
-        } else {
-            persisted.command_history.clone()
-        };
-
-        Self {
-            id: persisted.id,
-            name: persisted.name.clone(),
-            active_pane_id: persisted.active_pane_id,
-            command_history,
-            policy: persisted.policy,
-            reconstructed: true,
-            revision: persisted.revision.max(default_runtime_revision()),
-            persisted_revision: persisted.revision.max(default_runtime_revision()),
-            created_at: persisted.created_at,
-            last_active_at: persisted.last_active_at,
-            attached_clients: HashMap::new(),
-            panes,
         }
     }
 
@@ -507,22 +467,6 @@ impl Runtime {
         !self.attached_clients.is_empty()
     }
 
-    /// Build a persistable snapshot of this runtime.
-    #[must_use]
-    pub fn to_persisted(&self) -> PersistedRuntime {
-        PersistedRuntime {
-            id: self.id,
-            name: self.name.clone(),
-            panes: self.panes.values().map(Pane::to_persisted).collect(),
-            active_pane_id: self.active_pane_id,
-            command_history: self.command_history.clone(),
-            policy: self.policy,
-            revision: self.revision,
-            created_at: self.created_at,
-            last_active_at: self.last_active_at,
-        }
-    }
-
     /// Build a v2 `RuntimeFileV1` for per-runtime persistence.
     #[must_use]
     pub fn to_runtime_file(&self) -> crate::state::types::RuntimeFileV1 {
@@ -631,31 +575,6 @@ impl Runtime {
     }
 }
 
-/// Serializable runtime state for disk persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedRuntime {
-    /// Unique runtime identifier.
-    pub id: Uuid,
-    /// Runtime name.
-    pub name: String,
-    /// Persisted pane states.
-    pub panes: Vec<PersistedPane>,
-    /// Active pane ID.
-    pub active_pane_id: Option<Uuid>,
-    /// Per-runtime command history.
-    pub command_history: Vec<HistoryEntry>,
-    /// Runtime retention policy.
-    #[serde(default)]
-    pub policy: RuntimePolicy,
-    /// Monotonic runtime revision.
-    #[serde(default = "default_runtime_revision")]
-    pub revision: u64,
-    /// When the runtime was created.
-    pub created_at: SystemTime,
-    /// When the runtime was last active.
-    pub last_active_at: SystemTime,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,36 +634,6 @@ mod tests {
     }
 
     #[test]
-    fn persisted_roundtrip() {
-        let mut runtime = Runtime::new("test".into());
-        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        let persisted = runtime.to_persisted();
-        let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedRuntime = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovered.id, runtime.id);
-        assert_eq!(recovered.name, "test");
-        assert_eq!(recovered.panes.len(), 1);
-    }
-
-    #[test]
-    fn from_persisted_restores_panes() {
-        let mut runtime = Runtime::new("test".into());
-        let pane = Pane::new(Uuid::new_v4(), 120, 40);
-        let pane_id = pane.id;
-        runtime.add_pane(pane);
-        let persisted = runtime.to_persisted();
-
-        let restored = Runtime::from_persisted(&persisted);
-        assert_eq!(restored.id, runtime.id);
-        assert_eq!(restored.policy, RuntimePolicy::Persistent);
-        assert!(restored.reconstructed);
-        assert_eq!(restored.revision(), runtime.revision());
-        assert!(restored.panes.contains_key(&pane_id));
-        assert_eq!(restored.panes[&pane_id].cols, 120);
-        assert!(restored.panes[&pane_id].reconstructed);
-    }
-
-    #[test]
     fn duplicate_attach_is_idempotent() {
         let mut runtime = Runtime::new("test".into());
         let client = Uuid::new_v4();
@@ -752,35 +641,6 @@ mod tests {
         let _ = runtime.attach_client(client, AttachMode::ReadWrite);
         assert_eq!(runtime.attached_client_count(), 1);
         assert_eq!(runtime.revision(), 2);
-    }
-
-    #[test]
-    fn persisted_policy_roundtrip() {
-        let mut runtime = Runtime::new("test".into());
-        runtime.policy = RuntimePolicy::Ephemeral;
-        let persisted = runtime.to_persisted();
-        let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedRuntime = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovered.policy, RuntimePolicy::Ephemeral);
-    }
-
-    #[test]
-    fn persisted_runtime_defaults_policy_for_legacy_state() {
-        let persisted: PersistedRuntime = serde_json::from_str(
-            r#"{
-                "id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "name":"legacy",
-                "panes":[],
-                "active_pane_id":null,
-                "command_history":[],
-                "created_at":{"secs_since_epoch":1,"nanos_since_epoch":0},
-                "last_active_at":{"secs_since_epoch":2,"nanos_since_epoch":0}
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(persisted.policy, RuntimePolicy::Persistent);
-        assert_eq!(persisted.revision, 1);
     }
 
     #[test]
@@ -804,25 +664,12 @@ mod tests {
     }
 
     #[test]
-    fn rename_updates_name_and_persists() {
+    fn rename_updates_name() {
         let mut runtime = Runtime::new("original".into());
         assert_eq!(runtime.name, "original");
 
         runtime.rename("updated".into());
         assert_eq!(runtime.name, "updated");
-
-        let persisted = runtime.to_persisted();
-        assert_eq!(persisted.name, "updated");
-    }
-
-    #[test]
-    fn persisted_revision_roundtrip() {
-        let mut runtime = Runtime::new("test".into());
-        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        let persisted = runtime.to_persisted();
-        let json = serde_json::to_string(&persisted).unwrap();
-        let recovered: PersistedRuntime = serde_json::from_str(&json).unwrap();
-        assert_eq!(recovered.revision, runtime.revision());
     }
 
     #[test]
@@ -919,19 +766,6 @@ mod tests {
     }
 
     #[test]
-    fn from_persisted_truncates_oversized_history() {
-        let mut runtime = Runtime::new("test".into());
-        runtime.command_history = (0..MAX_COMMAND_HISTORY + 200).map(make_history_entry).collect();
-        let persisted = runtime.to_persisted();
-        let restored = Runtime::from_persisted(&persisted);
-        assert_eq!(restored.command_history.len(), MAX_COMMAND_HISTORY);
-        assert_eq!(
-            restored.command_history[0].command, "cmd-200",
-            "oldest entries should be dropped on load"
-        );
-    }
-
-    #[test]
     fn runtime_file_v2_round_trip() {
         let mut runtime = Runtime::new("v2-test".into());
         runtime.policy = RuntimePolicy::Persistent;
@@ -1001,15 +835,6 @@ mod tests {
 
         runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
         assert!(runtime.is_dirty(), "mutation should make runtime dirty again");
-    }
-
-    #[test]
-    fn from_persisted_is_clean() {
-        let mut runtime = Runtime::new("test".into());
-        runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        let persisted = runtime.to_persisted();
-        let restored = Runtime::from_persisted(&persisted);
-        assert!(!restored.is_dirty(), "restored runtime should be clean");
     }
 
     #[test]
