@@ -73,8 +73,5 @@ async fn v1_state_json_in_cache_is_not_loaded() {
     c.handshake().await;
 
     let runtimes = common::list_runtimes(&mut c).await;
-    assert!(
-        runtimes.is_empty(),
-        "v1 state.json must not be loaded — daemon should start fresh"
-    );
+    assert!(runtimes.is_empty(), "v1 state.json must not be loaded — daemon should start fresh");
 }
