@@ -1277,6 +1277,7 @@ name = "rttx-proto"
 version = "0.4.11"
 dependencies = [
  "bytes",
+ "proptest",
  "prost",
  "prost-build",
  "thiserror",
@@ -1293,6 +1294,7 @@ dependencies = [
  "daemonize",
  "nix",
  "pretty_assertions",
+ "proptest",
  "prost",
  "pty-process",
  "rttx-proto",
