@@ -663,6 +663,15 @@ mod tests {
         }
     }
 
+    /// `WorkspaceMode` was removed — serialized state must not contain it.
+    #[test]
+    fn serialized_workspace_state_has_no_mode_field() {
+        let state = window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
+        let json = serde_json::to_string(&state.workspaces[0]).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("mode").is_none(), "WorkspaceMode must be fully removed");
+    }
+
     #[test]
     fn managed_terminal_binding_ignores_placeholders_and_uses_explicit_runtime_bindings() {
         let runtime_id = uuid::Uuid::new_v4().to_string();
@@ -1957,24 +1966,5 @@ mod tests {
         assert_eq!(round_tripped.scrollback_lines, 5000);
         assert!(round_tripped.smart_clipboard);
         assert_eq!(round_tripped.paste_guard_threshold, 512);
-    }
-
-    #[test]
-    fn runtime_operations_do_not_write_legacy_mode() {
-        use crate::workspace::WorkspaceMode;
-
-        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
-
-        // Simulate pane creation — mode must stay Direct.
-        state.apply_managed_pane_created("ws-1", "pane-1", "rt-1", "daemon-pane-1");
-        assert_eq!(state.workspaces[0].mode, WorkspaceMode::Direct);
-
-        // Simulate runtime termination — mode must stay Direct.
-        let _ = state.reconcile_endpoint_event(&EndpointEvent::RuntimeTerminated {
-            workspace_id: "ws-1".into(),
-            runtime_id: "rt-1".into(),
-            reason: rttx_proto::v3::RuntimeTerminationReason::Explicit,
-        });
-        assert_eq!(state.workspaces[0].mode, WorkspaceMode::Direct);
     }
 }

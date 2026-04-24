@@ -8,37 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::shell_quote;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PaneSource {
     EmptyShell,
     Command { title: String },
     Manual,
-}
-
-impl<'de> Deserialize<'de> for PaneSource {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        /// Mirror of `PaneSource` that includes removed variants for backward
-        /// compatibility with persisted state.
-        #[derive(Deserialize)]
-        #[serde(rename_all = "kebab-case")]
-        #[allow(dead_code)] // fields in removed variants are intentionally discarded
-        enum Raw {
-            EmptyShell,
-            Bookmark { name: String },
-            Command { title: String },
-            SessionTemplate { name: String },
-            Manual,
-        }
-        match Raw::deserialize(deserializer)? {
-            Raw::EmptyShell => Ok(Self::EmptyShell),
-            Raw::Command { title } => Ok(Self::Command { title }),
-            Raw::Bookmark { .. } | Raw::SessionTemplate { .. } | Raw::Manual => Ok(Self::Manual),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,23 +32,10 @@ pub enum PaneTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaneRecovery {
     pub source: PaneSource,
-    #[serde(default, deserialize_with = "deserialize_pane_target")]
+    #[serde(default)]
     pub target: Option<PaneTarget>,
     #[serde(default)]
     pub startup: Vec<StartupStep>,
-}
-
-/// Deserializes `Option<PaneTarget>`, mapping removed variants (local-tmux,
-/// remote-tmux) to `None` so old persisted state loads without error.
-fn deserialize_pane_target<'de, D>(deserializer: D) -> Result<Option<PaneTarget>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    Ok(serde_json::from_value::<PaneTarget>(value).ok())
 }
 
 impl PaneRecovery {
@@ -179,43 +141,20 @@ mod tests {
     }
 
     #[test]
-    fn legacy_local_tmux_target_deserializes_as_none() {
-        let json = r#"{"source":"empty-shell","target":{"local-tmux":{"session":"dev"}}}"#;
-        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
-        assert_eq!(recovery.target, None);
+    fn removed_pane_source_variants_fail_to_deserialize() {
+        let bookmark_json = r#"{"source":{"bookmark":{"name":"Prod"}}}"#;
+        assert!(serde_json::from_str::<PaneRecovery>(bookmark_json).is_err());
+
+        let template_json = r#"{"source":{"session-template":{"name":"Dev Setup"}}}"#;
+        assert!(serde_json::from_str::<PaneRecovery>(template_json).is_err());
     }
 
     #[test]
-    fn legacy_remote_tmux_target_deserializes_as_none() {
-        let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
-        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
-        assert_eq!(recovery.target, None);
-        assert_eq!(recovery.source, PaneSource::Manual);
-    }
+    fn removed_pane_target_variants_fail_to_deserialize() {
+        let local_tmux = r#"{"source":"empty-shell","target":{"local-tmux":{"session":"dev"}}}"#;
+        assert!(serde_json::from_str::<PaneRecovery>(local_tmux).is_err());
 
-    #[test]
-    fn legacy_session_template_source_deserializes_as_manual() {
-        let json = r#"{"source":{"session-template":{"name":"Dev Setup"}}}"#;
-        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
-        assert_eq!(recovery.source, PaneSource::Manual);
-    }
-
-    #[test]
-    fn legacy_bookmark_source_deserializes_as_manual() {
-        let json = r#"{"source":{"bookmark":{"name":"Prod"}}}"#;
-        let recovery: PaneRecovery = serde_json::from_str(json).unwrap();
-        assert_eq!(recovery.source, PaneSource::Manual);
-    }
-
-    #[test]
-    fn session_template_variant_absent_from_enum() {
-        let json = serde_json::to_string(&PaneSource::Manual).unwrap();
-        assert!(!json.contains("session-template"));
-    }
-
-    #[test]
-    fn bookmark_variant_absent_from_serialized_enum() {
-        let json = serde_json::to_string(&PaneSource::Manual).unwrap();
-        assert!(!json.contains("bookmark"));
+        let remote_tmux = r#"{"source":"manual","target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
+        assert!(serde_json::from_str::<PaneRecovery>(remote_tmux).is_err());
     }
 }

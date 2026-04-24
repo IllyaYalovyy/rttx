@@ -331,7 +331,6 @@ Key rules:
 - Store paths are injectable via `StorePaths` for tests.
 - New persisted fields must use `#[serde(default)]` for backward compatibility.
 - New documents require a schema identifier and version in the envelope.
-- `SessionMode` is import-only — new code must not create canonical `SessionMode` records.
 
 See `designs/RFC-023-client-configuration-state-store.md` for the full design.
 

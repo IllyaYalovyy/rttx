@@ -161,7 +161,6 @@ fn contract_any_constructible_state_roundtrips() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -180,7 +179,6 @@ fn contract_any_constructible_state_roundtrips() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: true,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -202,7 +200,6 @@ fn contract_any_constructible_state_roundtrips() {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: false,
-                    mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
@@ -221,7 +218,6 @@ fn contract_any_constructible_state_roundtrips() {
                     terminal_recovery: Default::default(),
                     active_terminal_uuid: None,
                     input_sync: i % 2 == 0,
-                    mode: Default::default(),
                     runtime: Default::default(),
                     color: Default::default(),
                     zoomed_terminal_uuid: None,
@@ -254,7 +250,7 @@ fn contract_any_constructible_state_roundtrips() {
 fn contract_forward_compat_missing_fields() {
     // Simulate v0.1 state without input_sync or custom_title
     let old_json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1", "name": "Old",
             "layout": {"Split": {
                 "orientation": "horizontal",
@@ -278,7 +274,7 @@ fn contract_forward_compat_missing_fields() {
 #[test]
 fn contract_backward_compat_extra_fields() {
     let future_json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1", "name": "Future",
             "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}},
             "input_sync": false,
@@ -620,7 +616,7 @@ fn contract_borrow_released_before_signal_does_not_panic() {
 #[test]
 fn contract_active_workspace_index_out_of_bounds_is_clamped_safely() {
     let json = r#"{
-        "sessions": [
+        "workspaces": [
             {"uuid":"s1","name":"Only","layout":{"Terminal":{"uuid":"t1","profile":null,"cwd":null,"custom_title":null}},"input_sync":false}
         ],
         "active_workspace_index": 99,
@@ -646,7 +642,7 @@ fn contract_active_workspace_index_out_of_bounds_is_clamped_safely() {
 #[test]
 fn contract_empty_sessions_is_handled_without_panic() {
     let json = r#"{
-        "sessions": [],
+        "workspaces": [],
         "active_workspace_index": 0,
         "width": 800, "height": 600, "is_maximized": false
     }"#;
@@ -683,7 +679,6 @@ fn zoom_state_survives_serialization_roundtrip() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: Some("t1".into()),
             input_sync: false,
-            mode: Default::default(),
             runtime: Default::default(),
             color: Default::default(),
             zoomed_terminal_uuid: Some("t1".into()),
@@ -700,7 +695,7 @@ fn zoom_state_survives_serialization_roundtrip() {
 #[test]
 fn old_state_without_zoom_field_deserializes_cleanly() {
     let json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1",
             "name": "Work",
             "layout": {"Terminal": {"uuid": "t1"}}

@@ -90,7 +90,7 @@ fn preferences_unknown_fields_are_ignored() {
 #[test]
 fn preferences_input_sync_persists_in_session_state() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::workspace::{LayoutNode, WindowState, WorkspaceColor, WorkspaceMode, WorkspaceState};
+    use rttx::workspace::{LayoutNode, WindowState, WorkspaceColor, WorkspaceState};
 
     let state = WindowState {
         workspaces: vec![WorkspaceState {
@@ -100,7 +100,6 @@ fn preferences_input_sync_persists_in_session_state() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
@@ -124,7 +123,7 @@ fn preferences_input_sync_persists_in_session_state() {
 fn preferences_backward_compat_missing_input_sync() {
     // Old session state JSON without input_sync or active_terminal_uuid should default safely.
     let json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1",
             "name": "Test",
             "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}}
@@ -143,7 +142,7 @@ fn preferences_backward_compat_missing_input_sync() {
 #[test]
 fn custom_title_persists_in_layout() {
     use rttx::runtime::WorkspaceRuntime;
-    use rttx::workspace::{LayoutNode, WindowState, WorkspaceColor, WorkspaceMode, WorkspaceState};
+    use rttx::workspace::{LayoutNode, WindowState, WorkspaceColor, WorkspaceState};
 
     let state = WindowState {
         workspaces: vec![WorkspaceState {
@@ -158,7 +157,6 @@ fn custom_title_persists_in_layout() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
@@ -180,7 +178,7 @@ fn custom_title_persists_in_layout() {
 fn custom_title_backward_compat_null() {
     // Old JSON without custom_title should deserialize as None
     let json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1",
             "name": "Test",
             "layout": {"Terminal": {"uuid": "t1", "profile": null, "cwd": null, "custom_title": null}}

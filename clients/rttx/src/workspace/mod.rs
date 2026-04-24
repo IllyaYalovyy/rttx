@@ -4,42 +4,10 @@ pub mod state;
 
 pub use layout::{Direction, LayoutNode, MAX_SPLIT_DEPTH, SplitOrientation};
 pub use recovery::{PaneRecovery, PaneSource, PaneTarget, StartupStep};
-pub use state::{WindowState, WorkspaceColor, WorkspaceMode, WorkspaceState};
+pub use state::{WindowState, WorkspaceColor, WorkspaceState};
 
-use crate::config;
 use gtk4::glib;
 use gtk4::prelude::*;
-use std::fs;
-use std::path::PathBuf;
-
-/// Returns the path to the sessions directory in `XDG_CONFIG_HOME`.
-#[must_use]
-pub fn workspaces_dir() -> Option<PathBuf> {
-    Some(config::config_dir_path())
-}
-
-/// Load the legacy window state from `sessions.json`, or return default.
-///
-/// Used only for one-time import when the new store is empty.
-/// New code should use `ClientStore` instead.
-#[must_use]
-pub fn load_window_state() -> WindowState {
-    let Some(mut path) = workspaces_dir() else {
-        return WindowState::default();
-    };
-    path.push("sessions.json");
-    fs::read_to_string(path).map_or_else(
-        |_| WindowState::default(),
-        |json| {
-            let mut state = serde_json::from_str::<WindowState>(&json).unwrap_or_default();
-            for session in &mut state.workspaces {
-                session.normalize_runtime_metadata();
-                session.normalize_active_terminal();
-            }
-            state
-        },
-    )
-}
 
 /// Walk the live widget tree and apply split ratios to `GtkPaned` positions.
 ///
@@ -271,7 +239,6 @@ fn apply_initial_paned_ratios(layout: &LayoutNode, widget: &gtk4::Widget) {
 mod tests {
     use super::*;
     use std::sync::Once;
-    use tempfile::TempDir;
 
     static GTK_INIT: Once = Once::new();
     static GTK_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -301,72 +268,6 @@ mod tests {
                 return;
             }
         };
-    }
-
-    #[test]
-    fn save_and_load_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let state = WindowState { width: 123, height: 456, ..WindowState::default() };
-
-        let path = tmp.path().join("sessions.json");
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        fs::write(&path, json).unwrap();
-
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(state.width, loaded.width);
-        assert_eq!(state.height, loaded.height);
-    }
-
-    #[test]
-    fn save_complex_layout_and_reload() {
-        let tmp = TempDir::new().unwrap();
-        let mut state = WindowState::default();
-        let root = LayoutNode::Terminal {
-            uuid: "t1".into(),
-            profile: None,
-            cwd: None,
-            custom_title: None,
-        };
-        state.workspaces[0].layout = root.split(SplitOrientation::Horizontal);
-
-        let path = tmp.path().join("sessions.json");
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        fs::write(&path, json).unwrap();
-
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(state.workspaces[0].layout, loaded.workspaces[0].layout);
-    }
-
-    #[rstest::rstest]
-    #[case(0)]
-    #[case(1)]
-    #[case(99)]
-    fn window_state_active_index_preserved(#[case] index: usize) {
-        let tmp = TempDir::new().unwrap();
-        let state = WindowState { active_workspace_index: index, ..WindowState::default() };
-
-        let path = tmp.path().join("sessions.json");
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        fs::write(&path, json).unwrap();
-
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(state.active_workspace_index, loaded.active_workspace_index);
-    }
-
-    #[test]
-    fn load_returns_default_when_no_file() {
-        let tmp = TempDir::new().unwrap();
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(loaded, WindowState::default_for_test());
-    }
-
-    #[test]
-    fn load_returns_default_on_corrupt_json() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("sessions.json");
-        fs::write(path, "{corrupt").unwrap();
-        let loaded = load_state_from(tmp.path());
-        assert_eq!(loaded, WindowState::default_for_test());
     }
 
     #[test]
@@ -432,13 +333,5 @@ mod tests {
             (inner_ratio - 0.7).abs() < 0.03,
             "inner split should restore saved ratio from a non-sentinel position, got {inner_ratio}"
         );
-    }
-
-    fn load_state_from(dir: &std::path::Path) -> WindowState {
-        let path = dir.join("sessions.json");
-        fs::read_to_string(path).map_or_else(
-            |_| WindowState::default_for_test(),
-            |json| serde_json::from_str(&json).unwrap_or_else(|_| WindowState::default_for_test()),
-        )
     }
 }
