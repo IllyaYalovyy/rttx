@@ -6644,9 +6644,8 @@ fn split_managed_pane_inherits_parent_cwd() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.split-managed-cwd-test")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.split-managed-cwd-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -6654,11 +6653,8 @@ fn split_managed_pane_inherits_parent_cwd() {
     // Create a managed workspace whose layout node starts with an initial CWD.
     let mut layout = LayoutNode::new_terminal_with_uuid("parent-pane");
     layout.set_terminal_cwd("parent-pane", Some("/home/user/original".into()));
-    let session_state = crate::test_helpers::managed_session(
-        "ws-managed-cwd",
-        "Managed CWD Workspace",
-        layout,
-    );
+    let session_state =
+        crate::test_helpers::managed_session("ws-managed-cwd", "Managed CWD Workspace", layout);
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
 
