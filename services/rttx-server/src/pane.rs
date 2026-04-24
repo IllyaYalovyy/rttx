@@ -6,10 +6,8 @@
 use crate::screen::{PaneScreen, strip_client_queries};
 use crate::state::layout::scrollback_log;
 use crate::state::types::{SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot};
-use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 use uuid::Uuid;
 
 /// Default scrollback byte limit per pane (10 MB).
@@ -286,19 +284,6 @@ fn rotate_scrollback_log(path: &Path, max_bytes: u64, keep: u32) -> Result<(), s
     std::fs::rename(path, &first_rotated)?;
 
     Ok(())
-}
-
-/// History entry for per-session command history.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryEntry {
-    /// The command text.
-    pub command: String,
-    /// Working directory when the command was run.
-    pub cwd: String,
-    /// When the command was executed.
-    pub timestamp: SystemTime,
-    /// Which pane the command was run in.
-    pub pane_id: Uuid,
 }
 
 #[cfg(test)]

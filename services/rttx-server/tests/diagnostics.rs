@@ -31,7 +31,6 @@ async fn diagnostics_empty_server() {
     assert_eq!(report.total_exited_panes, 0);
     assert_eq!(report.total_raw_bytes, 0);
     assert_eq!(report.total_pending_flush, 0);
-    assert_eq!(report.total_command_history, 0);
     assert!(report.runtimes.is_empty());
 }
 
@@ -119,5 +118,4 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
     assert_eq!(after.total_pane_count, 0);
     assert_eq!(after.total_raw_bytes, 0);
     assert_eq!(after.total_pending_flush, 0);
-    assert_eq!(after.total_command_history, 0);
 }

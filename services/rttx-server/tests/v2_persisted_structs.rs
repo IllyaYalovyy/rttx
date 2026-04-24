@@ -73,12 +73,7 @@ fn runtime_file_persists_and_loads_via_migration_chain() {
             created_at: SystemTime::now(),
             panes: vec![pane],
             active_pane_id: None,
-            command_history: vec![HistoryEntryV1 {
-                command: "cargo build".into(),
-                cwd: "/home/user/project".into(),
-                timestamp: SystemTime::now(),
-                pane_id: Uuid::new_v4(),
-            }],
+            command_history: vec![],
         },
         instance: RuntimeInstanceV1 {
             revision: 7,

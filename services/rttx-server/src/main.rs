@@ -222,7 +222,6 @@ fn diagnostics() -> anyhow::Result<()> {
             println!("PTY writers: {}", report.pty_writer_count);
             println!("Total raw_bytes: {} bytes", report.total_raw_bytes);
             println!("Total pending_flush: {} bytes", report.total_pending_flush);
-            println!("Total command_history entries: {}", report.total_command_history);
 
             if !report.runtimes.is_empty() {
                 println!();
@@ -234,7 +233,6 @@ fn diagnostics() -> anyhow::Result<()> {
                         "    Panes: {} active, {} exited",
                         rt_info.active_pane_count, rt_info.exited_pane_count
                     );
-                    println!("    Command history: {} entries", rt_info.command_history_len);
                     println!("    Attached clients: {}", rt_info.attached_client_count);
                     for pane in &rt_info.panes {
                         let pid = rttx_proto::bytes_to_uuid(&pane.id)

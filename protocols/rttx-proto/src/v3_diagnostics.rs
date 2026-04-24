@@ -55,7 +55,6 @@ pub fn build_runtime_diagnostics_info(
     name: String,
     active_pane_count: u32,
     exited_pane_count: u32,
-    command_history_len: u32,
     attached_client_count: u32,
     panes: Vec<v3::PaneDiagnosticsInfo>,
 ) -> v3::RuntimeDiagnosticsInfo {
@@ -64,7 +63,7 @@ pub fn build_runtime_diagnostics_info(
         name,
         active_pane_count,
         exited_pane_count,
-        command_history_len,
+        command_history_len: 0,
         attached_client_count,
         panes,
     }
@@ -84,7 +83,7 @@ pub fn build_diagnostics_report(args: DiagnosticsReportArgs) -> v3::DiagnosticsR
         pty_writer_count: args.pty_writer_count,
         total_raw_bytes: args.total_raw_bytes,
         total_pending_flush: args.total_pending_flush,
-        total_command_history: args.total_command_history,
+        total_command_history: 0,
         runtimes: args.runtimes,
     }
 }
@@ -99,7 +98,6 @@ pub struct DiagnosticsReportArgs {
     pub pty_writer_count: u32,
     pub total_raw_bytes: u64,
     pub total_pending_flush: u64,
-    pub total_command_history: u32,
     pub runtimes: Vec<v3::RuntimeDiagnosticsInfo>,
 }
 
@@ -225,12 +223,11 @@ mod tests {
         let r = rt();
         let p = pn();
         let pane = build_pane_diagnostics_info(p, 2048, 64, false);
-        let info = build_runtime_diagnostics_info(r, "dev".into(), 2, 1, 10, 1, vec![pane.clone()]);
+        let info = build_runtime_diagnostics_info(r, "dev".into(), 2, 1, 1, vec![pane.clone()]);
         assert_eq!(info.id, uuid_to_bytes(r));
         assert_eq!(info.name, "dev");
         assert_eq!(info.active_pane_count, 2);
         assert_eq!(info.exited_pane_count, 1);
-        assert_eq!(info.command_history_len, 10);
         assert_eq!(info.attached_client_count, 1);
         assert_eq!(info.panes.len(), 1);
         assert_eq!(info.panes[0], pane);
@@ -238,14 +235,14 @@ mod tests {
 
     #[test]
     fn runtime_diagnostics_info_empty_panes() {
-        let info = build_runtime_diagnostics_info(rt(), "empty".into(), 0, 0, 0, 0, vec![]);
+        let info = build_runtime_diagnostics_info(rt(), "empty".into(), 0, 0, 0, vec![]);
         assert!(info.panes.is_empty());
     }
 
     #[test]
     fn runtime_diagnostics_info_wire_roundtrip() {
         let pane = build_pane_diagnostics_info(pn(), 8192, 256, true);
-        let info = build_runtime_diagnostics_info(rt(), "test-rt".into(), 3, 2, 5, 2, vec![pane]);
+        let info = build_runtime_diagnostics_info(rt(), "test-rt".into(), 3, 2, 2, vec![pane]);
         let mut buf = BytesMut::new();
         encode_frame(&info, &mut buf).unwrap();
         let decoded: v3::RuntimeDiagnosticsInfo = decode_frame(&mut buf).unwrap();
@@ -257,7 +254,7 @@ mod tests {
     #[test]
     fn diagnostics_report_populates_all_fields() {
         let pane = build_pane_diagnostics_info(pn(), 4096, 128, false);
-        let runtime = build_runtime_diagnostics_info(rt(), "ws1".into(), 1, 0, 3, 1, vec![pane]);
+        let runtime = build_runtime_diagnostics_info(rt(), "ws1".into(), 1, 0, 1, vec![pane]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             runtime_count: 1,
             total_pane_count: 1,
@@ -267,7 +264,6 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 4096,
             total_pending_flush: 128,
-            total_command_history: 3,
             runtimes: vec![runtime],
         });
         assert_eq!(report.runtime_count, 1);
@@ -278,7 +274,6 @@ mod tests {
         assert_eq!(report.pty_writer_count, 1);
         assert_eq!(report.total_raw_bytes, 4096);
         assert_eq!(report.total_pending_flush, 128);
-        assert_eq!(report.total_command_history, 3);
         assert_eq!(report.runtimes.len(), 1);
     }
 
@@ -293,7 +288,6 @@ mod tests {
             pty_writer_count: 0,
             total_raw_bytes: 0,
             total_pending_flush: 0,
-            total_command_history: 0,
             runtimes: vec![],
         });
         assert_eq!(report.runtime_count, 0);
@@ -304,15 +298,8 @@ mod tests {
     fn diagnostics_report_wire_roundtrip() {
         let pane1 = build_pane_diagnostics_info(pn(), 1024, 0, false);
         let pane2 = build_pane_diagnostics_info(pn(), 2048, 512, true);
-        let runtime = build_runtime_diagnostics_info(
-            rt(),
-            "multi-pane".into(),
-            1,
-            1,
-            7,
-            2,
-            vec![pane1, pane2],
-        );
+        let runtime =
+            build_runtime_diagnostics_info(rt(), "multi-pane".into(), 1, 1, 2, vec![pane1, pane2]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             runtime_count: 1,
             total_pane_count: 2,
@@ -322,7 +309,6 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 3072,
             total_pending_flush: 512,
-            total_command_history: 7,
             runtimes: vec![runtime],
         });
         let mut buf = BytesMut::new();
@@ -344,7 +330,6 @@ mod tests {
             pty_writer_count: 0,
             total_raw_bytes: 0,
             total_pending_flush: 0,
-            total_command_history: 0,
             runtimes: vec![],
         });
         let env = build_diagnostics_report_response(42, report);
@@ -362,7 +347,6 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 10000,
             total_pending_flush: 500,
-            total_command_history: 15,
             runtimes: vec![],
         });
         let env = build_diagnostics_report_response(7, report.clone());
@@ -385,7 +369,6 @@ mod tests {
             pty_writer_count: 0,
             total_raw_bytes: 0,
             total_pending_flush: 0,
-            total_command_history: 0,
             runtimes: vec![],
         });
         let env = build_diagnostics_report_response(1, report);
@@ -395,8 +378,7 @@ mod tests {
     #[test]
     fn report_response_wire_roundtrip() {
         let pane = build_pane_diagnostics_info(pn(), 65536, 1024, false);
-        let runtime =
-            build_runtime_diagnostics_info(rt(), "roundtrip".into(), 1, 0, 0, 1, vec![pane]);
+        let runtime = build_runtime_diagnostics_info(rt(), "roundtrip".into(), 1, 0, 1, vec![pane]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             runtime_count: 1,
             total_pane_count: 1,
@@ -406,7 +388,6 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 65536,
             total_pending_flush: 1024,
-            total_command_history: 0,
             runtimes: vec![runtime],
         });
         let env = build_diagnostics_report_response(99, report);
@@ -459,19 +440,11 @@ mod tests {
             "workspace-1".into(),
             2,
             0,
-            5,
             1,
             vec![p1.clone(), p2.clone()],
         );
-        let rt2 = build_runtime_diagnostics_info(
-            rt(),
-            "workspace-2".into(),
-            0,
-            1,
-            2,
-            0,
-            vec![p3.clone()],
-        );
+        let rt2 =
+            build_runtime_diagnostics_info(rt(), "workspace-2".into(), 0, 1, 0, vec![p3.clone()]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             runtime_count: 2,
             total_pane_count: 3,
@@ -481,7 +454,6 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: p1.raw_bytes_len + p2.raw_bytes_len + p3.raw_bytes_len,
             total_pending_flush: p1.pending_flush_len + p2.pending_flush_len + p3.pending_flush_len,
-            total_command_history: rt1.command_history_len + rt2.command_history_len,
             runtimes: vec![rt1, rt2],
         });
 

@@ -22,7 +22,6 @@ pub struct RuntimeDiagnostics {
     pub name: String,
     pub active_pane_count: usize,
     pub exited_pane_count: usize,
-    pub command_history_len: usize,
     pub attached_client_count: usize,
     pub panes: Vec<PaneDiagnostics>,
 }
@@ -38,7 +37,6 @@ pub struct DiagnosticsReport {
     pub pty_writer_count: usize,
     pub total_raw_bytes: usize,
     pub total_pending_flush: usize,
-    pub total_command_history: usize,
     pub runtimes: Vec<RuntimeDiagnostics>,
 }
 
@@ -54,7 +52,6 @@ impl fmt::Display for DiagnosticsReport {
         writeln!(f, "PTY writers: {}", self.pty_writer_count)?;
         writeln!(f, "Total raw_bytes: {} bytes", self.total_raw_bytes)?;
         writeln!(f, "Total pending_flush: {} bytes", self.total_pending_flush)?;
-        writeln!(f, "Total command_history entries: {}", self.total_command_history)?;
 
         if !self.runtimes.is_empty() {
             writeln!(f)?;
@@ -65,7 +62,6 @@ impl fmt::Display for DiagnosticsReport {
                     "    Panes: {} active, {} exited",
                     rt.active_pane_count, rt.exited_pane_count
                 )?;
-                writeln!(f, "    Command history: {} entries", rt.command_history_len)?;
                 writeln!(f, "    Attached clients: {}", rt.attached_client_count)?;
                 for pane in &rt.panes {
                     let status = if pane.is_exited { "exited" } else { "active" };
@@ -92,7 +88,6 @@ impl Server {
         let mut runtimes = Vec::with_capacity(self.runtimes.len());
         let mut total_raw_bytes = 0usize;
         let mut total_pending_flush = 0usize;
-        let mut total_command_history = 0usize;
         let mut total_active_panes = 0usize;
         let mut total_exited_panes = 0usize;
 
@@ -123,14 +118,12 @@ impl Server {
 
             total_active_panes += active;
             total_exited_panes += exited;
-            total_command_history += rt.command_history.len();
 
             runtimes.push(RuntimeDiagnostics {
                 id: rt.id.to_string(),
                 name: rt.name.clone(),
                 active_pane_count: active,
                 exited_pane_count: exited,
-                command_history_len: rt.command_history.len(),
                 attached_client_count: rt.attached_client_count(),
                 panes,
             });
@@ -145,7 +138,6 @@ impl Server {
             pty_writer_count: self.pty_writer_count(),
             total_raw_bytes,
             total_pending_flush,
-            total_command_history,
             runtimes,
         }
     }
@@ -162,7 +154,6 @@ impl Server {
             pty_writers = report.pty_writer_count,
             raw_bytes = report.total_raw_bytes,
             pending_flush = report.total_pending_flush,
-            command_history = report.total_command_history,
             "memory diagnostics"
         );
     }
@@ -207,7 +198,6 @@ mod tests {
         assert_eq!(report.pty_writer_count, 0);
         assert_eq!(report.total_raw_bytes, 0);
         assert_eq!(report.total_pending_flush, 0);
-        assert_eq!(report.total_command_history, 0);
     }
 
     #[test]
@@ -232,22 +222,6 @@ mod tests {
         assert_eq!(report.total_active_panes, 1);
         assert_eq!(report.total_exited_panes, 1);
         assert_eq!(report.total_raw_bytes, 11); // "hello world"
-    }
-
-    #[test]
-    fn diagnostics_counts_command_history() {
-        let mut server = test_server();
-        let mut rt = Runtime::new("test".into());
-        rt.command_history.push(crate::pane::HistoryEntry {
-            command: "ls".into(),
-            cwd: "/tmp".into(),
-            timestamp: std::time::SystemTime::now(),
-            pane_id: Uuid::new_v4(),
-        });
-        server.runtimes.insert(rt.id, rt);
-
-        let report = server.diagnostics();
-        assert_eq!(report.total_command_history, 1);
     }
 
     #[test]
