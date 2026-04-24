@@ -663,6 +663,15 @@ mod tests {
         }
     }
 
+    /// `WorkspaceMode` was removed — serialized state must not contain it.
+    #[test]
+    fn serialized_workspace_state_has_no_mode_field() {
+        let state = window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
+        let json = serde_json::to_string(&state.workspaces[0]).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("mode").is_none(), "WorkspaceMode must be fully removed");
+    }
+
     #[test]
     fn managed_terminal_binding_ignores_placeholders_and_uses_explicit_runtime_bindings() {
         let runtime_id = uuid::Uuid::new_v4().to_string();

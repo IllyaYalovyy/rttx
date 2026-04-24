@@ -459,3 +459,21 @@ fn full_roundtrip_through_file_persistence() {
     assert!(!s2.input_sync);
     assert_eq!(s2.color, WorkspaceColor::Blue);
 }
+
+/// Workspace state serialized after legacy removal must not contain a
+/// `mode` field, and must round-trip cleanly through the current format.
+#[test]
+fn workspace_state_roundtrip_has_no_legacy_mode_field() {
+    let session = WorkspaceState::new_managed_local(
+        "Managed".into(),
+        WorkspacePolicy::Persistent,
+        Some("/home/user".into()),
+    );
+    let json = serde_json::to_string(&session).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(value.get("mode").is_none(), "mode field must not exist after removal");
+
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
+    assert!(restored.uses_managed_runtime());
+    assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::Local);
+}
