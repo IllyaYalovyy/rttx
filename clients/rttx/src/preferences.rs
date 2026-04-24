@@ -251,26 +251,13 @@ impl From<PreferencesDisk> for Preferences {
     }
 }
 
+/// Parse a raw JSON string into `Preferences`, applying legacy migrations.
+///
+/// Used only by unit tests to verify backward-compatible deserialization
+/// without going through `ClientStore`.
+#[cfg(test)]
 fn parse_preferences_json(data: &str) -> Preferences {
     serde_json::from_str::<PreferencesDisk>(data).map(Into::into).unwrap_or_default()
-}
-
-#[must_use]
-pub fn load_from(path: &std::path::Path) -> Preferences {
-    std::fs::read_to_string(path)
-        .map_or_else(|_| Preferences::default(), |data| parse_preferences_json(&data))
-}
-
-pub fn save_to(
-    prefs: &Preferences,
-    path: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(prefs)?;
-    std::fs::write(path, json)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -278,7 +265,10 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    use tempfile::TempDir;
+    fn roundtrip(prefs: &Preferences) -> Preferences {
+        let json = serde_json::to_string_pretty(prefs).unwrap();
+        parse_preferences_json(&json)
+    }
 
     #[test]
     fn default_preferences_are_sensible() {
@@ -300,40 +290,23 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_via_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
+    fn serde_roundtrip() {
         let prefs = Preferences {
             font: "JetBrains Mono 14".into(),
             scrollback_lines: 5000,
             ..Default::default()
         };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
-        assert_eq!(prefs, loaded);
-    }
-
-    #[test]
-    fn missing_file_returns_default() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("nonexistent.json");
-        assert_eq!(load_from(&path), Preferences::default());
+        assert_eq!(prefs, roundtrip(&prefs));
     }
 
     #[test]
     fn corrupt_json_returns_default() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "not json").unwrap();
-        assert_eq!(load_from(&path), Preferences::default());
+        assert_eq!(parse_preferences_json("not json"), Preferences::default());
     }
 
     #[test]
     fn partial_json_fills_defaults() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, r#"{"font": "Hack 10"}"#).unwrap();
-        let loaded = load_from(&path);
+        let loaded = parse_preferences_json(r#"{"font": "Hack 10"}"#);
         assert_eq!(loaded.font, "Hack 10");
         assert_eq!(loaded.light_color_scheme, color_scheme::BUILTIN_LIGHT_SCHEME_NAME);
         assert_eq!(loaded.dark_color_scheme, color_scheme::BUILTIN_DARK_SCHEME_NAME);
@@ -343,30 +316,19 @@ mod tests {
 
     #[test]
     fn negative_scrollback_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
         let prefs = Preferences { scrollback_lines: -1, ..Default::default() };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
-        assert_eq!(loaded.scrollback_lines, -1);
+        assert_eq!(roundtrip(&prefs).scrollback_lines, -1);
     }
 
     #[test]
     fn empty_font_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
         let prefs = Preferences { font: String::new(), ..Default::default() };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
-        assert_eq!(loaded.font, "");
+        assert_eq!(roundtrip(&prefs).font, "");
     }
 
     #[test]
     fn legacy_single_color_scheme_populates_light_and_dark() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, r#"{"color_scheme": "Solarized Dark"}"#).unwrap();
-        let loaded = load_from(&path);
+        let loaded = parse_preferences_json(r#"{"color_scheme": "Solarized Dark"}"#);
         assert_eq!(loaded.light_color_scheme, "Solarized Dark");
         assert_eq!(loaded.dark_color_scheme, "Solarized Dark");
     }
@@ -394,10 +356,7 @@ mod tests {
 
     #[test]
     fn boolean_defaults_are_correct() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "{}").unwrap();
-        let loaded = load_from(&path);
+        let loaded = parse_preferences_json("{}");
         assert!(loaded.show_headerbar, "show_headerbar should default true");
         assert!(loaded.scroll_on_keystroke, "scroll_on_keystroke should default true");
         assert!(!loaded.scroll_on_output, "scroll_on_output should default false");
@@ -413,28 +372,20 @@ mod tests {
 
     #[test]
     fn default_session_folder_roundtrips() {
-        let dir = TempDir::new().unwrap();
-
         for folder in [
             DefaultSessionFolder::Home,
             DefaultSessionFolder::CurrentSession,
             DefaultSessionFolder::Custom("/home/user/dev".into()),
         ] {
-            let path = dir.path().join("prefs.json");
             let prefs =
                 Preferences { default_session_folder: folder.clone(), ..Default::default() };
-            save_to(&prefs, &path).unwrap();
-            let loaded = load_from(&path);
-            assert_eq!(loaded.default_session_folder, prefs.default_session_folder);
+            assert_eq!(roundtrip(&prefs).default_session_folder, prefs.default_session_folder);
         }
     }
 
     #[test]
     fn missing_session_folder_defaults_to_home() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "{}").unwrap();
-        let loaded = load_from(&path);
+        let loaded = parse_preferences_json("{}");
         assert_eq!(loaded.default_session_folder, DefaultSessionFolder::Home);
     }
 
@@ -446,23 +397,16 @@ mod tests {
 
     #[test]
     fn pane_navigation_keys_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
         let prefs = Preferences {
             pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
             ..Default::default()
         };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
-        assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
+        assert_eq!(roundtrip(&prefs).pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
     }
 
     #[test]
     fn missing_pane_navigation_keys_defaults_to_alt_arrow() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "{}").unwrap();
-        let loaded = load_from(&path);
+        let loaded = parse_preferences_json("{}");
         assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
     }
 
@@ -473,21 +417,13 @@ mod tests {
 
     #[test]
     fn auto_start_daemon_roundtrips_false() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
         let prefs = Preferences { auto_start_daemon: false, ..Default::default() };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
-        assert!(!loaded.auto_start_daemon);
+        assert!(!roundtrip(&prefs).auto_start_daemon);
     }
 
     #[test]
     fn missing_auto_start_daemon_defaults_to_true() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "{}").unwrap();
-        let loaded = load_from(&path);
-        assert!(loaded.auto_start_daemon);
+        assert!(parse_preferences_json("{}").auto_start_daemon);
     }
 
     #[test]
@@ -497,19 +433,13 @@ mod tests {
 
     #[test]
     fn reconnect_delay_secs_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
         let prefs = Preferences { reconnect_delay_secs: 30, ..Default::default() };
-        save_to(&prefs, &path).unwrap();
-        assert_eq!(load_from(&path).reconnect_delay_secs, 30);
+        assert_eq!(roundtrip(&prefs).reconnect_delay_secs, 30);
     }
 
     #[test]
     fn missing_reconnect_delay_secs_defaults_to_10() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "{}").unwrap();
-        assert_eq!(load_from(&path).reconnect_delay_secs, 10);
+        assert_eq!(parse_preferences_json("{}").reconnect_delay_secs, 10);
     }
 
     #[test]
@@ -521,22 +451,16 @@ mod tests {
 
     #[test]
     fn paste_guard_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
         let prefs =
             Preferences { paste_guard: false, paste_guard_threshold: 4096, ..Default::default() };
-        save_to(&prefs, &path).unwrap();
-        let loaded = load_from(&path);
+        let loaded = roundtrip(&prefs);
         assert!(!loaded.paste_guard);
         assert_eq!(loaded.paste_guard_threshold, 4096);
     }
 
     #[test]
     fn missing_paste_guard_defaults_to_enabled() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("prefs.json");
-        std::fs::write(&path, "{}").unwrap();
-        let loaded = load_from(&path);
+        let loaded = parse_preferences_json("{}");
         assert!(loaded.paste_guard);
         assert_eq!(loaded.paste_guard_threshold, 1024);
     }

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -87,14 +86,6 @@ pub fn migrate_legacy(commands: &mut [SavedCommand]) {
     }
 }
 
-#[must_use]
-pub fn load_from(path: &Path) -> Vec<SavedCommand> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|data| serde_json::from_str::<Vec<SavedCommand>>(&data).ok())
-        .unwrap_or_default()
-}
-
 /// Move the item with `source_uuid` to the position of `target_uuid`.
 pub fn reorder(items: &mut Vec<SavedCommand>, source_uuid: &str, target_uuid: &str) {
     let Some(src) = items.iter().position(|c| c.uuid == source_uuid) else {
@@ -107,31 +98,20 @@ pub fn reorder(items: &mut Vec<SavedCommand>, source_uuid: &str, target_uuid: &s
     items.insert(tgt, item);
 }
 
-pub fn save_to(commands: &[SavedCommand], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(commands)?;
-    std::fs::write(path, json)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     #[test]
-    fn multiline_command_roundtrips_without_loss() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("commands.json");
+    fn multiline_command_serde_roundtrip() {
         let mut command =
             SavedCommand::new("Deploy", "cd /srv/app\ncargo build\nsystemctl restart app");
         command.default_run_mode = CommandRunMode::Insert;
 
-        save_to(&[command.clone()], &path).unwrap();
-        assert_eq!(load_from(&path), vec![command]);
+        let json = serde_json::to_string(&[&command]).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, vec![command]);
     }
 
     #[test]
@@ -188,9 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn reorder_persists_through_save_and_load() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("commands.json");
+    fn reorder_preserves_order_through_serde() {
         let mut items = vec![
             SavedCommand { uuid: "a".into(), ..SavedCommand::new("A", "echo a") },
             SavedCommand { uuid: "b".into(), ..SavedCommand::new("B", "echo b") },
@@ -198,9 +176,8 @@ mod tests {
         ];
 
         reorder(&mut items, "c", "b");
-        save_to(&items, &path).unwrap();
-
-        let loaded = load_from(&path);
+        let json = serde_json::to_string(&items).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
         let uuids: Vec<&str> = loaded.iter().map(|c| c.uuid.as_str()).collect();
         assert_eq!(uuids, vec!["a", "c", "b"]);
     }
@@ -214,14 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn host_tags_roundtrip_via_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("commands.json");
+    fn host_tags_serde_roundtrip() {
         let mut command = SavedCommand::new("Deploy", "cargo build");
         command.host_tags = vec!["local".into(), "example.com".into()];
 
-        save_to(&[command.clone()], &path).unwrap();
-        assert_eq!(load_from(&path), vec![command]);
+        let json = serde_json::to_string(&[&command]).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, vec![command]);
     }
 
     #[test]

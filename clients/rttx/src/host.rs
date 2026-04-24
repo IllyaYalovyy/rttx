@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// Reserved host key for the local machine.
 pub const LOCAL_KEY: &str = "local";
@@ -91,25 +90,6 @@ fn strip_ssh_user(target: &str) -> &str {
     last_token.split_once('@').map_or(last_token, |(_, h)| h)
 }
 
-// ── Persistence ─────────────────────────────────────────────────
-
-#[must_use]
-pub fn load_from(path: &Path) -> Vec<Host> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|data| serde_json::from_str::<Vec<Host>>(&data).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_to(hosts: &[Host], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(hosts)?;
-    std::fs::write(path, json)?;
-    Ok(())
-}
-
 /// Items affected by deleting a host record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeletionAffected {
@@ -189,7 +169,6 @@ pub fn resolve(key: &str, saved: &[Host]) -> Host {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     // ── Host construction ───────────────────────────────────────
 
@@ -261,35 +240,20 @@ mod tests {
         assert_eq!(display_name_from_ssh("dev-box"), "dev-box");
     }
 
-    // ── Persistence ─────────────────────────────────────────────
+    // ── Serde ─────────────────────────────────────────────────────
 
     #[test]
-    fn roundtrip_via_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("hosts.json");
+    fn serde_roundtrip() {
         let hosts = vec![Host::remote("deploy@example.com")];
-
-        save_to(&hosts, &path).unwrap();
-        let loaded = load_from(&path);
+        let json = serde_json::to_string(&hosts).unwrap();
+        let loaded: Vec<Host> = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded, hosts);
     }
 
     #[test]
-    fn missing_file_returns_empty_list() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("missing.json");
-        assert!(load_from(&path).is_empty());
-    }
-
-    #[test]
-    fn local_host_not_persisted_in_saved_list() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("hosts.json");
-        let hosts = vec![Host::remote("example.com")];
-        save_to(&hosts, &path).unwrap();
-
-        let loaded = load_from(&path);
-        assert!(!loaded.iter().any(Host::is_local));
+    fn local_host_not_in_remote_list() {
+        let hosts = [Host::remote("example.com")];
+        assert!(!hosts.iter().any(Host::is_local));
     }
 
     // ── Resolve ─────────────────────────────────────────────────

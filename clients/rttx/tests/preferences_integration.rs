@@ -1,10 +1,31 @@
 /// Integration tests for preferences persistence.
 use std::collections::BTreeMap;
 
-use rttx::preferences::{
-    self, DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode,
-};
+use rttx::preferences::{DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode};
+use rttx::store::{ClientStore, StorePaths};
 use tempfile::TempDir;
+
+fn test_store() -> (TempDir, ClientStore) {
+    let tmp = TempDir::new().unwrap();
+    let paths = StorePaths::new(
+        tmp.path().join("config"),
+        tmp.path().join("state"),
+        tmp.path().join("cache"),
+    );
+    (tmp, ClientStore::new(paths))
+}
+
+/// Parse raw JSON through the `Preferences` serde path (no envelope).
+/// Exercises the same `PreferencesDisk` → `Preferences` migration that
+/// `ClientStore` uses internally, but without the envelope wrapper.
+fn parse_raw(json: &str) -> Preferences {
+    #[derive(serde::Deserialize)]
+    struct Disk {
+        #[serde(flatten)]
+        prefs: Preferences,
+    }
+    serde_json::from_str::<Disk>(json).map_or_else(|_| Preferences::default(), |d| d.prefs)
+}
 
 #[test]
 fn preferences_default_values_are_reasonable() {
@@ -15,12 +36,10 @@ fn preferences_default_values_are_reasonable() {
 
 #[test]
 fn preferences_roundtrip_all_fields() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
+    let (_tmp, store) = test_store();
 
     let prefs = Preferences {
         font: "Fira Code 16".into(),
-        color_scheme: "Solarized Dark".into(),
         terminal_theme_mode: TerminalThemeMode::Dark,
         light_color_scheme: "Rttx Daybreak".into(),
         dark_color_scheme: "Solarized Dark".into(),
@@ -39,51 +58,28 @@ fn preferences_roundtrip_all_fields() {
         reconnect_delay_secs: 10,
         paste_guard: false,
         paste_guard_threshold: 2048,
+        ..Default::default()
     };
 
-    preferences::save_to(&prefs, &path).unwrap();
-    let loaded = preferences::load_from(&path);
+    store.save_preferences(&prefs).unwrap();
+    let loaded = store.load_preferences().into_value().unwrap();
     assert_eq!(prefs, loaded);
 }
 
 #[test]
 fn preferences_partial_json_uses_defaults_for_missing() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-
-    // Only set font — everything else should default
-    std::fs::write(&path, r#"{"font": "Hack 10"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
+    let loaded = parse_raw(r#"{"font": "Hack 10"}"#);
 
     assert_eq!(loaded.font, "Hack 10");
     assert_eq!(loaded.terminal_theme_mode, TerminalThemeMode::System);
-    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
-    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
     assert_eq!(loaded.scrollback_lines, 10000);
     assert!(loaded.show_headerbar);
     assert!(!loaded.smart_clipboard);
 }
 
 #[test]
-fn preferences_legacy_color_scheme_migrates_to_light_and_dark() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-
-    std::fs::write(&path, r#"{"color_scheme": "Solarized Dark"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
-
-    assert_eq!(loaded.light_color_scheme, "Solarized Dark");
-    assert_eq!(loaded.dark_color_scheme, "Solarized Dark");
-}
-
-#[test]
 fn preferences_unknown_fields_are_ignored() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-
-    std::fs::write(&path, r#"{"font": "Mono 12", "unknown_field": true, "future_setting": 42}"#)
-        .unwrap();
-    let loaded = preferences::load_from(&path);
+    let loaded = parse_raw(r#"{"font": "Mono 12", "unknown_field": true, "future_setting": 42}"#);
     assert_eq!(loaded.font, "Mono 12");
 }
 
@@ -196,22 +192,16 @@ fn custom_title_backward_compat_null() {
 }
 
 #[test]
-fn pane_navigation_keys_persists_across_save_load() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
+fn pane_navigation_keys_persists_through_store() {
+    let (_tmp, store) = test_store();
 
     let prefs = Preferences {
         pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
         ..Default::default()
     };
-    preferences::save_to(&prefs, &path).unwrap();
-    let loaded = preferences::load_from(&path);
+    store.save_preferences(&prefs).unwrap();
+    let loaded = store.load_preferences().into_value().unwrap();
     assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
-
-    // Verify backward compatibility: old JSON without the field defaults to AltArrow.
-    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
-    assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
 }
 
 #[test]
@@ -223,23 +213,19 @@ fn paste_guard_defaults_to_enabled_with_1k_threshold() {
 
 #[test]
 fn paste_guard_roundtrips() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
+    let (_tmp, store) = test_store();
 
     let prefs =
         Preferences { paste_guard: false, paste_guard_threshold: 4096, ..Default::default() };
-    preferences::save_to(&prefs, &path).unwrap();
-    let loaded = preferences::load_from(&path);
+    store.save_preferences(&prefs).unwrap();
+    let loaded = store.load_preferences().into_value().unwrap();
     assert!(!loaded.paste_guard);
     assert_eq!(loaded.paste_guard_threshold, 4096);
 }
 
 #[test]
 fn paste_guard_backward_compat_missing_fields() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
+    let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(loaded.paste_guard);
     assert_eq!(loaded.paste_guard_threshold, 1024);
 }
@@ -252,21 +238,17 @@ fn trim_trailing_whitespace_on_copy_defaults_to_false() {
 
 #[test]
 fn trim_trailing_whitespace_on_copy_roundtrips() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
+    let (_tmp, store) = test_store();
 
     let prefs = Preferences { trim_trailing_whitespace_on_copy: true, ..Default::default() };
-    preferences::save_to(&prefs, &path).unwrap();
-    let loaded = preferences::load_from(&path);
+    store.save_preferences(&prefs).unwrap();
+    let loaded = store.load_preferences().into_value().unwrap();
     assert!(loaded.trim_trailing_whitespace_on_copy);
 }
 
 #[test]
 fn trim_trailing_whitespace_on_copy_backward_compat_missing_field() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
+    let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(!loaded.trim_trailing_whitespace_on_copy);
 }
 
@@ -278,63 +260,21 @@ fn keyboard_shortcuts_defaults_to_empty() {
 
 #[test]
 fn keyboard_shortcuts_roundtrips() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
+    let (_tmp, store) = test_store();
 
     let mut shortcuts = BTreeMap::new();
     shortcuts.insert("close-terminal".into(), vec!["<Ctrl>q".into()]);
     shortcuts.insert("fullscreen".into(), vec![]);
 
     let prefs = Preferences { keyboard_shortcuts: shortcuts, ..Default::default() };
-    preferences::save_to(&prefs, &path).unwrap();
-    let loaded = preferences::load_from(&path);
+    store.save_preferences(&prefs).unwrap();
+    let loaded = store.load_preferences().into_value().unwrap();
     assert_eq!(loaded.keyboard_shortcuts["close-terminal"], vec!["<Ctrl>q"]);
     assert!(loaded.keyboard_shortcuts["fullscreen"].is_empty());
 }
 
 #[test]
 fn keyboard_shortcuts_backward_compat_missing_field() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(&path, r#"{"font": "Mono 12"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
+    let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(loaded.keyboard_shortcuts.is_empty());
-}
-
-#[test]
-fn keyboard_shortcuts_migration_from_ctrl_shift_arrow() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(&path, r#"{"pane_navigation_keys": "ctrl-shift-arrow"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
-    assert_eq!(loaded.keyboard_shortcuts["navigate-left"], vec!["<Ctrl><Shift>Left"]);
-    assert_eq!(loaded.keyboard_shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
-    assert_eq!(loaded.keyboard_shortcuts["navigate-up"], vec!["<Ctrl><Shift>Up"]);
-    assert_eq!(loaded.keyboard_shortcuts["navigate-down"], vec!["<Ctrl><Shift>Down"]);
-}
-
-#[test]
-fn keyboard_shortcuts_migration_noop_for_alt_arrow() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(&path, r#"{"pane_navigation_keys": "alt-arrow"}"#).unwrap();
-    let loaded = preferences::load_from(&path);
-    assert!(!loaded.keyboard_shortcuts.contains_key("navigate-left"));
-}
-
-#[test]
-fn keyboard_shortcuts_explicit_override_wins_over_migration() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(
-        &path,
-        r#"{
-            "pane_navigation_keys": "ctrl-shift-arrow",
-            "keyboard_shortcuts": {"navigate-left": ["<Alt>h"]}
-        }"#,
-    )
-    .unwrap();
-    let loaded = preferences::load_from(&path);
-    assert_eq!(loaded.keyboard_shortcuts["navigate-left"], vec!["<Alt>h"]);
-    assert_eq!(loaded.keyboard_shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
 }

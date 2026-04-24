@@ -92,30 +92,10 @@ pub fn matches_query(place: &Place, query: &str) -> bool {
         || place.path.to_ascii_lowercase().contains(&query)
 }
 
-// ── Persistence ─────────────────────────────────────────────────
-
-#[must_use]
-pub fn load_from(path: &Path) -> Vec<Place> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|data| serde_json::from_str::<Vec<Place>>(&data).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_to(places: &[Place], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(places)?;
-    std::fs::write(path, json)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     // ── Built-in places ─────────────────────────────────────────
 
@@ -260,24 +240,16 @@ mod tests {
         assert!(matches_query(&place, "   "));
     }
 
-    // ── Persistence ─────────────────────────────────────────────
+    // ── Serde ────────────────────────────────────────────────────
 
     #[test]
-    fn roundtrip_via_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("places.json");
+    fn serde_roundtrip() {
         let mut place = Place::new("rttx", "~/pro/rttx");
         place.host_tags = vec!["local".into()];
 
-        save_to(&[place.clone()], &path).unwrap();
-        assert_eq!(load_from(&path), vec![place]);
-    }
-
-    #[test]
-    fn missing_file_returns_empty_list() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("missing.json");
-        assert!(load_from(&path).is_empty());
+        let json = serde_json::to_string(&[&place]).unwrap();
+        let loaded: Vec<Place> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, vec![place]);
     }
 
     #[test]

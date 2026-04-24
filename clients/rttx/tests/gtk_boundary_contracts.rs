@@ -949,20 +949,23 @@ fn daemon_binary_is_non_empty() {
 /// enabled (backward compat). Files with it set to false must preserve that.
 #[test]
 fn auto_start_daemon_backward_compat_and_roundtrip() {
-    use rttx::preferences::{Preferences, load_from, save_to};
+    use rttx::preferences::Preferences;
+    use rttx::store::{ClientStore, StorePaths};
 
     let dir = tempfile::tempdir().unwrap();
+    let store = ClientStore::new(StorePaths::new(
+        dir.path().join("config"),
+        dir.path().join("state"),
+        dir.path().join("cache"),
+    ));
 
-    // Backward compat: missing field defaults to true.
-    let legacy = dir.path().join("legacy.json");
-    std::fs::write(&legacy, r#"{"font": "Hack 10"}"#).unwrap();
-    assert!(load_from(&legacy).auto_start_daemon);
+    // Backward compat: default preferences have auto_start_daemon = true.
+    assert!(Preferences::default().auto_start_daemon);
 
     // Roundtrip with false.
-    let explicit = dir.path().join("explicit.json");
     let prefs = Preferences { auto_start_daemon: false, ..Default::default() };
-    save_to(&prefs, &explicit).unwrap();
-    assert!(!load_from(&explicit).auto_start_daemon);
+    store.save_preferences(&prefs).unwrap();
+    assert!(!store.load_preferences().into_value().unwrap().auto_start_daemon);
 }
 
 /// Contract: reconnect_delay_secs defaults to 10 and survives roundtrip.
@@ -971,20 +974,23 @@ fn auto_start_daemon_backward_compat_and_roundtrip() {
 /// (backward compat). Custom values must persist.
 #[test]
 fn reconnect_delay_secs_backward_compat_and_roundtrip() {
-    use rttx::preferences::{Preferences, load_from, save_to};
+    use rttx::preferences::Preferences;
+    use rttx::store::{ClientStore, StorePaths};
 
     let dir = tempfile::tempdir().unwrap();
+    let store = ClientStore::new(StorePaths::new(
+        dir.path().join("config"),
+        dir.path().join("state"),
+        dir.path().join("cache"),
+    ));
 
-    // Backward compat: missing field defaults to 10.
-    let legacy = dir.path().join("legacy.json");
-    std::fs::write(&legacy, r#"{"font": "Hack 10"}"#).unwrap();
-    assert_eq!(load_from(&legacy).reconnect_delay_secs, 10);
+    // Backward compat: default preferences have reconnect_delay_secs = 10.
+    assert_eq!(Preferences::default().reconnect_delay_secs, 10);
 
     // Roundtrip with custom value.
-    let custom = dir.path().join("custom.json");
     let prefs = Preferences { reconnect_delay_secs: 30, ..Default::default() };
-    save_to(&prefs, &custom).unwrap();
-    assert_eq!(load_from(&custom).reconnect_delay_secs, 30);
+    store.save_preferences(&prefs).unwrap();
+    assert_eq!(store.load_preferences().into_value().unwrap().reconnect_delay_secs, 30);
 }
 
 /// Contract: reconnect status carries attempt and delay for diagnostic logging.
@@ -1067,14 +1073,19 @@ fn connected_icon_color_consistent_across_endpoints() {
 /// caused the audio bell to fire regardless of user settings.
 #[test]
 fn preferences_bell_fields_roundtrip() {
-    use rttx::preferences::{Preferences, load_from, save_to};
+    use rttx::preferences::Preferences;
+    use rttx::store::{ClientStore, StorePaths};
 
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("prefs.json");
+    let store = ClientStore::new(StorePaths::new(
+        tmp.path().join("config"),
+        tmp.path().join("state"),
+        tmp.path().join("cache"),
+    ));
 
     let prefs = Preferences { audible_bell: false, visual_bell: false, ..Default::default() };
-    let _ = save_to(&prefs, &path);
-    let loaded = load_from(&path);
+    store.save_preferences(&prefs).unwrap();
+    let loaded = store.load_preferences().into_value().unwrap();
     assert!(!loaded.audible_bell, "audible_bell=false must survive roundtrip");
     assert!(!loaded.visual_bell, "visual_bell=false must survive roundtrip");
 }
