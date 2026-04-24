@@ -107,3 +107,36 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_sequences_cover_all_documented_modes() {
+        let modes = [
+            "APP_CURSOR",
+            "APP_KEYPAD",
+            "BRACKETED_PASTE",
+            "FOCUS_REPORTING",
+            "MOUSE_1000",
+            "MOUSE_1002",
+            "MOUSE_1003",
+            "SGR_MOUSE",
+        ];
+        for mode in modes {
+            assert!(mode_set_sequence(mode).is_some(), "SET must handle {mode}");
+            assert!(mode_reset_sequence(mode).is_some(), "RESET must handle {mode}");
+        }
+    }
+
+    #[test]
+    fn hex_decode_valid() {
+        assert_eq!(hex_decode("1b5b3f3168"), Some(b"\x1b[?1h".to_vec()));
+    }
+
+    #[test]
+    fn hex_decode_odd_length_returns_none() {
+        assert_eq!(hex_decode("1b5"), None);
+    }
+}
