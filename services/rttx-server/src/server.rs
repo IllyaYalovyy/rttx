@@ -829,7 +829,8 @@ impl Server {
                     let cwd = req.cwd.or_else(|| rt.any_pane_cwd());
                     let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
                     let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
-                    let config = PaneSpawnConfig { command: vec![], cwd: cwd.clone(), env, cols, rows };
+                    let config =
+                        PaneSpawnConfig { command: vec![], cwd: cwd.clone(), env, cols, rows };
                     (s.engine.spawn_pane(pane_id, &config), label, cols, rows, cwd)
                 };
 
