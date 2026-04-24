@@ -5,8 +5,7 @@
 use crate::color_scheme::ColorScheme;
 use crate::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 use crate::workspace::{
-    LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceColor, WorkspaceMode,
-    WorkspaceState,
+    LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceColor, WorkspaceState,
 };
 use std::path::{Path, PathBuf};
 
@@ -72,7 +71,6 @@ pub fn workspace(id: &str, name: &str, layout: LayoutNode) -> WorkspaceState {
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: None,
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
@@ -117,7 +115,6 @@ pub fn managed_session_with_runtime(
         terminal_recovery,
         active_terminal_uuid,
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime {
             managed: true,
             endpoint,
@@ -237,26 +234,6 @@ pub fn remove_env(key: &str) {
 }
 
 // ── Persistence helpers ──────────────────────────────────────────
-
-/// Save a window state to a temp directory (bypasses glib config dir).
-pub fn save_state_to(dir: &Path, state: &WindowState) -> Result<(), Box<dyn std::error::Error>> {
-    let workspaces_dir = dir.join(crate::config::CONFIG_DIR).join("sessions");
-    std::fs::create_dir_all(&workspaces_dir)?;
-    let path = workspaces_dir.join("window-state.json");
-    let json = serde_json::to_string_pretty(state)?;
-    std::fs::write(path, json)?;
-    Ok(())
-}
-
-/// Load a window state from a temp directory (bypasses glib config dir).
-#[must_use]
-pub fn load_state_from(dir: &Path) -> WindowState {
-    let path = dir.join(crate::config::CONFIG_DIR).join("sessions").join("window-state.json");
-    std::fs::read_to_string(path).map_or_else(
-        |_| WindowState::default(),
-        |json| serde_json::from_str(&json).unwrap_or_default(),
-    )
-}
 
 /// Save a color scheme to a temp directory.
 pub fn save_scheme_to(

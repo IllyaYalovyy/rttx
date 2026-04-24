@@ -365,28 +365,23 @@ impl Window {
     fn load_state(&self) {
         let store = crate::store::default_store();
 
-        // Load workspace state from the new store, falling back to legacy.
         let ws_store = store.load_workspaces().into_value().unwrap_or_default();
         let ui = store.load_ui_state().into_value().unwrap_or_default();
         let cache = store.load_runtime_cache().into_value().unwrap_or_default();
 
-        let state = if ws_store.workspaces.is_empty() {
-            // One-time legacy import: read sessions.json and migrate
-            // WorkspaceMode into WorkspaceRuntime.
-            let mut legacy = workspace::load_window_state();
-            legacy.dismissed_runtime_ids.extend(cache.dismissed_runtime_ids);
-            legacy
+        let workspaces: Vec<_> = ws_store
+            .workspaces
+            .iter()
+            .map(crate::store::models::workspaces::WorkspaceRecord::to_workspace_state)
+            .collect();
+        let active_workspace_index = ws_store
+            .active_workspace_id
+            .as_ref()
+            .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
+            .unwrap_or(0);
+        let state = if workspaces.is_empty() {
+            WindowState::default()
         } else {
-            let workspaces: Vec<_> = ws_store
-                .workspaces
-                .iter()
-                .map(crate::store::models::workspaces::WorkspaceRecord::to_workspace_state)
-                .collect();
-            let active_workspace_index = ws_store
-                .active_workspace_id
-                .as_ref()
-                .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
-                .unwrap_or(0);
             WindowState {
                 workspaces,
                 active_workspace_index,

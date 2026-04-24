@@ -441,7 +441,6 @@ impl WorkspaceRecord {
                 .collect(),
             active_terminal_uuid: self.active_pane_id.clone(),
             input_sync: matches!(self.input_sync, InputSyncState::On),
-            mode: state::WorkspaceMode::default(),
             runtime,
             color: (&self.color).into(),
             zoomed_terminal_uuid: self.zoomed_pane_id.clone(),

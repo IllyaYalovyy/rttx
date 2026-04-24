@@ -1399,13 +1399,12 @@ mod search_tests {
         assert_eq!(prefs.paste_guard_threshold, 1024);
     }
 
-    /// Legacy persisted state with bookmark source must deserialize without
-    /// error after the Bookmark variant was removed from `PaneSource`.
+    /// Removed `PaneSource` variants must fail to deserialize now that the
+    /// legacy backward-compat layer is gone.
     #[test]
-    fn legacy_bookmark_pane_source_deserializes_after_removal() {
+    fn removed_pane_source_variant_rejects_on_deserialize() {
         let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":null,"startup":[]}"#;
-        let recovery: crate::workspace::PaneRecovery = serde_json::from_str(json).unwrap();
-        assert_eq!(recovery.source, crate::workspace::PaneSource::Manual);
+        assert!(serde_json::from_str::<crate::workspace::PaneRecovery>(json).is_err());
     }
 
     #[test]

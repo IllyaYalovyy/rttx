@@ -56,13 +56,12 @@ fn split_ratio(
 /// dir caching.
 fn save_and_load(state: &WindowState) -> WindowState {
     let tmp = tempfile::TempDir::new().unwrap();
-    let path = tmp.path().join("sessions.json");
+    let path = tmp.path().join("workspaces.json");
     let json = serde_json::to_string_pretty(state).unwrap();
     std::fs::write(&path, &json).unwrap();
     let loaded_json = std::fs::read_to_string(&path).unwrap();
     let mut loaded: WindowState = serde_json::from_str(&loaded_json).unwrap();
     for session in &mut loaded.workspaces {
-        session.normalize_runtime_metadata();
         session.normalize_active_terminal();
     }
     loaded
@@ -75,7 +74,7 @@ fn save_and_load(state: &WindowState) -> WindowState {
 #[test]
 fn older_format_without_sidebar_widths_loads_with_defaults() {
     let json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1",
             "name": "Legacy",
             "layout": {"Terminal": {"uuid": "t1"}}
@@ -98,7 +97,7 @@ fn older_format_without_sidebar_widths_loads_with_defaults() {
 #[test]
 fn older_format_without_runtime_or_color_fields_loads_gracefully() {
     let json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1",
             "name": "Old Session",
             "layout": {"Terminal": {"uuid": "t1"}},
@@ -126,7 +125,7 @@ fn older_format_without_runtime_or_color_fields_loads_gracefully() {
 #[test]
 fn older_format_without_dismissed_runtime_ids_loads_empty() {
     let json = r#"{
-        "sessions": [{"uuid": "s1", "name": "W", "layout": {"Terminal": {"uuid": "t1"}}}],
+        "workspaces": [{"uuid": "s1", "name": "W", "layout": {"Terminal": {"uuid": "t1"}}}],
         "active_workspace_index": 0,
         "width": 800,
         "height": 600,
@@ -137,10 +136,10 @@ fn older_format_without_dismissed_runtime_ids_loads_empty() {
     assert!(state.dismissed_runtime_ids.is_empty());
 }
 
-/// A session saved with the legacy `Persistent` mode (before the `runtime`
-/// struct existed) must normalize into the modern runtime metadata.
+/// State with a legacy `mode` field must deserialize without error,
+/// silently ignoring the removed field.
 #[test]
-fn legacy_persistent_mode_normalizes_to_runtime_metadata() {
+fn legacy_mode_field_is_silently_ignored() {
     let json = r#"{
         "uuid": "s1",
         "name": "Legacy Persistent",
@@ -151,13 +150,12 @@ fn legacy_persistent_mode_normalizes_to_runtime_metadata() {
         "mode": {"persistent": {"daemon_runtime_id": "runtime-abc"}}
     }"#;
 
-    let mut session: WorkspaceState = serde_json::from_str(json).unwrap();
-    session.normalize_runtime_metadata();
-
-    assert!(session.runtime.is_managed());
-    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
-    assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
-    assert_eq!(session.runtime.runtime_id.as_deref(), Some("runtime-abc"));
+    let session: WorkspaceState = serde_json::from_str(json).unwrap();
+    assert!(
+        !session.uses_managed_runtime(),
+        "unknown mode field must not activate managed runtime"
+    );
+    assert_eq!(session.uuid, "s1");
 }
 
 // ── Corrupted state ─────────────────────────────────────────────
@@ -199,7 +197,7 @@ fn empty_string_falls_back_to_default() {
 #[test]
 fn unknown_fields_are_ignored_gracefully() {
     let json = r#"{
-        "sessions": [{
+        "workspaces": [{
             "uuid": "s1",
             "name": "Future",
             "layout": {"Terminal": {"uuid": "t1"}},
@@ -241,7 +239,6 @@ fn large_layout_persists_and_restores_through_file() {
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("t7".into()),
             input_sync: true,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::Teal,
             zoomed_terminal_uuid: None,
@@ -293,7 +290,6 @@ fn multi_workspace_mixed_config_persists_through_file() {
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("t2".into()),
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::Green,
             zoomed_terminal_uuid: None,
@@ -316,7 +312,6 @@ fn multi_workspace_mixed_config_persists_through_file() {
             terminal_recovery: BTreeMap::default(),
             active_terminal_uuid: Some("t-mon".into()),
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::Purple,
             zoomed_terminal_uuid: None,
@@ -394,7 +389,6 @@ fn full_roundtrip_through_file_persistence() {
                 terminal_recovery: BTreeMap::default(),
                 active_terminal_uuid: Some("t2".into()),
                 input_sync: true,
-                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: WorkspaceColor::Orange,
                 zoomed_terminal_uuid: None,
@@ -407,7 +401,6 @@ fn full_roundtrip_through_file_persistence() {
                 terminal_recovery: BTreeMap::default(),
                 active_terminal_uuid: Some("t3".into()),
                 input_sync: false,
-                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: WorkspaceColor::Blue,
                 zoomed_terminal_uuid: None,

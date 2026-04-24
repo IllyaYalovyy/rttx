@@ -71,7 +71,6 @@ fn workflow_multi_session_state() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
@@ -84,7 +83,6 @@ fn workflow_multi_session_state() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
@@ -97,7 +95,6 @@ fn workflow_multi_session_state() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
@@ -156,7 +153,6 @@ fn workflow_persist_and_restore_with_cwds() {
             terminal_recovery: std::collections::BTreeMap::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: WorkspaceMode::default(),
             runtime: WorkspaceRuntime::default(),
             color: WorkspaceColor::default(),
             zoomed_terminal_uuid: None,
@@ -244,7 +240,6 @@ fn empty_workspace_name_is_valid() {
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: None,
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
@@ -266,7 +261,6 @@ fn session_order_persists_through_serialization() {
                 terminal_recovery: std::collections::BTreeMap::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: WorkspaceColor::default(),
                 zoomed_terminal_uuid: None,
@@ -279,7 +273,6 @@ fn session_order_persists_through_serialization() {
                 terminal_recovery: std::collections::BTreeMap::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: WorkspaceColor::default(),
                 zoomed_terminal_uuid: None,
@@ -292,7 +285,6 @@ fn session_order_persists_through_serialization() {
                 terminal_recovery: std::collections::BTreeMap::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: WorkspaceMode::default(),
                 runtime: WorkspaceRuntime::default(),
                 color: WorkspaceColor::default(),
                 zoomed_terminal_uuid: None,
@@ -326,7 +318,7 @@ fn module_split_reexports_are_complete() {
 
     // State types
     let session = WorkspaceState::new("reexport-test".into());
-    assert_eq!(session.mode, WorkspaceMode::Direct);
+    assert!(!session.uuid.is_empty());
 
     let state = WindowState::default();
     assert!(!state.workspaces.is_empty());
@@ -541,7 +533,7 @@ fn new_managed_remote_produces_remote_persistent_session() {
 #[test]
 fn remote_managed_session_persists_and_restores() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
-    use rttx::workspace::{WorkspaceMode, WorkspaceState};
+    use rttx::workspace::WorkspaceState;
 
     let session = WorkspaceState::new_managed_remote(
         "Remote Work".into(),
@@ -558,7 +550,6 @@ fn remote_managed_session_persists_and_restores() {
         restored.runtime.endpoint,
         RuntimeEndpoint::Remote { host: "dev@build-host".into() }
     );
-    assert_eq!(restored.mode, WorkspaceMode::Direct, "mode is no longer serialized");
     assert_eq!(
         restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
         Some("/home/dev/project")
@@ -993,7 +984,6 @@ fn zoom_toggle_sets_and_clears_zoomed_terminal() {
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t1".into()),
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
@@ -1022,7 +1012,6 @@ fn zoom_state_not_persisted_when_cleared_before_save() {
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t1".into()),
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: Some("t1".into()),
@@ -1046,7 +1035,6 @@ fn zoom_on_single_pane_session_is_noop() {
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t1".into()),
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
@@ -1068,7 +1056,6 @@ fn zoom_preserves_layout_tree_integrity() {
         terminal_recovery: std::collections::BTreeMap::default(),
         active_terminal_uuid: Some("t2".into()),
         input_sync: false,
-        mode: WorkspaceMode::default(),
         runtime: WorkspaceRuntime::default(),
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
@@ -1236,11 +1223,10 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     assert_eq!(restored.input_sync_targets("pane-1").len(), 2);
 }
 
-/// Legacy persisted `WindowState` with bookmark-sourced panes must load
-/// without error after the Bookmark variant was removed from `PaneSource`.
+/// Legacy persisted `WindowState` with the old `sessions` key must fail
+/// to deserialize now that the alias is removed.
 #[test]
-fn legacy_bookmark_sourced_pane_loads_after_removal() {
-    use rttx::workspace::PaneSource;
+fn legacy_sessions_key_rejects_on_deserialize() {
     use rttx::workspace::state::WindowState;
 
     let json = r#"{
@@ -1251,21 +1237,11 @@ fn legacy_bookmark_sourced_pane_loads_after_removal() {
         "sessions": [{
             "uuid": "s1",
             "name": "Legacy",
-            "layout": {"Terminal": {"uuid": "t1"}},
-            "terminal_recovery": {
-                "t1": {
-                    "source": {"bookmark": {"name": "Prod"}},
-                    "target": null,
-                    "startup": []
-                }
-            }
+            "layout": {"Terminal": {"uuid": "t1"}}
         }]
     }"#;
 
-    let state: WindowState = serde_json::from_str(json).unwrap();
-    assert_eq!(state.workspaces.len(), 1);
-    let recovery = &state.workspaces[0].terminal_recovery["t1"];
-    assert_eq!(recovery.source, PaneSource::Manual);
+    assert!(serde_json::from_str::<WindowState>(json).is_err());
 }
 
 /// Dismissed runtime IDs that are no longer in the daemon inventory

@@ -156,7 +156,6 @@ fn make_state_two_sessions() -> WindowState {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -169,7 +168,6 @@ fn make_state_two_sessions() -> WindowState {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -216,7 +214,6 @@ fn terminal_in_visible_session_with_split_suppresses_notification() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: Default::default(),
             runtime: Default::default(),
             color: Default::default(),
             zoomed_terminal_uuid: None,
@@ -256,7 +253,6 @@ fn preferred_command_target_uuid_uses_focused_terminal_first() {
             terminal_recovery: Default::default(),
             active_terminal_uuid: None,
             input_sync: false,
-            mode: Default::default(),
             runtime: Default::default(),
             color: Default::default(),
             zoomed_terminal_uuid: None,
@@ -284,7 +280,6 @@ fn preferred_command_target_uuid_falls_back_to_visible_session() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -302,7 +297,6 @@ fn preferred_command_target_uuid_falls_back_to_visible_session() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -571,7 +565,6 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
             )]),
             active_terminal_uuid: Some(terminal_uuid.clone()),
             input_sync: false,
-            mode: Default::default(),
             runtime: Default::default(),
             color: Default::default(),
             zoomed_terminal_uuid: None,
@@ -2726,7 +2719,6 @@ fn load_state_keeps_selected_row_and_visible_session_in_sync() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -2739,7 +2731,6 @@ fn load_state_keeps_selected_row_and_visible_session_in_sync() {
                 terminal_recovery: Default::default(),
                 active_terminal_uuid: None,
                 input_sync: false,
-                mode: Default::default(),
                 runtime: Default::default(),
                 color: Default::default(),
                 zoomed_terminal_uuid: None,
@@ -3021,7 +3012,6 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
     );
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id, None);
-    assert_eq!(saved_session.mode, crate::workspace::WorkspaceMode::Direct,);
     assert_eq!(
         saved_session.runtime.pane_bindings.get("managed-pane").map(String::as_str),
         Some("managed-pane")
