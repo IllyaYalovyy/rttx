@@ -919,6 +919,14 @@ impl Window {
                 }
             }
             Payload::Bell(_) => pane.flash_bell(),
+            Payload::TerminalModeChanged(m) => {
+                if let Some(modes) = m.modes {
+                    pane.set_application_modes(
+                        modes.application_cursor_keys,
+                        modes.application_keypad,
+                    );
+                }
+            }
             Payload::PaneResized(_)
             | Payload::PaneCreated(_)
             | Payload::PaneClosed(_)
@@ -932,7 +940,6 @@ impl Window {
             | Payload::Pong(_)
             | Payload::Error(_)
             | Payload::DiagnosticsReport(_)
-            | Payload::TerminalModeChanged(_)
             | Payload::StreamOverflow(_)
             | Payload::ScrollbackChunk(_)
             | Payload::TakeoverCompleted(_)

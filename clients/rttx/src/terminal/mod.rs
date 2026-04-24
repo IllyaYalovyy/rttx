@@ -57,14 +57,32 @@ pub(crate) fn populate_places_submenu(menu: &gtk4::gio::Menu, host_key: &str) {
     }
 }
 
-/// Test-only re-export of `encode_terminal_key_input`.
+/// Test-only re-export of `encode_terminal_key_input` (normal mode).
 #[doc(hidden)]
 #[must_use]
 pub fn encode_terminal_key_input_for_test(
     key: gtk4::gdk::Key,
     state: gtk4::gdk::ModifierType,
 ) -> Option<Vec<u8>> {
-    encode_terminal_key_input(key, state)
+    encode_terminal_key_input(key, state, TerminalModes::default())
+}
+
+/// Test-only re-export of mode-aware `encode_terminal_key_input`.
+#[doc(hidden)]
+#[must_use]
+pub fn encode_terminal_key_input_with_modes_for_test(
+    key: gtk4::gdk::Key,
+    state: gtk4::gdk::ModifierType,
+    modes: TerminalModes,
+) -> Option<Vec<u8>> {
+    encode_terminal_key_input(key, state, modes)
+}
+
+/// Terminal interaction modes that affect key encoding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalModes {
+    pub application_cursor_keys: bool,
+    pub application_keypad: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,26 +212,91 @@ fn ss3_or_csi(suffix: u8, modifier: u8) -> Vec<u8> {
     }
 }
 
+/// Encode a cursor/navigation key: SS3 when application cursor mode is active
+/// and no modifiers are held, CSI otherwise.
+fn cursor_key(suffix: u8, modifier: u8, application_cursor: bool) -> Vec<u8> {
+    if modifier == 0 && application_cursor {
+        vec![0x1b, b'O', suffix]
+    } else {
+        csi_letter(suffix, modifier)
+    }
+}
+
+/// Map a keypad key to its SS3 application-mode byte, if applicable.
+const fn keypad_application_byte(key: gtk4::gdk::Key) -> Option<u8> {
+    match key {
+        gtk4::gdk::Key::KP_0 => Some(b'p'),
+        gtk4::gdk::Key::KP_1 => Some(b'q'),
+        gtk4::gdk::Key::KP_2 => Some(b'r'),
+        gtk4::gdk::Key::KP_3 => Some(b's'),
+        gtk4::gdk::Key::KP_4 => Some(b't'),
+        gtk4::gdk::Key::KP_5 => Some(b'u'),
+        gtk4::gdk::Key::KP_6 => Some(b'v'),
+        gtk4::gdk::Key::KP_7 => Some(b'w'),
+        gtk4::gdk::Key::KP_8 => Some(b'x'),
+        gtk4::gdk::Key::KP_9 => Some(b'y'),
+        gtk4::gdk::Key::KP_Add => Some(b'k'),
+        gtk4::gdk::Key::KP_Subtract => Some(b'm'),
+        gtk4::gdk::Key::KP_Multiply => Some(b'j'),
+        gtk4::gdk::Key::KP_Divide => Some(b'o'),
+        gtk4::gdk::Key::KP_Decimal => Some(b'n'),
+        gtk4::gdk::Key::KP_Enter => Some(b'M'),
+        _ => None,
+    }
+}
+
+fn encode_printable_or_control(key: gtk4::gdk::Key, ctrl: bool, alt: bool) -> Option<Vec<u8>> {
+    let ch = key.to_unicode()?;
+    if ctrl && alt {
+        let ctrl_byte = encode_control_character(ch)?;
+        Some(vec![0x1b, ctrl_byte])
+    } else if ctrl {
+        Some(vec![encode_control_character(ch)?])
+    } else if alt {
+        let mut prefixed = vec![0x1b];
+        prefixed.extend(ch.to_string().bytes());
+        Some(prefixed)
+    } else {
+        Some(ch.to_string().into_bytes())
+    }
+}
+
 fn encode_terminal_key_input(
     key: gtk4::gdk::Key,
     state: gtk4::gdk::ModifierType,
+    modes: TerminalModes,
 ) -> Option<Vec<u8>> {
     let ctrl = state.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
     let alt = state.contains(gtk4::gdk::ModifierType::ALT_MASK);
     let m = xterm_modifier_param(state);
 
     let seq = match key {
+        gtk4::gdk::Key::KP_Enter if modes.application_keypad => {
+            return Some(vec![0x1b, b'O', b'M']);
+        }
         gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => vec![b'\r'],
         gtk4::gdk::Key::BackSpace => vec![0x7f],
         gtk4::gdk::Key::Tab | gtk4::gdk::Key::KP_Tab => vec![b'\t'],
         gtk4::gdk::Key::ISO_Left_Tab => b"\x1b[Z".to_vec(),
         gtk4::gdk::Key::Escape => vec![0x1b],
-        gtk4::gdk::Key::Up | gtk4::gdk::Key::KP_Up => return Some(csi_letter(b'A', m)),
-        gtk4::gdk::Key::Down | gtk4::gdk::Key::KP_Down => return Some(csi_letter(b'B', m)),
-        gtk4::gdk::Key::Right | gtk4::gdk::Key::KP_Right => return Some(csi_letter(b'C', m)),
-        gtk4::gdk::Key::Left | gtk4::gdk::Key::KP_Left => return Some(csi_letter(b'D', m)),
-        gtk4::gdk::Key::Home | gtk4::gdk::Key::KP_Home => return Some(csi_letter(b'H', m)),
-        gtk4::gdk::Key::End | gtk4::gdk::Key::KP_End => return Some(csi_letter(b'F', m)),
+        gtk4::gdk::Key::Up | gtk4::gdk::Key::KP_Up => {
+            return Some(cursor_key(b'A', m, modes.application_cursor_keys));
+        }
+        gtk4::gdk::Key::Down | gtk4::gdk::Key::KP_Down => {
+            return Some(cursor_key(b'B', m, modes.application_cursor_keys));
+        }
+        gtk4::gdk::Key::Right | gtk4::gdk::Key::KP_Right => {
+            return Some(cursor_key(b'C', m, modes.application_cursor_keys));
+        }
+        gtk4::gdk::Key::Left | gtk4::gdk::Key::KP_Left => {
+            return Some(cursor_key(b'D', m, modes.application_cursor_keys));
+        }
+        gtk4::gdk::Key::Home | gtk4::gdk::Key::KP_Home => {
+            return Some(cursor_key(b'H', m, modes.application_cursor_keys));
+        }
+        gtk4::gdk::Key::End | gtk4::gdk::Key::KP_End => {
+            return Some(cursor_key(b'F', m, modes.application_cursor_keys));
+        }
         gtk4::gdk::Key::Insert | gtk4::gdk::Key::KP_Insert => return Some(csi_tilde("2", m)),
         gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete => return Some(csi_tilde("3", m)),
         gtk4::gdk::Key::Page_Up | gtk4::gdk::Key::KP_Page_Up => return Some(csi_tilde("5", m)),
@@ -232,20 +315,14 @@ fn encode_terminal_key_input(
         gtk4::gdk::Key::F10 => return Some(csi_tilde("21", m)),
         gtk4::gdk::Key::F11 => return Some(csi_tilde("23", m)),
         gtk4::gdk::Key::F12 => return Some(csi_tilde("24", m)),
-        _ => {
-            let ch = key.to_unicode()?;
-            if ctrl && alt {
-                let ctrl_byte = encode_control_character(ch)?;
-                vec![0x1b, ctrl_byte]
-            } else if ctrl {
-                vec![encode_control_character(ch)?]
-            } else if alt {
-                let mut prefixed = vec![0x1b];
-                prefixed.extend(ch.to_string().bytes());
-                return Some(prefixed);
-            } else {
-                ch.to_string().into_bytes()
+        _ if modes.application_keypad => {
+            if let Some(ss3) = keypad_application_byte(key) {
+                return Some(vec![0x1b, b'O', ss3]);
             }
+            return encode_printable_or_control(key, ctrl, alt);
+        }
+        _ => {
+            return encode_printable_or_control(key, ctrl, alt);
         }
     };
 
@@ -279,6 +356,7 @@ fn terminal_key_action(
     modifiers: gtk4::gdk::ModifierType,
     has_selection: bool,
     smart_clipboard_enabled: bool,
+    modes: TerminalModes,
 ) -> TerminalKeyAction {
     let normalized = normalized_shortcut_modifiers(modifiers);
 
@@ -312,7 +390,7 @@ fn terminal_key_action(
 
     match backend {
         TerminalInputBackend::Direct => TerminalKeyAction::PassThrough,
-        TerminalInputBackend::Managed => encode_terminal_key_input(key, modifiers)
+        TerminalInputBackend::Managed => encode_terminal_key_input(key, modifiers, modes)
             .map_or(TerminalKeyAction::PassThrough, TerminalKeyAction::ForwardToPty),
     }
 }
@@ -320,8 +398,12 @@ fn terminal_key_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalInputBackend, TerminalKeyAction, encode_terminal_key_input, terminal_key_action,
+        TerminalInputBackend, TerminalKeyAction, TerminalModes, encode_terminal_key_input,
+        terminal_key_action,
     };
+
+    const DEFAULT_MODES: TerminalModes =
+        TerminalModes { application_cursor_keys: false, application_keypad: false };
 
     #[test]
     fn direct_and_managed_share_clipboard_policy() {
@@ -336,6 +418,7 @@ mod tests {
                 modifiers,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -346,6 +429,7 @@ mod tests {
                 modifiers,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -362,6 +446,7 @@ mod tests {
                 modifiers,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -372,6 +457,7 @@ mod tests {
                 modifiers,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -386,6 +472,7 @@ mod tests {
                 gtk4::gdk::ModifierType::SUPER_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -396,6 +483,7 @@ mod tests {
                 gtk4::gdk::ModifierType::SUPER_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -410,6 +498,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x03])
         );
@@ -420,6 +509,7 @@ mod tests {
                 gtk4::gdk::ModifierType::ALT_MASK,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(b"\x1bx".to_vec())
         );
@@ -428,7 +518,11 @@ mod tests {
     #[test]
     fn ctrl_d_encodes_eof_byte() {
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::d, gtk4::gdk::ModifierType::CONTROL_MASK),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::d,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                DEFAULT_MODES
+            ),
             Some(vec![0x04])
         );
         assert_eq!(
@@ -438,6 +532,7 @@ mod tests {
                 gtk4::gdk::ModifierType::CONTROL_MASK,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x04])
         );
@@ -456,6 +551,7 @@ mod tests {
                 modifiers,
                 false,
                 true,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -464,31 +560,59 @@ mod tests {
     #[test]
     fn encode_terminal_key_input_maps_basic_shell_keys() {
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::a, gtk4::gdk::ModifierType::empty()),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::a,
+                gtk4::gdk::ModifierType::empty(),
+                DEFAULT_MODES
+            ),
             Some(vec![b'a'])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Return, gtk4::gdk::ModifierType::empty()),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::Return,
+                gtk4::gdk::ModifierType::empty(),
+                DEFAULT_MODES
+            ),
             Some(vec![b'\r'])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::BackSpace, gtk4::gdk::ModifierType::empty()),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::BackSpace,
+                gtk4::gdk::ModifierType::empty(),
+                DEFAULT_MODES
+            ),
             Some(vec![0x7f])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Left, gtk4::gdk::ModifierType::empty()),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::Left,
+                gtk4::gdk::ModifierType::empty(),
+                DEFAULT_MODES
+            ),
             Some(b"\x1b[D".to_vec())
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::c, gtk4::gdk::ModifierType::CONTROL_MASK),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                DEFAULT_MODES
+            ),
             Some(vec![0x03])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::x, gtk4::gdk::ModifierType::ALT_MASK),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::x,
+                gtk4::gdk::ModifierType::ALT_MASK,
+                DEFAULT_MODES
+            ),
             Some(b"\x1bx".to_vec())
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Shift_L, gtk4::gdk::ModifierType::SHIFT_MASK,),
+            encode_terminal_key_input(
+                gtk4::gdk::Key::Shift_L,
+                gtk4::gdk::ModifierType::SHIFT_MASK,
+                DEFAULT_MODES
+            ),
             None
         );
     }
@@ -505,6 +629,7 @@ mod tests {
                 modifiers,
                 false,
                 false, // smart clipboard OFF
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -522,6 +647,7 @@ mod tests {
                 modifiers,
                 true,  // has selection
                 false, // smart clipboard OFF
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -545,7 +671,8 @@ mod tests {
             (gtk4::gdk::Key::F12, b"\x1b[24~"),
         ];
         for (key, seq) in expected {
-            let result = encode_terminal_key_input(*key, gtk4::gdk::ModifierType::empty());
+            let result =
+                encode_terminal_key_input(*key, gtk4::gdk::ModifierType::empty(), DEFAULT_MODES);
             assert_eq!(
                 result.as_deref(),
                 Some(*seq as &[u8]),
@@ -563,6 +690,7 @@ mod tests {
             gtk4::gdk::ModifierType::empty(),
             false,
             false,
+            DEFAULT_MODES,
         );
         assert!(
             matches!(action, TerminalKeyAction::ForwardToPty(_)),
@@ -573,8 +701,11 @@ mod tests {
     /// Alt+F-key must use xterm modifier param 3. #293.
     #[test]
     fn alt_fkey_uses_modifier_encoding() {
-        let result =
-            encode_terminal_key_input(gtk4::gdk::Key::F2, gtk4::gdk::ModifierType::ALT_MASK);
+        let result = encode_terminal_key_input(
+            gtk4::gdk::Key::F2,
+            gtk4::gdk::ModifierType::ALT_MASK,
+            DEFAULT_MODES,
+        );
         assert_eq!(result.as_deref(), Some(b"\x1b[1;3Q" as &[u8]));
     }
 
@@ -583,19 +714,19 @@ mod tests {
     fn ctrl_arrow_uses_xterm_modifier_encoding() {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Right, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Right, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5C" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Left, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Left, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5D" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Up, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Up, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5A" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Down, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Down, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5B" as &[u8])
         );
     }
@@ -605,11 +736,11 @@ mod tests {
     fn shift_arrow_uses_xterm_modifier_encoding() {
         let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Right, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Right, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;2C" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Left, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Left, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;2D" as &[u8])
         );
     }
@@ -619,11 +750,11 @@ mod tests {
     fn ctrl_home_end_uses_xterm_modifier_encoding() {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Home, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Home, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5H" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::End, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::End, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5F" as &[u8])
         );
     }
@@ -633,7 +764,7 @@ mod tests {
     fn ctrl_shift_arrow_uses_modifier_6() {
         let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Right, mods).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Right, mods, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;6C" as &[u8])
         );
     }
@@ -643,7 +774,7 @@ mod tests {
     fn alt_ctrl_arrow_uses_modifier_7() {
         let mods = gtk4::gdk::ModifierType::ALT_MASK | gtk4::gdk::ModifierType::CONTROL_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Right, mods).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Right, mods, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;7C" as &[u8])
         );
     }
@@ -654,12 +785,12 @@ mod tests {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
         // F5 = CSI 15~ → Ctrl+F5 = CSI 15;5~
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::F5, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::F5, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[15;5~" as &[u8])
         );
         // F1 = SS3 P → Ctrl+F1 = CSI 1;5P
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::F1, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::F1, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;5P" as &[u8])
         );
     }
@@ -669,11 +800,11 @@ mod tests {
     fn ctrl_tilde_keys_use_modified_format() {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Delete, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Delete, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[3;5~" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Page_Up, ctrl).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Page_Up, ctrl, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[5;5~" as &[u8])
         );
     }
@@ -683,15 +814,15 @@ mod tests {
     fn unmodified_navigation_keys_unchanged() {
         let none = gtk4::gdk::ModifierType::empty();
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Right, none).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Right, none, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[C" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Home, none).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Home, none, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[H" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::F1, none).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::F1, none, DEFAULT_MODES).as_deref(),
             Some(b"\x1bOP" as &[u8])
         );
     }
@@ -701,9 +832,15 @@ mod tests {
     fn ctrl_alt_letter_preserves_alt_prefix() {
         let mods = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::ALT_MASK;
         // Ctrl+Alt+a → ESC 0x01
-        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::a, mods), Some(vec![0x1b, 0x01]));
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::a, mods, DEFAULT_MODES),
+            Some(vec![0x1b, 0x01])
+        );
         // Ctrl+Alt+c → ESC 0x03
-        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, mods), Some(vec![0x1b, 0x03]));
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::c, mods, DEFAULT_MODES),
+            Some(vec![0x1b, 0x03])
+        );
     }
 
     /// Ctrl+Alt+letter must be forwarded as `ForwardToPty` in managed mode. #457.
@@ -716,6 +853,7 @@ mod tests {
             mods,
             false,
             false,
+            DEFAULT_MODES,
         );
         assert_eq!(action, TerminalKeyAction::ForwardToPty(vec![0x1b, 0x01]));
     }
@@ -738,7 +876,7 @@ mod tests {
         ];
         for (key, byte) in expected {
             assert_eq!(
-                encode_terminal_key_input(*key, none),
+                encode_terminal_key_input(*key, none, DEFAULT_MODES),
                 Some(vec![*byte]),
                 "KP digit {key:?} should produce ASCII digit"
             );
@@ -758,7 +896,7 @@ mod tests {
         ];
         for (key, bytes) in expected {
             assert_eq!(
-                encode_terminal_key_input(*key, none),
+                encode_terminal_key_input(*key, none, DEFAULT_MODES),
                 Some(bytes.to_vec()),
                 "KP operator {key:?} should produce ASCII"
             );
@@ -770,19 +908,19 @@ mod tests {
     fn shift_tilde_keys_use_modified_format() {
         let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Insert, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Insert, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[2;2~" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Delete, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Delete, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[3;2~" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Page_Up, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Page_Up, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[5;2~" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Page_Down, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Page_Down, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[6;2~" as &[u8])
         );
     }
@@ -792,11 +930,11 @@ mod tests {
     fn shift_home_end_uses_modified_format() {
         let shift = gtk4::gdk::ModifierType::SHIFT_MASK;
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::Home, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::Home, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;2H" as &[u8])
         );
         assert_eq!(
-            encode_terminal_key_input(gtk4::gdk::Key::End, shift).as_deref(),
+            encode_terminal_key_input(gtk4::gdk::Key::End, shift, DEFAULT_MODES).as_deref(),
             Some(b"\x1b[1;2F" as &[u8])
         );
     }
@@ -815,8 +953,14 @@ mod tests {
             (gtk4::gdk::Key::F5, gtk4::gdk::ModifierType::empty()),
         ];
         for (key, mods) in keys_and_mods {
-            let action =
-                terminal_key_action(TerminalInputBackend::Managed, *key, *mods, false, false);
+            let action = terminal_key_action(
+                TerminalInputBackend::Managed,
+                *key,
+                *mods,
+                false,
+                false,
+                DEFAULT_MODES,
+            );
             assert!(
                 matches!(action, TerminalKeyAction::ForwardToPty(_)),
                 "managed backend must intercept {key:?}+{mods:?}, got {action:?}"
@@ -837,7 +981,7 @@ mod tests {
         ];
         for key in &dead_keys {
             assert_eq!(
-                encode_terminal_key_input(*key, none),
+                encode_terminal_key_input(*key, none, DEFAULT_MODES),
                 None,
                 "dead key {key:?} must return None so IMContext handles it"
             );
@@ -856,6 +1000,7 @@ mod tests {
                 none,
                 false,
                 false,
+                DEFAULT_MODES,
             ),
             TerminalKeyAction::PassThrough,
         );
@@ -866,8 +1011,14 @@ mod tests {
     #[test]
     fn control_keys_still_encoded_with_ime_active() {
         let ctrl = gtk4::gdk::ModifierType::CONTROL_MASK;
-        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::c, ctrl), Some(vec![0x03]),);
-        assert_eq!(encode_terminal_key_input(gtk4::gdk::Key::d, ctrl), Some(vec![0x04]),);
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::c, ctrl, DEFAULT_MODES),
+            Some(vec![0x03]),
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::d, ctrl, DEFAULT_MODES),
+            Some(vec![0x04]),
+        );
     }
 
     /// Keys that produce `ForwardToPty` in managed mode are the ones that
@@ -882,13 +1033,79 @@ mod tests {
             (gtk4::gdk::Key::Up, gtk4::gdk::ModifierType::empty()),
         ];
         for (key, mods) in typing_keys {
-            let action =
-                terminal_key_action(TerminalInputBackend::Managed, *key, *mods, false, false);
+            let action = terminal_key_action(
+                TerminalInputBackend::Managed,
+                *key,
+                *mods,
+                false,
+                false,
+                DEFAULT_MODES,
+            );
             assert!(
                 matches!(action, TerminalKeyAction::ForwardToPty(_)),
                 "{key:?}+{mods:?} must produce ForwardToPty (scroll-on-keystroke trigger)"
             );
         }
+    }
+
+    /// Application cursor mode: unmodified arrows use SS3. #767.
+    #[test]
+    fn app_cursor_mode_arrows_use_ss3() {
+        let modes = TerminalModes { application_cursor_keys: true, application_keypad: false };
+        let none = gtk4::gdk::ModifierType::empty();
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Up, none, modes).as_deref(),
+            Some(b"\x1bOA" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::Down, none, modes).as_deref(),
+            Some(b"\x1bOB" as &[u8])
+        );
+    }
+
+    /// Application cursor mode: modified arrows still use CSI. #767.
+    #[test]
+    fn app_cursor_mode_modified_arrows_use_csi() {
+        let modes = TerminalModes { application_cursor_keys: true, application_keypad: false };
+        assert_eq!(
+            encode_terminal_key_input(
+                gtk4::gdk::Key::Up,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                modes
+            )
+            .as_deref(),
+            Some(b"\x1b[1;5A" as &[u8])
+        );
+    }
+
+    /// Application keypad mode: digits use SS3. #767.
+    #[test]
+    fn app_keypad_mode_digits_use_ss3() {
+        let modes = TerminalModes { application_cursor_keys: false, application_keypad: true };
+        let none = gtk4::gdk::ModifierType::empty();
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::KP_0, none, modes).as_deref(),
+            Some(b"\x1bOp" as &[u8])
+        );
+        assert_eq!(
+            encode_terminal_key_input(gtk4::gdk::Key::KP_5, none, modes).as_deref(),
+            Some(b"\x1bOu" as &[u8])
+        );
+    }
+
+    /// Managed terminal with app cursor mode forwards SS3 arrows. #767.
+    #[test]
+    fn managed_app_cursor_forwards_ss3_arrows() {
+        let modes = TerminalModes { application_cursor_keys: true, application_keypad: false };
+        let action = terminal_key_action(
+            TerminalInputBackend::Managed,
+            gtk4::gdk::Key::Up,
+            gtk4::gdk::ModifierType::empty(),
+            false,
+            false,
+            modes,
+        );
+        assert_eq!(action, TerminalKeyAction::ForwardToPty(b"\x1bOA".to_vec()));
     }
 }
 
