@@ -1733,7 +1733,8 @@ impl Server {
             env.push(("COLORFGBG".into(), colorfgbg.into()));
             let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
             let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
-            let config = PaneSpawnConfig { command: vec![], cwd: req.cwd, env, cols, rows };
+            let cwd = req.cwd.or_else(|| rt.any_pane_cwd());
+            let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
             (s.engine.spawn_pane(pane_id, &config), label, cols, rows)
         };
         match pty_result {
