@@ -32,8 +32,7 @@ async fn serialization_writes_v2_runtime_files() {
     };
 
     // Wait for serialization tick to write state.
-    wait_for_state_containing(tmp.path(), "v2-write-test", Duration::from_secs(10))
-        .await;
+    wait_for_state_containing(tmp.path(), "v2-write-test", Duration::from_secs(10)).await;
 
     // Verify v2 daemon index exists.
     let state_dir = tmp.path().join("state/rttx/daemon");
@@ -120,12 +119,7 @@ async fn restart_prefers_v2_over_v1() {
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
-        wait_for_state_containing(
-            tmp.path(),
-            "v2-preferred",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "v2-preferred", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -203,12 +197,7 @@ async fn corrupt_v2_runtime_skipped_not_fatal() {
         .await;
         let _ = c.recv().await; // RuntimeCreated
 
-        wait_for_state_containing(
-            tmp.path(),
-            "bad-runtime",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "bad-runtime", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

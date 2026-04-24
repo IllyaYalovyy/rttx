@@ -33,12 +33,7 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
         let _rt_id =
             create_runtime(&mut c, "index-fallback", proto::RuntimePolicy::Persistent).await;
 
-        wait_for_state_containing(
-            tmp.path(),
-            "index-fallback",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "index-fallback", Duration::from_secs(10)).await;
 
         // Create a second runtime to trigger a second daemon index write,
         // which produces the .prev backup.
@@ -87,12 +82,7 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
         let _rt_id =
             create_runtime(&mut c, "doomed-runtime", proto::RuntimePolicy::Persistent).await;
 
-        wait_for_state_containing(
-            tmp.path(),
-            "doomed-runtime",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "doomed-runtime", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -135,12 +125,7 @@ async fn corrupt_runtime_file_recovers_from_backup() {
         runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
         // Wait for first write.
-        wait_for_state_containing(
-            tmp.path(),
-            "backup-recovery",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "backup-recovery", Duration::from_secs(10)).await;
 
         // Attach and create a pane to trigger a second write (dirty flag).
         attach_rw(&mut c, &rt_id_bytes).await;
@@ -187,12 +172,7 @@ async fn loaded_runtime_is_clean_after_restart() {
         let _rt_id =
             create_runtime(&mut c, "clean-after-restart", proto::RuntimePolicy::Persistent).await;
 
-        wait_for_state_containing(
-            tmp.path(),
-            "clean-after-restart",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "clean-after-restart", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -238,8 +218,7 @@ async fn multiple_mutations_coalesce_into_single_write() {
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for initial write.
-    wait_for_state_containing(tmp.path(), "coalesce-test", Duration::from_secs(10))
-        .await;
+    wait_for_state_containing(tmp.path(), "coalesce-test", Duration::from_secs(10)).await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let rt_path = layout::runtime_file(&state_dir, runtime_id);
@@ -401,12 +380,7 @@ async fn terminated_runtime_does_not_become_orphan_on_restart() {
             create_runtime(&mut c, "terminated-rt", proto::RuntimePolicy::Persistent).await;
 
         // Wait for serialization.
-        wait_for_state_containing(
-            tmp.path(),
-            "terminated-rt",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "terminated-rt", Duration::from_secs(10)).await;
 
         // Attach and terminate.
         attach_rw(&mut c, &rt_id_bytes).await;
@@ -466,12 +440,7 @@ async fn screen_snapshot_survives_restart() {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Wait for serialization to write snapshot.
-        wait_for_state_containing(
-            tmp.path(),
-            "snap-restart",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "snap-restart", Duration::from_secs(10)).await;
         // Extra time for screen snapshot write.
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -533,12 +502,7 @@ async fn no_persist_pane_snapshot_is_confidential_via_server() {
     };
 
     // Wait for serialization.
-    wait_for_state_containing(
-        tmp.path(),
-        "confidential-snap",
-        Duration::from_secs(10),
-    )
-    .await;
+    wait_for_state_containing(tmp.path(), "confidential-snap", Duration::from_secs(10)).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Check the snapshot.

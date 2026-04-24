@@ -211,12 +211,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             other => panic!("expected PaneResized, got {other:?}"),
         }
 
-        wait_for_state_containing(
-            tmp.path(),
-            "restart-revision",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "restart-revision", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

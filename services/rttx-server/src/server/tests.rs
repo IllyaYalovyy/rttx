@@ -2119,3 +2119,44 @@ fn fresh_start_log_includes_state_directory_path() {
     );
     assert!(logs_contain("Starting fresh"));
 }
+
+// ── No v1 fallback ──────────────────────────────────────────────
+
+#[test]
+#[traced_test]
+fn v1_state_json_in_cache_dir_is_ignored() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let os = temp_os(tmp.path());
+    let cache_dir = os.cache_dir();
+
+    // Write a v1 state.json with a runtime — should be ignored.
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("state.json"),
+        r#"{
+            "sessions": [{
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "name": "v1-ghost",
+                "panes": [],
+                "active_pane_id": null,
+                "command_history": [],
+                "policy": "persistent",
+                "revision": 1,
+                "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+                "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
+            }],
+            "serialized_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
+            "server_version": "0.3.0"
+        }"#,
+    )
+    .unwrap();
+
+    let mut server = Server::new(Box::new(os));
+    server.load_persisted_state();
+
+    assert!(
+        server.runtimes.is_empty(),
+        "v1 state.json must not be loaded — v1 fallback was removed"
+    );
+    assert!(logs_contain("Starting fresh"));
+}

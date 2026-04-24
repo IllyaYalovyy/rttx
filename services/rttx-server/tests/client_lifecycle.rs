@@ -76,12 +76,7 @@ async fn reconnect_restores_scrollback() {
         .await;
 
         // Wait for output + serialization tick.
-        wait_for_state_containing(
-            tmp.path(),
-            "lifecycle-test",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "lifecycle-test", Duration::from_secs(10)).await;
 
         // Drain deltas.
         let _ = c.drain(Duration::from_millis(500)).await;
@@ -251,12 +246,7 @@ async fn restart_preserves_runtime_count_and_scrollback() {
         .await;
 
         // Wait for serialization.
-        wait_for_state_containing(
-            tmp.path(),
-            "restart-stable",
-            Duration::from_secs(10),
-        )
-        .await;
+        wait_for_state_containing(tmp.path(), "restart-stable", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
