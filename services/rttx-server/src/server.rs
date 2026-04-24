@@ -794,7 +794,7 @@ impl Server {
 
                 let pane_id = Uuid::new_v4();
                 let no_persist = req.no_persist.unwrap_or(false);
-                let (pty_result, runtime_label, cols, rows) = {
+                let (pty_result, runtime_label, cols, rows, initial_cwd) = {
                     let s = server.lock().await;
                     let Some(rt) = s.runtimes.get(&runtime_id) else {
                         return Some(protocol::error(
@@ -826,11 +826,11 @@ impl Server {
                     let colorfgbg =
                         if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
                     env.push(("COLORFGBG".into(), colorfgbg.into()));
-                    let cwd = req.cwd;
+                    let cwd = req.cwd.or_else(|| rt.any_pane_cwd());
                     let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
                     let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
-                    let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
-                    (s.engine.spawn_pane(pane_id, &config), label, cols, rows)
+                    let config = PaneSpawnConfig { command: vec![], cwd: cwd.clone(), env, cols, rows };
+                    (s.engine.spawn_pane(pane_id, &config), label, cols, rows, cwd)
                 };
 
                 match pty_result {
@@ -850,6 +850,7 @@ impl Server {
                             let mut pane = Pane::new(pane_id, cols, rows);
                             pane.child_pid = child_pid;
                             pane.no_persist = no_persist;
+                            pane.cwd = initial_cwd;
                             rt.add_pane(pane);
                             let revision = rt.revision();
                             let name = rt.name.clone();
