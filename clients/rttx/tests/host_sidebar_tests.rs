@@ -9,6 +9,17 @@ use rttx::commands::{self, SavedCommand};
 use rttx::host;
 use rttx::places::{self, Place};
 use rttx::runtime::RuntimeEndpoint;
+use rttx::store::{ClientStore, StorePaths};
+
+fn test_store() -> (tempfile::TempDir, ClientStore) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let paths = StorePaths::new(
+        tmp.path().join("config"),
+        tmp.path().join("state"),
+        tmp.path().join("cache"),
+    );
+    (tmp, ClientStore::new(paths))
+}
 
 #[test]
 fn host_key_local_endpoint_returns_local_key() {
@@ -80,20 +91,19 @@ fn endpoint_host_key_matches_place_and_command_tags() {
 
 #[test]
 fn add_host_from_remote_endpoint_saves_and_deduplicates() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("hosts.json");
+    let (_tmp, store) = test_store();
 
     let ssh_target = "deploy@builder.example.com";
     let new_host = host::Host::remote(ssh_target);
 
     // First save succeeds
-    let mut hosts = host::load_from(&path);
+    let mut hosts = store.load_hosts().into_value().unwrap_or_default();
     assert!(!hosts.iter().any(|h| h.key == new_host.key));
     hosts.push(new_host.clone());
-    host::save_to(&hosts, &path).unwrap();
+    store.save_hosts(&hosts).unwrap();
 
     // Duplicate detection prevents second save
-    let hosts = host::load_from(&path);
+    let hosts = store.load_hosts().into_value().unwrap();
     assert!(hosts.iter().any(|h| h.key == new_host.key));
     assert_eq!(hosts.iter().filter(|h| h.key == "builder.example.com").count(), 1);
 }
@@ -109,13 +119,12 @@ fn add_host_rejects_blank_ssh_target() {
 
 #[test]
 fn add_host_detects_duplicate_by_normalized_key() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("hosts.json");
+    let (_tmp, store) = test_store();
 
     let host_a = host::Host::remote("deploy@example.com");
-    host::save_to(&[host_a], &path).unwrap();
+    store.save_hosts(&[host_a]).unwrap();
 
-    let hosts = host::load_from(&path);
+    let hosts = store.load_hosts().into_value().unwrap();
     let host_b = host::Host::remote("root@Example.COM");
     assert!(
         hosts.iter().any(|h| h.key == host_b.key),

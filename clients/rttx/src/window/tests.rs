@@ -2,10 +2,6 @@ use super::*;
 use crate::workspace::PaneTarget;
 use std::time::{Duration, Instant};
 
-fn config_dir() -> std::path::PathBuf {
-    crate::config::config_dir_path()
-}
-
 fn store() -> crate::store::ClientStore {
     crate::store::default_store()
 }
@@ -467,7 +463,7 @@ fn utility_sidebar_shows_and_filters_commands() {
 
     let run = crate::commands::SavedCommand::new("Restart app", "systemctl restart app");
     let insert = crate::commands::SavedCommand::new("Deploy checklist", "cargo build\ncargo test");
-    crate::commands::save_to(&[run, insert], &config_dir().join("commands.json")).unwrap();
+    store().save_commands(&[run, insert]).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.utility-command-sidebar-tests")
@@ -1575,7 +1571,7 @@ fn smart_clipboard_preference_reaches_live_terminals() {
 
     let mut prefs = preferences::Preferences::default();
     prefs.smart_clipboard = true;
-    preferences::save_to(&prefs, &config_dir().join("preferences.json")).unwrap();
+    store().save_preferences(&prefs).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.smart-clipboard-preferences-tests")
@@ -1594,7 +1590,7 @@ fn smart_clipboard_preference_reaches_live_terminals() {
     assert!(terminal.smart_clipboard_enabled_for_test());
 
     prefs.smart_clipboard = false;
-    preferences::save_to(&prefs, &config_dir().join("preferences.json")).unwrap();
+    store().save_preferences(&prefs).unwrap();
     window.reapply_terminal_preferences();
     assert!(!terminal.smart_clipboard_enabled_for_test());
 
@@ -3273,10 +3269,10 @@ fn bell_preferences_applied_to_managed_pane() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     // Save preferences with bells disabled.
-    let mut prefs = preferences::load_from(&config_dir().join("preferences.json"));
+    let mut prefs = store().load_preferences().into_value().unwrap_or_default();
     prefs.audible_bell = false;
     prefs.visual_bell = false;
-    let _ = preferences::save_to(&prefs, &config_dir().join("preferences.json"));
+    let _ = store().save_preferences(&prefs);
 
     let app = adw::Application::builder().application_id("com.illya.rttx.bell-pref-test").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
@@ -3884,11 +3880,7 @@ fn command_sidebar_filters_by_selected_host() {
     let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
     remote_cmd.host_tags = vec!["example.com".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(
-        &[local_cmd, remote_cmd, global_cmd],
-        &config_dir().join("commands.json"),
-    )
-    .unwrap();
+    store().save_commands(&[local_cmd, remote_cmd, global_cmd]).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-host-filter-tests")
@@ -3920,18 +3912,14 @@ fn command_sidebar_groups_by_host_in_all_hosts_view() {
     let config_dir = tmp.path().join("rttx-devel");
     std::fs::create_dir_all(&config_dir).unwrap();
     let hosts = vec![crate::host::Host::remote("deploy@example.com")];
-    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+    store().save_hosts(&hosts).unwrap();
 
     let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
     local_cmd.host_tags = vec!["local".into()];
     let mut remote_cmd = crate::commands::SavedCommand::new("Remote cmd", "echo remote");
     remote_cmd.host_tags = vec!["example.com".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(
-        &[local_cmd, remote_cmd, global_cmd],
-        &config_dir.join("commands.json"),
-    )
-    .unwrap();
+    store().save_commands(&[local_cmd, remote_cmd, global_cmd]).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-all-hosts-sections-test")
@@ -3972,8 +3960,7 @@ fn command_sidebar_shows_sections_for_specific_host() {
     let mut local_cmd = crate::commands::SavedCommand::new("Local cmd", "echo local");
     local_cmd.host_tags = vec!["local".into()];
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(&[local_cmd, global_cmd], &config_dir().join("commands.json"))
-        .unwrap();
+    store().save_commands(&[local_cmd, global_cmd]).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-host-sections-test")
@@ -4010,7 +3997,7 @@ fn command_sidebar_only_global_section_when_no_host_commands() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let global_cmd = crate::commands::SavedCommand::new("Global cmd", "echo global");
-    crate::commands::save_to(&[global_cmd], &config_dir().join("commands.json")).unwrap();
+    store().save_commands(&[global_cmd]).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.command-global-only-test")
@@ -4069,7 +4056,7 @@ fn host_delete_button_visible_for_remote_host() {
     let config_dir = tmp.path().join("rttx-devel");
     std::fs::create_dir_all(&config_dir).unwrap();
     let hosts = vec![crate::host::Host::remote("deploy@example.com")];
-    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+    store().save_hosts(&hosts).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.host-delete-remote-test")
@@ -4115,7 +4102,7 @@ fn host_delete_button_hidden_for_all_hosts() {
     let config_dir = tmp.path().join("rttx-devel");
     std::fs::create_dir_all(&config_dir).unwrap();
     let hosts = vec![crate::host::Host::remote("deploy@example.com")];
-    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+    store().save_hosts(&hosts).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.host-delete-allhosts-test")
@@ -4191,7 +4178,7 @@ fn add_current_host_saves_remote_host() {
     window.do_add_current_host();
 
     // Verify host was saved
-    let hosts = crate::host::load_from(&config_dir().join("hosts.json"));
+    let hosts = store().load_hosts().into_value().unwrap_or_default();
     assert!(hosts.iter().any(|h| h.key == "builder.example.com"), "host should be saved");
 
     window.close();
@@ -4218,7 +4205,7 @@ fn add_current_host_skips_duplicate() {
 
     // Pre-save the host
     let existing = crate::host::Host::remote("deploy@builder.example.com");
-    crate::host::save_to(&[existing], &config_dir().join("hosts.json")).unwrap();
+    store().save_hosts(&[existing]).unwrap();
 
     // Add a remote managed workspace and switch to it
     let remote_session = WorkspaceState::new_managed_remote(
@@ -4241,7 +4228,7 @@ fn add_current_host_skips_duplicate() {
     // Trigger the action — should not duplicate
     window.do_add_current_host();
 
-    let hosts = crate::host::load_from(&config_dir().join("hosts.json"));
+    let hosts = store().load_hosts().into_value().unwrap_or_default();
     assert_eq!(
         hosts.iter().filter(|h| h.key == "builder.example.com").count(),
         1,
@@ -4276,7 +4263,7 @@ fn add_current_host_noop_for_local_session() {
     // Trigger the action — should not save anything
     window.do_add_current_host();
 
-    let hosts = crate::host::load_from(&config_dir().join("hosts.json"));
+    let hosts = store().load_hosts().into_value().unwrap_or_default();
     assert!(hosts.is_empty(), "no host should be saved for a local session");
 
     window.close();
@@ -4311,7 +4298,7 @@ fn add_current_path_to_places_saves_place_with_derived_name() {
 
     window.do_add_current_path_to_places();
 
-    let places = crate::places::load_from(&config_dir().join("places.json"));
+    let places = store().load_places();
     assert_eq!(places.len(), 1, "one place should be saved");
     assert_eq!(places[0].name, "rttx");
     assert_eq!(places[0].path, "/home/user/projects/rttx");
@@ -4347,7 +4334,7 @@ fn add_current_path_to_places_noop_without_cwd() {
 
     window.do_add_current_path_to_places();
 
-    let places = crate::places::load_from(&config_dir().join("places.json"));
+    let places = store().load_places();
     assert!(places.is_empty(), "no place should be saved when CWD is unknown");
 
     window.close();
@@ -4402,7 +4389,7 @@ fn add_current_path_to_places_tags_remote_host() {
 
     window.do_add_current_path_to_places();
 
-    let places = crate::places::load_from(&config_dir().join("places.json"));
+    let places = store().load_places();
     assert_eq!(places.len(), 1, "one place should be saved");
     assert_eq!(places[0].name, "app");
     assert_eq!(places[0].path, "/srv/app");
@@ -4785,7 +4772,7 @@ fn new_menu_includes_saved_remote_hosts() {
     let config_dir = tmp.path().join("rttx-devel");
     std::fs::create_dir_all(&config_dir).unwrap();
     let hosts = vec![crate::host::Host::remote("deploy@example.com")];
-    crate::host::save_to(&hosts, &config_dir.join("hosts.json")).unwrap();
+    store().save_hosts(&hosts).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.new-menu-saved-hosts-test")
@@ -4870,7 +4857,7 @@ fn place_sidebar_shows_edit_delete_for_user_places_not_builtins() {
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
     let user_place = crate::places::Place::new("MyProject", "~/projects/myproject");
-    crate::places::save_to(&[user_place], &tmp.path().join("rttx-devel/places.json")).unwrap();
+    store().save_places(&[user_place]).unwrap();
 
     let app = adw::Application::builder()
         .application_id("com.illya.rttx.place-sidebar-crud-tests")
@@ -6496,9 +6483,9 @@ fn reapply_preferences_updates_keyboard_shortcut_accels() {
     assert!(accels.iter().any(|a| a == "F11"), "fullscreen should default to F11, got: {accels:?}");
 
     // Override fullscreen to Ctrl+Shift+F11 via preferences.
-    let mut prefs = crate::preferences::load_from(&config_dir().join("preferences.json"));
+    let mut prefs = store().load_preferences().into_value().unwrap_or_default();
     prefs.keyboard_shortcuts.insert("fullscreen".into(), vec!["<Ctrl><Shift>F11".into()]);
-    crate::preferences::save_to(&prefs, &config_dir().join("preferences.json")).unwrap();
+    store().save_preferences(&prefs).unwrap();
 
     window.reapply_terminal_preferences();
 
