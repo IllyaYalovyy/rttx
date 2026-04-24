@@ -577,12 +577,11 @@ impl PersistentPaneView {
         if modes.application_keypad {
             vte.feed(b"\x1b=");
         }
-        let mouse_tracking = u32::from(
-            rttx_proto::v3_terminal_modes::tracking_value_from_mouse_mode(
+        let mouse_tracking =
+            u32::from(rttx_proto::v3_terminal_modes::tracking_value_from_mouse_mode(
                 rttx_proto::v3::MouseMode::try_from(modes.mouse_mode)
                     .unwrap_or(rttx_proto::v3::MouseMode::None),
-            ),
-        );
+            ));
         match mouse_tracking {
             1000 => vte.feed(b"\x1b[?1000h"),
             1002 => vte.feed(b"\x1b[?1002h"),

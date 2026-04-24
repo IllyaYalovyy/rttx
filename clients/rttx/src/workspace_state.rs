@@ -1196,10 +1196,8 @@ mod tests {
             snapshot: snapshot(&runtime_id, vec![snap]),
         });
 
-        let modes = transition.pane_snapshot_restores[0]
-            .terminal_modes
-            .as_ref()
-            .expect("modes present");
+        let modes =
+            transition.pane_snapshot_restores[0].terminal_modes.as_ref().expect("modes present");
         assert!(modes.focus_reporting);
         assert!(modes.cursor_hidden);
         assert!(modes.alternate_screen);
