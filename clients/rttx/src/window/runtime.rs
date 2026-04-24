@@ -650,15 +650,10 @@ impl Window {
         pane.feed_snapshot(&restore.scrollback_tail);
         if let Some(ref modes) = restore.terminal_modes {
             pane.set_bracketed_paste_mode(modes.bracketed_paste);
-            pane.restore_interaction_modes(
-                modes.application_cursor_keys,
-                modes.application_keypad,
-                u32::from(rttx_proto::v3_terminal_modes::tracking_value_from_mouse_mode(
-                    rttx_proto::v3::MouseMode::try_from(modes.mouse_mode)
-                        .unwrap_or(rttx_proto::v3::MouseMode::None),
-                )),
-                modes.sgr_mouse,
-            );
+            // alternate_screen is intentionally not restored: the snapshot
+            // already contains the rendered screen content, and switching
+            // VTE into alt-screen mode would discard it.
+            pane.restore_interaction_modes(modes);
         }
         pane.set_current_directory(Some(&restore.cwd));
         if !restore.title.is_empty() && pane.custom_title().is_none() {

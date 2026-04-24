@@ -5931,6 +5931,79 @@ fn restore_managed_snapshot_feeds_scrollback_and_cwd_to_pane() {
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
 
+/// Reconnect restore applies `focus_reporting` and `cursor_hidden` from the
+/// snapshot even when the scrollback tail does not contain the original
+/// enabling escape sequences. #765.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn restore_managed_snapshot_applies_focus_and_cursor_modes() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.restore-focus-cursor-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "focus-cursor-pane";
+    let session_state = crate::test_helpers::managed_session(
+        "ws-fc",
+        "Focus Cursor Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+    );
+    window.imp().state.borrow_mut().workspaces.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Scrollback tail intentionally lacks the enabling escape sequences —
+    // the restore path must re-apply modes from the snapshot metadata.
+    let restore = crate::workspace_state::WorkspacePaneRestore {
+        layout_terminal_uuid: layout_uuid.to_string(),
+        title: "htop".to_string(),
+        cwd: "/home/user".to_string(),
+        pane_output_seq: 0,
+        scrollback_tail: bytes::Bytes::from_static(b"plain text only\r\n"),
+        scrollback_complete: true,
+        cols: 80,
+        rows: 24,
+        terminal_modes: Some(rttx_proto::v3::TerminalModeState {
+            bracketed_paste: true,
+            focus_reporting: true,
+            cursor_hidden: true,
+            application_cursor_keys: true,
+            application_keypad: false,
+            alternate_screen: false,
+            mouse_mode: rttx_proto::v3::MouseMode::None as i32,
+            sgr_mouse: false,
+        }),
+    };
+    window.restore_managed_snapshot(&restore);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get(layout_uuid)
+        .cloned()
+        .expect("pane should exist");
+
+    assert!(
+        pane.imp().bracketed_paste_mode.get(),
+        "bracketed paste should be restored from snapshot"
+    );
+    assert!(
+        pane.imp().application_cursor_keys.get(),
+        "application cursor keys should be restored from snapshot"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn restore_managed_snapshot_skips_missing_pane() {

@@ -567,30 +567,35 @@ impl PersistentPaneView {
     /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
     /// that may have been lost when the mode-setting sequence fell outside the
     /// retained snapshot tail.
-    pub fn restore_interaction_modes(
-        &self,
-        application_cursor_keys: bool,
-        application_keypad: bool,
-        mouse_tracking_mode: u32,
-        sgr_mouse_mode: bool,
-    ) {
-        self.imp().application_cursor_keys.set(application_cursor_keys);
-        self.imp().application_keypad.set(application_keypad);
+    pub fn restore_interaction_modes(&self, modes: &rttx_proto::v3::TerminalModeState) {
+        self.imp().application_cursor_keys.set(modes.application_cursor_keys);
+        self.imp().application_keypad.set(modes.application_keypad);
         let vte = &self.imp().vte;
-        if application_cursor_keys {
+        if modes.application_cursor_keys {
             vte.feed(b"\x1b[?1h");
         }
-        if application_keypad {
+        if modes.application_keypad {
             vte.feed(b"\x1b=");
         }
-        match mouse_tracking_mode {
+        let mouse_tracking =
+            u32::from(rttx_proto::v3_terminal_modes::tracking_value_from_mouse_mode(
+                rttx_proto::v3::MouseMode::try_from(modes.mouse_mode)
+                    .unwrap_or(rttx_proto::v3::MouseMode::None),
+            ));
+        match mouse_tracking {
             1000 => vte.feed(b"\x1b[?1000h"),
             1002 => vte.feed(b"\x1b[?1002h"),
             1003 => vte.feed(b"\x1b[?1003h"),
             _ => {}
         }
-        if sgr_mouse_mode {
+        if modes.sgr_mouse {
             vte.feed(b"\x1b[?1006h");
+        }
+        if modes.focus_reporting {
+            vte.feed(b"\x1b[?1004h");
+        }
+        if modes.cursor_hidden {
+            vte.feed(b"\x1b[?25l");
         }
     }
 
@@ -1928,9 +1933,13 @@ mod tests {
         require_display!();
 
         let pane = PersistentPaneView::new("pane-1", "runtime-1");
-        // Calling restore_interaction_modes should not panic and should
-        // feed the appropriate escape sequences into VTE.
-        pane.restore_interaction_modes(true, true, 1003, true);
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState {
+            application_cursor_keys: true,
+            application_keypad: true,
+            mouse_mode: rttx_proto::v3::MouseMode::Any as i32,
+            sgr_mouse: true,
+            ..Default::default()
+        });
         // No panic means VTE accepted the sequences.
     }
 
@@ -1963,7 +1972,11 @@ mod tests {
         require_display!();
 
         let pane = PersistentPaneView::new("restore-mode-1", "runtime-1");
-        pane.restore_interaction_modes(true, true, 0, false);
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState {
+            application_cursor_keys: true,
+            application_keypad: true,
+            ..Default::default()
+        });
         let modes = pane.terminal_modes();
         assert!(modes.application_cursor_keys);
         assert!(modes.application_keypad);
@@ -1975,8 +1988,24 @@ mod tests {
         require_display!();
 
         let pane = PersistentPaneView::new("pane-1", "runtime-1");
-        pane.restore_interaction_modes(false, false, 0, false);
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState::default());
         // No sequences injected, no panic.
+    }
+
+    /// `restore_interaction_modes` injects focus reporting and cursor hidden
+    /// sequences into VTE without panic. #765.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_interaction_modes_focus_and_cursor_hidden() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("focus-cursor-1", "runtime-1");
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState {
+            focus_reporting: true,
+            cursor_hidden: true,
+            ..Default::default()
+        });
+        // VTE accepted DECSET 1004 and DECRST 25 sequences without panic.
     }
 
     #[test]

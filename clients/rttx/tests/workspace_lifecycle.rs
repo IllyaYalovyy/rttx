@@ -1386,10 +1386,73 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
     assert!(restore.scrollback_complete);
     let modes = restore.terminal_modes.as_ref().expect("modes should be present");
     assert!(modes.bracketed_paste);
+    assert!(modes.focus_reporting);
     assert!(modes.application_cursor_keys);
     assert!(modes.alternate_screen);
     assert_eq!(modes.mouse_mode, rttx_proto::v3::MouseMode::Normal as i32);
     assert!(modes.sgr_mouse);
+}
+
+/// Snapshot with `focus_reporting` and `cursor_hidden` active propagates
+/// through reconciliation so the restore path can re-apply them. #765.
+#[test]
+fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
+    use rttx::workspace::{WindowState, WorkspaceState};
+
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+    let pane_id = uuid::Uuid::new_v4().to_string();
+    let mut state = WindowState {
+        workspaces: vec![WorkspaceState::new_managed_local(
+            "Test".into(),
+            rttx::runtime::WorkspacePolicy::Persistent,
+            None,
+        )],
+        ..WindowState::default()
+    };
+    let ws_id = state.workspaces[0].uuid.clone();
+
+    let snapshot = rttx_proto::v3::RuntimeSnapshot {
+        runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
+        panes: vec![rttx_proto::v3::PaneSnapshot {
+            pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
+            pane_output_seq: 10,
+            title: "htop".into(),
+            cwd: "/home".into(),
+            cols: 80,
+            rows: 24,
+            exit_status: None,
+            terminal_modes: Some(rttx_proto::v3::TerminalModeState {
+                focus_reporting: true,
+                cursor_hidden: true,
+                bracketed_paste: false,
+                application_cursor_keys: false,
+                application_keypad: false,
+                alternate_screen: false,
+                mouse_mode: rttx_proto::v3::MouseMode::None as i32,
+                sgr_mouse: false,
+            }),
+            scrollback_tail: bytes::Bytes::from_static(b"plain text"),
+            total_scrollback_bytes: 10,
+            scrollback_complete: true,
+        }],
+        runtime_revision: 1,
+        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+    };
+
+    let transition =
+        state.reconcile_endpoint_event(&rttx::daemon_bridge::EndpointEvent::WorkspaceOpened {
+            workspace_id: ws_id,
+            runtime_id,
+            snapshot,
+        });
+
+    assert_eq!(transition.pane_snapshot_restores.len(), 1);
+    let modes = transition.pane_snapshot_restores[0]
+        .terminal_modes
+        .as_ref()
+        .expect("modes should be present");
+    assert!(modes.focus_reporting, "focus_reporting must propagate");
+    assert!(modes.cursor_hidden, "cursor_hidden must propagate");
 }
 
 /// Serialized workspace state must not contain the legacy `mode` field.
