@@ -163,3 +163,78 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
     }
     panic!("pwd output did not contain home directory {home:?} within timeout.\nOutput: {output}");
 }
+
+/// When a second pane is created without an explicit CWD, the daemon
+/// falls back to the effective CWD of an existing pane in the same
+/// runtime. Regression test for #773.
+#[tokio::test]
+async fn create_pane_without_cwd_inherits_sibling_cwd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let create = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            name: "sibling-cwd-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    client.send(&create).await;
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
+
+    let target_dir = std::env::temp_dir();
+    let canonical_target =
+        std::fs::canonicalize(&target_dir).unwrap_or_else(|_| target_dir.clone());
+    let target_str = canonical_target.to_string_lossy().to_string();
+
+    // First pane: explicit CWD.
+    let _first_pane =
+        create_pane_with_cwd(&mut client, &runtime_id, Some(target_str.clone())).await;
+
+    // Second pane: no CWD — should inherit from the first pane.
+    let second_pane = create_pane_with_cwd(&mut client, &runtime_id, None).await;
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    client.send(&attach).await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            runtime_id: runtime_id.clone(),
+            pane_id: second_pane.clone(),
+            data: bytes::Bytes::from_static(b"pwd\n"),
+        })),
+    };
+    client.send(&input).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut output = String::new();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
+            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+        {
+            output.push_str(&String::from_utf8_lossy(&delta.data));
+            if output.contains(&target_str) {
+                return;
+            }
+        }
+    }
+    panic!(
+        "second pane pwd should contain sibling CWD {target_str:?} within timeout.\nOutput: {output}"
+    );
+}

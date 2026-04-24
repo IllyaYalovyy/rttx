@@ -6630,3 +6630,65 @@ fn paste_guard_dialog_defaults_to_paste() {
     assert_eq!(dialog.default_response().as_deref(), Some("paste"));
     assert_eq!(dialog.close_response(), "cancel");
 }
+
+/// Splitting a managed pane must propagate the parent pane's live CWD
+/// into the new layout node so the daemon receives the correct CWD in
+/// the CreatePane request. The widget CWD must win over a stale layout
+/// node CWD. Regression test for #773.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn split_managed_pane_inherits_parent_cwd() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.split-managed-cwd-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Create a managed workspace whose layout node starts with an initial CWD.
+    let mut layout = LayoutNode::new_terminal_with_uuid("parent-pane");
+    layout.set_terminal_cwd("parent-pane", Some("/home/user/original".into()));
+    let session_state =
+        crate::test_helpers::managed_session("ws-managed-cwd", "Managed CWD Workspace", layout);
+    window.imp().state.borrow_mut().workspaces.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Simulate the daemon reporting a CWD change — the user cd'd.
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get("parent-pane")
+        .cloned()
+        .expect("parent pane should be present");
+    pane.set_current_directory(Some("/home/user/changed-dir"));
+
+    // Do NOT update the layout node — this simulates the race where the
+    // widget has the live CWD but the layout node is stale.
+
+    window.split_terminal("parent-pane", SplitOrientation::Horizontal);
+
+    let state = window.imp().state.borrow();
+    let session = state
+        .workspaces
+        .iter()
+        .find(|s| s.uuid == "ws-managed-cwd")
+        .expect("workspace should exist");
+    let uuids = session.layout.terminal_uuids();
+    assert_eq!(uuids.len(), 2, "split should produce two panes");
+    let new_uuid = uuids.into_iter().find(|u| u != "parent-pane").unwrap();
+
+    assert_eq!(
+        session.layout.terminal_cwd(&new_uuid).as_deref(),
+        Some("/home/user/changed-dir"),
+        "new managed pane must inherit parent pane's live CWD, not stale layout node CWD"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

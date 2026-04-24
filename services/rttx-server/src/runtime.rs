@@ -471,6 +471,13 @@ impl Runtime {
         Some(self.revision())
     }
 
+    /// Return the effective CWD of any live pane in this runtime.
+    /// Used as a fallback when `CreatePane` arrives without an explicit CWD.
+    #[must_use]
+    pub fn any_pane_cwd(&self) -> Option<String> {
+        self.panes.values().find_map(Pane::effective_cwd)
+    }
+
     /// Append a history entry, evicting the oldest if the cap is reached.
     pub fn add_history_entry(&mut self, entry: HistoryEntry) {
         self.command_history.push(entry);
@@ -1093,5 +1100,18 @@ mod tests {
         let rf = runtime.to_runtime_file();
         let restored = Runtime::from_runtime_file(&rf);
         assert!(restored.panes[&pane_id].no_persist);
+    }
+
+    #[test]
+    fn any_pane_cwd_returns_cwd_from_existing_pane() {
+        let mut runtime = Runtime::new("test".into());
+        assert!(runtime.any_pane_cwd().is_none());
+
+        let pane_id = Uuid::new_v4();
+        let mut pane = Pane::new(pane_id, 80, 24);
+        pane.cwd = Some("/home/user/projects".into());
+        runtime.add_pane(pane);
+
+        assert_eq!(runtime.any_pane_cwd().as_deref(), Some("/home/user/projects"));
     }
 }
