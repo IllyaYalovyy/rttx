@@ -262,11 +262,7 @@ async fn managed_snapshot_pane(
             other => panic!("expected Snapshot, got {other:?}"),
         }
     };
-    snapshot
-        .panes
-        .into_iter()
-        .find(|p| p.pane_id == pane_id)
-        .expect("pane missing from snapshot")
+    snapshot.panes.into_iter().find(|p| p.pane_id == pane_id).expect("pane missing from snapshot")
 }
 
 async fn shutdown_server(client: &mut TestClient, server: &mut Child) {
