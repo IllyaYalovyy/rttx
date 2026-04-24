@@ -60,11 +60,18 @@ const RESP_CHANNEL_BOUND: usize = 256;
 /// This is the lock-free counterpart of [`Server::broadcast_to_runtime`]:
 /// collect handles with [`Server::collect_runtime_senders`] while holding
 /// the mutex, then call this after releasing it.
+///
+/// Returns the IDs of clients whose push channels overflowed. The caller
+/// must re-acquire the server lock and call [`Server::handle_push_overflows`]
+/// for each returned client.
 fn send_to_collected(
     senders: &[(Uuid, mpsc::Sender<ClientMsg>, Option<ClientProtocol>)],
+    runtime_id: Uuid,
+    pane_id: Uuid,
     msg: &ClientMsg,
-) {
+) -> Vec<Uuid> {
     let mut v3_msg: Option<ClientMsg> = None;
+    let mut overflowed = Vec::new();
     for (client_id, sender, protocol) in senders {
         let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
             v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg))
@@ -72,9 +79,16 @@ fn send_to_collected(
             msg
         };
         if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(outgoing.clone()) {
-            tracing::warn!("Client {} push channel full — dropping message", short_id(*client_id),);
+            tracing::warn!(
+                "Client {} push channel full — dropping message (runtime={}, pane={})",
+                short_id(*client_id),
+                short_id(runtime_id),
+                short_id(pane_id),
+            );
+            overflowed.push(*client_id);
         }
     }
+    overflowed
 }
 
 /// Convert a v2 push message to a v3 `ServerEnvelope`.
@@ -165,6 +179,8 @@ pub struct Server {
     pub os: Box<dyn OsInterface>,
     /// Per-client bounded push channels for server-initiated messages (Deltas, etc.).
     client_senders: HashMap<Uuid, mpsc::Sender<ClientMsg>>,
+    /// Per-client response channels for request/response messages.
+    client_resp_senders: HashMap<Uuid, mpsc::Sender<ClientMsg>>,
     /// Per-client protocol version and capabilities.
     client_protocols: HashMap<Uuid, ClientProtocol>,
     /// Per-pane PTY write handles for Input and Resize routing.
@@ -186,6 +202,7 @@ impl Server {
             engine: Box::new(NativeEngine),
             os,
             client_senders: HashMap::new(),
+            client_resp_senders: HashMap::new(),
             client_protocols: HashMap::new(),
             pty_writers: HashMap::new(),
             pty_kill_senders: HashMap::new(),
@@ -473,16 +490,20 @@ impl Server {
 
     /// Send a message to the provided clients, converting v2 push messages
     /// to v3 envelopes for v3 clients.
+    ///
+    /// On push channel overflow:
+    /// - V3 + `OPT_RESYNC`: sends `StreamOverflow` via the response channel
+    /// - V2 or V3 without `OPT_RESYNC`: removes the push sender (force disconnect)
     fn broadcast_to_clients<I>(
-        &self,
+        &mut self,
         client_ids: I,
         exclude_client_id: Option<Uuid>,
         msg: &ClientMsg,
     ) where
         I: IntoIterator<Item = Uuid>,
     {
-        // Lazily convert v2 push to v3 envelope only if needed.
         let mut v3_msg: Option<ClientMsg> = None;
+        let mut overflowed: Vec<Uuid> = Vec::new();
         for client_id in client_ids {
             if Some(client_id) == exclude_client_id {
                 continue;
@@ -502,16 +523,21 @@ impl Server {
                     "Client {} push channel full — dropping message",
                     short_id(client_id),
                 );
+                overflowed.push(client_id);
             }
+        }
+        for client_id in overflowed {
+            self.handle_single_push_overflow(client_id);
         }
     }
 
     /// Send a message to all clients attached to a runtime.
-    fn broadcast_to_runtime(&self, runtime_id: Uuid, msg: &ClientMsg) {
+    fn broadcast_to_runtime(&mut self, runtime_id: Uuid, msg: &ClientMsg) {
         let Some(rt) = self.runtimes.get(&runtime_id) else {
             return;
         };
-        self.broadcast_to_clients(rt.attached_clients.keys().copied(), None, msg);
+        let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
+        self.broadcast_to_clients(client_ids, None, msg);
     }
 
     /// Collect cloned sender handles for all clients attached to a runtime.
@@ -544,6 +570,75 @@ impl Server {
     /// Register a client's protocol version.
     pub fn set_client_protocol(&mut self, client_id: Uuid, protocol: ClientProtocol) {
         self.client_protocols.insert(client_id, protocol);
+    }
+
+    /// Check whether a push sender is registered for a client.
+    #[must_use]
+    pub fn has_client_sender(&self, client_id: Uuid) -> bool {
+        self.client_senders.contains_key(&client_id)
+    }
+
+    /// Handle push channel overflow for a batch of clients.
+    ///
+    /// Called by the PTY read loop after `send_to_collected` reports overflows.
+    /// `runtime_id` is used to build `StreamOverflow` events for resync-capable
+    /// clients.
+    pub fn handle_push_overflows(&mut self, overflowed: &[Uuid], runtime_id: Uuid) {
+        for &client_id in overflowed {
+            self.handle_single_push_overflow_for_runtime(client_id, runtime_id);
+        }
+    }
+
+    /// Handle push overflow for a single client in a runtime context.
+    ///
+    /// V3 + `OPT_RESYNC`: sends `StreamOverflow` via the response channel.
+    /// Otherwise: removes the push sender to force disconnect.
+    fn handle_single_push_overflow_for_runtime(&mut self, client_id: Uuid, runtime_id: Uuid) {
+        if let Some(ClientProtocol::V3 { effective_caps }) = self.client_protocols.get(&client_id)
+            && rttx_proto::v3_resync::is_supported(effective_caps)
+        {
+            let overflow = rttx_proto::v3_resync::build_stream_overflow(runtime_id, None, 1);
+            let env = rttx_proto::v3_resync::build_stream_overflow_envelope(overflow);
+            if let Some(resp_tx) = self.client_resp_senders.get(&client_id) {
+                if resp_tx.try_send(ClientMsg::V3(env)).is_err() {
+                    tracing::error!(
+                        "Client {} resp channel also full — forcing disconnect",
+                        short_id(client_id),
+                    );
+                    self.force_disconnect_client(client_id);
+                }
+                return;
+            }
+        }
+        self.force_disconnect_client(client_id);
+    }
+
+    /// Handle push overflow for a single client (no runtime context).
+    ///
+    /// Used by `broadcast_to_clients` which may not have a specific `runtime_id`.
+    fn handle_single_push_overflow(&mut self, client_id: Uuid) {
+        // Determine the runtime this client is attached to (if any) for the
+        // StreamOverflow event.
+        let runtime_id = self
+            .runtimes
+            .iter()
+            .find(|(_, rt)| rt.attached_clients.contains_key(&client_id))
+            .map(|(&rid, _)| rid);
+
+        if let Some(rid) = runtime_id {
+            self.handle_single_push_overflow_for_runtime(client_id, rid);
+        } else {
+            self.force_disconnect_client(client_id);
+        }
+    }
+
+    /// Remove a client's push sender to force the writer task to exit.
+    fn force_disconnect_client(&mut self, client_id: Uuid) {
+        tracing::warn!(
+            "Forcing disconnect for client {} — push channel overflow without OPT_RESYNC",
+            short_id(client_id),
+        );
+        self.client_senders.remove(&client_id);
     }
 
     fn terminate_runtime(
@@ -2108,17 +2203,24 @@ fn spawn_pty_read_loop(
                             // that the daemon already handles. If forwarded, VTE would
                             // generate duplicate responses that leak as visible garbage.
                             let client_data = crate::screen::strip_client_queries(&data);
+                            let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
                                 let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data.clone())));
-                                send_to_collected(&senders, &msg);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg));
                             }
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = ClientMsg::V2(protocol::cwd_changed(runtime_id, pane_id, cwd, revision));
-                                send_to_collected(&senders, &msg);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg));
                             }
                             if let Some((title, revision)) = new_title {
                                 let msg = ClientMsg::V2(protocol::title_changed(runtime_id, pane_id, title, revision));
-                                send_to_collected(&senders, &msg);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg));
+                            }
+                            if !all_overflows.is_empty() {
+                                all_overflows.sort_unstable();
+                                all_overflows.dedup();
+                                let mut s = server.lock().await;
+                                s.handle_push_overflows(&all_overflows, runtime_id);
                             }
                         }
                         Err(e) => {
@@ -2446,6 +2548,7 @@ where
     {
         let mut s = server.lock().await;
         s.client_senders.insert(client_id, tx);
+        s.client_resp_senders.insert(client_id, resp_tx.clone());
     }
 
     // Read the first raw frame to detect v2 vs v3 protocol.
@@ -2453,6 +2556,7 @@ where
         tracing::debug!("Client probe from {client_short} (disconnected before handshake)");
         let mut s = server.lock().await;
         s.client_senders.remove(&client_id);
+        s.client_resp_senders.remove(&client_id);
         return Ok(());
     };
 
@@ -2475,6 +2579,7 @@ where
     {
         let mut s = server.lock().await;
         s.client_senders.remove(&client_id);
+        s.client_resp_senders.remove(&client_id);
         s.client_protocols.remove(&client_id);
         if handshake_completed {
             for rt in s.runtimes.values_mut() {
