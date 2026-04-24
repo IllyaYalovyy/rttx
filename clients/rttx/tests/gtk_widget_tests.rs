@@ -2518,3 +2518,133 @@ fn context_menu_modifier_convention_matches_gnome() {
         assert!(has_btn3, "{label} must have a button-3 gesture for context menu");
     }
 }
+
+/// Regression test for #769: after a reconnect cycle (Disconnected →
+/// Recovered), VTE commit data must be forwarded again, proving the
+/// pane re-enables input. This catches regressions where
+/// `set_connection_presentation` fails to flip `accepts_input` back
+/// to true after reconnect.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_input_re_enabled_after_reconnect_cycle() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("recon-in", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(50);
+
+    let forwarded = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+    let f = Rc::clone(&forwarded);
+    pane.connect_input(move |bytes| {
+        f.borrow_mut().push(bytes.to_vec());
+    });
+
+    // Start connected — input should work.
+    let connected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Connected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    let probe = "\x1b[<0;1;1M";
+    pane.vte().emit_by_name::<()>("commit", &[&probe, &(probe.len() as u32)]);
+    pump_events(50);
+    assert_eq!(forwarded.borrow().len(), 1, "connected pane must forward input");
+    forwarded.borrow_mut().clear();
+
+    // Simulate disconnect — input must stop.
+    let disconnected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Disconnected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Disconnected, &disconnected);
+
+    pane.vte().emit_by_name::<()>("commit", &[&probe, &(probe.len() as u32)]);
+    pump_events(50);
+    assert!(forwarded.borrow().is_empty(), "disconnected pane must not forward input");
+
+    // Simulate reconnect — input must resume.
+    let recovered =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Recovered);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Recovered, &recovered);
+
+    pane.vte().emit_by_name::<()>("commit", &[&probe, &(probe.len() as u32)]);
+    pump_events(50);
+    assert_eq!(forwarded.borrow().len(), 1, "pane must forward input after reconnect (Recovered)");
+
+    window.close();
+}
+
+/// Regression test for #769: VTE commit data (mouse escape sequences)
+/// must be forwarded after a reconnect cycle. This catches regressions
+/// where the input callback is lost or `accepts_input` stays false
+/// after reconnect.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_mouse_input_forwarded_after_reconnect() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("mouse-rc", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_default_size(640, 320);
+    window.set_child(Some(&pane));
+    window.present();
+    pump_events(50);
+
+    let forwarded = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+    let f = Rc::clone(&forwarded);
+    pane.connect_input(move |bytes| {
+        f.borrow_mut().push(bytes.to_vec());
+    });
+
+    // Connect → disconnect → reconnect.
+    let connected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Connected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Connected, &connected);
+
+    let disconnected =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Disconnected);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Disconnected, &disconnected);
+
+    let recovered =
+        rttx::runtime::present_connection_status(&rttx::runtime::ConnectionStatus::Recovered);
+    pane.set_connection_presentation(&rttx::runtime::ConnectionStatus::Recovered, &recovered);
+
+    // Emit a mouse escape sequence — must be forwarded.
+    let sgr_click = "\x1b[<0;5;10M";
+    pane.vte().emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
+    pump_events(50);
+
+    assert!(
+        forwarded.borrow().contains(&sgr_click.as_bytes().to_vec()),
+        "VTE mouse escape sequences must be forwarded after reconnect"
+    );
+
+    window.close();
+}
+
+/// Regression test for #769: all gesture controllers on the persistent
+/// pane VTE must use capture phase so they can deny events to let VTE
+/// handle mouse-aware applications. No gesture should use bubble phase,
+/// which would prevent VTE from seeing the event first.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_all_gestures_use_capture_phase() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("gest-cap", "runtime-1");
+    let controllers = pane.vte().observe_controllers();
+    let mut gesture_count = 0;
+    for i in 0..controllers.n_items() {
+        let Some(ctrl) = controllers.item(i) else { continue };
+        if let Ok(gesture) = ctrl.downcast::<gtk4::GestureClick>() {
+            gesture_count += 1;
+            assert_eq!(
+                gesture.propagation_phase(),
+                gtk4::PropagationPhase::Capture,
+                "button-{} gesture must use capture phase for mouse-aware app compatibility",
+                gesture.button()
+            );
+        }
+    }
+    assert!(gesture_count > 0, "VTE must have at least one gesture controller");
+}
