@@ -212,6 +212,25 @@ impl PaneScreen {
             sgr_mouse: self.performer.sgr_mouse_mode,
         }
     }
+
+    /// Restore terminal mode flags from a persisted snapshot.
+    ///
+    /// Called during daemon restart reconstruction so that canonical mode
+    /// state comes from the snapshot metadata rather than depending on the
+    /// mode-setting escape sequences being present in `screen_bytes`.
+    pub const fn restore_modes(&mut self, modes: &crate::state::types::TerminalModeSnapshot) {
+        self.performer.bracketed_paste_mode = modes.bracketed_paste;
+        self.performer.application_cursor_keys = modes.application_cursor_keys;
+        self.performer.application_keypad = modes.application_keypad;
+        self.performer.mouse_tracking_mode = modes.mouse_tracking_mode;
+        self.performer.sgr_mouse_mode = modes.sgr_mouse;
+        self.performer.focus_event_mode = modes.focus_reporting;
+    }
+
+    /// Restore cursor visibility from a persisted snapshot.
+    pub const fn restore_cursor_visible(&mut self, visible: bool) {
+        self.performer.cursor_visible = visible;
+    }
 }
 
 /// Return restart-safe scrollback bytes for a reconstructed pane.
@@ -1310,5 +1329,79 @@ mod tests {
 
         let replies = screen.take_pending_replies();
         assert!(!replies.is_empty(), "raw replay should generate stale replies (the bug)");
+    }
+
+    // --- restore_modes ---
+
+    #[test]
+    fn restore_modes_sets_all_mode_flags() {
+        use crate::state::types::TerminalModeSnapshot;
+
+        let mut screen = PaneScreen::new(1024);
+        assert!(!screen.bracketed_paste_mode());
+        assert!(!screen.application_cursor_keys());
+        assert!(!screen.application_keypad());
+        assert_eq!(screen.mouse_tracking_mode(), 0);
+        assert!(!screen.sgr_mouse_mode());
+        assert!(!screen.focus_event_mode());
+
+        screen.restore_modes(&TerminalModeSnapshot {
+            bracketed_paste: true,
+            application_cursor_keys: true,
+            application_keypad: true,
+            mouse_tracking_mode: 1003,
+            sgr_mouse: true,
+            focus_reporting: true,
+        });
+
+        assert!(screen.bracketed_paste_mode());
+        assert!(screen.application_cursor_keys());
+        assert!(screen.application_keypad());
+        assert_eq!(screen.mouse_tracking_mode(), 1003);
+        assert!(screen.sgr_mouse_mode());
+        assert!(screen.focus_event_mode());
+    }
+
+    #[test]
+    fn restore_modes_overrides_replay_derived_state() {
+        use crate::state::types::TerminalModeSnapshot;
+
+        let mut screen = PaneScreen::new(1024);
+        // Replay sets bracketed paste on.
+        screen.feed(b"\x1b[?2004h");
+        assert!(screen.bracketed_paste_mode());
+
+        // Snapshot says it was off (mode-disabling escape was outside retained bytes).
+        screen.restore_modes(&TerminalModeSnapshot {
+            bracketed_paste: false,
+            application_cursor_keys: false,
+            application_keypad: false,
+            mouse_tracking_mode: 0,
+            sgr_mouse: false,
+            focus_reporting: false,
+        });
+
+        assert!(!screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn restore_cursor_visible_overrides_default() {
+        let mut screen = PaneScreen::new(1024);
+        assert!(screen.cursor_visible());
+
+        screen.restore_cursor_visible(false);
+        assert!(!screen.cursor_visible());
+    }
+
+    #[test]
+    fn restore_cursor_visible_overrides_replay_derived_state() {
+        let mut screen = PaneScreen::new(1024);
+        // Replay hides cursor.
+        screen.feed(b"\x1b[?25l");
+        assert!(!screen.cursor_visible());
+
+        // Snapshot says cursor was visible.
+        screen.restore_cursor_visible(true);
+        assert!(screen.cursor_visible());
     }
 }

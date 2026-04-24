@@ -252,6 +252,21 @@ impl Pane {
             confidential: self.no_persist,
         }
     }
+
+    /// Restore canonical pane state from a persisted screen snapshot.
+    ///
+    /// Feeds `screen_bytes` through the parser, then overwrites mode flags,
+    /// cursor visibility, and output sequence from the snapshot metadata.
+    /// This ensures restart reconstruction is deterministic from the
+    /// persisted metadata rather than depending on mode-setting escape
+    /// sequences being present in the retained byte tail.
+    pub fn restore_from_snapshot(&mut self, snap: &ScreenSnapshotV1) {
+        let clean = crate::screen::restart_safe_scrollback(&snap.screen_bytes);
+        self.screen.feed(clean);
+        self.screen.restore_modes(&snap.modes);
+        self.screen.restore_cursor_visible(snap.cursor_visible);
+        self.output_seq = snap.pane_output_seq;
+    }
 }
 
 /// Rotate a scrollback log file when it exceeds `max_bytes`.
@@ -762,5 +777,113 @@ mod tests {
     fn no_persist_defaults_to_false() {
         let pane = Pane::new(Uuid::new_v4(), 80, 24);
         assert!(!pane.no_persist);
+    }
+
+    // ── restore_from_snapshot tests ─────────────────────────────────
+
+    fn snapshot_with_modes(pane_id: Uuid) -> ScreenSnapshotV1 {
+        ScreenSnapshotV1 {
+            schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
+            pane_id,
+            cols: 80,
+            rows: 24,
+            cursor_row: 5,
+            cursor_col: 10,
+            cursor_visible: false,
+            title: None,
+            cwd: None,
+            pane_output_seq: 42,
+            modes: TerminalModeSnapshot {
+                bracketed_paste: true,
+                application_cursor_keys: true,
+                application_keypad: true,
+                mouse_tracking_mode: 1003,
+                sgr_mouse: true,
+                focus_reporting: true,
+            },
+            screen_bytes: b"line1\r\nline2\r\n".to_vec(),
+            confidential: false,
+        }
+    }
+
+    #[test]
+    fn restore_from_snapshot_restores_modes() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let snap = snapshot_with_modes(pane.id);
+
+        pane.restore_from_snapshot(&snap);
+
+        assert!(pane.screen.bracketed_paste_mode());
+        assert!(pane.screen.application_cursor_keys());
+        assert!(pane.screen.application_keypad());
+        assert_eq!(pane.screen.mouse_tracking_mode(), 1003);
+        assert!(pane.screen.sgr_mouse_mode());
+        assert!(pane.screen.focus_event_mode());
+    }
+
+    #[test]
+    fn restore_from_snapshot_restores_cursor_visibility() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert!(pane.screen.cursor_visible());
+
+        let snap = snapshot_with_modes(pane.id);
+        pane.restore_from_snapshot(&snap);
+
+        assert!(!pane.screen.cursor_visible());
+    }
+
+    #[test]
+    fn restore_from_snapshot_restores_output_seq() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert_eq!(pane.output_seq, 0);
+
+        let snap = snapshot_with_modes(pane.id);
+        pane.restore_from_snapshot(&snap);
+
+        assert_eq!(pane.output_seq, 42);
+    }
+
+    #[test]
+    fn restore_from_snapshot_feeds_screen_bytes() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let snap = snapshot_with_modes(pane.id);
+
+        pane.restore_from_snapshot(&snap);
+
+        assert!(!pane.screen.raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn restore_from_snapshot_modes_override_replay() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        // screen_bytes enable bracketed paste, but snapshot metadata says off.
+        let snap = ScreenSnapshotV1 {
+            schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
+            pane_id: pane.id,
+            cols: 80,
+            rows: 24,
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: true,
+            title: None,
+            cwd: None,
+            pane_output_seq: 0,
+            modes: TerminalModeSnapshot {
+                bracketed_paste: false,
+                application_cursor_keys: false,
+                application_keypad: false,
+                mouse_tracking_mode: 0,
+                sgr_mouse: false,
+                focus_reporting: false,
+            },
+            screen_bytes: b"\x1b[?2004h\x1b[?1hsome text\r\n".to_vec(),
+            confidential: false,
+        };
+
+        pane.restore_from_snapshot(&snap);
+
+        // Metadata wins over replay-derived state.
+        assert!(!pane.screen.bracketed_paste_mode());
+        assert!(!pane.screen.application_cursor_keys());
     }
 }

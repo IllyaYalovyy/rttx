@@ -345,12 +345,12 @@ impl Server {
                     if let Some(snap) =
                         crate::state::persistence::load_screen_snapshot(&state_dir, rt.id, pane.id)
                     {
-                        let clean = restart_safe_scrollback(&snap.screen_bytes);
                         tracing::info!(
-                            "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes)",
-                            clean.len(),
+                            "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes, seq={})",
+                            snap.screen_bytes.len(),
+                            snap.pane_output_seq,
                         );
-                        pane.screen.feed(clean);
+                        pane.restore_from_snapshot(&snap);
                         continue;
                     }
 
