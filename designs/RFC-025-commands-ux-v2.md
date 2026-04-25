@@ -375,10 +375,51 @@ each gets its own issue and is not a gate for the MVP.
   across all hosts. Bound through the RFC-024 shortcut registry. The palette hands
   the selected command to the same activation path the sidebar uses, so
   parameterized commands go through the runtime dialog.
+- **Per-command keyboard shortcuts (leader-prefix chord)** — optional bindings on
+  individual commands so frequent ones can be invoked from the keyboard without
+  opening the sidebar or the palette. Sketched below; the design choice that needs
+  early sign-off is leader-prefix vs. flat global accelerators.
+
+  **Why a leader prefix over flat accelerators.** A flat global accelerator
+  (`Ctrl+Shift+D` for "deploy") works for the first handful of commands but
+  collapses fast: the namespace is small, every binding competes with the terminal
+  and the system shortcuts, and the user has to memorise an opaque modifier soup.
+  A leader prefix (e.g. default `Ctrl+;`) opens a transient "leader active" mode,
+  after which the next one or two keystrokes select a command. The namespace is
+  effectively unbounded, no command shortcut collides with the terminal except for
+  the single leader binding, and the chord (`Ctrl+; d k`) reads as a memorable
+  mnemonic ("**d**eploy → **k**ubectl"). Spacemacs and modern editors (VS Code's
+  "chord shortcut") have proven the pattern.
+
+  **Data model**: reuse the RFC-024 shortcut registry. Action name is
+  `command:<uuid>`, value is the key sequence after the leader (e.g.
+  `["d", "k"]`). The leader itself is a single registry entry
+  (`commands.leader-key`) so it is rebindable like any other shortcut.
+
+  **GTK4 plumbing**: a window-level `gtk::ShortcutController` for the leader
+  binding flips a transient mode flag and shows an `adw::Toast` ("Leader active —
+  press a key"). While the flag is set, key events are matched against the
+  per-command sequences from the registry. After a hit, no-match, or timeout
+  (~3 seconds), the mode resets. For the matching loop we can either keep a small
+  trie keyed on the command sequences and walk it manually inside a key controller
+  callback (simpler, full control of partial-match feedback) or compose a
+  `gtk::ShortcutTrigger` chain per command (less code but harder to surface
+  partial-match UX).
+
+  **Editor surface**: a single "Shortcut" row in the command editor that opens a
+  capture dialog ("Press the key sequence after the leader…"). The dialog
+  acknowledges each keystroke and shows the running prefix; Esc cancels, Enter
+  confirms. Clearing the field removes the binding. Conflicts (same sequence
+  bound elsewhere) surface inline.
+
+  **Discoverability**: when leader mode is active, a popover lists matching
+  prefixes (Spacemacs `which-key` style) so users can see what is bound under the
+  current prefix without memorising. Optional, can ship later than the binding
+  itself.
 
 These are listed in priority order: description and labels are the most common
-scaling asks; confirm-before-run and run-in-new-pane are smaller; the palette is
-the largest follow-up.
+scaling asks; confirm-before-run and run-in-new-pane are smaller; the palette and
+per-command shortcuts are the largest follow-ups.
 
 ### Persistence and backwards compatibility
 
@@ -456,8 +497,12 @@ AT-SPI behavioural tests (follow-up):
   layout module and may warrant its own mini-RFC)*
 - [ ] **Step 11** — Command palette (Ctrl+K). *(follow-up issue; binds through the
   RFC-024 shortcut registry)*
+- [ ] **Step 12** — Per-command keyboard shortcuts via leader-prefix chord.
+  Reuses the RFC-024 registry with `command:<uuid>` keys; adds a leader-mode
+  controller, capture dialog, and (optionally, later) a `which-key`-style
+  popover. *(follow-up issue; depends on resolving Q6)*
 
-Steps 1–6 are the MVP that satisfies the user-raised asks. Steps 7–11 are the
+Steps 1–6 are the MVP that satisfies the user-raised asks. Steps 7–12 are the
 scaling roadmap — each gets its own issue once this RFC reaches Accepted.
 
 ---
@@ -482,6 +527,12 @@ scaling roadmap — each gets its own issue once this RFC reaches Accepted.
   to the clipboard (e.g., also offer to preserve the command as a shareable JSON
   blob)? Current answer: no — plain text only. Sharing at the library level is
   RFC-023/#755 territory.
+- [ ] **Q6** — Per-command keyboard shortcuts: leader-prefix chord (default
+  `Ctrl+;` then a 1–2 key sequence) vs. flat global accelerators (`Ctrl+Shift+D`
+  per command) vs. both? Current preference: leader-prefix only — flat
+  accelerators do not scale past ~10 commands without colliding with the terminal
+  and system shortcuts, and supporting both doubles the editor and conflict-detection
+  surface. Confirm before Step 12 starts.
 
 Mark questions `[x]` once resolved and record the answer inline.
 
