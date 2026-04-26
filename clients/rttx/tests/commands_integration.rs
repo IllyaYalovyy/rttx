@@ -97,3 +97,22 @@ fn duplicate_command_persists_with_new_uuid() {
     assert_eq!(loaded[1].title, "Deploy (copy)");
     assert_eq!(loaded[1].parameters, command.parameters);
 }
+
+#[test]
+fn command_description_roundtrip() {
+    let (_tmp, store) = test_store();
+
+    let mut command = SavedCommand::new("Deploy", "cargo build");
+    command.description = "Builds and deploys the production service".into();
+
+    store.save_commands(&[command]).unwrap();
+    let loaded = store.load_commands();
+    assert_eq!(loaded[0].description, "Builds and deploys the production service");
+}
+
+#[test]
+fn empty_description_not_serialized_in_json() {
+    let command = SavedCommand::new("Plain", "echo hi");
+    let json = serde_json::to_string(&command).unwrap();
+    assert!(!json.contains("description"));
+}

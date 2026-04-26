@@ -494,6 +494,47 @@ fn utility_sidebar_shows_and_filters_commands() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
+fn command_row_shows_description_as_tooltip() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut with_desc = crate::commands::SavedCommand::new("Deploy", "cargo build");
+    with_desc.description = "Builds the production service".into();
+    let without_desc = crate::commands::SavedCommand::new("Test", "cargo test");
+    store().save_commands(&[with_desc, without_desc]).unwrap();
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.command-tooltip-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Row 0 is the section header, rows 1 and 2 are commands
+    let row_with_desc = window.imp().command_list.row_at_index(1).unwrap();
+    let row_without_desc = window.imp().command_list.row_at_index(2).unwrap();
+
+    assert_eq!(
+        row_with_desc.tooltip_text().as_deref(),
+        Some("Builds the production service"),
+        "command with description should show it as tooltip"
+    );
+    assert_eq!(
+        row_without_desc.tooltip_text().as_deref(),
+        None,
+        "command without description should have no tooltip"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
 fn commands_page_has_no_separate_search_entry() {
     require_display!();
 

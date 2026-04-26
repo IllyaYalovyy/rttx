@@ -301,6 +301,10 @@ impl Window {
             action_row.set_subtitle(&command.preview());
             action_row.set_activatable(true);
 
+            if !command.description.is_empty() {
+                action_row.set_tooltip_text(Some(&command.description));
+            }
+
             if command.has_parameters() {
                 let chip = gtk4::Label::new(Some("ENV"));
                 chip.add_css_class("dim-label");

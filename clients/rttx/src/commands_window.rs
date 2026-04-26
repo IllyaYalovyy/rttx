@@ -14,6 +14,8 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
 
     let title_row = adw::EntryRow::builder().title("Title").build();
 
+    let description_row = adw::EntryRow::builder().title("Description").build();
+
     let body_buffer = gtk4::TextBuffer::new(None);
     let body_view = gtk4::TextView::with_buffer(&body_buffer);
     body_view.set_wrap_mode(gtk4::WrapMode::WordChar);
@@ -31,6 +33,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
 
     let title_group = adw::PreferencesGroup::new();
     title_group.add(&title_row);
+    title_group.add(&description_row);
 
     let behavior_group = adw::PreferencesGroup::new();
     behavior_group.add(&run_mode_row);
@@ -57,6 +60,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
 
     if let Some(c) = command {
         title_row.set_text(&c.title);
+        description_row.set_text(&c.description);
         body_buffer.set_text(&c.body);
         run_mode.set_selected(run_mode_index(c.default_run_mode));
         for param in &c.parameters {
@@ -76,6 +80,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     form.save_button.connect_clicked(move |_| {
         let cmd = match build_command(
             &title_row,
+            &description_row,
             &body_buffer,
             &run_mode,
             &host_picker,
@@ -158,6 +163,7 @@ fn append_parameter_row(list: &gtk4::ListBox, param: Option<&CommandParameter>) 
 
 fn build_command(
     title_row: &adw::EntryRow,
+    description_row: &adw::EntryRow,
     body_buffer: &gtk4::TextBuffer,
     run_mode: &gtk4::DropDown,
     host_picker: &HostTagPicker,
@@ -184,6 +190,7 @@ fn build_command(
     command.default_run_mode = run_mode_from_index(run_mode.selected());
     command.host_tags = host_picker.selected_tags();
     command.parameters = parameters;
+    command.description = description_row.text().trim().to_string();
     Ok(command)
 }
 
