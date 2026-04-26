@@ -98,6 +98,7 @@ pub fn matches_query(command: &SavedCommand, query: &str) -> bool {
     let query = query.to_ascii_lowercase();
     command.title.to_ascii_lowercase().contains(&query)
         || command.body.to_ascii_lowercase().contains(&query)
+        || command.description.to_ascii_lowercase().contains(&query)
         || command.host_tags.iter().any(|tag| tag.to_ascii_lowercase().contains(&query))
 }
 
@@ -200,6 +201,14 @@ mod tests {
         assert!(matches_query(&command, "tail"));
         assert!(matches_query(&command, "journalctl"));
         assert!(!matches_query(&command, "deploy"));
+    }
+
+    #[test]
+    fn matches_query_searches_description() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.description = "Builds and deploys the production service".into();
+        assert!(matches_query(&command, "production"));
+        assert!(!matches_query(&command, "staging"));
     }
 
     #[test]
