@@ -506,9 +506,8 @@ fn command_row_shows_description_as_tooltip() {
     let without_desc = crate::commands::SavedCommand::new("Test", "cargo test");
     store().save_commands(&[with_desc, without_desc]).unwrap();
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.command-tooltip-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.command-tooltip-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
