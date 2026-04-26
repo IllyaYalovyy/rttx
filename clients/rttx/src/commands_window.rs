@@ -1,3 +1,4 @@
+use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -54,9 +55,56 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     params_box.append(&add_param_button);
     params_group.add(&params_box);
 
+    // Shortcut key sequence
+    let shortcut_group = adw::PreferencesGroup::builder().title("Leader Shortcut").build();
+    let shortcut_row = adw::ActionRow::builder()
+        .title("Key sequence")
+        .subtitle("Press to capture keys after the leader")
+        .build();
+    let shortcut_label = gtk4::Label::new(None);
+    shortcut_label.add_css_class("dim-label");
+    shortcut_label.add_css_class("monospace");
+    shortcut_row.add_suffix(&shortcut_label);
+
+    let shortcut_keys: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+    let clear_button = gtk4::Button::builder()
+        .icon_name("edit-clear-symbolic")
+        .tooltip_text("Clear shortcut")
+        .valign(gtk4::Align::Center)
+        .build();
+    clear_button.add_css_class("flat");
+    shortcut_row.add_suffix(&clear_button);
+
+    {
+        let keys_ref = shortcut_keys.clone();
+        let label_ref = shortcut_label.clone();
+        clear_button.connect_clicked(move |_| {
+            keys_ref.borrow_mut().clear();
+            label_ref.set_text("");
+        });
+    }
+
+    shortcut_group.add(&shortcut_row);
+
+    let capture_button = gtk4::Button::with_label("Capture");
+    capture_button.add_css_class("flat");
+    shortcut_group.add(&capture_button);
+
+    {
+        let keys_ref = shortcut_keys.clone();
+        let label_ref = shortcut_label.clone();
+        let dialog_ref = form.dialog.clone();
+        capture_button.connect_clicked(move |_| {
+            show_capture_dialog(&dialog_ref, &keys_ref, &label_ref);
+        });
+    }
+
     form.content_box.append(&title_group);
     form.content_box.append(&body_scroll);
     form.content_box.append(&behavior_group);
+    form.content_box.append(&shortcut_group);
     form.content_box.append(&params_group);
     form.content_box.append(&host_picker.group);
     form.finish_layout();
@@ -69,6 +117,10 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
         run_mode.set_selected(run_mode_index(c.default_run_mode));
         for param in &c.parameters {
             append_parameter_row(&params_list, Some(param));
+        }
+        if !c.shortcut_keys.is_empty() {
+            shortcut_keys.borrow_mut().clone_from(&c.shortcut_keys);
+            shortcut_label.set_text(&c.shortcut_keys.join(" "));
         }
     }
 
@@ -91,6 +143,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
             &host_picker,
             &params_list,
             existing_uuid.clone(),
+            &shortcut_keys.borrow(),
         ) {
             Ok(c) => c,
             Err(msg) => {
@@ -176,6 +229,7 @@ fn build_command(
     host_picker: &HostTagPicker,
     params_list: &gtk4::ListBox,
     existing_uuid: Option<String>,
+    shortcut_keys: &[String],
 ) -> Result<SavedCommand, String> {
     let title = title_row.text().trim().to_string();
     if title.is_empty() {
@@ -206,6 +260,7 @@ fn build_command(
     command.parameters = parameters;
     command.description = description_row.text().trim().to_string();
     command.labels = labels;
+    command.shortcut_keys = shortcut_keys.to_vec();
     Ok(command)
 }
 
@@ -289,4 +344,74 @@ const fn run_mode_index(run_mode: CommandRunMode) -> u32 {
         CommandRunMode::Insert => 1,
         CommandRunMode::RunInNewPane => 2,
     }
+}
+
+fn show_capture_dialog(
+    parent: &adw::Dialog,
+    keys_out: &std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    label_out: &gtk4::Label,
+) {
+    let dialog = adw::Dialog::builder()
+        .title("Capture Shortcut")
+        .content_width(300)
+        .content_height(150)
+        .build();
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    content.set_margin_top(24);
+    content.set_margin_bottom(24);
+    content.set_margin_start(24);
+    content.set_margin_end(24);
+
+    let instruction =
+        gtk4::Label::new(Some("Press 1–2 keys for the sequence.\nEnter confirms, Escape cancels."));
+    instruction.set_wrap(true);
+    instruction.set_justify(gtk4::Justification::Center);
+    content.append(&instruction);
+
+    let preview = gtk4::Label::new(None);
+    preview.add_css_class("monospace");
+    preview.add_css_class("title-3");
+    content.append(&preview);
+
+    dialog.set_child(Some(&content));
+
+    let captured: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+    let controller = gtk4::EventControllerKey::new();
+    controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+    let keys_ref = keys_out.clone();
+    let label_ref = label_out.clone();
+    let dialog_ref = dialog.clone();
+    controller.connect_key_pressed(move |_, keyval, _keycode, _state| {
+        let key_name = keyval.name().map(|n| n.to_string()).unwrap_or_default();
+        if key_name.is_empty() {
+            return glib::Propagation::Stop;
+        }
+        if key_name == "Escape" {
+            dialog_ref.close();
+            return glib::Propagation::Stop;
+        }
+        if key_name == "Return" || key_name == "KP_Enter" {
+            let keys = captured.borrow().clone();
+            if !keys.is_empty() {
+                keys_ref.borrow_mut().clone_from(&keys);
+                label_ref.set_text(&keys.join(" "));
+            }
+            dialog_ref.close();
+            return glib::Propagation::Stop;
+        }
+
+        let mut keys = captured.borrow_mut();
+        if keys.len() < 2 {
+            keys.push(key_name);
+            preview.set_text(&keys.join(" "));
+        }
+        glib::Propagation::Stop
+    });
+
+    dialog.add_controller(controller);
+    dialog.present(Some(parent));
 }

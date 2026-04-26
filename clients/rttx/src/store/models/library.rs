@@ -38,6 +38,8 @@ pub struct CommandRecord {
     pub description: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shortcut_keys: Vec<String>,
 }
 
 const fn default_run_mode() -> RunMode {
@@ -87,6 +89,7 @@ impl From<CommandRecord> for crate::commands::SavedCommand {
             parameters: rec.parameters,
             description: rec.description,
             labels: rec.labels,
+            shortcut_keys: rec.shortcut_keys,
         }
     }
 }
@@ -106,6 +109,7 @@ impl From<&crate::commands::SavedCommand> for CommandRecord {
             parameters: cmd.parameters.clone(),
             description: cmd.description.clone(),
             labels: cmd.labels.clone(),
+            shortcut_keys: cmd.shortcut_keys.clone(),
         }
     }
 }

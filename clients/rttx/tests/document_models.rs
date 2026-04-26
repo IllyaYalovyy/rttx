@@ -299,6 +299,7 @@ fn library_preserves_orphaned_host_tags() {
             parameters: vec![],
             description: String::new(),
             labels: vec![],
+            shortcut_keys: vec![],
         }],
     };
     let env = DocumentEnvelope::new(library::SCHEMA, library::CURRENT_VERSION, lib);
