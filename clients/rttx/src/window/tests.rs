@@ -6825,3 +6825,125 @@ fn split_managed_pane_inherits_parent_cwd() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_label_filter_chips_shown_when_labels_exist() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut c1 = crate::commands::SavedCommand::new("Deploy", "cargo build");
+    c1.labels = vec!["ops".into(), "deploy".into()];
+    let c2 = crate::commands::SavedCommand::new("Test", "cargo test");
+    store().save_commands(&[c1, c2]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-label-filter-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Label filter box should be visible with 2 chips (deploy, ops)
+    assert!(
+        window.imp().label_filter_box.is_visible(),
+        "label filter box should be visible when commands have labels"
+    );
+
+    // Count chip buttons
+    let mut chip_count = 0;
+    let mut child = window.imp().label_filter_box.first_child();
+    while let Some(c) = child {
+        chip_count += 1;
+        child = c.next_sibling();
+    }
+    assert_eq!(chip_count, 2, "should show 2 label chips (deploy, ops)");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_label_filter_hides_non_matching_commands() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut c1 = crate::commands::SavedCommand::new("Deploy", "cargo build");
+    c1.labels = vec!["ops".into()];
+    let c2 = crate::commands::SavedCommand::new("Test", "cargo test");
+    store().save_commands(&[c1, c2]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-label-filter-hide-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Before filtering: Global header + 2 commands = 3 items
+    let count_before = window.imp().command_list.observe_children().n_items();
+    assert_eq!(
+        count_before, 3,
+        "should show header + 2 commands before filter, got {count_before}"
+    );
+
+    // Activate the "ops" label filter
+    {
+        let mut active = window.imp().active_labels.borrow_mut();
+        active.push("ops".into());
+    }
+    window.refresh_command_sidebar();
+    pump_events(50);
+
+    // After filtering: Global header + 1 command = 2 items
+    let count_after = window.imp().command_list.observe_children().n_items();
+    assert_eq!(
+        count_after, 2,
+        "should show header + 1 command after label filter, got {count_after}"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_sidebar_label_filter_hidden_when_no_labels() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let c1 = crate::commands::SavedCommand::new("Deploy", "cargo build");
+    let c2 = crate::commands::SavedCommand::new("Test", "cargo test");
+    store().save_commands(&[c1, c2]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-label-filter-hidden-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    assert!(
+        !window.imp().label_filter_box.is_visible(),
+        "label filter box should be hidden when no commands have labels"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

@@ -222,6 +222,9 @@ impl Window {
         let saved_hosts =
             crate::store::default_store().load_hosts().into_value().unwrap_or_default();
         let selected_key = self.selected_host_key();
+        let active_labels = imp.active_labels.borrow().clone();
+
+        self.rebuild_label_filter_chips(&all_commands);
 
         let any_shown = selected_key.as_ref().map_or_else(
             || {
@@ -233,6 +236,7 @@ impl Window {
                     let visible: Vec<_> = all_commands
                         .iter()
                         .filter(|c| c.host_tags.iter().any(|t| t == key))
+                        .filter(|c| commands::matches_labels(c, &active_labels))
                         .cloned()
                         .collect();
                     if !visible.is_empty() {
@@ -245,15 +249,21 @@ impl Window {
                         shown |= self.append_command_section(&label, &visible, query.as_str());
                     }
                 }
-                let global: Vec<_> =
-                    all_commands.iter().filter(|c| c.host_tags.is_empty()).cloned().collect();
+                let global: Vec<_> = all_commands
+                    .iter()
+                    .filter(|c| c.host_tags.is_empty())
+                    .filter(|c| commands::matches_labels(c, &active_labels))
+                    .cloned()
+                    .collect();
                 shown |= self.append_command_section("Global", &global, query.as_str());
                 shown
             },
             |key| {
-                let visible = commands::visible_for_host(&all_commands, key);
                 let (host_specific, global): (Vec<_>, Vec<_>) =
-                    visible.into_iter().partition(|c| !c.host_tags.is_empty());
+                    commands::visible_for_host(&all_commands, key)
+                        .into_iter()
+                        .filter(|c| commands::matches_labels(c, &active_labels))
+                        .partition(|c| !c.host_tags.is_empty());
 
                 let mut shown = false;
                 if !host_specific.is_empty() {
@@ -268,6 +278,47 @@ impl Window {
 
         imp.command_scroll.set_visible(any_shown);
         imp.command_empty.set_visible(!any_shown);
+    }
+
+    fn rebuild_label_filter_chips(&self, all_commands: &[SavedCommand]) {
+        let imp = self.imp();
+        while let Some(child) = imp.label_filter_box.first_child() {
+            imp.label_filter_box.remove(&child);
+        }
+
+        let labels = commands::collect_labels(all_commands);
+        if labels.is_empty() {
+            imp.label_filter_box.set_visible(false);
+            return;
+        }
+
+        imp.label_filter_box.set_visible(true);
+        let active = imp.active_labels.borrow().clone();
+
+        for label_text in &labels {
+            let button = gtk4::ToggleButton::with_label(label_text);
+            button.add_css_class("pill");
+            button.add_css_class("caption");
+            button.set_active(active.contains(label_text));
+
+            let win = self.clone();
+            let label_owned = label_text.clone();
+            button.connect_toggled(move |btn| {
+                {
+                    let mut active = win.imp().active_labels.borrow_mut();
+                    if btn.is_active() {
+                        if !active.contains(&label_owned) {
+                            active.push(label_owned.clone());
+                        }
+                    } else {
+                        active.retain(|l| l != &label_owned);
+                    }
+                }
+                win.refresh_command_sidebar();
+            });
+
+            imp.label_filter_box.insert(&button, -1);
+        }
     }
 
     fn append_command_section(
