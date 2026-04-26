@@ -6893,7 +6893,10 @@ fn command_sidebar_label_filter_hides_non_matching_commands() {
 
     // Before filtering: Global header + 2 commands = 3 items
     let count_before = window.imp().command_list.observe_children().n_items();
-    assert_eq!(count_before, 3, "should show header + 2 commands before filter, got {count_before}");
+    assert_eq!(
+        count_before, 3,
+        "should show header + 2 commands before filter, got {count_before}"
+    );
 
     // Activate the "ops" label filter
     {
@@ -6905,7 +6908,10 @@ fn command_sidebar_label_filter_hides_non_matching_commands() {
 
     // After filtering: Global header + 1 command = 2 items
     let count_after = window.imp().command_list.observe_children().n_items();
-    assert_eq!(count_after, 2, "should show header + 1 command after label filter, got {count_after}");
+    assert_eq!(
+        count_after, 2,
+        "should show header + 1 command after label filter, got {count_after}"
+    );
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");

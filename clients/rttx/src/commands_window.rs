@@ -16,8 +16,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
 
     let description_row = adw::EntryRow::builder().title("Description").build();
 
-    let labels_row =
-        adw::EntryRow::builder().title("Labels (comma-separated)").build();
+    let labels_row = adw::EntryRow::builder().title("Labels (comma-separated)").build();
 
     let body_buffer = gtk4::TextBuffer::new(None);
     let body_view = gtk4::TextView::with_buffer(&body_buffer);

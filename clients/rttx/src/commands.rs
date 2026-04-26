@@ -117,10 +117,7 @@ pub fn matches_labels(command: &SavedCommand, active_labels: &[String]) -> bool 
 /// Collect all distinct labels from a set of commands, sorted alphabetically.
 #[must_use]
 pub fn collect_labels(commands: &[SavedCommand]) -> Vec<String> {
-    let mut labels: Vec<String> = commands
-        .iter()
-        .flat_map(|c| c.labels.iter().cloned())
-        .collect();
+    let mut labels: Vec<String> = commands.iter().flat_map(|c| c.labels.iter().cloned()).collect();
     labels.sort();
     labels.dedup();
     labels
