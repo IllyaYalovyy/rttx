@@ -179,3 +179,34 @@ fn run_in_new_pane_mode_roundtrip() {
     let loaded = store.load_commands();
     assert_eq!(loaded[0].default_run_mode, CommandRunMode::RunInNewPane);
 }
+
+#[test]
+fn shortcut_keys_roundtrip() {
+    let (_tmp, store) = test_store();
+
+    let mut command = SavedCommand::new("Deploy", "cargo build");
+    command.shortcut_keys = vec!["d".into(), "k".into()];
+
+    store.save_commands(&[command]).unwrap();
+    let loaded = store.load_commands();
+    assert_eq!(loaded[0].shortcut_keys, vec!["d", "k"]);
+}
+
+#[test]
+fn empty_shortcut_keys_not_serialized() {
+    let command = SavedCommand::new("Plain", "echo hi");
+    let json = serde_json::to_string(&command).unwrap();
+    assert!(!json.contains("shortcut_keys"));
+}
+
+#[test]
+fn legacy_json_without_shortcut_keys_deserializes_with_empty_vec() {
+    let json = r#"[{
+        "uuid": "abc",
+        "title": "Old",
+        "body": "echo old",
+        "default_run_mode": "run"
+    }]"#;
+    let commands: Vec<SavedCommand> = serde_json::from_str(json).unwrap();
+    assert!(commands[0].shortcut_keys.is_empty());
+}

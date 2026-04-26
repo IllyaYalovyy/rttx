@@ -8,6 +8,7 @@ pub mod daemon_bridge;
 pub mod form_dialog;
 pub mod host;
 pub mod host_tag_picker;
+pub mod leader;
 pub mod new_workspace_dialog;
 pub mod parameter_dialog;
 pub mod places;

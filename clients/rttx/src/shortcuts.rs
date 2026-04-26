@@ -95,6 +95,11 @@ pub static DEFAULT_SHORTCUTS: &[ShortcutDef] = &[
     },
     ShortcutDef { action: "navigate-up", label: "Navigate up", default_accels: &["<Alt>Up"] },
     ShortcutDef { action: "navigate-down", label: "Navigate down", default_accels: &["<Alt>Down"] },
+    ShortcutDef {
+        action: "commands-leader",
+        label: "Commands leader key",
+        default_accels: &["<Ctrl>semicolon"],
+    },
 ];
 
 /// Look up the effective accelerators for an action, checking user overrides

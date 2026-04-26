@@ -1,4 +1,5 @@
 use super::*;
+use crate::leader::{self, LeaderMatch};
 use crate::shortcuts;
 use crate::terminal::paste_guard::{PasteGuardDecision, decide};
 
@@ -526,5 +527,99 @@ impl Window {
         if let Some(row) = self.imp().sidebar_list.row_at_index(index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
         }
+    }
+
+    // ── Leader-prefix command shortcuts ─────────────────────
+
+    pub(super) fn setup_leader_controller(&self) {
+        let prefs =
+            crate::store::default_store().load_preferences().into_value().unwrap_or_default();
+        let leader_accels =
+            shortcuts::effective_accels("commands-leader", &prefs.keyboard_shortcuts);
+        if leader_accels.is_empty() {
+            return;
+        }
+
+        let leader_action = gtk4::gio::SimpleAction::new("commands-leader", None);
+        let win = self.clone();
+        leader_action.connect_activate(move |_, _| {
+            win.activate_leader_mode();
+        });
+        self.add_action(&leader_action);
+
+        if let Some(app) = self.application().and_downcast::<adw::Application>() {
+            let accel_refs: Vec<&str> = leader_accels.iter().map(AsRef::as_ref).collect();
+            app.set_accels_for_action("win.commands-leader", &accel_refs);
+        }
+    }
+
+    fn activate_leader_mode(&self) {
+        let imp = self.imp();
+        imp.leader_keys.borrow_mut().clear();
+        if let Some(source) = imp.leader_timeout_source.take() {
+            source.remove();
+        }
+
+        self.show_toast("Leader active — press a key");
+
+        let win = self.clone();
+        let source = glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+            win.cancel_leader_mode();
+        });
+        imp.leader_timeout_source.replace(Some(source));
+
+        let controller = gtk4::EventControllerKey::new();
+        let win = self.clone();
+        controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        controller.connect_key_pressed(move |ctrl, keyval, _keycode, _state| {
+            let key_name = keyval.name().map(|n| n.to_string()).unwrap_or_default();
+            if key_name.is_empty() || key_name == "Escape" {
+                win.cancel_leader_mode();
+                win.remove_controller(ctrl);
+                return glib::Propagation::Stop;
+            }
+
+            win.imp().leader_keys.borrow_mut().push(key_name);
+            let keys = win.imp().leader_keys.borrow().clone();
+            let host_key = win.selected_host_key();
+            let commands = crate::store::default_store().load_commands();
+
+            match leader::resolve(&commands, &keys, host_key.as_deref()) {
+                LeaderMatch::Complete(uuid) => {
+                    win.finish_leader_mode();
+                    win.remove_controller(ctrl);
+                    if let Some(cmd) = commands.iter().find(|c| c.uuid == uuid) {
+                        win.execute_saved_command(cmd, cmd.default_run_mode);
+                    }
+                }
+                LeaderMatch::Partial => {
+                    // Wait for more keys
+                }
+                LeaderMatch::NoMatch => {
+                    win.cancel_leader_mode();
+                    win.remove_controller(ctrl);
+                }
+            }
+            glib::Propagation::Stop
+        });
+        self.add_controller(controller);
+    }
+
+    fn cancel_leader_mode(&self) {
+        self.finish_leader_mode();
+    }
+
+    fn finish_leader_mode(&self) {
+        let imp = self.imp();
+        imp.leader_keys.borrow_mut().clear();
+        if let Some(source) = imp.leader_timeout_source.take() {
+            source.remove();
+        }
+    }
+
+    /// Whether leader mode is currently active.
+    #[must_use]
+    pub fn is_leader_active(&self) -> bool {
+        self.imp().leader_timeout_source.borrow().is_some()
     }
 }

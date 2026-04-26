@@ -438,6 +438,7 @@ mod tests {
             parameters: vec![],
             description: String::new(),
             labels: vec![],
+            shortcut_keys: vec![],
         };
         store.save_library(&[place], &[cmd]).unwrap();
         let (places, commands) = store.load_library().into_value().unwrap();

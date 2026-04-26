@@ -76,6 +76,8 @@ mod imp {
         pub workspace_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub pending_connect_existing: RefCell<Option<crate::host::Host>>,
         pub host_selector_keys: RefCell<Vec<String>>,
+        pub leader_keys: RefCell<Vec<String>>,
+        pub leader_timeout_source: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -368,6 +370,7 @@ impl Window {
     pub fn new(app: &adw::Application) -> Self {
         let obj: Self = glib::Object::builder().property("application", app).build();
         obj.setup_actions(app);
+        obj.setup_leader_controller();
         obj.setup_signals();
         obj.load_state();
         obj

@@ -38,6 +38,10 @@ pub struct SavedCommand {
     pub description: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Key sequence after the leader key (e.g. `["d", "k"]`).
+    /// Duplicates across commands are intentional for host-scoped resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shortcut_keys: Vec<String>,
 }
 
 const fn default_run_mode() -> CommandRunMode {
@@ -56,6 +60,7 @@ impl SavedCommand {
             parameters: Vec::new(),
             description: String::new(),
             labels: Vec::new(),
+            shortcut_keys: Vec::new(),
         }
     }
 
@@ -655,5 +660,30 @@ mod tests {
     fn collect_labels_empty_commands_returns_empty() {
         let labels = collect_labels(&[]);
         assert!(labels.is_empty());
+    }
+
+    #[test]
+    fn shortcut_keys_serde_roundtrip() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.shortcut_keys = vec!["d".into(), "k".into()];
+
+        let json = serde_json::to_string(&[&command]).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded[0].shortcut_keys, vec!["d", "k"]);
+    }
+
+    #[test]
+    fn shortcut_keys_empty_not_serialized() {
+        let command = SavedCommand::new("Plain", "echo hi");
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(!json.contains("shortcut_keys"));
+    }
+
+    #[test]
+    fn duplicate_preserves_shortcut_keys() {
+        let mut original = SavedCommand::new("Deploy", "cargo build");
+        original.shortcut_keys = vec!["d".into()];
+        let copy = original.duplicate();
+        assert_eq!(copy.shortcut_keys, vec!["d"]);
     }
 }
