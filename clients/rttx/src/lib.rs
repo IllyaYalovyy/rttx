@@ -9,6 +9,7 @@ pub mod form_dialog;
 pub mod host;
 pub mod host_tag_picker;
 pub mod new_workspace_dialog;
+pub mod parameter_dialog;
 pub mod places;
 pub mod places_window;
 pub mod preferences;

@@ -296,6 +296,9 @@ fn library_preserves_orphaned_host_tags() {
             body: "echo hi".into(),
             default_run_mode: rttx::store::models::commands::RunMode::Run,
             host_tags: vec!["deleted-host-key".into()],
+            parameters: vec![],
+            description: String::new(),
+            labels: vec![],
         }],
     };
     let env = DocumentEnvelope::new(library::SCHEMA, library::CURRENT_VERSION, lib);

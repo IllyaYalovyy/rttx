@@ -133,6 +133,38 @@ impl Window {
         });
         self.add_action(&delete_command_action);
 
+        let duplicate_command_action =
+            gtk4::gio::SimpleAction::new("duplicate-command", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        duplicate_command_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            let all_commands = crate::store::default_store().load_commands();
+            if let Some(command) = all_commands.iter().find(|c| c.uuid == uuid) {
+                let copy = command.duplicate();
+                let mut items = crate::store::default_store().load_commands();
+                items.push(copy.clone());
+                let _ = crate::store::default_store().save_commands(&items);
+                win.refresh_command_sidebar();
+                crate::commands_window::show_form(&win, Some(&copy));
+            }
+        });
+        self.add_action(&duplicate_command_action);
+
+        let copy_body_action =
+            gtk4::gio::SimpleAction::new("copy-command-body", Some(glib::VariantTy::STRING));
+        let win = self.clone();
+        copy_body_action.connect_activate(move |_, param| {
+            let uuid: String = param.and_then(glib::Variant::get).unwrap_or_default();
+            let all_commands = crate::store::default_store().load_commands();
+            if let Some(command) = all_commands.iter().find(|c| c.uuid == uuid)
+                && let Some(display) = gtk4::gdk::Display::default()
+            {
+                display.clipboard().set_text(&command.body);
+                win.show_toast("Copied to clipboard");
+            }
+        });
+        self.add_action(&copy_body_action);
+
         let edit_place_action =
             gtk4::gio::SimpleAction::new("edit-place", Some(glib::VariantTy::STRING));
         let win = self.clone();
