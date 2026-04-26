@@ -432,10 +432,7 @@ impl Window {
             let win = self.clone();
             let command_for_run = (*command).clone();
             action_row.connect_activated(move |_| {
-                win.execute_saved_command(
-                    &command_for_run,
-                    command_for_run.default_run_mode,
-                );
+                win.execute_saved_command(&command_for_run, command_for_run.default_run_mode);
             });
 
             let win = self.clone();

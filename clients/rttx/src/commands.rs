@@ -250,10 +250,7 @@ mod tests {
     #[test]
     fn run_in_new_pane_appends_newline_like_run() {
         let command = SavedCommand::new("Build", "cargo test\ncargo clippy");
-        assert_eq!(
-            command.input_for(CommandRunMode::RunInNewPane),
-            "cargo test\ncargo clippy\n"
-        );
+        assert_eq!(command.input_for(CommandRunMode::RunInNewPane), "cargo test\ncargo clippy\n");
     }
 
     #[test]

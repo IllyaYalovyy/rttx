@@ -6957,9 +6957,8 @@ fn run_in_new_pane_splits_and_sends_command_to_new_terminal() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.run-in-new-pane-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.run-in-new-pane-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
@@ -7078,10 +7077,7 @@ fn run_in_new_pane_respects_split_depth_limit() {
         state.workspaces[0].layout.terminal_uuids().len()
     };
 
-    assert_eq!(
-        count_before, count_after,
-        "RunInNewPane should not split beyond the maximum depth"
-    );
+    assert_eq!(count_before, count_after, "RunInNewPane should not split beyond the maximum depth");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
