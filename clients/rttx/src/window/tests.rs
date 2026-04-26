@@ -6947,3 +6947,142 @@ fn command_sidebar_label_filter_hidden_when_no_labels() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn run_in_new_pane_splits_and_sends_command_to_new_terminal() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.run-in-new-pane-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1200, 800);
+    window.present();
+    pump_events(100);
+
+    let original_uuid = {
+        let state = window.imp().state.borrow();
+        let uuids = state.workspaces[0].layout.terminal_uuids();
+        assert_eq!(uuids.len(), 1, "should start with a single pane");
+        uuids[0].clone()
+    };
+
+    let command = SavedCommand::new("Build", "cargo build");
+    window.execute_saved_command(&command, CommandRunMode::RunInNewPane);
+    pump_events(100);
+
+    let (terminal_uuids, new_uuid) = {
+        let state = window.imp().state.borrow();
+        let uuids = state.workspaces[0].layout.terminal_uuids();
+        assert_eq!(uuids.len(), 2, "RunInNewPane should create a split");
+        let new = uuids.into_iter().find(|u| u != &original_uuid).unwrap();
+        let all = state.workspaces[0].layout.terminal_uuids();
+        (all, new)
+    };
+
+    assert_eq!(terminal_uuids.len(), 2);
+
+    // Verify the command was sent to the new pane, not the original
+    let new_term = window
+        .imp()
+        .terminals
+        .borrow()
+        .get(&new_uuid)
+        .cloned()
+        .expect("new split terminal should exist");
+    assert_eq!(
+        new_term.pending_shell_inputs_for_test(),
+        vec![String::from("cargo build\n")],
+        "command should be queued in the new pane with trailing newline (execute mode)"
+    );
+
+    // Verify recovery is set on the new pane
+    let recovery = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].recovery_for(&new_uuid).cloned()
+    };
+    assert_eq!(
+        recovery,
+        Some(PaneRecovery {
+            source: PaneSource::Command { title: "Build".into() },
+            target: None,
+            startup: vec![StartupStep::SendText { text: "cargo build".into(), execute: true }],
+        })
+    );
+
+    // Verify the original pane was NOT modified
+    let original_term = window
+        .imp()
+        .terminals
+        .borrow()
+        .get(&original_uuid)
+        .cloned()
+        .expect("original terminal should still exist");
+    assert!(
+        original_term.pending_shell_inputs_for_test().is_empty(),
+        "original pane should not receive the command"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn run_in_new_pane_respects_split_depth_limit() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.run-in-new-pane-depth-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1200, 800);
+    window.present();
+    pump_events(100);
+
+    // Split to maximum depth (5 levels)
+    for _ in 0..crate::workspace::MAX_SPLIT_DEPTH {
+        let uuid = {
+            let state = window.imp().state.borrow();
+            state.workspaces[0].layout.terminal_uuids().last().unwrap().clone()
+        };
+        window.split_terminal(&uuid, SplitOrientation::Horizontal);
+        pump_events(50);
+    }
+
+    let count_before = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().len()
+    };
+
+    // Attempt RunInNewPane at max depth — should not split further
+    let command = SavedCommand::new("Build", "cargo build");
+    window.execute_saved_command(&command, CommandRunMode::RunInNewPane);
+    pump_events(100);
+
+    let count_after = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().len()
+    };
+
+    assert_eq!(
+        count_before, count_after,
+        "RunInNewPane should not split beyond the maximum depth"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

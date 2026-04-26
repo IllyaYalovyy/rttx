@@ -25,7 +25,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     let body_scroll =
         gtk4::ScrolledWindow::builder().min_content_height(150).child(&body_view).build();
 
-    let run_mode = gtk4::DropDown::from_strings(&["Run", "Insert"]);
+    let run_mode = gtk4::DropDown::from_strings(&["Run", "Insert", "Run in new pane"]);
     let run_mode_row = adw::ActionRow::builder().title("Default action").build();
     run_mode_row.add_suffix(&run_mode);
     run_mode_row.set_activatable_widget(Some(&run_mode));
@@ -278,6 +278,7 @@ fn collect_entry_rows(group: &adw::PreferencesGroup) -> Vec<adw::EntryRow> {
 const fn run_mode_from_index(index: u32) -> CommandRunMode {
     match index {
         1 => CommandRunMode::Insert,
+        2 => CommandRunMode::RunInNewPane,
         _ => CommandRunMode::Run,
     }
 }
@@ -286,5 +287,6 @@ const fn run_mode_index(run_mode: CommandRunMode) -> u32 {
     match run_mode {
         CommandRunMode::Run => 0,
         CommandRunMode::Insert => 1,
+        CommandRunMode::RunInNewPane => 2,
     }
 }

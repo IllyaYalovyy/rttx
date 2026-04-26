@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum CommandRunMode {
     Run,
     Insert,
+    RunInNewPane,
 }
 
 /// A fixed-choice parameter declared on a saved command.
@@ -82,7 +83,7 @@ impl SavedCommand {
     #[must_use]
     pub fn input_for(&self, run_mode: CommandRunMode) -> String {
         match run_mode {
-            CommandRunMode::Run => format!("{}\n", self.body),
+            CommandRunMode::Run | CommandRunMode::RunInNewPane => format!("{}\n", self.body),
             CommandRunMode::Insert => self.body.clone(),
         }
     }
@@ -244,6 +245,34 @@ mod tests {
         let command = SavedCommand::new("Build", "cargo test\ncargo clippy");
         assert_eq!(command.input_for(CommandRunMode::Run), "cargo test\ncargo clippy\n");
         assert_eq!(command.input_for(CommandRunMode::Insert), "cargo test\ncargo clippy");
+    }
+
+    #[test]
+    fn run_in_new_pane_appends_newline_like_run() {
+        let command = SavedCommand::new("Build", "cargo test\ncargo clippy");
+        assert_eq!(
+            command.input_for(CommandRunMode::RunInNewPane),
+            "cargo test\ncargo clippy\n"
+        );
+    }
+
+    #[test]
+    fn run_in_new_pane_serde_roundtrip() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.default_run_mode = CommandRunMode::RunInNewPane;
+
+        let json = serde_json::to_string(&[&command]).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded[0].default_run_mode, CommandRunMode::RunInNewPane);
+    }
+
+    #[test]
+    fn run_in_new_pane_serializes_as_kebab_case() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.default_run_mode = CommandRunMode::RunInNewPane;
+
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(json.contains("\"run-in-new-pane\""));
     }
 
     #[test]

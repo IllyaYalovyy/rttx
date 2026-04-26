@@ -339,6 +339,97 @@ impl Window {
         }
     }
 
+    /// Split a terminal and return the UUID of the newly created pane.
+    ///
+    /// Returns `None` if the split depth limit is reached or the terminal is not found.
+    pub(super) fn split_terminal_returning_uuid(
+        &self,
+        terminal_uuid: &str,
+        orientation: SplitOrientation,
+    ) -> Option<String> {
+        // Unzoom before splitting so the full layout is visible.
+        {
+            let state = self.imp().state.borrow();
+            if let Some(session) =
+                state.workspaces.iter().find(|s| s.layout.contains_terminal(terminal_uuid))
+                && session.is_zoomed()
+            {
+                drop(state);
+                self.toggle_pane_zoom();
+            }
+        }
+
+        let imp = self.imp();
+
+        let terminal_cwd =
+            self.terminal_handle(terminal_uuid).and_then(|terminal| terminal.current_directory());
+
+        let mut state = imp.state.borrow_mut();
+
+        let workspace_idx =
+            state.workspaces.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
+
+        let idx = workspace_idx?;
+
+        let at_limit = state.workspaces[idx]
+            .layout
+            .depth_of_terminal(terminal_uuid)
+            .is_some_and(|d| d >= MAX_SPLIT_DEPTH);
+
+        if at_limit {
+            return None;
+        }
+
+        let source_cwd =
+            terminal_cwd.or_else(|| state.workspaces[idx].layout.terminal_cwd(terminal_uuid));
+
+        let (mut new_layout, new_terminal_uuid) =
+            state.workspaces[idx].layout.split_terminal_with_new_uuid(terminal_uuid, orientation)?;
+
+        if let Some(cwd) = &source_cwd {
+            new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd.clone()));
+        }
+        state.workspaces[idx].layout = new_layout;
+        state.workspaces[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
+        let layout_terminal_uuids = state.workspaces[idx].layout.terminal_uuids();
+        state.workspaces[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
+        state.workspaces[idx].normalize_active_terminal();
+        let session_uuid = state.workspaces[idx].uuid.clone();
+        let session_state = state.workspaces[idx].clone();
+        drop(state);
+
+        if self.split_terminal_in_place(
+            &session_uuid,
+            terminal_uuid,
+            &new_terminal_uuid,
+            orientation,
+            source_cwd.as_deref(),
+        ) {
+            self.refresh_sidebar_subtitle(&session_uuid);
+        } else {
+            self.rebuild_session_content(&session_uuid, &session_state);
+        }
+
+        if session_state.uses_managed_runtime()
+            && let Some(runtime_id) = session_state.runtime.runtime_id.as_deref()
+            && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
+        {
+            let size = self.persistent_terminal_size(terminal_uuid);
+            manager.create_pane(
+                &session_uuid,
+                &session_state.runtime.endpoint,
+                runtime_id,
+                &new_terminal_uuid,
+                source_cwd,
+                adw::StyleManager::default().is_dark(),
+                size,
+                false,
+            );
+        }
+
+        Some(new_terminal_uuid)
+    }
+
     pub(super) fn close_terminal(&self, terminal_uuid: &str) {
         #[derive(Debug)]
         #[allow(clippy::large_enum_variant)]

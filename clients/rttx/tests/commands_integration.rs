@@ -167,3 +167,15 @@ fn collect_labels_from_stored_commands() {
     let labels = commands::collect_labels(&loaded);
     assert_eq!(labels, vec!["deploy", "diag", "ops"]);
 }
+
+#[test]
+fn run_in_new_pane_mode_roundtrip() {
+    let (_tmp, store) = test_store();
+
+    let mut command = SavedCommand::new("Build", "cargo build");
+    command.default_run_mode = CommandRunMode::RunInNewPane;
+
+    store.save_commands(&[command]).unwrap();
+    let loaded = store.load_commands();
+    assert_eq!(loaded[0].default_run_mode, CommandRunMode::RunInNewPane);
+}
