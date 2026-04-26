@@ -14,9 +14,11 @@
 Extend saved commands (RFC-006) with three commonly-missed affordances — **Clone**,
 **Copy to clipboard**, and **Parameterized commands** — and record the additional UX
 moves that let the commands library scale to hundreds of entries without turning the
-sidebar into a dumping ground. Parameters use a fixed-choice drop-down model and a
-bash-safe `{{NAME}}` placeholder syntax. The runtime parameter prompt is a modal dialog
-with one combo row per parameter and a live-substituted preview.
+sidebar into a dumping ground. Parameters use a fixed-choice drop-down model and
+bash-native environment-variable references in the command body. At runtime rttx
+prompts for all declared parameters, shell-escapes the chosen values, injects them as
+`export` statements inside a subshell wrapper, and then runs/inserts the original
+body unchanged.
 
 ---
 
@@ -24,8 +26,8 @@ with one combo row per parameter and a live-substituted preview.
 
 - **G1** — Duplicate an existing command in one click and land in the editor pre-filled
 - **G2** — Copy a command body to the system clipboard without needing an active pane
-- **G3** — Parameterize a command body with fixed-choice drop-down values using a
-  bash-safe placeholder syntax
+- **G3** — Parameterize a command body with fixed-choice drop-down values using
+  standard shell environment variables
 - **G4** — Surface a runtime parameter prompt that is fast for 1–2 parameters and
   remains legible for 4–6
 - **G5** — Identify (not necessarily implement) the next set of UX moves that help the
@@ -34,8 +36,8 @@ with one combo row per parameter and a live-substituted preview.
 ## Non-Goals
 
 - **NG1** — No arbitrary scripting / macro DSL. No loops, conditionals, arithmetic,
-  command substitution, or nested placeholders in the command body beyond what bash
-  itself already does after substitution
+  command substitution, or custom templating beyond what bash itself already does
+  with normal variable expansion
 - **NG2** — No free-text parameters. Parameter types in this RFC are drop-down only
 - **NG3** — No shell-history capture, no auto-suggestion of commands from pane activity
 - **NG4** — No pin / recent commands (already tracked in
@@ -71,7 +73,7 @@ After a year of real use, three friction points dominate:
    the majority of these cases.
 
 The secondary motivation is scale. The sidebar list works at 10 commands and breaks
-down at 100. Several scaling primitives (description field, labels, confirmation flag,
+down at 100. Several scaling primitives (description field, labels, run-in-new-pane,
 command palette) are individually small, but the decisions compound. This RFC
 documents them as a coherent set so we do not accrete them ad-hoc.
 
@@ -88,7 +90,7 @@ Related prior art in the repo:
 
 | Audience     | Impact |
 |--------------|--------|
-| End users    | Clone/copy-to-clipboard become one click. One parameterized command replaces N near-duplicates. Library scales with description, labels, and confirm-before-run. |
+| End users    | Clone/copy-to-clipboard become one click. One parameterized command replaces N near-duplicates. Library scales with description, labels, and future command-library affordances. |
 | Contributors | New optional fields on `SavedCommand` via `#[serde(default)]`. New parameter dialog widget. No changes to the daemon or the protocol. |
 | Packagers    | None. No new dependencies; no new persisted files. |
 
@@ -96,31 +98,27 @@ Related prior art in the repo:
 
 ## Considered Options
 
-### Placeholder syntax
+### Parameter reference syntax
 
-#### Option A — rttx-specific braces: `{{NAME}}` *(chosen)*
+#### Option A — shell environment variables: `$NAME` / `${NAME}` *(chosen)*
 
-**Pros**: Unambiguous. Does not collide with real bash `$VAR` or `${VAR}`, so the user
-cannot accidentally leak an environment-variable reference through the template. Easy
-to parse (`{{` then `[A-Z][A-Z0-9_]*` then `}}`). Matches widely-understood template
-conventions (Handlebars, Jinja, Go templates). Visually obvious that substitution is
-happening — "this body is a template, not a shell snippet".
+**Pros**: Body remains normal shell text. Users can copy the command body and run or
+debug it directly in a shell. rttx does not need a custom placeholder grammar or a
+body parser. Values can be injected using standard `export` statements and shell
+escaping.
 
-**Cons**: Body is not valid bash as-is (a user pasting the raw body into a shell will
-see `{{FOO}}` literally). Mitigation: "Copy with parameters…" produces a substituted
-form; "Copy body" produces the raw template. Either is usually what the user wants.
+**Cons**: rttx gives up exact body-to-parameter validation. A command may declare a
+parameter that the body never reads, or the body may reference shell variables that
+are not declared in rttx. This RFC accepts that trade-off intentionally to stay out
+of the debugging/validation path.
 
-#### Option B — bash-style: `${NAME}`
+#### Option B — rttx-specific braces: `{{NAME}}`
 
-**Pros**: Body is still legal bash. A reader familiar with shell recognises the
-pattern instantly.
+**Pros**: Exact matching and exact discrepancy reporting are easy.
 
-**Cons**: Collides with real environment variables. If rttx treats `${PATH}` as a
-parameter, and the user also has `$PATH` in their shell, the semantics diverge
-depending on where the command runs. If rttx *does not* treat it as a parameter
-(requires declaration), the rule becomes subtle and the user has to learn which form
-is which. Also: it means we must parse a subset of shell grammar correctly (quoting,
-escaping) to avoid picking up real `${foo}` in a heredoc body — a trap.
+**Cons**: Requires a custom template syntax, blocks literal `{{...}}` use unless an
+escape mechanism exists, and pushes rttx into a validation/debugging role that is not
+worth the product complexity.
 
 #### Option C — positional: `$1`, `$2`
 
@@ -135,8 +133,8 @@ saves bash that invokes a function which itself uses `$1`.
 #### Option A — Modal dialog, one combo row per parameter *(chosen)*
 
 **Pros**: Clean keyboard navigation (Tab between rows, Enter to run, Esc to cancel).
-Scales to 4–6 parameters without running out of space. Room for a live-substituted
-preview block. Matches the GNOME HIG pattern for "ask the user for input before
+Scales to 4–6 parameters without running out of space. Room for a live preview of the
+effective shell block. Matches the GNOME HIG pattern for "ask the user for input before
 acting" (`adw::Dialog`, `adw::ComboRow`). Same widget vocabulary as the existing
 command editor.
 
@@ -165,18 +163,18 @@ parameters changes the menu structure.
 
 Overlaps but is orthogonal. A palette that fuzzy-matches across *all* commands and
 runs the selected one is a valuable scaling primitive, but it still needs the
-parameter prompt when the selected command has placeholders. Documented in this RFC
+parameter prompt when the selected command has parameters. Documented in this RFC
 as a scaling follow-up, not as the primary parameter UI.
 
 ### Parameter value model
 
 #### Option A — Fixed string choices only *(chosen)*
 
-Parameters carry a non-empty `Vec<String>` of choices plus an optional default. The
-user picks one at runtime.
+Parameters carry a `Vec<String>` of suggested choices plus an optional default. The
+user picks one at runtime; empty choices are allowed and resolve to an empty string.
 
-**Pros**: No free-text validation. No escaping/quoting concerns beyond what the
-template author already expressed. Covers the overwhelmingly common case
+**Pros**: No free-text validation. rttx only needs to present a list of values, select
+one, shell-escape it, and inject it. Covers the overwhelmingly common case
 (`env=prod|staging|dev`, `cluster=us|eu|apac`). Trivial to serialize and diff.
 
 **Cons**: Cannot express continuous values like "line count" or "arbitrary pod name".
@@ -197,12 +195,13 @@ RFC.
 ## Decision
 
 **Chosen options**:
-- Placeholder syntax: **Option A** (`{{NAME}}`).
+- Parameter reference syntax: **Option A** (`$NAME` / `${NAME}` with env-var injection).
 - Runtime parameter UI: **Option A** (modal dialog with one combo row per parameter).
 - Parameter value model: **Option A** (fixed drop-down choices only).
 
 Rationale: each choice minimises the ways a user can create an invalid or
-surprising command while still covering the dominant workflow. The model can be
+surprising command while still covering the dominant workflow. The model avoids
+custom template parsing and avoids turning rttx into a shell validator. It can be
 extended (free-text, typed values, inline entry for 1-parameter commands) in a
 successor RFC without breaking the stored format.
 
@@ -215,13 +214,14 @@ successor RFC without breaking the stored format.
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandParameter {
-    /// Placeholder name. Must match /^[A-Z][A-Z0-9_]*$/.
+    /// Environment variable name used by the command body (for example `ENV`).
+    /// rttx expects shell-compatible names but does not validate the body against them.
     pub name: String,
     /// Human-readable label shown in the runtime dialog.
     pub label: String,
-    /// Non-empty list of allowed values. Empty is a save-time validation error.
+    /// Suggested allowed values presented in the runtime dialog.
     pub choices: Vec<String>,
-    /// Optional default. If present, must be one of `choices`.
+    /// Optional default.
     #[serde(default)]
     pub default: Option<String>,
 }
@@ -243,8 +243,6 @@ pub struct SavedCommand {
     pub description: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub confirm_before_run: bool,
 }
 ```
 
@@ -252,54 +250,54 @@ All new fields use `#[serde(default)]` so existing `commands.json` files keep lo
 unchanged. Default values are skipped on write to keep the on-disk JSON readable for
 commands that do not use the new features.
 
-### Placeholder grammar and substitution
+### Runtime injection model
 
-- A placeholder is `{{` + `<NAME>` + `}}` where `<NAME>` matches
-  `^[A-Z][A-Z0-9_]*$`. Names are case-sensitive; uppercase is the only accepted form
-  to keep scanning cheap and to avoid case-collision surprises.
-- No escape mechanism in v1. If a body literally needs `{{FOO}}`, the command is not
-  parameterizable — use a non-parameterized copy instead. (An `{{{{ ... }}}}` escape
-  can be added later without breaking stored commands, since today the grammar
-  rejects it.)
-- Substitution is pure string replacement. Values are inserted verbatim without
-  automatic shell-quoting. Quoting is the template author's responsibility:
-  `--env={{ENV}}` vs `--name='{{NAME}}'` vs `"{{MSG}}"`. This matches the current
-  contract that command bodies are raw shell text.
+- The command body stays plain shell text. The author writes normal shell variable
+  references such as `$ENV` or `${ENV}` if they want to use parameters.
+- rttx prompts for **all declared parameters**. It does not inspect the body to decide
+  whether a parameter is "used".
+- rttx does not validate or rewrite the command body. If the body does not use a
+  declared variable, nothing special happens; if the body references a shell variable
+  that was not declared in rttx, the shell resolves it normally.
+- Selected values are shell-escaped once, then injected as `export` statements inside
+  a subshell wrapper so they do not leak into the user's interactive shell after the
+  command finishes.
+- If a parameter has no choices, or its default is absent / not present in `choices`,
+  the runtime dialog falls back to the first available choice, or to the empty string
+  when no choices exist. This keeps the model permissive and avoids save-time linting.
 
 ```rust
-pub fn substitute(body: &str, values: &BTreeMap<String, String>) -> String;
-pub fn scan_placeholders(body: &str) -> Vec<String>; // sorted, unique
+pub fn shell_escape(value: &str) -> String;
+pub fn render_env_block(body: &str, values: &[(String, String)]) -> String;
 ```
 
-### Save-time validation
+Example rendering:
 
-On save the editor must accept the command only if:
+```bash
+(
+export ENV='prod'
+export SERVICE='api'
+systemctl restart "$SERVICE"
+)
+```
 
-1. Every placeholder found by `scan_placeholders(body)` has a matching
-   `CommandParameter` with the same `name`.
-2. Every `CommandParameter` has a non-empty `choices` list.
-3. Each `default`, if set, appears in that parameter's `choices`.
-4. Parameter `name`s are unique within the command.
+### Editor behavior
 
-A parameter declared but not referenced in the body is a **warning**, not an error
-(the user may be mid-edit). The warning is shown as a subtle banner in the editor;
-save is not blocked.
+- No save-time validation of body content.
+- No placeholder scanning.
+- No advisory discrepancy hints. The editor stays out of shell analysis and debugging.
 
 ### Editor dialog — new "Parameters" section
 
 A new `adw::PreferencesGroup` titled "Parameters" sits below the behavior group and
 above the host-tag picker. Each parameter is one `adw::ExpanderRow` containing:
 
-- `adw::EntryRow` for `name` (validated against the placeholder grammar)
+- `adw::EntryRow` for `name`
 - `adw::EntryRow` for `label`
 - A list of `adw::EntryRow`s for `choices`, with an "Add choice" button
 - An `adw::ComboRow` bound to the current choices to set the default
 
-Below the group: an "Add parameter" button. A live banner summarises validation
-state ("3 placeholders, 2 declared — `HOST` is missing").
-
-Nice-to-have (post-MVP): an "Insert placeholder" action on the body text view that
-inserts `{{SELECTED_NAME}}` at the cursor.
+Below the group: an "Add parameter" button.
 
 ### Runtime parameter dialog
 
@@ -308,14 +306,13 @@ Triggered when the user activates (Run or Insert) a command with
 
 - `adw::Dialog` titled with the command's `title`
 - One `adw::ComboRow` per parameter, in declaration order, pre-selected to its
-  `default` (first choice if no default)
+  `default` (first choice if no default; empty string if no choices exist)
 - A "Preview" `gtk4::TextView` at the bottom with monospace font, read-only,
-  updated on every combo-row change. It renders the body with substitutions applied.
+  updated on every combo-row change. It renders the effective shell block with the
+  injected `export` statements plus the original body.
 - Primary button matches the action that triggered the dialog: "Run" or "Insert".
   Enter activates it.
 - Secondary button: "Cancel". Esc activates it.
-- When `confirm_before_run == true`, the primary button style is `.destructive-action`
-  (red).
 
 ### Sidebar row changes
 
@@ -328,23 +325,25 @@ Per-row suffixes (left → right):
   - **Run** (redundant with click-to-activate, but useful when click-to-activate is
     reassigned, and discoverable)
   - **Insert** (when primary is already Insert, this becomes **Run**)
-  - **Copy body** — copies the raw template (with `{{...}}` placeholders intact)
-  - **Copy with parameters…** — opens the runtime parameter dialog with a "Copy"
-    primary button; on confirm, writes the substituted body to the clipboard
+  - **Copy body** — copies the raw command body unchanged
   - **Duplicate** — creates a new `SavedCommand` with a new UUID, title suffixed
     ` (copy)` (or ` (copy N)` if the base already exists), same everything else,
     saves, and opens the editor on the new entry
   - **Edit** (existing)
   - **Delete** (existing)
 
-Row title gets a small chip "`{{…}}`" to the right of the title when the command has
+Row title gets a small "`ENV`" chip to the right of the title when the command has
 parameters, so users know the interaction will include a prompt.
 
 ### Primary-click semantics
 
 For backwards compatibility, activating a command row still maps to its
 `default_run_mode` (Run or Insert). The difference for parameterized commands is that
-activation opens the runtime dialog first.
+activation opens the runtime dialog first. The resolved action then uses the same
+rendered shell block:
+
+- **Run** — sends the rendered shell block to the pane and executes it
+- **Insert** — inserts the rendered shell block into the pane without executing
 
 ### Clipboard
 
@@ -364,10 +363,6 @@ each gets its own issue and is not a gate for the MVP.
   intended for grouping (`deploy`, `diag`, `tmux`). Proposed UI: a chip bar at the
   top of the Commands tab; clicking a chip filters the list. Interacts with the
   existing search field by AND.
-- **Confirm before run** (`SavedCommand::confirm_before_run`) — when set, Run
-  triggers an `adw::AlertDialog` ("Run `<title>`? This command is marked as
-  requiring confirmation.") before sending to the pane. For parameterized commands,
-  this replaces the primary-button styling in the parameter dialog instead.
 - **Run in new pane** — a third run mode alongside Run / Insert that splits the
   active pane and runs the command in the new one. Data-model impact:
   `CommandRunMode` gains a `RunInNewPane { split: SplitDirection }` variant.
@@ -409,8 +404,8 @@ each gets its own issue and is not a gate for the MVP.
   **Editor surface**: a single "Shortcut" row in the command editor that opens a
   capture dialog ("Press the key sequence after the leader…"). The dialog
   acknowledges each keystroke and shows the running prefix; Esc cancels, Enter
-  confirms. Clearing the field removes the binding. Conflicts (same sequence
-  bound elsewhere) surface inline.
+  confirms. Clearing the field removes the binding. Duplicate sequences are
+  allowed intentionally so host-specific commands can reuse the same mnemonic.
 
   **Discoverability**: when leader mode is active, a popover lists matching
   prefixes (Spacemacs `which-key` style) so users can see what is bound under the
@@ -418,14 +413,14 @@ each gets its own issue and is not a gate for the MVP.
   itself.
 
 These are listed in priority order: description and labels are the most common
-scaling asks; confirm-before-run and run-in-new-pane are smaller; the palette and
-per-command shortcuts are the largest follow-ups.
+scaling asks; run-in-new-pane is smaller; the palette and per-command shortcuts are
+the largest follow-ups.
 
 ### Persistence and backwards compatibility
 
 - All new fields on `SavedCommand` use `#[serde(default)]`.
-- Defaults that compare equal to their zero value are skipped on write to keep
-  older JSON round-tripping byte-identical.
+- Defaults that compare equal to their zero value are skipped on write to keep the
+  on-disk JSON compact and readable.
 - No new files. `commands.json` stays the single source of truth.
 - Existing tests for `commands.rs` serialization remain valid (they cover
   `SavedCommand::new()` which produces the zero-value shape for the new fields).
@@ -434,12 +429,12 @@ per-command shortcuts are the largest follow-ups.
 
 Unit tests (pure, no GTK):
 
-- `scan_placeholders` — empty body, single placeholder, duplicate placeholders,
-  placeholders inside strings, adjacent placeholders, malformed `{{ }}` ignored
-- `substitute` — all placeholders replaced, unknown keys preserved, empty values
-  allowed, values with `$` or `"` not interpreted
-- Save-time validation — missing parameter, undeclared parameter, empty choices,
-  default-not-in-choices, duplicate parameter names
+- `shell_escape` — spaces, quotes, dollar signs, semicolons, and newlines are escaped
+  into a shell-safe single value
+- `render_env_block` — renders a stable wrapper block with exports in declaration
+  order and leaves the original body unchanged
+- Runtime fallback selection — default chosen when present, first choice otherwise,
+  empty string when there are no choices
 - Serde round-trip including the new fields, and `#[serde(default)]` load of a
   legacy command
 
@@ -447,12 +442,12 @@ GTK widget tests:
 
 - Editor dialog instantiates with a parameterized command and round-trips it
 - Runtime parameter dialog instantiates, preview updates on combo change,
-  primary button emits expected substituted text
+  primary button emits the expected rendered shell block
 
 AT-SPI behavioural tests (follow-up):
 
 - Activate a parameterized command from the sidebar → dialog appears → select
-  default values → Enter → body reaches the pane
+  default values → Enter → rendered shell block reaches the pane
 - "Copy body" fires a toast and places text on the clipboard (verified via a
   helper that reads the clipboard in the test)
 - "Duplicate" creates a new entry and opens the editor
@@ -464,75 +459,59 @@ AT-SPI behavioural tests (follow-up):
 | Goal | How addressed |
 |------|---------------|
 | G1 — Clone a command in one click | "Duplicate" action in the per-row overflow menu; opens the editor on the copy |
-| G2 — Copy to clipboard | "Copy body" and "Copy with parameters…" actions; uses `gdk::Clipboard` with toast confirmation |
-| G3 — Parameterized commands with fixed-choice drop-downs | `CommandParameter { name, label, choices, default }` model; `{{NAME}}` placeholder syntax; save-time validation |
-| G4 — Parameter prompt that scales 1–6 parameters | `adw::Dialog` with one `adw::ComboRow` per parameter plus a live-substituted preview |
-| G5 — Scaling primitives identified | Description, labels, confirm-before-run, run-in-new-pane, command palette — documented here, implemented in follow-up issues |
+| G2 — Copy to clipboard | "Copy body" action; uses `gdk::Clipboard` with toast confirmation |
+| G3 — Parameterized commands with fixed-choice drop-downs | `CommandParameter { name, label, choices, default }` model; bash env-var injection; no body validation |
+| G4 — Parameter prompt that scales 1–6 parameters | `adw::Dialog` with one `adw::ComboRow` per parameter plus a live preview of the rendered shell block |
+| G5 — Scaling primitives identified | Description, labels, run-in-new-pane, command palette — documented here, implemented in follow-up issues |
 
 ---
 
 ## Development Plan
 
 - [ ] **Step 1** — Add `CommandParameter`, extend `SavedCommand` with
-  `parameters`/`description`/`labels`/`confirm_before_run`. Add `scan_placeholders`,
-  `substitute`, validation helpers. Unit tests. *(prerequisite: —)*
-- [ ] **Step 2** — Extend the command editor dialog with the Parameters group and
-  save-time validation banner. GTK widget tests. *(prerequisite: Step 1)*
+  `parameters`/`description`/`labels`. Add `shell_escape`, `render_env_block`, and
+  runtime fallback helpers. Unit tests. *(prerequisite: —)*
+- [ ] **Step 2** — Extend the command editor dialog with the Parameters group. GTK
+  widget tests. *(prerequisite: Step 1)*
 - [ ] **Step 3** — Implement the runtime parameter dialog (`adw::Dialog` + combo
   rows + live preview) and route sidebar activation through it for parameterized
   commands. *(prerequisite: Step 2)*
 - [ ] **Step 4** — "Duplicate" action in the per-row overflow menu. *(prerequisite:
   Step 1)*
-- [ ] **Step 5** — "Copy body" and "Copy with parameters…" actions; toast feedback.
-  *(prerequisite: Step 3 for the substituted variant)*
+- [ ] **Step 5** — "Copy body" action; toast feedback. *(prerequisite: Step 1)*
 - [ ] **Step 6** — Sidebar chip/icon for parameterized commands. *(prerequisite:
   Step 1)*
 - [ ] **Step 7** — Description field in the editor and row tooltip. *(prerequisite:
   Step 1, tracked as a follow-up issue)*
 - [ ] **Step 8** — Labels + filter chip bar in the Commands tab. *(prerequisite:
   Step 1, tracked as a follow-up issue)*
-- [ ] **Step 9** — Confirm-before-run flag and dialog. *(prerequisite: Step 1,
-  tracked as a follow-up issue)*
-- [ ] **Step 10** — Run-in-new-pane mode. *(follow-up issue; requires touching the
+- [ ] **Step 9** — Run-in-new-pane mode. *(follow-up issue; requires touching the
   layout module and may warrant its own mini-RFC)*
-- [ ] **Step 11** — Command palette (Ctrl+K). *(follow-up issue; binds through the
+- [ ] **Step 10** — Command palette (Ctrl+K). *(follow-up issue; binds through the
   RFC-024 shortcut registry)*
-- [ ] **Step 12** — Per-command keyboard shortcuts via leader-prefix chord.
+- [ ] **Step 11** — Per-command keyboard shortcuts via leader-prefix chord.
   Reuses the RFC-024 registry with `command:<uuid>` keys; adds a leader-mode
   controller, capture dialog, and (optionally, later) a `which-key`-style
-  popover. *(follow-up issue; depends on resolving Q6)*
+  popover. Duplicate sequences remain allowed; resolution is host/context-aware
+  and uses the first matching visible command. *(follow-up issue)*
 
-Steps 1–6 are the MVP that satisfies the user-raised asks. Steps 7–12 are the
+Steps 1–6 are the MVP that satisfies the user-raised asks. Steps 7–11 are the
 scaling roadmap — each gets its own issue once this RFC reaches Accepted.
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** — Should "Copy body" copy the raw template or the substituted form when
-  the command has parameters? Current answer: raw template. Substituted form is the
-  separate "Copy with parameters…" action. Confirm this split matches user
-  expectations.
-- [ ] **Q2** — Should the confirm-before-run flag be in this RFC or split out? It is
-  simple, but it has UX interactions with the parameter dialog (destructive
-  styling). Current answer: keep here.
-- [ ] **Q3** — Should the editor show a preview of the substituted body (using
-  defaults) while editing, to help the template author see what Run will produce?
-  Current answer: nice-to-have; not in the MVP.
-- [ ] **Q4** — Do we need parameter reordering in the editor? With `Vec<CommandParameter>`
-  the on-disk order is stable and drives dialog order. A drag handle per parameter
-  row is cheap but adds widget complexity. Current answer: defer to a follow-up;
-  ship with fixed insertion order.
-- [ ] **Q5** — Should `Copy with parameters…` write anything other than plain text
-  to the clipboard (e.g., also offer to preserve the command as a shareable JSON
-  blob)? Current answer: no — plain text only. Sharing at the library level is
-  RFC-023/#755 territory.
-- [ ] **Q6** — Per-command keyboard shortcuts: leader-prefix chord (default
-  `Ctrl+;` then a 1–2 key sequence) vs. flat global accelerators (`Ctrl+Shift+D`
-  per command) vs. both? Current preference: leader-prefix only — flat
-  accelerators do not scale past ~10 commands without colliding with the terminal
-  and system shortcuts, and supporting both doubles the editor and conflict-detection
-  surface. Confirm before Step 12 starts.
+- [x] **Q1** — Should "Copy body" copy the raw body or the rendered shell block when the command has parameters?
+  - **Answer**: raw body only.
+- [x] **Q2** — Should the editor show a preview of the rendered shell block (using current defaults) while editing, to help the author see what Run will produce?
+  - **Answer**: not in the MVP.
+- [x] **Q3** — Do we need parameter reordering in the editor? With `Vec<CommandParameter>` the on-disk order is stable and drives dialog order. A drag handle per parameter row is cheap but adds widget complexity.
+  - **Answer**: fixed insertion order.
+- [x] **Q4** — Should there be any clipboard action other than raw body copy?
+  - **Answer**: no. There is no "Copy with parameters…" action in this RFC.
+- [x] **Q5** — Per-command keyboard shortcuts: leader-prefix chord (default `Ctrl+;` then a 1–2 key sequence) vs. flat global accelerators (`Ctrl+Shift+D` per command) vs. both?
+  - **Answer**: leader-prefix only. Commands may intentionally share the same sequence across hosts. Initial implementation does not reject duplicates globally; it resolves against the current host/context and uses the first matching visible command.
 
 Mark questions `[x]` once resolved and record the answer inline.
 
