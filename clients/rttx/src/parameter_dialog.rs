@@ -15,7 +15,7 @@ pub fn show(parent: &Window, command: &SavedCommand, run_mode: CommandRunMode) {
     let header = adw::HeaderBar::new();
 
     let action_label = match run_mode {
-        CommandRunMode::Run => "Run",
+        CommandRunMode::Run | CommandRunMode::RunInNewPane => "Run",
         CommandRunMode::Insert => "Insert",
     };
     let action_button = gtk4::Button::with_label(action_label);
@@ -93,7 +93,7 @@ pub fn show(parent: &Window, command: &SavedCommand, run_mode: CommandRunMode) {
         let values = collect_values(&command_clone.parameters, &rows_for_action);
         let rendered = render_env_block(&command_clone.body, &values);
         let text = match run_mode {
-            CommandRunMode::Run => format!("{rendered}\n"),
+            CommandRunMode::Run | CommandRunMode::RunInNewPane => format!("{rendered}\n"),
             CommandRunMode::Insert => rendered,
         };
         parent_win.execute_command_text(&command_clone, run_mode, &text);

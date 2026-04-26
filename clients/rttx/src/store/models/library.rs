@@ -81,6 +81,7 @@ impl From<CommandRecord> for crate::commands::SavedCommand {
             default_run_mode: match rec.default_run_mode {
                 RunMode::Run => crate::commands::CommandRunMode::Run,
                 RunMode::Insert => crate::commands::CommandRunMode::Insert,
+                RunMode::RunInNewPane => crate::commands::CommandRunMode::RunInNewPane,
             },
             host_tags: rec.host_tags,
             parameters: rec.parameters,
@@ -99,6 +100,7 @@ impl From<&crate::commands::SavedCommand> for CommandRecord {
             default_run_mode: match cmd.default_run_mode {
                 crate::commands::CommandRunMode::Run => RunMode::Run,
                 crate::commands::CommandRunMode::Insert => RunMode::Insert,
+                crate::commands::CommandRunMode::RunInNewPane => RunMode::RunInNewPane,
             },
             host_tags: cmd.host_tags.clone(),
             parameters: cmd.parameters.clone(),

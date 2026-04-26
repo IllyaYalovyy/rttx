@@ -432,7 +432,7 @@ impl Window {
             let win = self.clone();
             let command_for_run = (*command).clone();
             action_row.connect_activated(move |_| {
-                win.execute_saved_command(&command_for_run, CommandRunMode::Run);
+                win.execute_saved_command(&command_for_run, command_for_run.default_run_mode);
             });
 
             let win = self.clone();
@@ -497,6 +497,11 @@ impl Window {
         run_mode: CommandRunMode,
         text: &str,
     ) {
+        if run_mode == CommandRunMode::RunInNewPane {
+            self.execute_command_in_new_pane(command, text);
+            return;
+        }
+
         let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
             return;
         };
@@ -513,6 +518,32 @@ impl Window {
             },
         );
         self.send_input_to_terminal(&terminal_uuid, text);
+    }
+
+    fn execute_command_in_new_pane(&self, command: &SavedCommand, text: &str) {
+        let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
+            return;
+        };
+
+        let new_uuid = self.split_terminal_returning_uuid(
+            &terminal_uuid,
+            crate::workspace::SplitOrientation::Horizontal,
+        );
+
+        let Some(new_terminal_uuid) = new_uuid else {
+            self.show_toast("Cannot split: maximum depth reached");
+            return;
+        };
+
+        self.set_terminal_recovery(
+            &new_terminal_uuid,
+            PaneRecovery {
+                source: PaneSource::Command { title: command.title.clone() },
+                target: None,
+                startup: vec![StartupStep::SendText { text: command.body.clone(), execute: true }],
+            },
+        );
+        self.send_input_to_terminal(&new_terminal_uuid, text);
     }
 
     fn command_target_terminal_uuid(&self) -> Option<String> {
