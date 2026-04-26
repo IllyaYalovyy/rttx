@@ -2,7 +2,7 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-use crate::commands::{CommandRunMode, SavedCommand};
+use crate::commands::{CommandParameter, CommandRunMode, SavedCommand};
 use crate::form_dialog::FormDialog;
 use crate::host_tag_picker::HostTagPicker;
 use crate::window::Window;
@@ -35,9 +35,23 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     let behavior_group = adw::PreferencesGroup::new();
     behavior_group.add(&run_mode_row);
 
+    // Parameters section
+    let params_group = adw::PreferencesGroup::builder().title("Parameters").build();
+    let params_box = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+    let params_list = gtk4::ListBox::new();
+    params_list.add_css_class("boxed-list");
+    params_list.set_selection_mode(gtk4::SelectionMode::None);
+    params_box.append(&params_list);
+
+    let add_param_button = gtk4::Button::with_label("Add parameter");
+    add_param_button.add_css_class("flat");
+    params_box.append(&add_param_button);
+    params_group.add(&params_box);
+
     form.content_box.append(&title_group);
     form.content_box.append(&body_scroll);
     form.content_box.append(&behavior_group);
+    form.content_box.append(&params_group);
     form.content_box.append(&host_picker.group);
     form.finish_layout();
 
@@ -45,7 +59,16 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
         title_row.set_text(&c.title);
         body_buffer.set_text(&c.body);
         run_mode.set_selected(run_mode_index(c.default_run_mode));
+        for param in &c.parameters {
+            append_parameter_row(&params_list, Some(param));
+        }
     }
+
+    // Add parameter button
+    let list_for_add = params_list.clone();
+    add_param_button.connect_clicked(move |_| {
+        append_parameter_row(&list_for_add, None);
+    });
 
     let dialog = form.dialog.clone();
     let status_label = form.status_label.clone();
@@ -56,6 +79,7 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
             &body_buffer,
             &run_mode,
             &host_picker,
+            &params_list,
             existing_uuid.clone(),
         ) {
             Ok(c) => c,
@@ -82,11 +106,62 @@ pub fn show_form(parent: &Window, command: Option<&SavedCommand>) {
     form.present(parent);
 }
 
+fn append_parameter_row(list: &gtk4::ListBox, param: Option<&CommandParameter>) {
+    let row_box = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+    row_box.set_margin_start(6);
+    row_box.set_margin_end(6);
+    row_box.set_margin_top(6);
+    row_box.set_margin_bottom(6);
+
+    let name_entry = adw::EntryRow::builder().title("Variable name").build();
+    let label_entry = adw::EntryRow::builder().title("Label").build();
+    let choices_entry = adw::EntryRow::builder().title("Choices (comma-separated)").build();
+    let default_entry = adw::EntryRow::builder().title("Default").build();
+
+    if let Some(p) = param {
+        name_entry.set_text(&p.name);
+        label_entry.set_text(&p.label);
+        choices_entry.set_text(&p.choices.join(", "));
+        if let Some(ref d) = p.default {
+            default_entry.set_text(d);
+        }
+    }
+
+    let remove_button = gtk4::Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Remove parameter")
+        .halign(gtk4::Align::End)
+        .build();
+    remove_button.add_css_class("flat");
+    remove_button.add_css_class("destructive-action");
+
+    let entries_group = adw::PreferencesGroup::new();
+    entries_group.add(&name_entry);
+    entries_group.add(&label_entry);
+    entries_group.add(&choices_entry);
+    entries_group.add(&default_entry);
+
+    row_box.append(&entries_group);
+    row_box.append(&remove_button);
+
+    let list_row = gtk4::ListBoxRow::new();
+    list_row.set_child(Some(&row_box));
+    list_row.set_selectable(false);
+    list_row.set_activatable(false);
+    list.append(&list_row);
+
+    let list_ref = list.clone();
+    remove_button.connect_clicked(move |_| {
+        list_ref.remove(&list_row);
+    });
+}
+
 fn build_command(
     title_row: &adw::EntryRow,
     body_buffer: &gtk4::TextBuffer,
     run_mode: &gtk4::DropDown,
     host_picker: &HostTagPicker,
+    params_list: &gtk4::ListBox,
     existing_uuid: Option<String>,
 ) -> Result<SavedCommand, String> {
     let title = title_row.text().trim().to_string();
@@ -100,13 +175,82 @@ fn build_command(
         return Err("Command body is required".into());
     }
 
+    let parameters = extract_parameters(params_list)?;
+
     let mut command = SavedCommand::new(title, body);
     if let Some(uuid) = existing_uuid {
         command.uuid = uuid;
     }
     command.default_run_mode = run_mode_from_index(run_mode.selected());
     command.host_tags = host_picker.selected_tags();
+    command.parameters = parameters;
     Ok(command)
+}
+
+fn extract_parameters(list: &gtk4::ListBox) -> Result<Vec<CommandParameter>, String> {
+    let mut params = Vec::new();
+    let mut idx = 0;
+    while let Some(row) = list.row_at_index(idx) {
+        idx += 1;
+        let Some(row_box) = row.child().and_then(|c| c.downcast::<gtk4::Box>().ok()) else {
+            continue;
+        };
+        let Some(group) =
+            row_box.first_child().and_then(|c| c.downcast::<adw::PreferencesGroup>().ok())
+        else {
+            continue;
+        };
+
+        let entries = collect_entry_rows(&group);
+        if entries.len() < 4 {
+            continue;
+        }
+
+        let name = entries[0].text().trim().to_string();
+        if name.is_empty() {
+            return Err("Parameter variable name is required".into());
+        }
+        let label = entries[1].text().trim().to_string();
+        if label.is_empty() {
+            return Err("Parameter label is required".into());
+        }
+        let choices_text = entries[2].text().trim().to_string();
+        let choices: Vec<String> = choices_text
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let default_text = entries[3].text().trim().to_string();
+        let default = if default_text.is_empty() { None } else { Some(default_text) };
+
+        params.push(CommandParameter { name, label, choices, default });
+    }
+    Ok(params)
+}
+
+fn collect_entry_rows(group: &adw::PreferencesGroup) -> Vec<adw::EntryRow> {
+    let mut entries = Vec::new();
+    let listbox = group.first_child().and_then(|c| {
+        // PreferencesGroup wraps content in a Box > ListBox
+        let mut child = Some(c);
+        while let Some(c) = child {
+            if let Ok(lb) = c.clone().downcast::<gtk4::ListBox>() {
+                return Some(lb);
+            }
+            child = c.next_sibling();
+        }
+        None
+    });
+    if let Some(lb) = listbox {
+        let mut i = 0;
+        while let Some(row) = lb.row_at_index(i) {
+            if let Ok(entry) = row.downcast::<adw::EntryRow>() {
+                entries.push(entry);
+            }
+            i += 1;
+        }
+    }
+    entries
 }
 
 const fn run_mode_from_index(index: u32) -> CommandRunMode {

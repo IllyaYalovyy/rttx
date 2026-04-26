@@ -7,6 +7,20 @@ pub enum CommandRunMode {
     Insert,
 }
 
+/// A fixed-choice parameter declared on a saved command.
+///
+/// The command body references the parameter via `$NAME` or `${NAME}`.
+/// At runtime rttx prompts for all declared parameters and injects them
+/// as `export` statements.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandParameter {
+    pub name: String,
+    pub label: String,
+    pub choices: Vec<String>,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SavedCommand {
     pub uuid: String,
@@ -17,6 +31,12 @@ pub struct SavedCommand {
     /// Host keys this command is scoped to. Empty means global (visible everywhere).
     #[serde(default)]
     pub host_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<CommandParameter>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 const fn default_run_mode() -> CommandRunMode {
@@ -32,7 +52,26 @@ impl SavedCommand {
             body: body.into(),
             default_run_mode: CommandRunMode::Run,
             host_tags: Vec::new(),
+            parameters: Vec::new(),
+            description: String::new(),
+            labels: Vec::new(),
         }
+    }
+
+    /// Create a duplicate with a new UUID and a "(copy)" title suffix.
+    #[must_use]
+    pub fn duplicate(&self) -> Self {
+        Self {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            title: format!("{} (copy)", self.title),
+            ..self.clone()
+        }
+    }
+
+    /// Whether this command has declared parameters.
+    #[must_use]
+    pub const fn has_parameters(&self) -> bool {
+        !self.parameters.is_empty()
     }
 
     #[must_use]
@@ -96,6 +135,47 @@ pub fn reorder(items: &mut Vec<SavedCommand>, source_uuid: &str, target_uuid: &s
     };
     let item = items.remove(src);
     items.insert(tgt, item);
+}
+
+/// Shell-escape a value for safe inclusion in a single-quoted string.
+///
+/// Wraps the value in single quotes, escaping any embedded single quotes.
+#[must_use]
+pub fn shell_escape(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Resolve the effective default value for a parameter.
+///
+/// Returns `default` if present in `choices`, otherwise the first choice,
+/// otherwise the empty string.
+#[must_use]
+pub fn resolve_default(param: &CommandParameter) -> &str {
+    if let Some(ref d) = param.default
+        && param.choices.contains(d)
+    {
+        return d;
+    }
+    param.choices.first().map_or("", String::as_str)
+}
+
+/// Render the env-var injection block for a parameterized command.
+///
+/// Wraps the body in a subshell with `export` statements for each parameter
+/// in declaration order.
+#[must_use]
+pub fn render_env_block(body: &str, values: &[(String, String)]) -> String {
+    use std::fmt::Write;
+    let mut result = String::from("(\n");
+    for (name, value) in values {
+        let _ = writeln!(result, "export {}={}", name, shell_escape(value));
+    }
+    result.push_str(body);
+    if !body.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push(')');
+    result
 }
 
 #[cfg(test)]
@@ -279,5 +359,189 @@ mod tests {
         let mut commands = vec![command];
         migrate_legacy(&mut commands);
         assert_eq!(commands[0].host_tags, vec!["example.com"]);
+    }
+
+    // ── Parameters ──────────────────────────────────────────────
+
+    #[test]
+    fn shell_escape_plain_value() {
+        assert_eq!(shell_escape("prod"), "'prod'");
+    }
+
+    #[test]
+    fn shell_escape_value_with_spaces() {
+        assert_eq!(shell_escape("hello world"), "'hello world'");
+    }
+
+    #[test]
+    fn shell_escape_value_with_single_quotes() {
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_escape_value_with_dollar_sign() {
+        assert_eq!(shell_escape("$HOME"), "'$HOME'");
+    }
+
+    #[test]
+    fn shell_escape_value_with_semicolons_and_newlines() {
+        assert_eq!(shell_escape("a;b\nc"), "'a;b\nc'");
+    }
+
+    #[test]
+    fn shell_escape_empty_string() {
+        assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn render_env_block_single_parameter() {
+        let result =
+            render_env_block("systemctl restart $SERVICE", &[("SERVICE".into(), "api".into())]);
+        assert_eq!(result, "(\nexport SERVICE='api'\nsystemctl restart $SERVICE\n)");
+    }
+
+    #[test]
+    fn render_env_block_multiple_parameters_preserves_order() {
+        let result = render_env_block(
+            "kubectl logs -n $NS $POD",
+            &[("NS".into(), "prod".into()), ("POD".into(), "web-1".into())],
+        );
+        assert_eq!(result, "(\nexport NS='prod'\nexport POD='web-1'\nkubectl logs -n $NS $POD\n)");
+    }
+
+    #[test]
+    fn render_env_block_body_with_trailing_newline() {
+        let result = render_env_block("echo done\n", &[("X".into(), "1".into())]);
+        assert_eq!(result, "(\nexport X='1'\necho done\n)");
+    }
+
+    #[test]
+    fn render_env_block_escapes_values() {
+        let result = render_env_block("echo $MSG", &[("MSG".into(), "it's a test".into())]);
+        assert_eq!(result, "(\nexport MSG='it'\\''s a test'\necho $MSG\n)");
+    }
+
+    #[test]
+    fn resolve_default_uses_declared_default_when_in_choices() {
+        let param = CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["dev".into(), "staging".into(), "prod".into()],
+            default: Some("staging".into()),
+        };
+        assert_eq!(resolve_default(&param), "staging");
+    }
+
+    #[test]
+    fn resolve_default_falls_back_to_first_choice_when_default_not_in_choices() {
+        let param = CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["dev".into(), "prod".into()],
+            default: Some("staging".into()),
+        };
+        assert_eq!(resolve_default(&param), "dev");
+    }
+
+    #[test]
+    fn resolve_default_falls_back_to_first_choice_when_no_default() {
+        let param = CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["dev".into(), "prod".into()],
+            default: None,
+        };
+        assert_eq!(resolve_default(&param), "dev");
+    }
+
+    #[test]
+    fn resolve_default_returns_empty_when_no_choices() {
+        let param = CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec![],
+            default: None,
+        };
+        assert_eq!(resolve_default(&param), "");
+    }
+
+    #[test]
+    fn duplicate_creates_new_uuid_and_copy_title() {
+        let mut original = SavedCommand::new("Deploy", "cargo build");
+        original.parameters = vec![CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["prod".into()],
+            default: None,
+        }];
+        original.description = "Deploys the app".into();
+        original.labels = vec!["deploy".into()];
+
+        let copy = original.duplicate();
+        assert_ne!(copy.uuid, original.uuid);
+        assert_eq!(copy.title, "Deploy (copy)");
+        assert_eq!(copy.body, original.body);
+        assert_eq!(copy.parameters, original.parameters);
+        assert_eq!(copy.description, original.description);
+        assert_eq!(copy.labels, original.labels);
+        assert_eq!(copy.host_tags, original.host_tags);
+    }
+
+    #[test]
+    fn has_parameters_returns_false_for_plain_command() {
+        let command = SavedCommand::new("Test", "echo hi");
+        assert!(!command.has_parameters());
+    }
+
+    #[test]
+    fn has_parameters_returns_true_when_parameters_present() {
+        let mut command = SavedCommand::new("Test", "echo $X");
+        command.parameters = vec![CommandParameter {
+            name: "X".into(),
+            label: "X".into(),
+            choices: vec!["1".into()],
+            default: None,
+        }];
+        assert!(command.has_parameters());
+    }
+
+    #[test]
+    fn serde_roundtrip_with_parameters() {
+        let mut command = SavedCommand::new("Parameterized", "systemctl restart $SERVICE");
+        command.parameters = vec![CommandParameter {
+            name: "SERVICE".into(),
+            label: "Service name".into(),
+            choices: vec!["api".into(), "web".into(), "worker".into()],
+            default: Some("api".into()),
+        }];
+        command.description = "Restart a service".into();
+        command.labels = vec!["ops".into(), "restart".into()];
+
+        let json = serde_json::to_string(&[&command]).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, vec![command]);
+    }
+
+    #[test]
+    fn legacy_json_without_new_fields_deserializes_with_defaults() {
+        let json = r#"[{
+            "uuid": "abc",
+            "title": "Old",
+            "body": "echo old",
+            "default_run_mode": "run"
+        }]"#;
+        let commands: Vec<SavedCommand> = serde_json::from_str(json).unwrap();
+        assert!(commands[0].parameters.is_empty());
+        assert!(commands[0].description.is_empty());
+        assert!(commands[0].labels.is_empty());
+    }
+
+    #[test]
+    fn empty_parameters_not_serialized() {
+        let command = SavedCommand::new("Plain", "echo hi");
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(!json.contains("parameters"));
+        assert!(!json.contains("description"));
+        assert!(!json.contains("labels"));
     }
 }

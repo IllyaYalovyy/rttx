@@ -32,6 +32,12 @@ pub struct CommandRecord {
     /// Empty means global visibility. Values are endpoint keys.
     #[serde(default)]
     pub host_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<crate::commands::CommandParameter>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 const fn default_run_mode() -> RunMode {
@@ -77,6 +83,9 @@ impl From<CommandRecord> for crate::commands::SavedCommand {
                 RunMode::Insert => crate::commands::CommandRunMode::Insert,
             },
             host_tags: rec.host_tags,
+            parameters: rec.parameters,
+            description: rec.description,
+            labels: rec.labels,
         }
     }
 }
@@ -92,6 +101,9 @@ impl From<&crate::commands::SavedCommand> for CommandRecord {
                 crate::commands::CommandRunMode::Insert => RunMode::Insert,
             },
             host_tags: cmd.host_tags.clone(),
+            parameters: cmd.parameters.clone(),
+            description: cmd.description.clone(),
+            labels: cmd.labels.clone(),
         }
     }
 }

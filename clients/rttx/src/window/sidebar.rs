@@ -301,6 +301,14 @@ impl Window {
             action_row.set_subtitle(&command.preview());
             action_row.set_activatable(true);
 
+            if command.has_parameters() {
+                let chip = gtk4::Label::new(Some("ENV"));
+                chip.add_css_class("dim-label");
+                chip.add_css_class("caption");
+                chip.set_valign(gtk4::Align::Center);
+                action_row.add_suffix(&chip);
+            }
+
             let insert_button = gtk4::Button::builder()
                 .icon_name("insert-text-symbolic")
                 .tooltip_text("Insert into current pane")
@@ -312,11 +320,23 @@ impl Window {
             let edit_item = gtk4::gio::MenuItem::new(Some("Edit"), None);
             edit_item
                 .set_action_and_target_value(Some("win.edit-command"), Some(&uuid.to_variant()));
+            let duplicate_item = gtk4::gio::MenuItem::new(Some("Duplicate"), None);
+            duplicate_item.set_action_and_target_value(
+                Some("win.duplicate-command"),
+                Some(&uuid.to_variant()),
+            );
+            let copy_body_item = gtk4::gio::MenuItem::new(Some("Copy body"), None);
+            copy_body_item.set_action_and_target_value(
+                Some("win.copy-command-body"),
+                Some(&uuid.to_variant()),
+            );
             let delete_item = gtk4::gio::MenuItem::new(Some("Delete"), None);
             delete_item
                 .set_action_and_target_value(Some("win.delete-command"), Some(&uuid.to_variant()));
             let menu = gtk4::gio::Menu::new();
             menu.append_item(&edit_item);
+            menu.append_item(&duplicate_item);
+            menu.append_item(&copy_body_item);
             menu.append_item(&delete_item);
             let more_button = gtk4::MenuButton::builder()
                 .icon_name("view-more-symbolic")
@@ -409,6 +429,19 @@ impl Window {
     }
 
     pub(crate) fn execute_saved_command(&self, command: &SavedCommand, run_mode: CommandRunMode) {
+        if command.has_parameters() {
+            crate::parameter_dialog::show(self, command, run_mode);
+            return;
+        }
+        self.execute_command_text(command, run_mode, &command.input_for(run_mode));
+    }
+
+    pub(crate) fn execute_command_text(
+        &self,
+        command: &SavedCommand,
+        run_mode: CommandRunMode,
+        text: &str,
+    ) {
         let Some(terminal_uuid) = self.command_target_terminal_uuid() else {
             return;
         };
@@ -424,7 +457,7 @@ impl Window {
                 }],
             },
         );
-        self.send_input_to_terminal(&terminal_uuid, &command.input_for(run_mode));
+        self.send_input_to_terminal(&terminal_uuid, text);
     }
 
     fn command_target_terminal_uuid(&self) -> Option<String> {

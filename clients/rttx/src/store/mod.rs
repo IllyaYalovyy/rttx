@@ -435,6 +435,9 @@ mod tests {
             body: "echo hi".into(),
             default_run_mode: crate::commands::CommandRunMode::Insert,
             host_tags: vec![],
+            parameters: vec![],
+            description: String::new(),
+            labels: vec![],
         };
         store.save_library(&[place], &[cmd]).unwrap();
         let (places, commands) = store.load_library().into_value().unwrap();
