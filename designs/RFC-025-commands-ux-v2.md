@@ -2,7 +2,7 @@
 
 | Field         | Value         |
 |---------------|---------------|
-| Status        | Draft         |
+| Status        | Accepted      |
 | Author(s)     | Illya Yalovyy |
 | Supersedes    | —             |
 | Superseded by | —             |
