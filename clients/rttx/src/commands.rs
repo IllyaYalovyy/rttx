@@ -100,6 +100,30 @@ pub fn matches_query(command: &SavedCommand, query: &str) -> bool {
         || command.body.to_ascii_lowercase().contains(&query)
         || command.description.to_ascii_lowercase().contains(&query)
         || command.host_tags.iter().any(|tag| tag.to_ascii_lowercase().contains(&query))
+        || command.labels.iter().any(|l| l.to_ascii_lowercase().contains(&query))
+}
+
+/// Returns `true` if the command has at least one label in `active_labels`.
+///
+/// When `active_labels` is empty, all commands match (no filter active).
+#[must_use]
+pub fn matches_labels(command: &SavedCommand, active_labels: &[String]) -> bool {
+    if active_labels.is_empty() {
+        return true;
+    }
+    command.labels.iter().any(|l| active_labels.contains(l))
+}
+
+/// Collect all distinct labels from a set of commands, sorted alphabetically.
+#[must_use]
+pub fn collect_labels(commands: &[SavedCommand]) -> Vec<String> {
+    let mut labels: Vec<String> = commands
+        .iter()
+        .flat_map(|c| c.labels.iter().cloned())
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
 }
 
 /// Returns `true` if the command should be visible for the given host key.
@@ -552,5 +576,61 @@ mod tests {
         assert!(!json.contains("parameters"));
         assert!(!json.contains("description"));
         assert!(!json.contains("labels"));
+    }
+
+    // ── Label filtering ─────────────────────────────────────────
+
+    #[test]
+    fn matches_query_searches_labels() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.labels = vec!["ops".into(), "deploy".into()];
+        assert!(matches_query(&command, "ops"));
+        assert!(matches_query(&command, "deploy"));
+        assert!(!matches_query(&command, "diag"));
+    }
+
+    #[test]
+    fn matches_labels_empty_filter_matches_all() {
+        let command = SavedCommand::new("Test", "echo hi");
+        assert!(matches_labels(&command, &[]));
+    }
+
+    #[test]
+    fn matches_labels_returns_true_when_command_has_matching_label() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.labels = vec!["ops".into(), "deploy".into()];
+        assert!(matches_labels(&command, &["ops".into()]));
+        assert!(matches_labels(&command, &["deploy".into()]));
+    }
+
+    #[test]
+    fn matches_labels_returns_false_when_no_match() {
+        let mut command = SavedCommand::new("Deploy", "cargo build");
+        command.labels = vec!["ops".into()];
+        assert!(!matches_labels(&command, &["diag".into()]));
+    }
+
+    #[test]
+    fn matches_labels_unlabeled_command_excluded_when_filter_active() {
+        let command = SavedCommand::new("Plain", "echo hi");
+        assert!(!matches_labels(&command, &["ops".into()]));
+    }
+
+    #[test]
+    fn collect_labels_returns_sorted_unique_labels() {
+        let mut c1 = SavedCommand::new("A", "echo a");
+        c1.labels = vec!["deploy".into(), "ops".into()];
+        let mut c2 = SavedCommand::new("B", "echo b");
+        c2.labels = vec!["ops".into(), "diag".into()];
+        let c3 = SavedCommand::new("C", "echo c");
+
+        let labels = collect_labels(&[c1, c2, c3]);
+        assert_eq!(labels, vec!["deploy", "diag", "ops"]);
+    }
+
+    #[test]
+    fn collect_labels_empty_commands_returns_empty() {
+        let labels = collect_labels(&[]);
+        assert!(labels.is_empty());
     }
 }

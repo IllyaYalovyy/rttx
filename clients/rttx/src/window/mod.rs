@@ -59,6 +59,8 @@ mod imp {
         pub command_list: gtk4::ListBox,
         pub command_scroll: gtk4::ScrolledWindow,
         pub command_empty: adw::StatusPage,
+        pub label_filter_box: gtk4::FlowBox,
+        pub active_labels: RefCell<Vec<String>>,
         pub toast_overlay: adw::ToastOverlay,
         pub new_button: gtk4::MenuButton,
         pub connect_button: gtk4::MenuButton,
@@ -278,8 +280,17 @@ mod imp {
             ));
             self.command_empty.set_vexpand(true);
 
+            self.label_filter_box.set_selection_mode(gtk4::SelectionMode::None);
+            self.label_filter_box.set_homogeneous(false);
+            self.label_filter_box.set_margin_start(12);
+            self.label_filter_box.set_margin_end(12);
+            self.label_filter_box.set_row_spacing(4);
+            self.label_filter_box.set_column_spacing(4);
+            self.label_filter_box.set_visible(false);
+
             let commands_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             commands_page.append(&commands_header);
+            commands_page.append(&self.label_filter_box);
             commands_page.append(&self.command_scroll);
             commands_page.append(&self.command_empty);
 

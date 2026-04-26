@@ -116,3 +116,54 @@ fn empty_description_not_serialized_in_json() {
     let json = serde_json::to_string(&command).unwrap();
     assert!(!json.contains("description"));
 }
+
+#[test]
+fn commands_with_labels_roundtrip() {
+    let (_tmp, store) = test_store();
+
+    let mut command = SavedCommand::new("Deploy", "cargo build");
+    command.labels = vec!["ops".into(), "deploy".into()];
+
+    store.save_commands(&[command.clone()]).unwrap();
+    let loaded = store.load_commands();
+    assert_eq!(loaded, vec![command]);
+}
+
+#[test]
+fn label_filtering_composes_with_text_search() {
+    let mut c1 = SavedCommand::new("Deploy prod", "cargo build --release");
+    c1.labels = vec!["ops".into(), "deploy".into()];
+    let mut c2 = SavedCommand::new("Deploy dev", "cargo build");
+    c2.labels = vec!["ops".into(), "dev".into()];
+    let c3 = SavedCommand::new("Tail logs", "journalctl -fu app");
+
+    let all = [c1, c2, c3];
+
+    // Label filter alone
+    let active = vec!["ops".into()];
+    assert_eq!(all.iter().filter(|c| commands::matches_labels(c, &active)).count(), 2);
+
+    // Label + text search compose with AND
+    let filtered: Vec<_> = all
+        .iter()
+        .filter(|c| commands::matches_labels(c, &active))
+        .filter(|c| commands::matches_query(c, "prod"))
+        .collect();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].title, "Deploy prod");
+}
+
+#[test]
+fn collect_labels_from_stored_commands() {
+    let (_tmp, store) = test_store();
+
+    let mut c1 = SavedCommand::new("A", "echo a");
+    c1.labels = vec!["deploy".into(), "ops".into()];
+    let mut c2 = SavedCommand::new("B", "echo b");
+    c2.labels = vec!["ops".into(), "diag".into()];
+
+    store.save_commands(&[c1, c2]).unwrap();
+    let loaded = store.load_commands();
+    let labels = commands::collect_labels(&loaded);
+    assert_eq!(labels, vec!["deploy", "diag", "ops"]);
+}
