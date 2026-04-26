@@ -1,4 +1,4 @@
-# RFC-025: Pane State Clone on Split
+# RFC-026: Pane State Clone on Split
 
 | Field         | Value         |
 |---------------|---------------|
