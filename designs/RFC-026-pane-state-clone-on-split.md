@@ -2,7 +2,7 @@
 
 | Field         | Value         |
 |---------------|---------------|
-| Status        | Draft         |
+| Status        | Accepted      |
 | Author(s)     | Illya Yalovyy |
 | Supersedes    | —             |
 | Superseded by | —             |
@@ -217,7 +217,10 @@ When the daemon receives `ClonePane`:
 
 2. **Read CWD.** Use `parent_pane.effective_cwd()` — this checks OSC 7 first,
    then falls back to `/proc/<pid>/cwd`. This is always accurate regardless of
-   shell OSC 7 support.
+   shell OSC 7 support. If the parent pane's process has exited
+   (`exit_status` is `Some`), `/proc/<pid>/cwd` will not be available; use the
+   last known `pane.cwd` from OSC 7. If neither is available, fall back to
+   `$HOME`.
 
 3. **Copy history file.** Copy the parent pane's `.hist` file to the new pane's
    history path. If the parent has `no_persist`, skip this step. After the copy,
@@ -239,11 +242,16 @@ When the daemon receives `ClonePane`:
    inherited environment, and the requested terminal size. The shell is a new
    process — no PTY sharing.
 
-8. **Apply terminal modes.** After the shell starts, send the appropriate escape
-   sequences to the new PTY to restore the parent's terminal mode state
+8. **Apply terminal modes to the child PTY.** After the shell starts, send
+   escape sequences to the new PTY to restore the parent's terminal mode state
    (bracketed paste enable, application cursor keys, etc.). This ensures the
-   shell and any TUI application started in the new pane see the same mode
-   environment.
+   shell sees the correct terminal capabilities from the start. The
+   `alternate_screen` flag is **not** applied — it is a property of the running
+   application (e.g., vim), not the terminal configuration, and a fresh shell
+   should never start in alternate screen mode. The client independently applies
+   `inherited_modes` from the `PaneCreated` response to configure its VTE widget
+   (see §4). Both sides act: the daemon sets PTY state so the shell is correct;
+   the client sets widget state so rendering is correct.
 
 ### 3. Environment tracking
 
@@ -259,24 +267,31 @@ This is not a full `/proc/<pid>/environ` clone — it only covers variables the
 daemon explicitly set. Shell-internal variables (`PS1`, aliases, functions) are
 not cloned because they live inside the shell process, not the PTY environment.
 
+`spawn_env` must be persisted in `PaneSpecV1` (RFC-022) so that reconstructed
+panes after a daemon restart can still be cloned correctly.
+
 ### 4. `PaneCreated` response extension
 
-The `PaneCreated` response must include the parent's terminal mode state so the
-client can configure the new widget before output arrives:
+The `PaneCreated` response gains a new field for the parent's terminal mode
+state so the client can configure the new widget before output arrives:
 
 ```protobuf
 message PaneCreated {
-  bytes pane_id = 1;
-  optional TerminalModeState inherited_modes = 2;
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 runtime_revision = 3;
+  optional TerminalModeState inherited_modes = 4;  // new — present only for ClonePane
 }
 ```
 
 `TerminalModeState` already exists in the v3 proto for `PaneSnapshot`. Reuse it.
 
-When `inherited_modes` is present, the client applies the modes to the new
-`PersistentPaneView` immediately, before any `OutputDelta` arrives. This
-prevents a flash of incorrect behavior (e.g., bracketed paste disabled for a
-moment in a pane that should have it enabled).
+When `inherited_modes` is present (i.e., the pane was created via `ClonePane`),
+the client applies the modes to the new `PersistentPaneView` immediately, before
+any `OutputDelta` arrives. This prevents a flash of incorrect behavior (e.g.,
+bracketed paste disabled for a moment in a pane that should have it enabled).
+
+For `CreatePane` responses, `inherited_modes` is absent.
 
 ### 5. Client changes
 
@@ -316,6 +331,14 @@ After this change:
 - `CreatePane` without `cwd` → spawn in `$HOME`
 - `ClonePane` → spawn in parent pane's directory (always accurate)
 
+### 7. Remote endpoints
+
+`ClonePane` works identically for local and remote daemons — the daemon on the
+remote host performs all cloning locally. The `/proc/<pid>/cwd` fallback is
+Linux-specific; on remote hosts running a different OS, the daemon relies on
+OSC 7 for CWD (with `$HOME` as the final fallback). This is acceptable because
+rttx targets Linux (RFC-001 principle 1).
+
 ---
 
 ## Goals Alignment
@@ -332,35 +355,42 @@ After this change:
 
 ## Development Plan
 
-- [ ] **Step 1** — Add `spawn_env` field to `Pane`; record environment at spawn
-  time *(prerequisite: this RFC accepted)*
+- [ ] **Step 1** — Add `spawn_env` field to `Pane` and `PaneSpecV1`; record
+  environment at spawn time; persist and restore on daemon restart. Tests:
+  round-trip serialization, reconstructed pane retains `spawn_env`.
+  *(prerequisite: this RFC accepted)*
 - [ ] **Step 2** — Add `ClonePane` message to `rttx-v3.proto` and extend
-  `PaneCreated` with `inherited_modes` *(prerequisite: Step 1)*
-- [ ] **Step 3** — Implement `ClonePane` handler in the daemon: CWD resolution,
-  history copy, env clone, mode snapshot, shell spawn, mode application
+  `PaneCreated` with `inherited_modes`. Tests: proto round-trip, field presence
+  for `ClonePane` vs `CreatePane` responses. *(prerequisite: Step 1)*
+- [ ] **Step 3** — Implement `ClonePane` handler in the daemon: CWD resolution
+  (including exited parent fallback), history copy, env clone, mode snapshot,
+  shell spawn, mode application (excluding `alternate_screen`). Tests: CWD
+  clone with multiple panes, history file copy, mode inheritance, `no_persist`
+  inheritance, exited parent pane fallback, parent not found error.
   *(prerequisite: Step 2)*
 - [ ] **Step 4** — Update client split path to use `ClonePane` instead of
-  `CreatePane`; apply `inherited_modes` on the new widget *(prerequisite:
-  Step 3)*
+  `CreatePane`; apply `inherited_modes` on the new widget. Tests: GTK split
+  test verifying `ClonePane` is sent with correct parent pane ID.
+  *(prerequisite: Step 3)*
 - [ ] **Step 5** — Remove `any_pane_cwd()` fallback from `CreatePane` handler;
-  default to `$HOME` when no CWD is provided *(prerequisite: Step 4)*
-- [ ] **Step 6** — Tests: CWD clone accuracy with multiple panes, history file
-  copy, mode inheritance, `no_persist` inheritance, `CreatePane` without CWD
-  defaults to `$HOME` *(prerequisite: Steps 3–5)*
+  default to `$HOME` when no CWD is provided. Tests: `CreatePane` without CWD
+  defaults to `$HOME`, end-to-end split with multiple panes verifying correct
+  CWD. *(prerequisite: Step 4)*
 
 ---
 
 ## Open Questions
 
-- [ ] **Q1** — Should `ClonePane` support an optional CWD override? Use case:
-  splitting a pane but opening a different directory (e.g., from a place
-  bookmark). Current thinking: no — use `CreatePane` with an explicit CWD for
-  that case. `ClonePane` means "exact state clone."
-- [ ] **Q2** — Should the daemon apply terminal modes via escape sequences to
+- [x] **Q1** — Should `ClonePane` support an optional CWD override?
+  **Resolved:** no. Use `CreatePane` with an explicit CWD for that case.
+  `ClonePane` means "exact state clone."
+- [x] **Q2** — Should the daemon apply terminal modes via escape sequences to
   the child PTY (§2 step 8), or should the client be responsible for sending
-  mode-setting sequences after receiving `inherited_modes`? Daemon-side is
-  simpler and avoids a race, but the client may need to know the modes anyway
-  for its own widget configuration.
+  mode-setting sequences after receiving `inherited_modes`? **Resolved:** both.
+  The daemon applies modes to the PTY so the shell sees correct capabilities
+  from the start. The client applies `inherited_modes` from `PaneCreated` to
+  configure its VTE widget so rendering is correct before the first output.
+  `alternate_screen` is excluded from PTY-side application (see §2 step 8).
 
 ---
 
