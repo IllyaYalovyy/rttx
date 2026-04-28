@@ -47,15 +47,15 @@ async fn cleanup_sequence_broadcast_on_pane_exit() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid =
-        create_runtime(&mut client, "cleanup-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "cleanup-test", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
     // Send "exit" to make the shell terminate.
     send_input(&mut client, &sid, &pane_id, b"exit\n").await;
 
-    let (delta_data, exit_msg) = collect_deltas_until_exit(&mut client, Duration::from_secs(15)).await;
+    let (delta_data, exit_msg) =
+        collect_deltas_until_exit(&mut client, Duration::from_secs(15)).await;
 
     assert!(exit_msg.is_some(), "should receive PaneExited");
 
@@ -75,8 +75,7 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid =
-        create_runtime(&mut client, "reattach-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "reattach-test", proto::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 

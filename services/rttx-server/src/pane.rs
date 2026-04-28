@@ -934,9 +934,6 @@ mod tests {
         let log_path = pane.scrollback_log_path.as_ref().unwrap();
         let content = std::fs::read(log_path).unwrap();
         let cleanup = crate::screen::terminal_cleanup_bytes();
-        assert!(
-            content.ends_with(cleanup),
-            "scrollback log should end with cleanup bytes"
-        );
+        assert!(content.ends_with(cleanup), "scrollback log should end with cleanup bytes");
     }
 }
