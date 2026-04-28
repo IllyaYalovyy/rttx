@@ -77,6 +77,11 @@ pub static DEFAULT_SHORTCUTS: &[ShortcutDef] = &[
         default_accels: &["<Ctrl><Shift>R"],
     },
     ShortcutDef {
+        action: "repair-terminal",
+        label: "Repair terminal",
+        default_accels: &["<Ctrl><Shift>X"],
+    },
+    ShortcutDef {
         action: "connect-to-existing",
         label: "Connect to existing workspace",
         default_accels: &["<Ctrl><Shift>A"],
@@ -232,5 +237,11 @@ mod tests {
         migrate_pane_navigation(&PaneNavigationKeys::CtrlShiftArrow, &mut shortcuts);
         assert_eq!(shortcuts["navigate-left"], vec!["<Alt>h"]);
         assert_eq!(shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
+    }
+
+    #[test]
+    fn repair_terminal_shortcut_registered() {
+        let accels = default_accels("repair-terminal");
+        assert_eq!(accels, vec!["<Ctrl><Shift>X"]);
     }
 }

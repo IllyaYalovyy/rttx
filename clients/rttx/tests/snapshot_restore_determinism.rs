@@ -78,3 +78,25 @@ fn full_snapshot_restore_cycle_overrides_scrollback_modes() {
     assert!(modes.application_cursor_keys, "snapshot says cursor keys on");
     assert!(!modes.application_keypad, "snapshot says keypad off");
 }
+
+/// Repair terminal resets VTE to ground state after stuck TUI modes.
+/// Simulates the case where SSH dies while a remote TUI had cursor hidden,
+/// mouse tracking on, and application cursor keys enabled. #811.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn repair_terminal_clears_stuck_tui_modes() {
+    require_display!();
+
+    let pane = PersistentPaneView::new("repair-stuck-1", "runtime-1");
+
+    // Simulate stuck state: alt-screen on, cursor hidden, mouse on.
+    pane.vte().feed(b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1h");
+    pane.set_application_modes(true, false);
+
+    let handle = rttx::terminal::handle::TerminalHandle::Managed(pane.clone());
+    handle.repair_terminal();
+
+    let modes = pane.terminal_modes();
+    assert!(!modes.application_cursor_keys, "cursor keys must be off after repair");
+    assert!(!modes.application_keypad, "keypad must be off after repair");
+}

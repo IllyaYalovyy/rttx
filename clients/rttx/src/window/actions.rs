@@ -40,6 +40,7 @@ impl Window {
             ("zoom-reset", |w| w.zoom_focused(0)),
             ("toggle-pane-zoom", Self::toggle_pane_zoom),
             ("rotate-layout", Self::rotate_layout),
+            ("repair-terminal", Self::repair_focused_terminal),
             ("new-session", Self::add_session),
             ("new-ephemeral-workspace", Self::add_ephemeral_session),
             ("new-remote-workspace", Self::show_new_remote_workspace_dialog),
@@ -280,6 +281,15 @@ impl Window {
             && let Some(terminal) = self.terminal_handle(&uuid)
         {
             terminal.toggle_search();
+        }
+    }
+
+    fn repair_focused_terminal(&self) {
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(terminal) = self.terminal_handle(&uuid)
+        {
+            terminal.repair_terminal();
+            self.show_toast("Terminal repaired");
         }
     }
 

@@ -1496,4 +1496,23 @@ mod search_tests {
         assert!(bytes.windows(6).any(|w| w == b"\x1b[?25h"), "cursor visible");
         assert!(bytes.windows(3).any(|w| w == b"\x1b[m"), "SGR reset");
     }
+
+    /// `TerminalHandle::repair_terminal` resets tracked modes on managed
+    /// panes so key encoding matches the cleaned VTE state. #811.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn repair_terminal_resets_tracked_modes_on_managed_handle() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let pane = super::persistent_widget::PersistentPaneView::new("repair-mod-1", "rt-1");
+        pane.set_application_modes(true, true);
+        let handle = super::handle::TerminalHandle::Managed(pane.clone());
+        handle.repair_terminal();
+        let modes = pane.terminal_modes();
+        assert!(!modes.application_cursor_keys);
+        assert!(!modes.application_keypad);
+    }
 }

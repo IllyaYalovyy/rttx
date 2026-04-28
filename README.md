@@ -170,6 +170,7 @@ workspaces will fail to connect.
 | Zoom in / out / reset | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Zoom pane (toggle) | Ctrl+Shift+Z |
 | Rotate layout | Ctrl+Shift+R |
+| Repair terminal | Ctrl+Shift+X |
 | Navigate panes | Alt+Arrow (configurable) |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |
