@@ -507,6 +507,34 @@ fn csi_query_len(data: &[u8]) -> Option<usize> {
     }
 }
 
+/// Terminal cleanup byte sequence fed into a pane's screen when its
+/// process exits.
+///
+/// Resets every mode a TUI might have left enabled so that reconnecting
+/// clients and persisted snapshots see a clean terminal state.
+///
+/// Contents (in order):
+/// 1. `CAN` (`\x18`) — abort any in-progress escape sequence
+/// 2. Exit alt-screen: DECRST 1049 (modern) + DECRST 47 (legacy)
+/// 3. Show cursor: DECSET 25
+/// 4. Disable mouse: DECRST 1000, 1002, 1003, 1006, 1015
+/// 5. Disable focus reporting: DECRST 1004
+/// 6. Normal cursor keys: DECRST 1
+/// 7. Numeric keypad: DECPNM (`ESC >`)
+/// 8. Disable bracketed paste: DECRST 2004
+/// 9. Reset SGR: `ESC [ m`
+#[must_use]
+pub const fn terminal_cleanup_bytes() -> &'static [u8] {
+    b"\x18\
+      \x1b[?1049l\x1b[?47l\
+      \x1b[?25h\
+      \x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\
+      \x1b[?1004l\
+      \x1b[?1l\x1b>\
+      \x1b[?2004l\
+      \x1b[m"
+}
+
 fn parse_osc7_current_directory(uri: &str) -> Option<String> {
     let path_with_host = uri.strip_prefix("file://")?;
     let path_start = path_with_host.find('/')?;
@@ -1403,5 +1431,61 @@ mod tests {
         // Snapshot says cursor was visible.
         screen.restore_cursor_visible(true);
         assert!(screen.cursor_visible());
+    }
+
+    // ── terminal_cleanup_bytes ──────────────────────────────────────
+
+    #[test]
+    fn terminal_cleanup_bytes_contains_required_sequences() {
+        let bytes = terminal_cleanup_bytes();
+        assert_eq!(bytes[0], 0x18, "must start with CAN");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1049l"), "alt-screen modern off");
+        assert!(bytes.windows(6).any(|w| w == b"\x1b[?47l"), "alt-screen legacy off");
+        assert!(bytes.windows(6).any(|w| w == b"\x1b[?25h"), "cursor visible");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1000l"), "mouse normal off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1002l"), "mouse button off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1003l"), "mouse any off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1006l"), "SGR mouse off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1015l"), "urxvt mouse off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1004l"), "focus reporting off");
+        assert!(bytes.windows(5).any(|w| w == b"\x1b[?1l"), "DECCKM off");
+        assert!(bytes.windows(2).any(|w| w == b"\x1b>"), "DECPNM");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?2004l"), "bracketed paste off");
+        assert!(bytes.windows(3).any(|w| w == b"\x1b[m"), "SGR reset");
+    }
+
+    #[test]
+    fn cleanup_bytes_reset_dirty_screen_state() {
+        let mut screen = PaneScreen::new(4096);
+        // Simulate a TUI that enabled everything.
+        screen.feed(b"\x1b[?1049h"); // alt-screen
+        screen.feed(b"\x1b[?25l"); // hide cursor
+        screen.feed(b"\x1b[?1003h"); // any-event mouse
+        screen.feed(b"\x1b[?1006h"); // SGR mouse
+        screen.feed(b"\x1b[?1004h"); // focus reporting
+        screen.feed(b"\x1b[?1h"); // application cursor keys
+        screen.feed(b"\x1b="); // application keypad
+        screen.feed(b"\x1b[?2004h"); // bracketed paste
+
+        assert!(screen.alternate_screen());
+        assert!(!screen.cursor_visible());
+        assert_eq!(screen.mouse_tracking_mode(), 1003);
+        assert!(screen.sgr_mouse_mode());
+        assert!(screen.focus_event_mode());
+        assert!(screen.application_cursor_keys());
+        assert!(screen.application_keypad());
+        assert!(screen.bracketed_paste_mode());
+
+        // Feed cleanup.
+        screen.feed(terminal_cleanup_bytes());
+
+        assert!(!screen.alternate_screen());
+        assert!(screen.cursor_visible());
+        assert_eq!(screen.mouse_tracking_mode(), 0);
+        assert!(!screen.sgr_mouse_mode());
+        assert!(!screen.focus_event_mode());
+        assert!(!screen.application_cursor_keys());
+        assert!(!screen.application_keypad());
+        assert!(!screen.bracketed_paste_mode());
     }
 }

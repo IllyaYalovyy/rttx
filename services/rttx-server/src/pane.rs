@@ -192,6 +192,20 @@ impl Pane {
         self.exit_status = Some(status);
     }
 
+    /// Feed the terminal cleanup sequence into the pane's screen state.
+    ///
+    /// Called when the pane process exits so that alt-screen, mouse tracking,
+    /// hidden cursor, and other TUI modes are reset. Returns the cleanup
+    /// bytes for the caller to broadcast to attached clients and append to
+    /// the scrollback log.
+    pub fn feed_cleanup(&mut self) -> &'static [u8] {
+        let cleanup = crate::screen::terminal_cleanup_bytes();
+        self.screen.feed(cleanup);
+        self.pending_flush.extend_from_slice(cleanup);
+        self.output_seq += 1;
+        cleanup
+    }
+
     /// Release the in-memory scrollback buffer and pending flush data.
     ///
     /// Called when the pane process exits so the up-to-10 MB `raw_bytes`
@@ -826,5 +840,103 @@ mod tests {
         // Metadata wins over replay-derived state.
         assert!(!pane.screen.bracketed_paste_mode());
         assert!(!pane.screen.application_cursor_keys());
+    }
+
+    // ── feed_cleanup tests ──────────────────────────────────────────
+
+    #[test]
+    fn feed_cleanup_resets_dirty_screen_modes() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"\x1b[?1049h"); // alt-screen
+        pane.feed_output(b"\x1b[?25l"); // hide cursor
+        pane.feed_output(b"\x1b[?1003h"); // any-event mouse
+        pane.feed_output(b"\x1b[?1006h"); // SGR mouse
+        pane.feed_output(b"\x1b[?1004h"); // focus reporting
+        pane.feed_output(b"\x1b[?1h"); // application cursor keys
+        pane.feed_output(b"\x1b="); // application keypad
+        pane.feed_output(b"\x1b[?2004h"); // bracketed paste
+
+        pane.feed_cleanup();
+
+        assert!(!pane.screen.alternate_screen());
+        assert!(pane.screen.cursor_visible());
+        assert_eq!(pane.screen.mouse_tracking_mode(), 0);
+        assert!(!pane.screen.sgr_mouse_mode());
+        assert!(!pane.screen.focus_event_mode());
+        assert!(!pane.screen.application_cursor_keys());
+        assert!(!pane.screen.application_keypad());
+        assert!(!pane.screen.bracketed_paste_mode());
+    }
+
+    #[test]
+    fn feed_cleanup_appends_to_pending_flush() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello");
+        let before = pane.pending_flush_len();
+
+        pane.feed_cleanup();
+
+        let cleanup_len = crate::screen::terminal_cleanup_bytes().len();
+        assert_eq!(pane.pending_flush_len(), before + cleanup_len);
+    }
+
+    #[test]
+    fn feed_cleanup_increments_output_seq() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let before = pane.output_seq;
+        pane.feed_cleanup();
+        assert_eq!(pane.output_seq, before + 1);
+    }
+
+    #[test]
+    fn feed_cleanup_returns_cleanup_bytes() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let returned = pane.feed_cleanup();
+        assert_eq!(returned, crate::screen::terminal_cleanup_bytes());
+    }
+
+    #[test]
+    fn feed_cleanup_is_idempotent_on_clean_state() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello\r\n");
+
+        pane.feed_cleanup();
+        pane.feed_cleanup();
+
+        assert!(pane.screen.cursor_visible());
+        assert_eq!(pane.screen.mouse_tracking_mode(), 0);
+        assert!(!pane.screen.alternate_screen());
+    }
+
+    #[test]
+    fn snapshot_after_cleanup_shows_clean_modes() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?2004h");
+
+        pane.feed_cleanup();
+
+        let snap = pane.to_screen_snapshot();
+        assert!(snap.cursor_visible);
+        assert!(!snap.modes.bracketed_paste);
+        assert_eq!(snap.modes.mouse_tracking_mode, 0);
+        assert!(!snap.modes.application_cursor_keys);
+    }
+
+    #[test]
+    fn cleanup_bytes_flushed_to_scrollback_log() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello");
+        pane.feed_cleanup();
+        pane.flush_scrollback(tmp.path(), session_id).unwrap();
+
+        let log_path = pane.scrollback_log_path.as_ref().unwrap();
+        let content = std::fs::read(log_path).unwrap();
+        let cleanup = crate::screen::terminal_cleanup_bytes();
+        assert!(
+            content.ends_with(cleanup),
+            "scrollback log should end with cleanup bytes"
+        );
     }
 }

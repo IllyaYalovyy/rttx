@@ -2211,6 +2211,22 @@ fn spawn_pty_read_loop(
         };
 
         let mut s = server.lock().await;
+
+        // Feed terminal cleanup sequence so the screen state and
+        // scrollback reflect a clean terminal (alt-screen off, cursor
+        // visible, mouse off, etc.) before marking the pane as exited.
+        if let Some(rt) = s.runtimes.get_mut(&runtime_id)
+            && let Some(pane) = rt.panes.get_mut(&pane_id)
+        {
+            pane.feed_cleanup();
+        }
+        let cleanup_delta = ClientMsg::V2(protocol::delta(
+            runtime_id,
+            pane_id,
+            bytes::Bytes::from_static(crate::screen::terminal_cleanup_bytes()),
+        ));
+        s.broadcast_to_runtime(runtime_id, &cleanup_delta);
+
         let exit_msg = if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
             let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
                 ClientMsg::V2(protocol::pane_exited(runtime_id, pane_id, status, revision))
