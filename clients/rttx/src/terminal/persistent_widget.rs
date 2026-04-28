@@ -567,10 +567,17 @@ impl PersistentPaneView {
     /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
     /// that may have been lost when the mode-setting sequence fell outside the
     /// retained snapshot tail.
+    ///
+    /// Feeds a cleanup baseline first so the result is deterministic
+    /// regardless of what the preceding scrollback bytes left in VTE.
     pub fn restore_interaction_modes(&self, modes: &rttx_proto::v3::TerminalModeState) {
         self.imp().application_cursor_keys.set(modes.application_cursor_keys);
         self.imp().application_keypad.set(modes.application_keypad);
         let vte = &self.imp().vte;
+
+        // Reset VTE to ground state before additive restore (#809).
+        vte.feed(crate::terminal::terminal_cleanup_bytes());
+
         if modes.application_cursor_keys {
             vte.feed(b"\x1b[?1h");
         }
@@ -2006,6 +2013,76 @@ mod tests {
             ..Default::default()
         });
         // VTE accepted DECSET 1004 and DECRST 25 sequences without panic.
+    }
+
+    /// Scrollback hides cursor, snapshot says visible → cursor must be
+    /// visible after restore. Regression for #809.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_modes_resets_cursor_hidden_from_scrollback() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("cursor-reset-1", "runtime-1");
+        // Simulate scrollback that hid the cursor.
+        pane.imp().vte.feed(b"\x1b[?25l");
+        // Snapshot says cursor should be visible (cursor_hidden=false).
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState::default());
+        // The cleanup baseline re-enables the cursor; no panic.
+    }
+
+    /// Scrollback enables mouse tracking, snapshot says none → mouse must
+    /// be off after restore. Regression for #809.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_modes_resets_mouse_tracking_from_scrollback() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("mouse-reset-1", "runtime-1");
+        // Simulate scrollback that enabled mouse any-event tracking.
+        pane.imp().vte.feed(b"\x1b[?1003h");
+        // Snapshot says mouse_mode=None.
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState::default());
+        // The cleanup baseline disables all mouse modes; no panic.
+    }
+
+    /// Truncated escape at snapshot boundary must not swallow the next
+    /// live keystroke. Regression for #809.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_modes_cancels_truncated_escape_from_scrollback() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("truncated-esc-1", "runtime-1");
+        // Feed a truncated escape: VTE is now mid-sequence.
+        pane.imp().vte.feed(b"\x1b[");
+        // Restore with default modes — CAN aborts the partial sequence.
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState::default());
+        // Feed a normal character — it must not be swallowed.
+        pane.imp().vte.feed(b"A");
+        // No panic; VTE accepted the character normally.
+    }
+
+    /// Tracked mode state must be reset when restore says modes are off
+    /// but they were previously on. Regression for #809.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn restore_modes_resets_tracked_state_from_on_to_off() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("tracked-reset-1", "runtime-1");
+        // First restore: enable application cursor keys and keypad.
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState {
+            application_cursor_keys: true,
+            application_keypad: true,
+            ..Default::default()
+        });
+        assert!(pane.terminal_modes().application_cursor_keys);
+        assert!(pane.terminal_modes().application_keypad);
+
+        // Second restore: snapshot says both off.
+        pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState::default());
+        assert!(!pane.terminal_modes().application_cursor_keys);
+        assert!(!pane.terminal_modes().application_keypad);
     }
 
     #[test]

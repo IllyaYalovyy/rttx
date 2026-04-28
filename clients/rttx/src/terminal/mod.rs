@@ -85,6 +85,24 @@ pub struct TerminalModes {
     pub application_keypad: bool,
 }
 
+/// Byte sequence that resets VTE to a known ground state.
+///
+/// Intended to be fed into VTE *before* an additive mode-restore block so
+/// the final state is deterministic regardless of what the preceding
+/// scrollback bytes left behind.
+///
+/// Contents (in order):
+/// 1. `CAN` (`\x18`) — abort any in-progress escape sequence
+/// 2. DECRST for cursor-keys, mouse tracking, SGR mouse, urxvt mouse,
+///    focus reporting, bracketed paste — turns every mode off
+/// 3. DECPNM (`\x1b>`) — numeric keypad (cancel application keypad)
+/// 4. DECTCEM set (`\x1b[?25h`) — cursor visible
+/// 5. SGR reset (`\x1b[m`) — default text attributes
+#[must_use]
+pub const fn terminal_cleanup_bytes() -> &'static [u8] {
+    b"\x18\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l\x1b>\x1b[?25h\x1b[m"
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalInputBackend {
     Direct,
@@ -1458,5 +1476,24 @@ mod search_tests {
         // Before the widget is parented, vadjustment may or may not exist
         // depending on VTE version, but scroll_position must not panic.
         let _ = handle.scroll_position();
+    }
+
+    /// `terminal_cleanup_bytes` contains CAN, all mode-off sequences,
+    /// DECPNM, DECTCEM set, and SGR reset. #809.
+    #[test]
+    fn terminal_cleanup_bytes_contains_required_sequences() {
+        let bytes = super::terminal_cleanup_bytes();
+        assert_eq!(bytes[0], 0x18, "must start with CAN");
+        assert!(bytes.windows(5).any(|w| w == b"\x1b[?1l"), "DECCKM off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1000l"), "mouse normal off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1002l"), "mouse button off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1003l"), "mouse any off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1006l"), "SGR mouse off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1015l"), "urxvt mouse off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1004l"), "focus reporting off");
+        assert!(bytes.windows(8).any(|w| w == b"\x1b[?2004l"), "bracketed paste off");
+        assert!(bytes.windows(2).any(|w| w == b"\x1b>"), "DECPNM");
+        assert!(bytes.windows(6).any(|w| w == b"\x1b[?25h"), "cursor visible");
+        assert!(bytes.windows(3).any(|w| w == b"\x1b[m"), "SGR reset");
     }
 }
