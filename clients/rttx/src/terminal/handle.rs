@@ -104,4 +104,14 @@ impl TerminalHandle {
     pub fn grab_focus(&self) -> bool {
         self.vte().grab_focus()
     }
+
+    /// Feed the terminal cleanup byte sequence into VTE to restore sane
+    /// state after a remote TUI dies without cleaning up. Resets tracked
+    /// mode state for managed panes so key encoding stays correct.
+    pub fn repair_terminal(&self) {
+        self.vte().feed(crate::terminal::terminal_cleanup_bytes());
+        if let Self::Managed(pane) = self {
+            pane.reset_tracked_modes();
+        }
+    }
 }

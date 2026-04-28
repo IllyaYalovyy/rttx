@@ -218,6 +218,7 @@ mod imp {
             pane_section.append(Some("Split Horizontally"), Some("win.split-horizontal"));
             pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
             pane_section.append(Some("Rotate Layout"), Some("win.rotate-layout"));
+            pane_section.append(Some("Repair Terminal"), Some("win.repair-terminal"));
             pane_section.append(Some("Confidential Mode"), Some("win.toggle-no-persist"));
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
@@ -562,6 +563,15 @@ impl PersistentPaneView {
             application_cursor_keys: self.imp().application_cursor_keys.get(),
             application_keypad: self.imp().application_keypad.get(),
         }
+    }
+
+    /// Reset tracked mode state to defaults (all off).
+    ///
+    /// Called after feeding `terminal_cleanup_bytes()` into VTE so the
+    /// tracked state matches what VTE now believes.
+    pub fn reset_tracked_modes(&self) {
+        self.imp().application_cursor_keys.set(false);
+        self.imp().application_keypad.set(false);
     }
 
     /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
@@ -1997,6 +2007,23 @@ mod tests {
         let pane = PersistentPaneView::new("pane-1", "runtime-1");
         pane.restore_interaction_modes(&rttx_proto::v3::TerminalModeState::default());
         // No sequences injected, no panic.
+    }
+
+    /// `reset_tracked_modes` clears application cursor keys and keypad
+    /// back to defaults after repair. #811.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn reset_tracked_modes_clears_application_modes() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("repair-1", "runtime-1");
+        pane.set_application_modes(true, true);
+        assert!(pane.terminal_modes().application_cursor_keys);
+        assert!(pane.terminal_modes().application_keypad);
+
+        pane.reset_tracked_modes();
+        assert!(!pane.terminal_modes().application_cursor_keys);
+        assert!(!pane.terminal_modes().application_keypad);
     }
 
     /// `restore_interaction_modes` injects focus reporting and cursor hidden

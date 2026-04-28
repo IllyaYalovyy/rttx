@@ -2648,3 +2648,39 @@ fn persistent_pane_all_gestures_use_capture_phase() {
     }
     assert!(gesture_count > 0, "VTE must have at least one gesture controller");
 }
+
+/// `repair_terminal` on a managed handle feeds cleanup bytes into VTE and
+/// resets tracked mode state. #811.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn repair_terminal_resets_managed_pane_modes() {
+    require_display!();
+
+    let managed =
+        rttx::terminal::persistent_widget::PersistentPaneView::new("repair-1", "runtime-1");
+    // Simulate stuck state: cursor hidden, mouse on, app cursor keys on.
+    managed.vte().feed(b"\x1b[?25l\x1b[?1003h\x1b[?1h");
+    managed.set_application_modes(true, true);
+
+    let handle = rttx::terminal::handle::TerminalHandle::Managed(managed.clone());
+    handle.repair_terminal();
+
+    let modes = managed.terminal_modes();
+    assert!(!modes.application_cursor_keys, "cursor keys should be off after repair");
+    assert!(!modes.application_keypad, "keypad should be off after repair");
+}
+
+/// `repair_terminal` on a direct handle feeds cleanup bytes without panic. #811.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn repair_terminal_works_on_direct_pane() {
+    require_display!();
+
+    let direct = rttx::terminal::widget::TerminalWidget::new("repair-direct-1", None);
+    // Simulate stuck state.
+    direct.vte().feed(b"\x1b[?25l\x1b[?1003h");
+
+    let handle = rttx::terminal::handle::TerminalHandle::Direct(direct);
+    handle.repair_terminal();
+    // No panic — cleanup bytes accepted by VTE.
+}
