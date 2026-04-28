@@ -70,10 +70,8 @@ fn full_snapshot_restore_cycle_overrides_scrollback_modes() {
     pane.feed_snapshot(b"\x1b[?1h\x1b[?1003h\x1b[?1006h\x1b[?25l");
 
     // Snapshot says: only application_cursor_keys should be on.
-    let snapshot_modes = rttx_proto::v3::TerminalModeState {
-        application_cursor_keys: true,
-        ..Default::default()
-    };
+    let snapshot_modes =
+        rttx_proto::v3::TerminalModeState { application_cursor_keys: true, ..Default::default() };
     pane.restore_interaction_modes(&snapshot_modes);
 
     let modes = pane.terminal_modes();
