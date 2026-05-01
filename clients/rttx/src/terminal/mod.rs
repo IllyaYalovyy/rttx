@@ -1515,4 +1515,28 @@ mod search_tests {
         assert!(!modes.application_cursor_keys);
         assert!(!modes.application_keypad);
     }
+
+    /// `TerminalHandle::set_custom_title` propagates to the underlying
+    /// widget and clearing reverts to the daemon-reported title. #819.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn handle_set_custom_title_propagates_and_clears() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let pane = super::persistent_widget::PersistentPaneView::new("ct-mod-1", "rt-1");
+        pane.set_daemon_title("auto title");
+        let handle = super::handle::TerminalHandle::Managed(pane.clone());
+
+        assert!(handle.custom_title().is_none());
+        handle.set_custom_title(Some("renamed"));
+        assert_eq!(handle.custom_title().as_deref(), Some("renamed"));
+        assert_eq!(pane.title_label().label(), "renamed");
+
+        handle.set_custom_title(None);
+        assert!(handle.custom_title().is_none());
+        assert_eq!(pane.title_label().label(), "auto title");
+    }
 }

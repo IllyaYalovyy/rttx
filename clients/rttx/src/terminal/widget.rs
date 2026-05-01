@@ -237,6 +237,7 @@ mod imp {
             pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
             pane_section.append(Some("Rotate Layout"), Some("win.rotate-layout"));
             pane_section.append(Some("Repair Terminal"), Some("win.repair-terminal"));
+            pane_section.append(Some("Rename Pane"), Some("win.rename-pane"));
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
             session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
@@ -394,6 +395,10 @@ impl TerminalWidget {
         self.imp().custom_title.replace(title.map(str::to_string));
         if let Some(title) = title {
             self.set_title(title);
+        } else {
+            let vte_title = self.imp().vte.window_title().unwrap_or_default();
+            let cleaned = crate::terminal::persistent_widget::strip_user_host_prefix(&vte_title);
+            self.set_title(cleaned);
         }
     }
 

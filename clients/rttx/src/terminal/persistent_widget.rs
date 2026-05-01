@@ -219,6 +219,7 @@ mod imp {
             pane_section.append(Some("Split Vertically"), Some("win.split-vertical"));
             pane_section.append(Some("Rotate Layout"), Some("win.rotate-layout"));
             pane_section.append(Some("Repair Terminal"), Some("win.repair-terminal"));
+            pane_section.append(Some("Rename Pane"), Some("win.rename-pane"));
             pane_section.append(Some("Confidential Mode"), Some("win.toggle-no-persist"));
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));

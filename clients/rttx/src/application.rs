@@ -249,6 +249,19 @@ pub fn run() -> glib::ExitCode {
     });
     app.add_action(&rename_workspace_action);
 
+    let rename_pane_action =
+        gtk4::gio::SimpleAction::new("rename-pane", Some(glib::VariantTy::STRING));
+    let app_ref = app.clone();
+    rename_pane_action.connect_activate(move |_, param| {
+        if let Some(win) = app_ref.active_window()
+            && let Ok(win) = win.downcast::<Window>()
+            && let Some(name) = param.and_then(glib::Variant::get::<String>)
+        {
+            win.rename_focused_pane_direct(&name);
+        }
+    });
+    app.add_action(&rename_pane_action);
+
     let save_state_action = gtk4::gio::SimpleAction::new("save-state", None);
     let app_ref = app.clone();
     save_state_action.connect_activate(move |_, _| {

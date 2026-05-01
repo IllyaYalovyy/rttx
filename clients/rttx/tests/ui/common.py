@@ -590,7 +590,7 @@ class AppFixture:
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         params = GLib.Variant("(sava{sv})", (
             action_name,
-            [GLib.Variant("s", parameter)] if parameter else [],
+            [GLib.Variant("s", parameter)] if parameter is not None else [],
             {},
         ))
         bus.call_sync(
