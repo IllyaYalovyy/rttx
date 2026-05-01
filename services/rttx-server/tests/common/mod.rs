@@ -172,6 +172,47 @@ pub async fn wait_for_state_file(state_dir: &std::path::Path, timeout: std::time
     }
 }
 
+/// Wait until at least one `.log` file appears under
+/// `base_dir/state/rttx/daemon/runtimes/<id>/scrollback/`.
+/// Polls every 200ms for up to `timeout`.
+pub async fn wait_for_scrollback_log(
+    base_dir: &std::path::Path,
+    timeout: std::time::Duration,
+) -> Vec<std::path::PathBuf> {
+    let runtimes_dir = base_dir.join("state/rttx/daemon/runtimes");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let logs = find_scrollback_logs(&runtimes_dir);
+        if !logs.is_empty() {
+            return logs;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no scrollback log appeared under {} within {}s",
+            runtimes_dir.display(),
+            timeout.as_secs()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+fn find_scrollback_logs(runtimes_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut logs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(runtimes_dir) else { return logs };
+    for entry in entries.flatten() {
+        let scrollback_dir = entry.path().join("scrollback");
+        if let Ok(files) = std::fs::read_dir(&scrollback_dir) {
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().is_some_and(|ext| ext == "log") {
+                    logs.push(path);
+                }
+            }
+        }
+    }
+    logs
+}
+
 /// Wait until any v2 runtime file under the state dir contains a specific
 /// substring. Polls every 200ms for up to `timeout`.
 ///

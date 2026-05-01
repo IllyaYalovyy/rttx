@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server, wait_for_state_containing};
+use common::{TestClient, start_test_server, wait_for_scrollback_log, wait_for_state_containing};
 use rttx_proto::proto;
 use std::time::Duration;
 
@@ -232,38 +232,11 @@ async fn scrollback_log_capped_at_max_size() {
     };
     client.send(&input).await;
 
-    // Wait for command to finish + serialization ticks to flush and cap.
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    // Poll until the scrollback log file appears (covers command execution +
+    // serialization tick flush). Generous timeout for slow CI runners.
+    let log_files = wait_for_scrollback_log(tmp.path(), Duration::from_secs(30)).await;
 
-    // Find the scrollback log file in the state directory.
-    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
-
-    // Wait for the runtimes directory to appear (scrollback flush creates it).
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !runtimes_dir.exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "runtimes directory did not appear at {}",
-            runtimes_dir.display()
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let mut log_files = Vec::new();
-    for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
-        let runtime_dir = runtime_dir.unwrap().path();
-        let scrollback_dir = runtime_dir.join("scrollback");
-        if scrollback_dir.is_dir() {
-            for entry in std::fs::read_dir(&scrollback_dir).unwrap() {
-                let entry = entry.unwrap().path();
-                if entry.extension().is_some_and(|ext| ext == "log") {
-                    log_files.push(entry);
-                }
-            }
-        }
-    }
-
-    assert!(!log_files.is_empty(), "expected at least one scrollback log");
+    assert_eq!(log_files.len(), 1, "expected exactly one scrollback log, found: {log_files:?}");
 
     let size = std::fs::metadata(&log_files[0]).unwrap().len();
     let max = 10 * 1024 * 1024_u64; // 10 MB
