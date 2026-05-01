@@ -2684,3 +2684,91 @@ fn repair_terminal_works_on_direct_pane() {
     handle.repair_terminal();
     // No panic — cleanup bytes accepted by VTE.
 }
+
+/// `TerminalHandle::set_custom_title` sets and clears on direct panes.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_handle_custom_title_direct() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("ct-direct-1", None);
+    let handle = rttx::terminal::handle::TerminalHandle::Direct(term);
+
+    assert!(handle.custom_title().is_none());
+    handle.set_custom_title(Some("my pane"));
+    assert_eq!(handle.custom_title().as_deref(), Some("my pane"));
+    assert_eq!(handle.title(), "my pane");
+
+    handle.set_custom_title(None);
+    assert!(handle.custom_title().is_none());
+}
+
+/// `TerminalHandle::set_custom_title` sets and clears on managed panes.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_handle_custom_title_managed() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("ct-managed-1", "rt-1");
+    pane.set_daemon_title("daemon title");
+    let handle = rttx::terminal::handle::TerminalHandle::Managed(pane);
+
+    assert!(handle.custom_title().is_none());
+    handle.set_custom_title(Some("custom name"));
+    assert_eq!(handle.custom_title().as_deref(), Some("custom name"));
+    assert_eq!(handle.title(), "custom name");
+
+    handle.set_custom_title(None);
+    assert!(handle.custom_title().is_none());
+    assert_eq!(handle.title(), "daemon title");
+}
+
+/// Context menu for `TerminalWidget` includes "Rename Pane".
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn terminal_widget_context_menu_has_rename_pane() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("ctx-rename-1", None);
+    let menu = term.imp().context_menu.borrow();
+    let popover = menu.as_ref().expect("context menu should exist");
+    let model = popover.menu_model().expect("menu model should exist");
+    let has_rename = menu_model_contains_label(&model, "Rename Pane");
+    assert!(has_rename, "context menu should contain 'Rename Pane'");
+}
+
+/// Context menu for `PersistentPaneView` includes "Rename Pane".
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn persistent_pane_context_menu_has_rename_pane() {
+    require_display!();
+
+    let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("ctx-rename-2", "rt-1");
+    let menu = pane.imp().context_menu.borrow();
+    let popover = menu.as_ref().expect("context menu should exist");
+    let model = popover.menu_model().expect("menu model should exist");
+    let has_rename = menu_model_contains_label(&model, "Rename Pane");
+    assert!(has_rename, "context menu should contain 'Rename Pane'");
+}
+
+fn menu_model_contains_label(model: &gtk4::gio::MenuModel, label: &str) -> bool {
+    for i in 0..model.n_items() {
+        if let Some(item_label) =
+            model.item_attribute_value(i, "label", Some(gtk4::glib::VariantTy::STRING))
+            && item_label.get::<String>().is_some_and(|l| l == label)
+        {
+            return true;
+        }
+        if let Some(section) = model.item_link(i, "section")
+            && menu_model_contains_label(&section, label)
+        {
+            return true;
+        }
+        if let Some(submenu) = model.item_link(i, "submenu")
+            && menu_model_contains_label(&submenu, label)
+        {
+            return true;
+        }
+    }
+    false
+}

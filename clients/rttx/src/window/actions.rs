@@ -41,6 +41,7 @@ impl Window {
             ("toggle-pane-zoom", Self::toggle_pane_zoom),
             ("rotate-layout", Self::rotate_layout),
             ("repair-terminal", Self::repair_focused_terminal),
+            ("rename-pane", Self::rename_focused_pane),
             ("new-session", Self::add_session),
             ("new-ephemeral-workspace", Self::add_ephemeral_session),
             ("new-remote-workspace", Self::show_new_remote_workspace_dialog),
@@ -290,6 +291,28 @@ impl Window {
         {
             terminal.repair_terminal();
             self.show_toast("Terminal repaired");
+        }
+    }
+
+    fn rename_focused_pane(&self) {
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(terminal) = self.terminal_handle(&uuid)
+        {
+            self.show_rename_pane_dialog(&uuid, &terminal);
+        }
+    }
+
+    /// Rename the focused pane directly (for D-Bus / test automation).
+    /// Empty string clears the custom title.
+    pub(crate) fn rename_focused_pane_direct(&self, name: &str) {
+        if let Some(uuid) = self.focused_terminal_uuid()
+            && let Some(handle) = self.terminal_handle(&uuid)
+        {
+            if name.is_empty() {
+                handle.set_custom_title(None);
+            } else {
+                handle.set_custom_title(Some(name));
+            }
         }
     }
 

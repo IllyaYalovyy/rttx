@@ -52,6 +52,23 @@ impl TerminalHandle {
         }
     }
 
+    /// Get the custom title, if set.
+    #[must_use]
+    pub fn custom_title(&self) -> Option<String> {
+        match self {
+            Self::Direct(terminal) => terminal.custom_title(),
+            Self::Managed(pane) => pane.custom_title(),
+        }
+    }
+
+    /// Set or clear the custom title override.
+    pub fn set_custom_title(&self, title: Option<&str>) {
+        match self {
+            Self::Direct(terminal) => terminal.set_custom_title(title),
+            Self::Managed(pane) => pane.set_custom_title(title),
+        }
+    }
+
     /// Toggle the pane's inline search UI.
     pub fn toggle_search(&self) {
         match self {

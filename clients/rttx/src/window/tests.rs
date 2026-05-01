@@ -7082,3 +7082,40 @@ fn run_in_new_pane_respects_split_depth_limit() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn rename_focused_pane_direct_sets_custom_title() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.rename-pane-direct-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let terminal_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.imp().focused_terminal_uuid.replace(Some(terminal_uuid.clone()));
+
+    window.rename_focused_pane_direct("My Pane");
+    let handle = window.terminal_handle(&terminal_uuid).unwrap();
+    assert_eq!(handle.custom_title().as_deref(), Some("My Pane"));
+    assert_eq!(handle.title(), "My Pane");
+
+    window.rename_focused_pane_direct("");
+    let handle = window.terminal_handle(&terminal_uuid).unwrap();
+    assert!(handle.custom_title().is_none(), "empty string should clear custom title");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

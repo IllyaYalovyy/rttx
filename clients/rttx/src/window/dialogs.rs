@@ -16,6 +16,50 @@ impl Window {
         alert.present(Some(self));
     }
 
+    pub(super) fn show_rename_pane_dialog(&self, terminal_uuid: &str, handle: &TerminalHandle) {
+        let current_title = handle.title();
+        let has_custom = handle.custom_title().is_some();
+
+        let alert = adw::AlertDialog::new(Some("Rename Pane"), None);
+        alert.add_response("cancel", "Cancel");
+        if has_custom {
+            alert.add_response("reset", "Reset");
+        }
+        alert.add_response("rename", "Rename");
+        alert.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("rename"));
+        alert.set_close_response("cancel");
+
+        let entry = adw::EntryRow::builder().title("Pane title").build();
+        entry.set_text(&current_title);
+
+        let group = adw::PreferencesGroup::new();
+        group.add(&entry);
+        alert.set_extra_child(Some(&group));
+
+        alert.connect_response(None, {
+            let win = self.clone();
+            let uuid = terminal_uuid.to_string();
+            move |_, response| match response {
+                "rename" => {
+                    let text = entry.text().trim().to_string();
+                    if !text.is_empty()
+                        && let Some(handle) = win.terminal_handle(&uuid)
+                    {
+                        handle.set_custom_title(Some(&text));
+                    }
+                }
+                "reset" => {
+                    if let Some(handle) = win.terminal_handle(&uuid) {
+                        handle.set_custom_title(None);
+                    }
+                }
+                _ => {}
+            }
+        });
+        alert.present(Some(self));
+    }
+
     pub(super) fn confirm_close_others(&self, keep_uuid: &str) {
         let other_uuids: Vec<String> = {
             let state = self.imp().state.borrow();
