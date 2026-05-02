@@ -614,6 +614,9 @@ impl Window {
                     self.show_toast(&detail);
                 }
             }
+            EndpointEvent::ResyncCompleted { endpoint, runtime_id, snapshot, .. } => {
+                self.apply_resync_snapshot(&endpoint, &runtime_id, &snapshot);
+            }
             EndpointEvent::InventoryLoaded { endpoint, runtimes }
                 if self.imp().pending_connect_existing.borrow().is_some() =>
             {
@@ -740,6 +743,58 @@ impl Window {
         let (cols, rows) = pane.terminal_size();
         if cols > 0 && rows > 0 && (cols != restore.cols || rows != restore.rows) {
             self.send_managed_terminal_resize(&restore.layout_terminal_uuid, cols, rows);
+        }
+    }
+
+    /// Apply a resync snapshot received after a `StreamOverflow`.
+    ///
+    /// Resets each affected pane's VTE and feeds the fresh snapshot data,
+    /// then shows a toast so the user knows output may have been lost.
+    pub(super) fn apply_resync_snapshot(
+        &self,
+        endpoint: &RuntimeEndpoint,
+        runtime_id: &str,
+        snapshot: &v3::RuntimeSnapshot,
+    ) {
+        let state = self.imp().state.borrow();
+        let Some(workspace_id) = state.workspace_for_runtime(endpoint, runtime_id) else {
+            return;
+        };
+        let session = state.workspaces.iter().find(|s| s.uuid == workspace_id);
+        let Some(session) = session else { return };
+        let bindings = session.runtime.pane_bindings.clone();
+        drop(state);
+
+        let mut resynced = 0u32;
+        for pane_snap in &snapshot.panes {
+            let Ok(pane_uuid) = rttx_proto::bytes_to_uuid(&pane_snap.pane_id) else {
+                continue;
+            };
+            let runtime_pane_id = pane_uuid.to_string();
+            let Some(layout_terminal_uuid) = bindings
+                .iter()
+                .find(|(_, rpid)| **rpid == runtime_pane_id)
+                .map(|(ltid, _)| ltid.clone())
+            else {
+                continue;
+            };
+            let restore = WorkspacePaneRestore {
+                layout_terminal_uuid,
+                title: pane_snap.title.clone(),
+                cwd: pane_snap.cwd.clone(),
+                pane_output_seq: pane_snap.pane_output_seq,
+                scrollback_tail: pane_snap.scrollback_tail.clone(),
+                scrollback_complete: pane_snap.scrollback_complete,
+                cols: pane_snap.cols as u16,
+                rows: pane_snap.rows as u16,
+                terminal_modes: pane_snap.terminal_modes,
+            };
+            self.restore_managed_snapshot(&restore);
+            resynced += 1;
+        }
+
+        if resynced > 0 {
+            self.show_toast("Terminal resynced — some output may have been lost");
         }
     }
 

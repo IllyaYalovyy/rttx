@@ -7119,3 +7119,100 @@ fn rename_focused_pane_direct_sets_custom_title() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// `apply_resync_snapshot` resets VTE and feeds fresh snapshot data for
+/// each pane in the runtime, then shows a toast. Verifies the full
+/// StreamOverflow → resync → snapshot application path on the GTK side.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn apply_resync_snapshot_resets_and_feeds_panes() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.resync-snapshot-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "resync-pane-1";
+    let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+    let runtime_pane_id = uuid::Uuid::new_v4().to_string();
+
+    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+        "ws-resync",
+        "Resync Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some(runtime_id),
+    );
+    // Replace placeholder binding with a real runtime pane ID.
+    session_state.runtime.pane_bindings.clear();
+    session_state
+        .runtime
+        .pane_bindings
+        .insert(layout_uuid.to_string(), runtime_pane_id.clone());
+
+    window.imp().state.borrow_mut().workspaces.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // Feed some initial content so we can verify the reset.
+    {
+        let pane = window
+            .imp()
+            .persistent_terminals
+            .borrow()
+            .get(layout_uuid)
+            .cloned()
+            .expect("pane should exist");
+        pane.feed_output(b"old content that should be replaced\r\n");
+    }
+
+    // Build a snapshot as the daemon would send after ResyncRuntime.
+    let pane_uuid: uuid::Uuid = runtime_pane_id.parse().unwrap();
+    let pane_snap = rttx_proto::v3_snapshot::build_pane_snapshot(
+        rttx_proto::v3_snapshot::PaneSnapshotParams {
+            pane_id: pane_uuid,
+            pane_output_seq: 200,
+            title: "zsh".into(),
+            cwd: "/tmp/resync".into(),
+            cols: 80,
+            rows: 24,
+            exit_status: None,
+            terminal_modes: rttx_proto::v3::TerminalModeState::default(),
+            scrollback_tail: bytes::Bytes::from_static(b"$ echo resynced\r\nresynced\r\n"),
+            total_scrollback_bytes: 26,
+        },
+    );
+    let runtime_uuid: uuid::Uuid = runtime_id.parse().unwrap();
+    let snapshot = rttx_proto::v3_snapshot::build_runtime_snapshot(
+        runtime_uuid,
+        99,
+        rttx_proto::v3::RuntimeClientRole::Writer,
+        vec![pane_snap],
+    );
+
+    window.apply_resync_snapshot(&RuntimeEndpoint::Local, runtime_id, &snapshot);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get(layout_uuid)
+        .cloned()
+        .expect("pane should exist after resync");
+
+    assert_eq!(
+        pane.current_directory().as_deref(),
+        Some("/tmp/resync"),
+        "resync should update CWD"
+    );
+    assert_eq!(pane.status_label_text_for_test(), "Connected", "resync marks pane connected");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

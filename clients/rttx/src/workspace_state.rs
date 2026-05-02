@@ -215,7 +215,9 @@ impl WindowState {
                 }
                 transition.persist_window_state = true;
             }
-            EndpointEvent::RuntimeMessage { .. } | EndpointEvent::WorkspaceError { .. } => {}
+            EndpointEvent::RuntimeMessage { .. }
+            | EndpointEvent::ResyncCompleted { .. }
+            | EndpointEvent::WorkspaceError { .. } => {}
         }
 
         transition

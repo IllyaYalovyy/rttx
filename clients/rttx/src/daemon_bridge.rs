@@ -14,7 +14,7 @@ use crate::runtime::{
 };
 use rttx_proto::v3;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -89,6 +89,12 @@ pub enum EndpointEvent {
         endpoint: RuntimeEndpoint,
         message: v3::ServerEnvelope,
     },
+    ResyncCompleted {
+        endpoint: RuntimeEndpoint,
+        runtime_id: String,
+        snapshot: v3::RuntimeSnapshot,
+        dropped_count: u64,
+    },
     WorkspaceError {
         workspace_id: String,
         operation: ManagerOperation,
@@ -159,6 +165,10 @@ enum EndpointCommand {
         runtime_id: String,
         runtime_pane_id: String,
         no_persist: bool,
+    },
+    ResyncRuntime {
+        runtime_id: String,
+        dropped_count: u64,
     },
     Shutdown,
 }
@@ -416,6 +426,8 @@ struct EndpointActor {
     auto_start_daemon: bool,
     reconnect_delay_secs: u32,
     next_request_id: u64,
+    /// Runtime IDs with a pending resync request (debounce guard).
+    pending_resyncs: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -508,6 +520,7 @@ impl EndpointActor {
             auto_start_daemon,
             reconnect_delay_secs,
             next_request_id: 1,
+            pending_resyncs: HashSet::new(),
         }
     }
 
@@ -627,6 +640,20 @@ impl EndpointActor {
             && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
         {
             self.tracked_workspaces.retain(|_, tracked| tracked != &runtime_id.to_string());
+        }
+        if let Some(v3::server_envelope::Payload::StreamOverflow(overflow)) = &env.payload {
+            if let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&overflow.runtime_id) {
+                let rid = runtime_id.to_string();
+                if self.pending_resyncs.insert(rid) {
+                    let _ = self.self_tx.try_send(EndpointCommand::ResyncRuntime {
+                        runtime_id: runtime_id.to_string(),
+                        dropped_count: overflow.dropped_count,
+                    });
+                }
+            }
+            // Don't forward StreamOverflow to the GTK thread — the resync
+            // response will carry the corrective snapshot.
+            return;
         }
         self.forward_push(env);
     }
@@ -1221,6 +1248,39 @@ impl EndpointActor {
             EndpointCommand::ForgetWorkspace { workspace_id } => {
                 self.tracked_workspaces.remove(&workspace_id);
             }
+            EndpointCommand::ResyncRuntime { runtime_id, dropped_count } => {
+                let Some(runtime_uuid) = Uuid::parse_str(&runtime_id).ok() else {
+                    self.pending_resyncs.remove(&runtime_id);
+                    return;
+                };
+                if self.writer.is_none() {
+                    self.pending_resyncs.remove(&runtime_id);
+                    return;
+                }
+                let msg = v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                });
+                match self.send_and_read(msg, false).await {
+                    Ok(response) => {
+                        if let Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) =
+                            response.payload
+                        {
+                            let _ = self.event_tx.try_send(EndpointEvent::ResyncCompleted {
+                                endpoint: self.endpoint.clone(),
+                                runtime_id: runtime_id.clone(),
+                                snapshot,
+                                dropped_count,
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "ResyncRuntime failed for runtime {runtime_id}: {error}"
+                        );
+                    }
+                }
+                self.pending_resyncs.remove(&runtime_id);
+            }
             EndpointCommand::Shutdown => {}
         }
     }
@@ -1553,6 +1613,7 @@ impl EndpointActor {
         self.writer = None;
         self.ssh_handle = None;
         self.heartbeat.reset();
+        self.pending_resyncs.clear();
         if self.tracked_workspaces.is_empty() {
             return;
         }
@@ -1742,6 +1803,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            pending_resyncs: HashSet::new(),
         }
     }
 
@@ -1848,6 +1910,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            pending_resyncs: HashSet::new(),
         };
         (actor, event_rx)
     }
@@ -2189,6 +2252,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            pending_resyncs: HashSet::new(),
         };
 
         let stale_runtime = Uuid::new_v4();
@@ -2271,6 +2335,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            pending_resyncs: HashSet::new(),
         };
 
         let runtime_id = Uuid::new_v4();
@@ -2478,6 +2543,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            pending_resyncs: HashSet::new(),
         };
 
         // Server: drop the connection immediately to cause I/O errors.
@@ -2955,5 +3021,204 @@ mod tests {
             2,
             "all workspaces must remain tracked after partial reconnect failure"
         );
+    }
+
+    #[test]
+    fn dispatch_push_intercepts_stream_overflow_and_queues_resync() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let ((reader, writer), _server_stream) = split_duplex_connection();
+            let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+            let (self_tx, mut cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+            let mut actor = EndpointActor {
+                endpoint: RuntimeEndpoint::Local,
+                event_tx,
+                self_tx,
+                cmd_rx: mpsc::channel(CMD_CHANNEL_BOUND).1,
+                connection: None,
+                reader: Some(reader),
+                writer: Some(writer),
+                ssh_handle: None,
+                tracked_workspaces: HashMap::new(),
+                reconnect_attempt: 0,
+                heartbeat: HeartbeatMonitor::default(),
+                heartbeat_deadline: new_heartbeat_deadline(),
+                daemon_start_attempted: false,
+                auto_start_daemon: true,
+                reconnect_delay_secs: 10,
+                next_request_id: 1,
+                pending_resyncs: HashSet::new(),
+            };
+
+            let runtime_id = Uuid::new_v4();
+            let overflow = rttx_proto::v3_resync::build_stream_overflow(runtime_id, None, 5);
+            let env = rttx_proto::v3_resync::build_stream_overflow_envelope(overflow);
+
+            actor.dispatch_push(env);
+
+            // StreamOverflow must NOT be forwarded to the GTK thread.
+            assert!(event_rx.try_recv().is_err());
+
+            // A ResyncRuntime command must be queued.
+            let cmd = cmd_rx.try_recv().expect("should queue ResyncRuntime");
+            match cmd {
+                EndpointCommand::ResyncRuntime { dropped_count, .. } => {
+                    assert_eq!(dropped_count, 5);
+                }
+                other => panic!("expected ResyncRuntime, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn dispatch_push_debounces_duplicate_stream_overflow() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let ((reader, writer), _server_stream) = split_duplex_connection();
+            let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+            let (self_tx, mut cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+            let mut actor = EndpointActor {
+                endpoint: RuntimeEndpoint::Local,
+                event_tx,
+                self_tx,
+                cmd_rx: mpsc::channel(CMD_CHANNEL_BOUND).1,
+                connection: None,
+                reader: Some(reader),
+                writer: Some(writer),
+                ssh_handle: None,
+                tracked_workspaces: HashMap::new(),
+                reconnect_attempt: 0,
+                heartbeat: HeartbeatMonitor::default(),
+                heartbeat_deadline: new_heartbeat_deadline(),
+                daemon_start_attempted: false,
+                auto_start_daemon: true,
+                reconnect_delay_secs: 10,
+                next_request_id: 1,
+                pending_resyncs: HashSet::new(),
+            };
+
+            let runtime_id = Uuid::new_v4();
+            let overflow1 = rttx_proto::v3_resync::build_stream_overflow(runtime_id, None, 3);
+            let env1 = rttx_proto::v3_resync::build_stream_overflow_envelope(overflow1);
+            let overflow2 = rttx_proto::v3_resync::build_stream_overflow(runtime_id, None, 7);
+            let env2 = rttx_proto::v3_resync::build_stream_overflow_envelope(overflow2);
+
+            actor.dispatch_push(env1);
+            actor.dispatch_push(env2);
+
+            // Only one ResyncRuntime command should be queued.
+            let _cmd = cmd_rx.try_recv().expect("first resync queued");
+            assert!(cmd_rx.try_recv().is_err(), "duplicate resync must be suppressed");
+        });
+    }
+
+    #[test]
+    fn disconnect_clears_pending_resyncs() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let ((reader, writer), _server_stream) = split_duplex_connection();
+            let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+            let (self_tx, _cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+            let mut actor = EndpointActor {
+                endpoint: RuntimeEndpoint::Local,
+                event_tx,
+                self_tx,
+                cmd_rx: mpsc::channel(CMD_CHANNEL_BOUND).1,
+                connection: None,
+                reader: Some(reader),
+                writer: Some(writer),
+                ssh_handle: None,
+                tracked_workspaces: HashMap::new(),
+                reconnect_attempt: 0,
+                heartbeat: HeartbeatMonitor::default(),
+                heartbeat_deadline: new_heartbeat_deadline(),
+                daemon_start_attempted: false,
+                auto_start_daemon: true,
+                reconnect_delay_secs: 10,
+                next_request_id: 1,
+                pending_resyncs: HashSet::new(),
+            };
+
+            actor.pending_resyncs.insert("some-runtime".into());
+            assert!(!actor.pending_resyncs.is_empty());
+
+            actor.handle_disconnect();
+
+            assert!(actor.pending_resyncs.is_empty());
+        });
+    }
+
+    #[tokio::test]
+    async fn resync_runtime_command_sends_request_and_forwards_snapshot() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+
+        let runtime_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
+        actor.pending_resyncs.insert(runtime_id.to_string());
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let msg = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            match msg.command {
+                Some(v3::client_envelope::Command::ResyncRuntime(req)) => {
+                    assert_eq!(
+                        rttx_proto::bytes_to_uuid(&req.runtime_id).unwrap(),
+                        runtime_id
+                    );
+                }
+                other => panic!("expected ResyncRuntime, got {other:?}"),
+            }
+
+            let pane_snap = rttx_proto::v3_snapshot::build_pane_snapshot(
+                rttx_proto::v3_snapshot::PaneSnapshotParams {
+                    pane_id,
+                    pane_output_seq: 100,
+                    title: "bash".into(),
+                    cwd: "/home".into(),
+                    cols: 80,
+                    rows: 24,
+                    exit_status: None,
+                    terminal_modes: v3::TerminalModeState::default(),
+                    scrollback_tail: bytes::Bytes::from_static(b"$ "),
+                    total_scrollback_bytes: 2,
+                },
+            );
+            let snapshot = rttx_proto::v3_snapshot::build_runtime_snapshot(
+                runtime_id,
+                42,
+                v3::RuntimeClientRole::Writer,
+                vec![pane_snap],
+            );
+            let response = rttx_proto::v3_resync::build_resync_response(msg.request_id, snapshot);
+            send_server_envelope(&mut server_stream, &response).await;
+        });
+
+        actor
+            .handle_command(EndpointCommand::ResyncRuntime {
+                runtime_id: runtime_id.to_string(),
+                dropped_count: 10,
+            })
+            .await;
+
+        server.await.expect("server task");
+
+        let event = event_rx.try_recv().expect("should emit ResyncCompleted");
+        match event {
+            EndpointEvent::ResyncCompleted {
+                runtime_id: rid,
+                snapshot,
+                dropped_count,
+                ..
+            } => {
+                assert_eq!(rid, runtime_id.to_string());
+                assert_eq!(dropped_count, 10);
+                assert_eq!(snapshot.panes.len(), 1);
+            }
+            other => panic!("expected ResyncCompleted, got {other:?}"),
+        }
+
+        // pending_resyncs must be cleared after completion.
+        assert!(actor.pending_resyncs.is_empty());
     }
 }
