@@ -89,8 +89,23 @@ impl Pane {
     }
 
     /// Feed PTY output into the screen state.
+    ///
+    /// Combines [`accept_output`] and [`parse_and_extract`] in a single
+    /// call. Callers that need to minimize lock hold time should use the
+    /// two-phase API instead.
     pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
-        self.screen.feed(data);
+        self.accept_output(data);
+        self.parse_and_extract(data)
+    }
+
+    /// Store raw PTY bytes without running the VTE parser.
+    ///
+    /// Updates `pending_flush`, `output_seq`, and the screen's raw-byte
+    /// buffer. This is a fast memcpy suitable for calling inside a
+    /// contended mutex. Call [`parse_and_extract`] afterwards (potentially
+    /// after releasing the lock) to run the expensive VTE state machine.
+    pub fn accept_output(&mut self, data: &[u8]) {
+        self.screen.accept_raw(data);
         self.pending_flush.extend_from_slice(data);
         self.output_seq += 1;
         if self.pending_flush.len() > DEFAULT_MAX_SCROLLBACK {
@@ -98,6 +113,38 @@ impl Pane {
             self.pending_flush.drain(..excess);
             self.pending_flush.shrink_to(DEFAULT_MAX_SCROLLBACK);
         }
+    }
+
+    /// Temporarily take the screen out of this pane for out-of-lock parsing.
+    ///
+    /// Returns the screen, replacing it with a default instance. The caller
+    /// must call [`return_screen`] to put it back after parsing.
+    #[must_use]
+    pub fn take_screen(&mut self) -> PaneScreen {
+        std::mem::replace(&mut self.screen, PaneScreen::new(DEFAULT_MAX_SCROLLBACK))
+    }
+
+    /// Return a previously taken screen and extract metadata changes.
+    ///
+    /// The screen is placed back into the pane and any CWD, title, or
+    /// pending-reply changes are returned.
+    pub fn return_screen(&mut self, screen: PaneScreen) -> FeedResult {
+        self.screen = screen;
+        self.extract_metadata()
+    }
+
+    /// Run the VTE parser and extract metadata changes.
+    ///
+    /// This is the expensive half of [`feed_output`]: it advances the VTE
+    /// state machine byte-by-byte and returns any CWD, title, or DSR
+    /// reply changes. Callers that split the two phases should call this
+    /// after releasing the contended lock.
+    pub fn parse_and_extract(&mut self, data: &[u8]) -> FeedResult {
+        self.screen.parse(data);
+        self.extract_metadata()
+    }
+
+    fn extract_metadata(&mut self) -> FeedResult {
         let new_title = self.screen.title().and_then(|title| {
             let title = title.to_string();
             if self.title.as_deref() == Some(&title) {
@@ -1009,5 +1056,93 @@ mod tests {
 
         let rotated = path.with_extension("log.1");
         assert!(rotated.exists(), "rotated segment .1 should exist");
+    }
+
+    // ── two-phase accept_output / parse_and_extract tests ───────────
+
+    #[test]
+    fn accept_output_stores_raw_bytes_without_vte_parsing() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let osc7 = b"\x1b]7;file://localhost/tmp/test\x07";
+        pane.accept_output(osc7);
+
+        // Raw bytes stored in screen.
+        assert_eq!(pane.screen.raw_bytes(), osc7);
+        // Pending flush updated.
+        assert!(pane.has_pending_flush());
+        // Seq incremented.
+        assert_eq!(pane.output_seq, 1);
+        // VTE not parsed — CWD not extracted yet.
+        assert!(pane.cwd.is_none());
+        assert!(pane.screen.cwd().is_none());
+    }
+
+    #[test]
+    fn parse_and_extract_runs_vte_after_accept() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let osc7 = b"\x1b]7;file://localhost/tmp/test\x07";
+        pane.accept_output(osc7);
+        let result = pane.parse_and_extract(osc7);
+
+        assert_eq!(result.new_cwd.as_deref(), Some("/tmp/test"));
+        assert_eq!(pane.cwd.as_deref(), Some("/tmp/test"));
+    }
+
+    #[test]
+    fn take_screen_and_return_screen_equivalent_to_feed_output() {
+        // feed_output path
+        let mut pane_a = Pane::new(Uuid::new_v4(), 80, 24);
+        let data = b"\x1b]0;my-title\x07\x1b]7;file://localhost/home/user\x07hello\r\n\x1b[6n";
+        let result_a = pane_a.feed_output(data);
+
+        // two-phase path
+        let mut pane_b = Pane::new(Uuid::new_v4(), 80, 24);
+        pane_b.accept_output(data);
+        let mut screen = pane_b.take_screen();
+        screen.parse(data);
+        let result_b = pane_b.return_screen(screen);
+
+        assert_eq!(result_a.new_cwd, result_b.new_cwd);
+        assert_eq!(result_a.new_title, result_b.new_title);
+        assert_eq!(result_a.pending_replies, result_b.pending_replies);
+        assert_eq!(pane_a.cwd, pane_b.cwd);
+        assert_eq!(pane_a.title, pane_b.title);
+        assert_eq!(pane_a.output_seq, pane_b.output_seq);
+    }
+
+    #[test]
+    fn take_screen_returns_screen_with_accumulated_state() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"line1\r\nline2\r\n");
+        let screen = pane.take_screen();
+        assert_eq!(screen.cursor_position(), (2, 0));
+        assert!(!screen.raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn return_screen_restores_screen_state() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello");
+
+        let mut screen = pane.take_screen();
+        // Pane now has a fresh empty screen.
+        assert!(pane.screen.raw_bytes().is_empty());
+
+        screen.parse(b" world");
+        pane.return_screen(screen);
+
+        // Screen is restored with all accumulated state.
+        assert!(!pane.screen.raw_bytes().is_empty());
+        assert_eq!(pane.screen.cursor_position(), (0, 11));
+    }
+
+    #[test]
+    fn accept_output_increments_seq_each_call() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert_eq!(pane.output_seq, 0);
+        pane.accept_output(b"a");
+        assert_eq!(pane.output_seq, 1);
+        pane.accept_output(b"b");
+        assert_eq!(pane.output_seq, 2);
     }
 }

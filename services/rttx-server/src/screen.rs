@@ -75,14 +75,32 @@ impl PaneScreen {
 
     /// Feed raw PTY output bytes into the parser.
     pub fn feed(&mut self, data: &[u8]) {
-        // Store raw bytes for snapshot replay.
+        self.accept_raw(data);
+        self.parse(data);
+    }
+
+    /// Store raw bytes for snapshot replay without running the VTE parser.
+    ///
+    /// This is the cheap half of [`feed`]: a memcpy into the scrollback
+    /// buffer, safe to call while holding a contended lock. Call [`parse`]
+    /// separately (potentially after releasing the lock) to run the
+    /// expensive byte-by-byte VTE state machine.
+    pub fn accept_raw(&mut self, data: &[u8]) {
         self.performer.raw_bytes.extend_from_slice(data);
         if self.performer.raw_bytes.len() > self.performer.max_bytes {
             let excess = self.performer.raw_bytes.len() - self.performer.max_bytes;
             self.performer.raw_bytes.drain(..excess);
             self.performer.raw_bytes.shrink_to(self.performer.max_bytes);
         }
+    }
 
+    /// Run the VTE parser over `data`, updating cursor, modes, title, and CWD.
+    ///
+    /// This is the expensive half of [`feed`]: it advances the VTE state
+    /// machine byte-by-byte. Callers that need to minimize lock hold time
+    /// should call [`accept_raw`] under the lock and defer [`parse`] until
+    /// after releasing it.
+    pub fn parse(&mut self, data: &[u8]) {
         for &byte in data {
             self.parser.advance(&mut self.performer, byte);
         }
@@ -1487,5 +1505,52 @@ mod tests {
         assert!(!screen.application_cursor_keys());
         assert!(!screen.application_keypad());
         assert!(!screen.bracketed_paste_mode());
+    }
+
+    // ── accept_raw / parse split tests ──────────────────────────────
+
+    #[test]
+    fn accept_raw_stores_bytes_without_parsing() {
+        let mut screen = PaneScreen::new(1024);
+        screen.accept_raw(b"\x1b]0;title\x07hello");
+        assert_eq!(screen.raw_bytes(), b"\x1b]0;title\x07hello");
+        // VTE not run — title not extracted.
+        assert!(screen.title().is_none());
+        assert_eq!(screen.cursor_position(), (0, 0));
+    }
+
+    #[test]
+    fn parse_advances_vte_state_machine() {
+        let mut screen = PaneScreen::new(1024);
+        screen.accept_raw(b"\x1b]0;title\x07hello");
+        screen.parse(b"\x1b]0;title\x07hello");
+        assert_eq!(screen.title(), Some("title"));
+        assert_eq!(screen.cursor_position(), (0, 5));
+    }
+
+    #[test]
+    fn accept_raw_then_parse_equivalent_to_feed() {
+        let data = b"\x1b[?2004h\x1b]7;file://localhost/tmp\x07text\r\n\x1b[6n";
+
+        let mut screen_a = PaneScreen::new(1024);
+        screen_a.feed(data);
+
+        let mut screen_b = PaneScreen::new(1024);
+        screen_b.accept_raw(data);
+        screen_b.parse(data);
+
+        assert_eq!(screen_a.raw_bytes(), screen_b.raw_bytes());
+        assert_eq!(screen_a.cursor_position(), screen_b.cursor_position());
+        assert_eq!(screen_a.cwd(), screen_b.cwd());
+        assert_eq!(screen_a.bracketed_paste_mode(), screen_b.bracketed_paste_mode());
+        assert_eq!(screen_a.take_pending_replies().len(), screen_b.take_pending_replies().len());
+    }
+
+    #[test]
+    fn accept_raw_caps_at_max_bytes() {
+        let mut screen = PaneScreen::new(10);
+        screen.accept_raw(b"0123456789abcdef");
+        assert_eq!(screen.raw_bytes().len(), 10);
+        assert_eq!(screen.raw_bytes(), b"6789abcdef");
     }
 }
