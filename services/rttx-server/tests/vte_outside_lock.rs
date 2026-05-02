@@ -1,0 +1,46 @@
+//! Integration test: VTE parsing outside the mutex still propagates
+//! CWD and title changes correctly.
+//!
+//! Verifies that the two-phase `accept_output`/`parse_and_extract` split
+//! (issue #823) does not regress metadata extraction.
+
+mod common;
+
+use common::{TestClient, send_input, start_test_server};
+use rttx_proto::proto;
+use std::time::Duration;
+
+async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
+    client.handshake().await;
+    let runtime_id =
+        common::create_runtime(client, "vte-test", proto::RuntimePolicy::Persistent).await;
+    let pane_id = common::create_pane(client, &runtime_id).await;
+    common::attach_rw(client, &runtime_id).await;
+    (runtime_id, pane_id)
+}
+
+#[tokio::test]
+async fn title_and_cwd_propagated_after_two_phase_parsing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&sock).await;
+    let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
+
+    // Emit OSC 0 (title) and OSC 7 (CWD) in a single printf.
+    let cmd = "printf '\\033]0;my-project\\007\\033]7;file://localhost/tmp/project\\007'\n";
+    send_input(&mut client, &runtime_id, &pane_id, cmd.as_bytes()).await;
+
+    let msgs = client.drain(Duration::from_secs(5)).await;
+
+    let title_msg = msgs.iter().find_map(|m| match &m.msg {
+        Some(proto::server_message::Msg::TitleChanged(t)) => Some(t.title.clone()),
+        _ => None,
+    });
+    let cwd_msg = msgs.iter().find_map(|m| match &m.msg {
+        Some(proto::server_message::Msg::CwdChanged(c)) => Some(c.cwd.clone()),
+        _ => None,
+    });
+
+    assert_eq!(title_msg.as_deref(), Some("my-project"), "title should propagate");
+    assert_eq!(cwd_msg.as_deref(), Some("/tmp/project"), "CWD should propagate");
+}
