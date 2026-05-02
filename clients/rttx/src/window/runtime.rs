@@ -1,9 +1,48 @@
 use super::*;
 use rttx_proto::v3;
+use std::collections::BTreeMap;
 
 /// Maximum events the poller processes per GTK timer callback.
 /// Keeps the main loop responsive during output bursts.
 pub(super) const EVENT_POLL_BATCH_LIMIT: usize = 64;
+
+/// Result of partitioning a batch of endpoint events into coalesced output
+/// deltas and remaining non-delta events.
+pub(super) struct CoalescedBatch {
+    /// Accumulated output bytes per pane, keyed by `(endpoint, pane_id_bytes)`.
+    pub delta_buffers: BTreeMap<(RuntimeEndpoint, Vec<u8>), Vec<u8>>,
+    /// Non-delta events in their original order.
+    pub other_events: Vec<crate::daemon_bridge::EndpointEvent>,
+}
+
+/// Partition a batch of endpoint events: coalesce `OutputDelta` messages per
+/// pane into a single buffer, and collect everything else in order.
+pub(super) fn coalesce_event_batch(
+    events: Vec<crate::daemon_bridge::EndpointEvent>,
+) -> CoalescedBatch {
+    let mut delta_buffers: BTreeMap<(RuntimeEndpoint, Vec<u8>), Vec<u8>> = BTreeMap::new();
+    let mut other_events: Vec<crate::daemon_bridge::EndpointEvent> = Vec::new();
+
+    for event in events {
+        match event {
+            crate::daemon_bridge::EndpointEvent::RuntimeMessage { ref endpoint, ref message }
+                if matches!(
+                    message.payload,
+                    Some(v3::server_envelope::Payload::OutputDelta(_))
+                ) =>
+            {
+                if let Some(v3::server_envelope::Payload::OutputDelta(ref delta)) = message.payload
+                {
+                    let key = (endpoint.clone(), delta.pane_id.clone());
+                    delta_buffers.entry(key).or_default().extend_from_slice(&delta.data);
+                }
+            }
+            other => other_events.push(other),
+        }
+    }
+
+    CoalescedBatch { delta_buffers, other_events }
+}
 
 impl Window {
     pub fn add_session(&self) {
@@ -514,15 +553,52 @@ impl Window {
             let Some(win) = win.upgrade() else {
                 return glib::ControlFlow::Break;
             };
+
+            let mut events = Vec::new();
             for _ in 0..EVENT_POLL_BATCH_LIMIT {
                 match rx.try_recv() {
-                    Ok(event) => win.handle_endpoint_event(event),
+                    Ok(event) => events.push(event),
                     Err(_) => break,
                 }
             }
+
+            if !events.is_empty() {
+                let batch = coalesce_event_batch(events);
+                win.feed_coalesced_deltas(&batch.delta_buffers);
+                for event in batch.other_events {
+                    win.handle_endpoint_event(event);
+                }
+            }
+
             glib::ControlFlow::Continue
         });
         self.imp().event_poller_source.replace(Some(source));
+    }
+
+    /// Feed coalesced output delta buffers — one `vte.feed()` call per pane.
+    fn feed_coalesced_deltas(&self, delta_buffers: &BTreeMap<(RuntimeEndpoint, Vec<u8>), Vec<u8>>) {
+        for ((endpoint, pane_id_bytes), data) in delta_buffers {
+            let Ok(pane_id) = rttx_proto::bytes_to_uuid(pane_id_bytes) else {
+                continue;
+            };
+            let runtime_pane_id = pane_id.to_string();
+            let layout_terminal_uuid = {
+                let state = self.imp().state.borrow();
+                state.runtime_pane_target(endpoint, &runtime_pane_id).map(|(_, uuid)| uuid)
+            };
+            let Some(layout_terminal_uuid) = layout_terminal_uuid else {
+                continue;
+            };
+
+            let pane = {
+                let panes = self.imp().persistent_terminals.borrow();
+                panes.get(&layout_terminal_uuid).cloned()
+            };
+            let Some(pane) = pane else { continue };
+
+            pane.feed_output(data);
+            self.mark_session_activity(&layout_terminal_uuid);
+        }
     }
 
     pub(super) fn handle_endpoint_event(&self, event: crate::daemon_bridge::EndpointEvent) {
@@ -1082,5 +1158,187 @@ impl Window {
         };
         let (cols, rows) = pane.terminal_size();
         (u32::from(cols), u32::from(rows))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon_bridge::EndpointEvent;
+    use rttx_proto::{uuid_to_bytes, v3_snapshot::build_output_delta_envelope};
+    use uuid::Uuid;
+
+    fn delta_event(
+        endpoint: RuntimeEndpoint,
+        pane_id: Uuid,
+        data: &[u8],
+        seq: u64,
+    ) -> EndpointEvent {
+        EndpointEvent::RuntimeMessage {
+            endpoint,
+            message: build_output_delta_envelope(
+                Uuid::nil(),
+                pane_id,
+                bytes::Bytes::copy_from_slice(data),
+                seq,
+            ),
+        }
+    }
+
+    fn title_event(endpoint: RuntimeEndpoint, pane_id: Uuid, title: &str) -> EndpointEvent {
+        use rttx_proto::v3_envelope::build_push_envelope;
+        EndpointEvent::RuntimeMessage {
+            endpoint,
+            message: build_push_envelope(v3::server_envelope::Payload::TitleChanged(
+                v3::TitleChanged {
+                    runtime_id: vec![],
+                    pane_id: uuid_to_bytes(pane_id),
+                    title: title.to_string(),
+                    runtime_revision: 0,
+                },
+            )),
+        }
+    }
+
+    fn cwd_event(endpoint: RuntimeEndpoint, pane_id: Uuid, cwd: &str) -> EndpointEvent {
+        use rttx_proto::v3_envelope::build_push_envelope;
+        EndpointEvent::RuntimeMessage {
+            endpoint,
+            message: build_push_envelope(v3::server_envelope::Payload::CwdChanged(
+                v3::CwdChanged {
+                    runtime_id: vec![],
+                    pane_id: uuid_to_bytes(pane_id),
+                    cwd: cwd.to_string(),
+                    runtime_revision: 0,
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn coalesce_merges_deltas_for_same_pane() {
+        let pane = Uuid::new_v4();
+        let ep = RuntimeEndpoint::Local;
+        let events = vec![
+            delta_event(ep.clone(), pane, b"hello ", 1),
+            delta_event(ep.clone(), pane, b"world", 2),
+        ];
+
+        let batch = coalesce_event_batch(events);
+
+        assert_eq!(batch.delta_buffers.len(), 1);
+        let key = (ep, uuid_to_bytes(pane));
+        assert_eq!(batch.delta_buffers[&key], b"hello world");
+        assert!(batch.other_events.is_empty());
+    }
+
+    #[test]
+    fn coalesce_separates_panes() {
+        let pane_a = Uuid::new_v4();
+        let pane_b = Uuid::new_v4();
+        let ep = RuntimeEndpoint::Local;
+        let events = vec![
+            delta_event(ep.clone(), pane_a, b"aaa", 1),
+            delta_event(ep.clone(), pane_b, b"bbb", 1),
+            delta_event(ep.clone(), pane_a, b"AAA", 2),
+        ];
+
+        let batch = coalesce_event_batch(events);
+
+        assert_eq!(batch.delta_buffers.len(), 2);
+        assert_eq!(batch.delta_buffers[&(ep.clone(), uuid_to_bytes(pane_a))], b"aaaAAA");
+        assert_eq!(batch.delta_buffers[&(ep, uuid_to_bytes(pane_b))], b"bbb");
+        assert!(batch.other_events.is_empty());
+    }
+
+    #[test]
+    fn coalesce_preserves_non_delta_events() {
+        let pane = Uuid::new_v4();
+        let ep = RuntimeEndpoint::Local;
+        let events = vec![
+            delta_event(ep.clone(), pane, b"data", 1),
+            title_event(ep.clone(), pane, "my title"),
+            delta_event(ep.clone(), pane, b" more", 2),
+            cwd_event(ep.clone(), pane, "/tmp"),
+        ];
+
+        let batch = coalesce_event_batch(events);
+
+        assert_eq!(batch.delta_buffers.len(), 1);
+        assert_eq!(batch.delta_buffers[&(ep, uuid_to_bytes(pane))], b"data more");
+        assert_eq!(batch.other_events.len(), 2);
+    }
+
+    #[test]
+    fn coalesce_empty_batch() {
+        let batch = coalesce_event_batch(vec![]);
+        assert!(batch.delta_buffers.is_empty());
+        assert!(batch.other_events.is_empty());
+    }
+
+    #[test]
+    fn coalesce_no_deltas() {
+        let pane = Uuid::new_v4();
+        let ep = RuntimeEndpoint::Local;
+        let events = vec![title_event(ep.clone(), pane, "t1"), cwd_event(ep, pane, "/home")];
+
+        let batch = coalesce_event_batch(events);
+
+        assert!(batch.delta_buffers.is_empty());
+        assert_eq!(batch.other_events.len(), 2);
+    }
+
+    #[test]
+    fn coalesce_separates_endpoints() {
+        let pane = Uuid::new_v4();
+        let local = RuntimeEndpoint::Local;
+        let remote = RuntimeEndpoint::Remote { host: "host1".into() };
+        let events = vec![
+            delta_event(local.clone(), pane, b"local", 1),
+            delta_event(remote.clone(), pane, b"remote", 1),
+        ];
+
+        let batch = coalesce_event_batch(events);
+
+        assert_eq!(batch.delta_buffers.len(), 2);
+        assert_eq!(batch.delta_buffers[&(local, uuid_to_bytes(pane))], b"local");
+        assert_eq!(batch.delta_buffers[&(remote, uuid_to_bytes(pane))], b"remote");
+    }
+
+    #[test]
+    fn coalesce_non_delta_order_preserved() {
+        let pane = Uuid::new_v4();
+        let ep = RuntimeEndpoint::Local;
+        let events = vec![
+            cwd_event(ep.clone(), pane, "/a"),
+            delta_event(ep.clone(), pane, b"x", 1),
+            title_event(ep.clone(), pane, "t1"),
+            cwd_event(ep.clone(), pane, "/b"),
+            title_event(ep, pane, "t2"),
+        ];
+
+        let batch = coalesce_event_batch(events);
+
+        assert_eq!(batch.other_events.len(), 4);
+        // Verify order by checking the payloads
+        for (i, event) in batch.other_events.iter().enumerate() {
+            if let EndpointEvent::RuntimeMessage { message, .. } = event {
+                match (i, message.payload.as_ref().unwrap()) {
+                    (0, v3::server_envelope::Payload::CwdChanged(c)) => {
+                        assert_eq!(c.cwd, "/a");
+                    }
+                    (1, v3::server_envelope::Payload::TitleChanged(t)) => {
+                        assert_eq!(t.title, "t1");
+                    }
+                    (2, v3::server_envelope::Payload::CwdChanged(c)) => {
+                        assert_eq!(c.cwd, "/b");
+                    }
+                    (3, v3::server_envelope::Payload::TitleChanged(t)) => {
+                        assert_eq!(t.title, "t2");
+                    }
+                    _ => panic!("unexpected event at index {i}"),
+                }
+            }
+        }
     }
 }
