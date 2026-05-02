@@ -143,18 +143,9 @@ impl Pane {
         }
 
         let path = scrollback_log(state_dir, session_id, self.id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
-        let clean = strip_client_queries(&self.pending_flush);
-        file.write_all(&clean)?;
-        self.pending_flush = Vec::new();
-        self.scrollback_log_path = Some(path.clone());
-
-        // Rotate when the file exceeds the cap.
-        rotate_scrollback_log(&path, DEFAULT_MAX_SCROLLBACK_LOG, SCROLLBACK_ROTATE_KEEP)?;
+        let data = std::mem::take(&mut self.pending_flush);
+        write_scrollback_to_disk(&path, &data)?;
+        self.scrollback_log_path = Some(path);
 
         Ok(())
     }
@@ -169,6 +160,15 @@ impl Pane {
     #[must_use]
     pub const fn pending_flush_len(&self) -> usize {
         self.pending_flush.len()
+    }
+
+    /// Drain pending scrollback bytes for out-of-lock flushing.
+    ///
+    /// Returns the accumulated bytes and resets the internal buffer.
+    /// The caller is responsible for writing the returned bytes to disk.
+    #[must_use]
+    pub fn take_pending_flush(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending_flush)
     }
 
     /// Read the child process CWD from /proc/<pid>/cwd.
@@ -264,6 +264,21 @@ impl Pane {
         self.screen.restore_cursor_visible(snap.cursor_visible);
         self.output_seq = snap.pane_output_seq;
     }
+}
+
+/// Write scrollback data to disk: strip client queries, append, and rotate.
+///
+/// This is the I/O-only counterpart of [`Pane::flush_scrollback`]. It can
+/// be called outside the server mutex after draining pending bytes with
+/// [`Pane::take_pending_flush`].
+pub fn write_scrollback_to_disk(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let clean = strip_client_queries(data);
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(&clean)?;
+    rotate_scrollback_log(path, DEFAULT_MAX_SCROLLBACK_LOG, SCROLLBACK_ROTATE_KEEP)
 }
 
 /// Rotate a scrollback log file when it exceeds `max_bytes`.
@@ -935,5 +950,64 @@ mod tests {
         let content = std::fs::read(log_path).unwrap();
         let cleanup = crate::screen::terminal_cleanup_bytes();
         assert!(content.ends_with(cleanup), "scrollback log should end with cleanup bytes");
+    }
+
+    // ── take_pending_flush / write_scrollback_to_disk tests ─────────
+
+    #[test]
+    fn take_pending_flush_drains_buffer() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"hello world");
+        assert!(pane.has_pending_flush());
+
+        let data = pane.take_pending_flush();
+        assert_eq!(data, b"hello world");
+        assert!(!pane.has_pending_flush());
+        assert_eq!(pane.pending_flush_len(), 0);
+    }
+
+    #[test]
+    fn take_pending_flush_returns_empty_when_nothing_pending() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let data = pane.take_pending_flush();
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn write_scrollback_to_disk_creates_file_and_strips_queries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("scrollback").join("test.log");
+        let data = b"line1\r\n\x1b[6nline2\r\n";
+
+        write_scrollback_to_disk(&path, data).unwrap();
+
+        let content = std::fs::read(&path).unwrap();
+        assert_eq!(content, b"line1\r\nline2\r\n");
+    }
+
+    #[test]
+    fn write_scrollback_to_disk_appends_to_existing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("test.log");
+
+        write_scrollback_to_disk(&path, b"first ").unwrap();
+        write_scrollback_to_disk(&path, b"second").unwrap();
+
+        let content = std::fs::read(&path).unwrap();
+        assert_eq!(content, b"first second");
+    }
+
+    #[test]
+    fn write_scrollback_to_disk_rotates_large_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("test.log");
+
+        let chunk = vec![b'A'; 4 * 1024 * 1024];
+        for _ in 0..4 {
+            write_scrollback_to_disk(&path, &chunk).unwrap();
+        }
+
+        let rotated = path.with_extension("log.1");
+        assert!(rotated.exists(), "rotated segment .1 should exist");
     }
 }

@@ -299,6 +299,91 @@ impl Server {
     /// `Arc<Mutex<>>` so we can spawn PTY read loops.
     #[allow(clippy::significant_drop_tightening)]
     pub async fn reconstruct_runtimes(server: &Arc<Mutex<Self>>) {
+        enum ReplayData {
+            Snapshot(crate::state::types::ScreenSnapshotV1),
+            Scrollback { clean: Vec<u8>, rewrite: Option<(std::path::PathBuf, Vec<u8>)> },
+            None,
+        }
+
+        // Phase 1: collect pane metadata and paths under the lock.
+        let replay_targets: Vec<(Uuid, Uuid, String, Option<std::path::PathBuf>)>;
+        let state_dir;
+        {
+            let s = server.lock().await;
+            state_dir = s.os.state_dir();
+            replay_targets = s
+                .runtimes
+                .values()
+                .flat_map(|rt| {
+                    let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
+                    rt.panes.values().map(move |pane| {
+                        (rt.id, pane.id, label.clone(), pane.scrollback_log_path.clone())
+                    })
+                })
+                .collect();
+        }
+
+        // Phase 2: read screen snapshots and scrollback files outside the lock.
+        let mut replay_results: Vec<(Uuid, Uuid, String, ReplayData)> =
+            Vec::with_capacity(replay_targets.len());
+        for (runtime_id, pane_id, label, log_path) in replay_targets {
+            let pane_short = short_id(pane_id);
+
+            if let Some(snap) =
+                crate::state::persistence::load_screen_snapshot(&state_dir, runtime_id, pane_id)
+            {
+                tracing::info!(
+                    "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes, seq={})",
+                    snap.screen_bytes.len(),
+                    snap.pane_output_seq,
+                );
+                replay_results.push((runtime_id, pane_id, label, ReplayData::Snapshot(snap)));
+                continue;
+            }
+
+            if let Some(ref path) = log_path
+                && path.exists()
+            {
+                match std::fs::read(path) {
+                    Ok(data) => {
+                        let restart_safe = restart_safe_scrollback(&data);
+                        let clean = strip_client_queries(restart_safe);
+                        tracing::info!(
+                            "Replaying {} bytes of scrollback for pane {pane_short} in runtime {label} (no snapshot)",
+                            clean.len(),
+                        );
+                        let rewrite =
+                            (clean.len() != data.len()).then(|| (path.clone(), clean.clone()));
+                        replay_results.push((
+                            runtime_id,
+                            pane_id,
+                            label,
+                            ReplayData::Scrollback { clean: clean.clone(), rewrite },
+                        ));
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to read scrollback log for pane {pane_short} in runtime {label}: {e}",
+                        );
+                    }
+                }
+            }
+            replay_results.push((runtime_id, pane_id, label, ReplayData::None));
+        }
+
+        // Write cleaned scrollback files outside the lock.
+        for (_, _, label, data) in &replay_results {
+            if let ReplayData::Scrollback { rewrite: Some((path, clean)), .. } = data
+                && let Err(e) = std::fs::write(path, clean)
+            {
+                tracing::error!(
+                    "Failed to rewrite restart-safe scrollback in runtime {label}: {e}",
+                );
+            }
+        }
+
+        // Phase 3: feed replay data into pane screens under the lock.
         #[allow(clippy::type_complexity)]
         let panes_to_reconstruct: Vec<(
             Uuid,
@@ -310,58 +395,18 @@ impl Server {
             bool,
         )> = {
             let mut s = server.lock().await;
-            let state_dir = s.os.state_dir();
-
-            for rt in s.runtimes.values_mut() {
-                let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
-                for pane in rt.panes.values_mut() {
-                    let pane_short = short_id(pane.id);
-
-                    // Prefer screen snapshot over raw scrollback replay.
-                    if let Some(snap) =
-                        crate::state::persistence::load_screen_snapshot(&state_dir, rt.id, pane.id)
-                    {
-                        tracing::info!(
-                            "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes, seq={})",
-                            snap.screen_bytes.len(),
-                            snap.pane_output_seq,
-                        );
-                        pane.restore_from_snapshot(&snap);
-                        continue;
-                    }
-
-                    // Fall back to scrollback log replay.
-                    if let Some(ref log_path) = pane.scrollback_log_path
-                        && log_path.exists()
-                    {
-                        match std::fs::read(log_path) {
-                            Ok(data) => {
-                                let restart_safe = restart_safe_scrollback(&data);
-                                let clean = strip_client_queries(restart_safe);
-                                tracing::info!(
-                                    "Replaying {} bytes of scrollback for pane {pane_short} in runtime {label} (no snapshot)",
-                                    clean.len(),
-                                );
-                                pane.screen.feed(&clean);
-                                if clean.len() != data.len()
-                                    && let Err(e) = std::fs::write(log_path, &clean)
-                                {
-                                    tracing::error!(
-                                        "Failed to rewrite restart-safe scrollback for pane {pane_short} in runtime {label}: {e}",
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to read scrollback log for pane {pane_short} in runtime {label}: {e}",
-                                );
-                            }
-                        }
+            for (runtime_id, pane_id, _, data) in replay_results {
+                if let Some(rt) = s.runtimes.get_mut(&runtime_id)
+                    && let Some(pane) = rt.panes.get_mut(&pane_id)
+                {
+                    match data {
+                        ReplayData::Snapshot(snap) => pane.restore_from_snapshot(&snap),
+                        ReplayData::Scrollback { clean, .. } => pane.screen.feed(&clean),
+                        ReplayData::None => {}
                     }
                 }
             }
 
-            // Collect panes that need fresh shells spawned.
             s.runtimes
                 .values()
                 .flat_map(|rt| {
@@ -2280,17 +2325,24 @@ pub async fn serialization_loop(
         let mut s = server.lock().await;
         let state_dir = s.os.state_dir();
 
+        // Phase 1: drain pending scrollback bytes under the lock (cheap mem::take).
+        let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
         let runtime_ids: Vec<_> = s.runtimes.keys().copied().collect();
         for runtime_id in runtime_ids {
             if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
-                let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 for pane in rt.panes.values_mut() {
-                    if let Err(e) = pane.flush_scrollback(&state_dir, runtime_id) {
-                        tracing::error!(
-                            "Failed to flush scrollback for pane {} in runtime {label}: {e}",
-                            short_id(pane.id)
-                        );
+                    if !pane.has_pending_flush() || pane.no_persist {
+                        if pane.no_persist {
+                            // Discard pending bytes for no-persist panes.
+                            let _ = pane.take_pending_flush();
+                        }
+                        continue;
                     }
+                    let path =
+                        crate::state::layout::scrollback_log(&state_dir, runtime_id, pane.id);
+                    let data = pane.take_pending_flush();
+                    pane.scrollback_log_path = Some(path.clone());
+                    flush_jobs.push((path, data));
                 }
             }
         }
@@ -2328,6 +2380,13 @@ pub async fn serialization_loop(
         let index_changed = current_ids != last_persisted_ids;
 
         drop(s);
+
+        // Phase 2: flush scrollback to disk outside the lock.
+        for (path, data) in &flush_jobs {
+            if let Err(e) = crate::pane::write_scrollback_to_disk(path, data) {
+                tracing::error!("Failed to flush scrollback to {}: {e}", path.display());
+            }
+        }
 
         // Write v2 daemon index only when runtime IDs changed.
         if index_changed {
@@ -2380,19 +2439,24 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut s = server.lock().await;
     let state_dir = s.os.state_dir();
 
+    // Drain pending scrollback bytes under the lock.
+    let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
     for rt in s.runtimes.values_mut() {
-        let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
         for pane in rt.panes.values_mut() {
-            if let Err(e) = pane.flush_scrollback(&state_dir, rt.id) {
-                tracing::error!(
-                    "Failed to flush scrollback for pane {} in runtime {label}: {e}",
-                    short_id(pane.id)
-                );
+            if !pane.has_pending_flush() || pane.no_persist {
+                if pane.no_persist {
+                    let _ = pane.take_pending_flush();
+                }
+                continue;
             }
+            let path = crate::state::layout::scrollback_log(&state_dir, rt.id, pane.id);
+            let data = pane.take_pending_flush();
+            pane.scrollback_log_path = Some(path.clone());
+            flush_jobs.push((path, data));
         }
     }
 
-    // Write v2 per-runtime files (all persistent, not just dirty).
+    // Collect v2 per-runtime files (all persistent, not just dirty).
     let runtime_files: Vec<_> = s
         .runtimes
         .values()
@@ -2407,6 +2471,22 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         .filter(|rt| rt.policy == RuntimePolicy::Persistent)
         .flat_map(|rt| rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot())))
         .collect();
+
+    // Mark all as persisted while still holding the lock.
+    for rt in s.runtimes.values_mut() {
+        if rt.policy == RuntimePolicy::Persistent {
+            rt.mark_persisted();
+        }
+    }
+
+    drop(s);
+
+    // All I/O happens outside the lock.
+    for (path, data) in &flush_jobs {
+        if let Err(e) = crate::pane::write_scrollback_to_disk(path, data) {
+            tracing::error!("Failed to flush scrollback to {} on shutdown: {e}", path.display());
+        }
+    }
 
     let ids: Vec<_> = runtime_files.iter().map(|rf| rf.spec.id).collect();
     if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &ids) {
@@ -2428,14 +2508,6 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         }
     }
 
-    // Mark all as persisted.
-    for rt in s.runtimes.values_mut() {
-        if rt.policy == RuntimePolicy::Persistent {
-            rt.mark_persisted();
-        }
-    }
-
-    drop(s);
     tracing::info!("Final state persisted");
 }
 
