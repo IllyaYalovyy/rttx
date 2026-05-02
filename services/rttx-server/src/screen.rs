@@ -1543,10 +1543,7 @@ mod tests {
         assert_eq!(screen_a.cursor_position(), screen_b.cursor_position());
         assert_eq!(screen_a.cwd(), screen_b.cwd());
         assert_eq!(screen_a.bracketed_paste_mode(), screen_b.bracketed_paste_mode());
-        assert_eq!(
-            screen_a.take_pending_replies().len(),
-            screen_b.take_pending_replies().len()
-        );
+        assert_eq!(screen_a.take_pending_replies().len(), screen_b.take_pending_replies().len());
     }
 
     #[test]
