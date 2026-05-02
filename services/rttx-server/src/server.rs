@@ -2147,31 +2147,17 @@ fn spawn_pty_read_loop(
 
                             let data = batch.split().freeze();
 
-                            // Phase 1: hold lock for state mutation and handle collection.
-                            let (new_cwd, new_title, pending_replies, pty_writer, senders, output_seq) = {
+                            // Phase 1: accept raw bytes under the lock (fast memcpy, no VTE parsing).
+                            let (mut taken_screen, senders, output_seq) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut s = server.lock().await;
-                                let (new_cwd, new_title, pending_replies, output_seq) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
+                                let (screen, seq) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
-                                    let result = pane.feed_output(&data);
-                                    let seq = pane.output_seq;
-                                    let cwd = result.new_cwd.and_then(|cwd| {
-                                        let rev = rt.set_pane_cwd(pane_id, &cwd)?;
-                                        Some((cwd, rev))
-                                    });
-                                    let title = result.new_title.and_then(|title| {
-                                        let rev = rt.set_pane_title(pane_id, title.clone())?;
-                                        Some((title, rev))
-                                    });
-                                    (cwd, title, result.pending_replies, seq)
+                                    pane.accept_output(&data);
+                                    (Some(pane.take_screen()), pane.output_seq)
                                 } else {
-                                    (None, None, Vec::new(), 0)
-                                };
-                                let pty_writer = if pending_replies.is_empty() {
-                                    None
-                                } else {
-                                    s.pty_writers.get(&pane_id).cloned()
+                                    (None, 0)
                                 };
                                 let senders = s.collect_runtime_senders(runtime_id);
                                 drop(s);
@@ -2184,11 +2170,42 @@ fn spawn_pty_read_loop(
                                         "server mutex held too long in PTY read loop",
                                     );
                                 }
-                                (new_cwd, new_title, pending_replies, pty_writer, senders, output_seq)
+                                (screen, senders, seq)
                             };
-                            // Lock released.
 
-                            // Phase 2: write DSR replies without the server lock.
+                            // Phase 2: VTE parsing outside the server lock.
+                            if let Some(ref mut screen) = taken_screen {
+                                screen.parse(&data);
+                            }
+
+                            // Phase 3: return parsed screen, extract metadata, collect PTY writer.
+                            let (new_cwd, new_title, pending_replies, pty_writer) = {
+                                let mut s = server.lock().await;
+                                if let Some(screen) = taken_screen
+                                    && let Some(rt) = s.runtimes.get_mut(&runtime_id)
+                                    && let Some(pane) = rt.panes.get_mut(&pane_id)
+                                {
+                                    let result = pane.return_screen(screen);
+                                    let cwd = result.new_cwd.and_then(|cwd| {
+                                        let rev = rt.set_pane_cwd(pane_id, &cwd)?;
+                                        Some((cwd, rev))
+                                    });
+                                    let title = result.new_title.and_then(|title| {
+                                        let rev = rt.set_pane_title(pane_id, title.clone())?;
+                                        Some((title, rev))
+                                    });
+                                    let writer = if result.pending_replies.is_empty() {
+                                        None
+                                    } else {
+                                        s.pty_writers.get(&pane_id).cloned()
+                                    };
+                                    (cwd, title, result.pending_replies, writer)
+                                } else {
+                                    (None, None, Vec::new(), None)
+                                }
+                            };
+
+                            // Phase 4: write DSR replies without the server lock.
                             if let Some(writer) = pty_writer {
                                 let mut w = writer.lock().await;
                                 for reply in &pending_replies {
@@ -2205,10 +2222,7 @@ fn spawn_pty_read_loop(
                                 }
                             }
 
-                            // Phase 3: broadcast to clients without the server lock.
-                            // Strip terminal query sequences (DSR, DA1, DA2, DECRQM)
-                            // that the daemon already handles. If forwarded, VTE would
-                            // generate duplicate responses that leak as visible garbage.
+                            // Phase 5: broadcast to clients without the server lock.
                             let client_data = crate::screen::strip_client_queries(&data);
                             let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
