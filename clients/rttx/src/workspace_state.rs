@@ -215,6 +215,10 @@ impl WindowState {
                 }
                 transition.persist_window_state = true;
             }
+            EndpointEvent::WorkspaceResynced { workspace_id, snapshot, .. } => {
+                let restores = self.build_resync_restores(workspace_id, snapshot);
+                transition.pane_snapshot_restores = restores;
+            }
             EndpointEvent::RuntimeMessage { .. } | EndpointEvent::WorkspaceError { .. } => {}
         }
 
@@ -520,6 +524,42 @@ impl WindowState {
             skipped_runtime_panes,
             previous_layout_terminals: layout_terminal_uuids,
         })
+    }
+
+    /// Build snapshot restores for a resync without rebuilding the layout.
+    fn build_resync_restores(
+        &self,
+        workspace_id: &str,
+        snapshot: &v3::RuntimeSnapshot,
+    ) -> Vec<WorkspacePaneRestore> {
+        let Some(session) = self.workspaces.iter().find(|s| s.uuid == workspace_id) else {
+            return Vec::new();
+        };
+        let layout_by_runtime_pane: BTreeMap<_, _> = session
+            .runtime
+            .pane_bindings
+            .iter()
+            .map(|(layout_uuid, runtime_pane_id)| (runtime_pane_id.clone(), layout_uuid.clone()))
+            .collect();
+        snapshot
+            .panes
+            .iter()
+            .filter_map(|pane_snapshot| {
+                let runtime_pane_id = snapshot_pane_id(pane_snapshot)?;
+                let layout_terminal_uuid = layout_by_runtime_pane.get(&runtime_pane_id)?.clone();
+                Some(WorkspacePaneRestore {
+                    layout_terminal_uuid,
+                    title: pane_snapshot.title.clone(),
+                    cwd: pane_snapshot.cwd.clone(),
+                    pane_output_seq: pane_snapshot.pane_output_seq,
+                    scrollback_tail: pane_snapshot.scrollback_tail.clone(),
+                    scrollback_complete: pane_snapshot.scrollback_complete,
+                    cols: pane_snapshot.cols as u16,
+                    rows: pane_snapshot.rows as u16,
+                    terminal_modes: pane_snapshot.terminal_modes,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1947,6 +1987,139 @@ mod tests {
             state.dismissed_runtime_ids.contains(&live_id),
             "live dismissed ID should be retained"
         );
+    }
+
+    // ── Resync (StreamOverflow recovery) ──
+
+    #[test]
+    fn resync_produces_snapshot_restores_for_bound_panes() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term(&pane_uuid))]);
+        // Simulate an opened workspace so bindings exist.
+        let _ = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(
+                &runtime_id,
+                vec![pane_snapshot(&pane_uuid, "bash", "/home", b"initial")],
+            ),
+        });
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceResynced {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(
+                &runtime_id,
+                vec![pane_snapshot(&pane_uuid, "bash", "/home/project", b"resynced output")],
+            ),
+        });
+
+        assert_eq!(transition.pane_snapshot_restores.len(), 1);
+        let restore = &transition.pane_snapshot_restores[0];
+        assert_eq!(restore.layout_terminal_uuid, pane_uuid);
+        assert_eq!(restore.cwd, "/home/project");
+        assert_eq!(restore.scrollback_tail, bytes::Bytes::from_static(b"resynced output"));
+    }
+
+    #[test]
+    fn resync_ignores_unknown_workspace() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![]);
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceResynced {
+            workspace_id: "nonexistent".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![]),
+        });
+
+        assert!(transition.pane_snapshot_restores.is_empty());
+    }
+
+    #[test]
+    fn resync_skips_unbound_runtime_panes() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_uuid = uuid::Uuid::new_v4().to_string();
+        let extra_pane = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term(&pane_uuid))]);
+        let _ = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![pane_snapshot(&pane_uuid, "bash", "/home", b"")]),
+        });
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceResynced {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(
+                &runtime_id,
+                vec![
+                    pane_snapshot(&pane_uuid, "bash", "/home", b"resynced"),
+                    pane_snapshot(&extra_pane, "zsh", "/tmp", b"extra"),
+                ],
+            ),
+        });
+
+        assert_eq!(transition.pane_snapshot_restores.len(), 1);
+        assert_eq!(transition.pane_snapshot_restores[0].layout_terminal_uuid, pane_uuid);
+    }
+
+    #[test]
+    fn resync_does_not_rebuild_layout() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term(&pane_uuid))]);
+        let _ = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![pane_snapshot(&pane_uuid, "bash", "/home", b"")]),
+        });
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceResynced {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(
+                &runtime_id,
+                vec![pane_snapshot(&pane_uuid, "bash", "/home", b"resynced")],
+            ),
+        });
+
+        assert!(transition.rebuilt_workspaces.is_empty());
+        assert!(transition.recovered_workspaces.is_empty());
+        assert!(transition.pane_create_requests.is_empty());
+    }
+
+    #[test]
+    fn resync_carries_terminal_modes() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_uuid = uuid::Uuid::new_v4().to_string();
+        let mut state = window_state(vec![managed_session("ws-1", "Workspace", term(&pane_uuid))]);
+        let _ = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![pane_snapshot(&pane_uuid, "bash", "/home", b"")]),
+        });
+
+        let mut snap = pane_snapshot(&pane_uuid, "vim", "/home", b"vim content");
+        snap.terminal_modes = Some(v3::TerminalModeState {
+            bracketed_paste: true,
+            application_cursor_keys: true,
+            ..Default::default()
+        });
+
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceResynced {
+            workspace_id: "ws-1".into(),
+            runtime_id: runtime_id.clone(),
+            snapshot: snapshot(&runtime_id, vec![snap]),
+        });
+
+        assert_eq!(transition.pane_snapshot_restores.len(), 1);
+        let modes = transition.pane_snapshot_restores[0]
+            .terminal_modes
+            .as_ref()
+            .expect("modes should be present");
+        assert!(modes.bracketed_paste);
+        assert!(modes.application_cursor_keys);
     }
 
     #[test]
