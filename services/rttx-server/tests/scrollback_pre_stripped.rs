@@ -66,9 +66,7 @@ async fn scrollback_pre_stripped_at_accept_time() {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(
-                b"printf 'PRE_STRIP\\033[6n\\033[cMARKER'\n",
-            ),
+            data: bytes::Bytes::from_static(b"printf 'PRE_STRIP\\033[6n\\033[cMARKER'\n"),
         })),
     })
     .await;
