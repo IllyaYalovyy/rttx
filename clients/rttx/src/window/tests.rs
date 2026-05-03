@@ -7119,3 +7119,100 @@ fn rename_focused_pane_direct_sets_custom_title() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn workspace_resynced_event_restores_pane_content() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.workspace-resynced-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let runtime_id = uuid::Uuid::new_v4();
+    let pane_id = uuid::Uuid::new_v4();
+    let session_state = crate::test_helpers::managed_session_with_runtime(
+        "workspace-resync",
+        "Resync Workspace",
+        LayoutNode::new_terminal_with_uuid(&pane_id.to_string()),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some(&runtime_id.to_string()),
+    );
+    window.imp().state.borrow_mut().workspaces.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    // First, open the workspace so bindings are established.
+    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
+        workspace_id: session_state.uuid.clone(),
+        runtime_id: runtime_id.to_string(),
+        snapshot: rttx_proto::v3::RuntimeSnapshot {
+            runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+            runtime_revision: 7,
+            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            panes: vec![rttx_proto::v3::PaneSnapshot {
+                pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                pane_output_seq: 10,
+                title: "bash".into(),
+                cwd: "/home".into(),
+                cols: 80,
+                rows: 24,
+                exit_status: None,
+                terminal_modes: None,
+                scrollback_tail: bytes::Bytes::from_static(b"initial"),
+                total_scrollback_bytes: 7,
+                scrollback_complete: true,
+            }],
+        },
+    });
+    pump_events(50);
+
+    // Now simulate a resync with updated content.
+    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceResynced {
+        workspace_id: session_state.uuid.clone(),
+        runtime_id: runtime_id.to_string(),
+        snapshot: rttx_proto::v3::RuntimeSnapshot {
+            runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+            runtime_revision: 8,
+            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            panes: vec![rttx_proto::v3::PaneSnapshot {
+                pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                pane_output_seq: 50,
+                title: "bash".into(),
+                cwd: "/home/project".into(),
+                cols: 80,
+                rows: 24,
+                exit_status: None,
+                terminal_modes: None,
+                scrollback_tail: bytes::Bytes::from_static(b"resynced output"),
+                total_scrollback_bytes: 15,
+                scrollback_complete: true,
+            }],
+        },
+    });
+    pump_events(50);
+
+    // Verify the pane is still connected and the CWD was updated.
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get(&pane_id.to_string())
+        .cloned()
+        .expect("pane should be present after resync");
+    assert!(pane.input_enabled_for_test());
+    assert_eq!(pane.current_directory().as_deref(), Some("/home/project"));
+
+    // Verify the layout was not rebuilt (workspace count unchanged).
+    let state = window.imp().state.borrow();
+    assert_eq!(state.workspaces.len(), 2); // default + our workspace
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

@@ -639,6 +639,16 @@ impl Window {
                     self.apply_endpoint_event_transition(&transition);
                 }
             }
+            EndpointEvent::WorkspaceResynced { .. } => {
+                let transition = {
+                    let mut state = self.imp().state.borrow_mut();
+                    state.reconcile_endpoint_event(&event)
+                };
+                self.apply_endpoint_event_transition(&transition);
+                if !transition.pane_snapshot_restores.is_empty() {
+                    self.show_toast("Terminal resynced — some output may have been lost");
+                }
+            }
             other => {
                 let transition = {
                     let mut state = self.imp().state.borrow_mut();

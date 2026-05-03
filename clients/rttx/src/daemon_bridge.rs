@@ -89,6 +89,11 @@ pub enum EndpointEvent {
         endpoint: RuntimeEndpoint,
         message: v3::ServerEnvelope,
     },
+    WorkspaceResynced {
+        workspace_id: String,
+        runtime_id: String,
+        snapshot: v3::RuntimeSnapshot,
+    },
     WorkspaceError {
         workspace_id: String,
         operation: ManagerOperation,
@@ -159,6 +164,10 @@ enum EndpointCommand {
         runtime_id: String,
         runtime_pane_id: String,
         no_persist: bool,
+    },
+    ResyncRuntime {
+        workspace_id: String,
+        runtime_id: String,
     },
     Shutdown,
 }
@@ -1218,6 +1227,40 @@ impl EndpointActor {
                 };
                 let _ = self.send_message(&env).await;
             }
+            EndpointCommand::ResyncRuntime { workspace_id, runtime_id } => {
+                let Ok(runtime_uuid) = runtime_id.parse::<Uuid>() else {
+                    return;
+                };
+                let resync = rttx_proto::v3_resync::build_resync_runtime(runtime_uuid);
+                let msg = v3::client_envelope::Command::ResyncRuntime(resync);
+                match self.send_and_read(msg, false).await {
+                    Ok(response) => match response.payload {
+                        Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => {
+                            let _ = self.event_tx.try_send(EndpointEvent::WorkspaceResynced {
+                                workspace_id,
+                                runtime_id,
+                                snapshot,
+                            });
+                        }
+                        Some(v3::server_envelope::Payload::Error(e)) => {
+                            tracing::warn!(
+                                "Resync failed for workspace {workspace_id}: {}",
+                                e.message
+                            );
+                        }
+                        _ => {
+                            tracing::warn!(
+                                "Unexpected resync response for workspace {workspace_id}"
+                            );
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(
+                            "Resync request failed for workspace {workspace_id}: {error}"
+                        );
+                    }
+                }
+            }
             EndpointCommand::ForgetWorkspace { workspace_id } => {
                 self.tracked_workspaces.remove(&workspace_id);
             }
@@ -1495,10 +1538,38 @@ impl EndpointActor {
                         tracked_runtime_id != &runtime_id.to_string()
                     });
                 }
+                if let Some(v3::server_envelope::Payload::StreamOverflow(overflow)) = &env.payload {
+                    self.handle_stream_overflow(overflow);
+                    return;
+                }
                 self.forward_push(env);
             }
             Ok(None) | Err(_) => self.handle_disconnect(),
         }
+    }
+
+    fn handle_stream_overflow(&self, overflow: &v3::StreamOverflow) {
+        let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&overflow.runtime_id) else {
+            return;
+        };
+        let runtime_id_str = runtime_id.to_string();
+        let Some(workspace_id) = self
+            .tracked_workspaces
+            .iter()
+            .find(|(_, rid)| *rid == &runtime_id_str)
+            .map(|(wid, _)| wid.clone())
+        else {
+            return;
+        };
+        tracing::warn!(
+            workspace_id,
+            %runtime_id,
+            dropped = overflow.dropped_count,
+            "StreamOverflow received, requesting resync"
+        );
+        let _ = self
+            .self_tx
+            .try_send(EndpointCommand::ResyncRuntime { workspace_id, runtime_id: runtime_id_str });
     }
 
     fn forward_push(&self, message: v3::ServerEnvelope) {
@@ -2955,5 +3026,180 @@ mod tests {
             2,
             "all workspaces must remain tracked after partial reconnect failure"
         );
+    }
+
+    #[test]
+    fn handle_stream_overflow_queues_resync_command() {
+        let ((reader, writer), _server) = split_duplex_connection();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let mut actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx: mpsc::channel(1).1,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::new(),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+            next_request_id: 1,
+        };
+
+        let runtime_id = Uuid::new_v4();
+        actor.tracked_workspaces.insert("ws-1".into(), runtime_id.to_string());
+
+        let overflow = v3::StreamOverflow {
+            runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+            pane_id: None,
+            dropped_count: 5,
+        };
+        actor.handle_stream_overflow(&overflow);
+
+        match cmd_rx.try_recv() {
+            Ok(EndpointCommand::ResyncRuntime { workspace_id, runtime_id: rid }) => {
+                assert_eq!(workspace_id, "ws-1");
+                assert_eq!(rid, runtime_id.to_string());
+            }
+            other => panic!("expected ResyncRuntime command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_stream_overflow_ignores_unknown_runtime() {
+        let ((reader, writer), _server) = split_duplex_connection();
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx: mpsc::channel(1).1,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::new(),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+            next_request_id: 1,
+        };
+
+        let overflow = v3::StreamOverflow {
+            runtime_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+            pane_id: None,
+            dropped_count: 3,
+        };
+        actor.handle_stream_overflow(&overflow);
+
+        assert!(matches!(cmd_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn resync_command_sends_request_and_emits_event() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+
+        let runtime_id = Uuid::new_v4();
+        actor.tracked_workspaces.insert("ws-1".into(), runtime_id.to_string());
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            match request.command {
+                Some(v3::client_envelope::Command::ResyncRuntime(resync)) => {
+                    assert_eq!(rttx_proto::bytes_to_uuid(&resync.runtime_id).unwrap(), runtime_id);
+                }
+                other => panic!("expected ResyncRuntime, got {other:?}"),
+            }
+            let pane_id = Uuid::new_v4();
+            let snap = rttx_proto::v3_snapshot::build_runtime_snapshot(
+                runtime_id,
+                42,
+                v3::RuntimeClientRole::Writer,
+                vec![rttx_proto::v3_snapshot::build_pane_snapshot(
+                    rttx_proto::v3_snapshot::PaneSnapshotParams {
+                        pane_id,
+                        pane_output_seq: 100,
+                        title: "bash".into(),
+                        cwd: "/home".into(),
+                        cols: 80,
+                        rows: 24,
+                        exit_status: None,
+                        terminal_modes: v3::TerminalModeState::default(),
+                        scrollback_tail: bytes::Bytes::from_static(b"$ "),
+                        total_scrollback_bytes: 2,
+                    },
+                )],
+            );
+            send_server_envelope(
+                &mut server_stream,
+                &rttx_proto::v3_resync::build_resync_response(request.request_id, snap),
+            )
+            .await;
+        });
+
+        actor
+            .handle_command(EndpointCommand::ResyncRuntime {
+                workspace_id: "ws-1".into(),
+                runtime_id: runtime_id.to_string(),
+            })
+            .await;
+
+        server.await.expect("server task should complete");
+
+        match event_rx.try_recv() {
+            Ok(EndpointEvent::WorkspaceResynced { workspace_id, runtime_id: rid, snapshot }) => {
+                assert_eq!(workspace_id, "ws-1");
+                assert_eq!(rid, runtime_id.to_string());
+                assert_eq!(snapshot.panes.len(), 1);
+            }
+            other => panic!("expected WorkspaceResynced event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resync_command_handles_error_response() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let (mut actor, mut event_rx) = make_actor_with_events(reader, writer);
+
+        let runtime_id = Uuid::new_v4();
+        actor.tracked_workspaces.insert("ws-1".into(), runtime_id.to_string());
+
+        let server = tokio::spawn(async move {
+            let mut read_buf = BytesMut::new();
+            let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
+            let err = rttx_proto::v3_error::build_error(
+                v3::ErrorKind::Internal,
+                "resync failed",
+                "ResyncRuntime",
+            );
+            send_server_envelope(
+                &mut server_stream,
+                &rttx_proto::v3_error::build_error_response(request.request_id, err),
+            )
+            .await;
+        });
+
+        actor
+            .handle_command(EndpointCommand::ResyncRuntime {
+                workspace_id: "ws-1".into(),
+                runtime_id: runtime_id.to_string(),
+            })
+            .await;
+
+        server.await.expect("server task should complete");
+
+        assert!(matches!(event_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }
