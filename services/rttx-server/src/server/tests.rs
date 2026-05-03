@@ -2160,3 +2160,79 @@ fn v1_state_json_in_cache_dir_is_ignored() {
     );
     assert!(logs_contain("Starting fresh"));
 }
+
+// ── Connection limit semaphore (#826) ───────────────────────────
+
+#[test]
+fn max_concurrent_clients_is_reasonable() {
+    const { assert!(super::MAX_CONCURRENT_CLIENTS >= 64) };
+    const { assert!(super::MAX_CONCURRENT_CLIENTS <= 1024) };
+}
+
+#[tokio::test]
+#[allow(clippy::significant_drop_tightening)]
+async fn semaphore_rejects_when_limit_reached() {
+    let limit = Arc::new(tokio::sync::Semaphore::new(2));
+
+    let _permit1 = limit.clone().try_acquire_owned().expect("first permit");
+    let _permit2 = limit.clone().try_acquire_owned().expect("second permit");
+
+    assert!(limit.try_acquire().is_err(), "third acquire should fail at limit=2");
+}
+
+#[tokio::test]
+async fn semaphore_releases_permit_on_drop() {
+    let limit = Arc::new(tokio::sync::Semaphore::new(1));
+
+    let permit = limit.clone().try_acquire_owned().expect("first permit");
+    assert!(limit.try_acquire().is_err(), "should be full");
+
+    drop(permit);
+    assert!(limit.try_acquire().is_ok(), "should succeed after release");
+}
+
+#[tokio::test]
+#[traced_test]
+async fn connection_limit_rejects_excess_clients() {
+    use tokio::net::UnixStream;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let listener = crate::ipc::Listener::bind(&sock_path).unwrap();
+
+    let connection_limit = Arc::new(tokio::sync::Semaphore::new(1));
+
+    // First connection: acquire permit and hold it.
+    let path1 = sock_path.clone();
+    let client1 = tokio::spawn(async move {
+        let _stream = UnixStream::connect(&path1).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    });
+
+    let conn1 = listener.accept().await.unwrap();
+    let permit1 = connection_limit.clone().try_acquire_owned();
+    assert!(permit1.is_ok(), "first connection should get a permit");
+
+    // Second connection: should be rejected by semaphore.
+    let path2 = sock_path.clone();
+    let client2 = tokio::spawn(async move {
+        let _stream = UnixStream::connect(&path2).await.unwrap();
+    });
+
+    let _conn2 = listener.accept().await.unwrap();
+    assert!(
+        connection_limit.try_acquire().is_err(),
+        "second connection should be rejected at limit=1"
+    );
+
+    // Drop the first permit — next acquire should succeed.
+    drop(permit1);
+    assert!(
+        connection_limit.try_acquire().is_ok(),
+        "permit should succeed after first connection releases"
+    );
+
+    drop(conn1);
+    client1.abort();
+    client2.abort();
+}
