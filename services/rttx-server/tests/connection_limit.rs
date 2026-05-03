@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{start_test_server, TestClient};
+use common::{TestClient, start_test_server};
 use rttx_proto::proto;
 use rttx_server::server::MAX_CONCURRENT_CLIENTS;
 
