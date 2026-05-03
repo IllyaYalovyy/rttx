@@ -101,12 +101,21 @@ impl Pane {
     /// Store raw PTY bytes without running the VTE parser.
     ///
     /// Updates `pending_flush`, `output_seq`, and the screen's raw-byte
-    /// buffer. This is a fast memcpy suitable for calling inside a
-    /// contended mutex. Call [`parse_and_extract`] afterwards (potentially
-    /// after releasing the lock) to run the expensive VTE state machine.
+    /// buffer. The screen receives raw bytes for accurate VTE parsing,
+    /// while `pending_flush` receives stripped bytes (terminal query
+    /// sequences removed) so that `flush_scrollback` can write directly
+    /// without re-stripping. The fast path (no ESC byte) avoids any
+    /// allocation beyond the `extend_from_slice` memcpy.
+    ///
+    /// Call [`parse_and_extract`] afterwards (potentially after releasing
+    /// the lock) to run the expensive VTE state machine.
     pub fn accept_output(&mut self, data: &[u8]) {
         self.screen.accept_raw(data);
-        self.pending_flush.extend_from_slice(data);
+        if data.contains(&0x1b) {
+            self.pending_flush.extend_from_slice(&strip_client_queries(data));
+        } else {
+            self.pending_flush.extend_from_slice(data);
+        }
         self.output_seq += 1;
         if self.pending_flush.len() > DEFAULT_MAX_SCROLLBACK {
             let excess = self.pending_flush.len() - DEFAULT_MAX_SCROLLBACK;
@@ -313,18 +322,18 @@ impl Pane {
     }
 }
 
-/// Write scrollback data to disk: strip client queries, append, and rotate.
+/// Write scrollback data to disk: append and rotate.
 ///
-/// This is the I/O-only counterpart of [`Pane::flush_scrollback`]. It can
-/// be called outside the server mutex after draining pending bytes with
-/// [`Pane::take_pending_flush`].
+/// Data is expected to be pre-stripped (terminal query sequences already
+/// removed by [`Pane::accept_output`]). This is the I/O-only counterpart
+/// of [`Pane::flush_scrollback`]. It can be called outside the server
+/// mutex after draining pending bytes with [`Pane::take_pending_flush`].
 pub fn write_scrollback_to_disk(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let clean = strip_client_queries(data);
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(&clean)?;
+    file.write_all(data)?;
     rotate_scrollback_log(path, DEFAULT_MAX_SCROLLBACK_LOG, SCROLLBACK_ROTATE_KEEP)
 }
 
@@ -1021,10 +1030,10 @@ mod tests {
     }
 
     #[test]
-    fn write_scrollback_to_disk_creates_file_and_strips_queries() {
+    fn write_scrollback_to_disk_writes_pre_stripped_data() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("scrollback").join("test.log");
-        let data = b"line1\r\n\x1b[6nline2\r\n";
+        let data = b"line1\r\nline2\r\n";
 
         write_scrollback_to_disk(&path, data).unwrap();
 
@@ -1075,6 +1084,29 @@ mod tests {
         // VTE not parsed — CWD not extracted yet.
         assert!(pane.cwd.is_none());
         assert!(pane.screen.cwd().is_none());
+    }
+
+    #[test]
+    fn accept_output_strips_queries_from_pending_flush() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let data = b"hello\x1b[6nworld\x1b[c";
+        pane.accept_output(data);
+
+        // Screen gets raw bytes (needed for accurate VTE parsing).
+        assert_eq!(pane.screen.raw_bytes(), data);
+        // Pending flush gets stripped bytes (no double strip on disk write).
+        let flushed = pane.take_pending_flush();
+        assert_eq!(flushed, b"helloworld");
+    }
+
+    #[test]
+    fn accept_output_pending_flush_unchanged_without_queries() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let data = b"plain text output\r\n";
+        pane.accept_output(data);
+
+        let flushed = pane.take_pending_flush();
+        assert_eq!(flushed, data);
     }
 
     #[test]
