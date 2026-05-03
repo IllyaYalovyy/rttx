@@ -167,10 +167,18 @@ fn convert_v2_push_to_v3(msg: &ClientMsg, pane_output_seq: u64) -> ClientMsg {
     ClientMsg::V3(rttx_proto::v3_envelope::build_push_envelope(payload))
 }
 
+/// Per-runtime lock type used throughout the server.
+pub type RuntimeLock = Arc<Mutex<Runtime>>;
+
 /// Shared mutable server state.
+///
+/// Runtimes are individually locked so independent workspaces never
+/// block each other.  The outer server mutex protects the registry
+/// (runtime map, client maps, PTY maps) and is held only briefly for
+/// lookups and structural changes.
 pub struct Server {
-    /// All active runtimes.
-    pub runtimes: HashMap<Uuid, Runtime>,
+    /// All active runtimes, each behind its own lock.
+    pub runtimes: HashMap<Uuid, RuntimeLock>,
     /// Server's own identity.
     pub server_id: Uuid,
     /// The engine used to spawn pane processes.
@@ -235,12 +243,18 @@ impl Server {
 
     /// Human-readable label for a runtime: `"name" (short_id)`.
     ///
-    /// Falls back to just the short ID when the runtime is not found.
+    /// Falls back to just the short ID when the runtime is not found or
+    /// its lock cannot be acquired without blocking.
     #[must_use]
     pub fn runtime_label(&self, runtime_id: Uuid) -> String {
         self.runtimes.get(&runtime_id).map_or_else(
             || format!("({})", short_id(runtime_id)),
-            |rt| format!("\"{}\" ({})", rt.name, short_id(runtime_id)),
+            |rt_lock| {
+                rt_lock.try_lock().map_or_else(
+                    |_| format!("({})", short_id(runtime_id)),
+                    |rt| format!("\"{}\" ({})", rt.name, short_id(runtime_id)),
+                )
+            },
         )
     }
 
@@ -259,16 +273,13 @@ impl Server {
                 result.failed_ids.len()
             );
             for rf in &result.runtimes {
-                let rt = Runtime::from_runtime_file(rf);
+                let mut rt = Runtime::from_runtime_file(rf);
                 let runtime_id = rt.id;
-                self.runtimes.insert(rt.id, rt);
-                if let Some(rt) = self.runtimes.get_mut(&runtime_id) {
-                    for pane in rt.panes.values_mut() {
-                        pane.scrollback_log_path = Some(crate::state::layout::scrollback_log(
-                            &state_dir, runtime_id, pane.id,
-                        ));
-                    }
+                for pane in rt.panes.values_mut() {
+                    pane.scrollback_log_path =
+                        Some(crate::state::layout::scrollback_log(&state_dir, runtime_id, pane.id));
                 }
+                self.runtimes.insert(rt.id, Arc::new(Mutex::new(rt)));
             }
 
             // Sweep orphaned runtime directories (RFC-022 §7).
@@ -305,22 +316,21 @@ impl Server {
             None,
         }
 
-        // Phase 1: collect pane metadata and paths under the lock.
+        // Phase 1: collect pane metadata and paths under the server lock.
         let replay_targets: Vec<(Uuid, Uuid, String, Option<std::path::PathBuf>)>;
         let state_dir;
         {
             let s = server.lock().await;
             state_dir = s.os.state_dir();
-            replay_targets = s
-                .runtimes
-                .values()
-                .flat_map(|rt| {
-                    let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
-                    rt.panes.values().map(move |pane| {
-                        (rt.id, pane.id, label.clone(), pane.scrollback_log_path.clone())
-                    })
-                })
-                .collect();
+            let mut targets = Vec::new();
+            for rt_lock in s.runtimes.values() {
+                let rt = rt_lock.lock().await;
+                let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
+                for pane in rt.panes.values() {
+                    targets.push((rt.id, pane.id, label.clone(), pane.scrollback_log_path.clone()));
+                }
+            }
+            replay_targets = targets;
         }
 
         // Phase 2: read screen snapshots and scrollback files outside the lock.
@@ -383,7 +393,7 @@ impl Server {
             }
         }
 
-        // Phase 3: feed replay data into pane screens under the lock.
+        // Phase 3: feed replay data into pane screens using per-runtime locks.
         #[allow(clippy::type_complexity)]
         let panes_to_reconstruct: Vec<(
             Uuid,
@@ -393,38 +403,40 @@ impl Server {
             u16,
             u16,
             bool,
-        )> = {
-            let mut s = server.lock().await;
+        )>;
+        {
+            let s = server.lock().await;
             for (runtime_id, pane_id, _, data) in replay_results {
-                if let Some(rt) = s.runtimes.get_mut(&runtime_id)
-                    && let Some(pane) = rt.panes.get_mut(&pane_id)
-                {
-                    match data {
-                        ReplayData::Snapshot(snap) => pane.restore_from_snapshot(&snap),
-                        ReplayData::Scrollback { clean, .. } => pane.screen.feed(&clean),
-                        ReplayData::None => {}
+                if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
+                    let mut rt = rt_lock.lock().await;
+                    if let Some(pane) = rt.panes.get_mut(&pane_id) {
+                        match data {
+                            ReplayData::Snapshot(snap) => pane.restore_from_snapshot(&snap),
+                            ReplayData::Scrollback { clean, .. } => pane.screen.feed(&clean),
+                            ReplayData::None => {}
+                        }
                     }
                 }
             }
 
-            s.runtimes
-                .values()
-                .flat_map(|rt| {
-                    let name = rt.name.clone();
-                    rt.panes.values().map(move |pane| {
-                        (
-                            rt.id,
-                            pane.id,
-                            name.clone(),
-                            pane.cwd.clone(),
-                            pane.cols,
-                            pane.rows,
-                            pane.no_persist,
-                        )
-                    })
-                })
-                .collect()
-        };
+            let mut targets = Vec::new();
+            for rt_lock in s.runtimes.values() {
+                let rt = rt_lock.lock().await;
+                let name = rt.name.clone();
+                for pane in rt.panes.values() {
+                    targets.push((
+                        rt.id,
+                        pane.id,
+                        name.clone(),
+                        pane.cwd.clone(),
+                        pane.cols,
+                        pane.rows,
+                        pane.no_persist,
+                    ));
+                }
+            }
+            panes_to_reconstruct = targets;
+        }
 
         if panes_to_reconstruct.is_empty() {
             return;
@@ -463,8 +475,8 @@ impl Server {
                         let mut s = server.lock().await;
                         s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                         s.pty_kill_senders.insert(pane_id, kill_tx);
-                        // Clear exit status — fresh shell is running.
-                        if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
+                        if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
+                            let mut rt = rt_lock.lock().await;
                             let _ = rt.set_pane_exit_status(pane_id, None);
                             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                 pane.child_pid = child_pid;
@@ -486,8 +498,9 @@ impl Server {
                     tracing::error!(
                         "Failed to reconstruct pane {pane_short} in runtime {runtime_label}: {e}"
                     );
-                    let mut s = server.lock().await;
-                    if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
+                    let s = server.lock().await;
+                    if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
+                        let mut rt = rt_lock.lock().await;
                         let _ = rt.set_pane_exit_status(pane_id, Some(-1));
                     }
                 }
@@ -538,28 +551,17 @@ impl Server {
         }
     }
 
-    /// Send a message to all clients attached to a runtime.
-    fn broadcast_to_runtime(&mut self, runtime_id: Uuid, msg: &ClientMsg) {
-        let Some(rt) = self.runtimes.get(&runtime_id) else {
-            return;
-        };
-        let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
-        self.broadcast_to_clients(client_ids, None, msg);
-    }
-
     /// Collect cloned sender handles for all clients attached to a runtime.
     ///
-    /// The returned senders can be used after releasing the server mutex via
-    /// [`send_to_collected`].
-    fn collect_runtime_senders(
+    /// `attached_client_ids` must be extracted from the runtime while its
+    /// lock is held.  The returned senders can be used after releasing both
+    /// the server and runtime mutexes via [`send_to_collected`].
+    fn collect_senders_for_clients(
         &self,
-        runtime_id: Uuid,
+        attached_client_ids: &[Uuid],
     ) -> Vec<(Uuid, mpsc::Sender<ClientMsg>, Option<ClientProtocol>)> {
-        let Some(rt) = self.runtimes.get(&runtime_id) else {
-            return Vec::new();
-        };
-        rt.attached_clients
-            .keys()
+        attached_client_ids
+            .iter()
             .filter_map(|&cid| {
                 self.client_senders
                     .get(&cid)
@@ -624,13 +626,17 @@ impl Server {
     ///
     /// Used by `broadcast_to_clients` which may not have a specific `runtime_id`.
     fn handle_single_push_overflow(&mut self, client_id: Uuid) {
-        // Determine the runtime this client is attached to (if any) for the
-        // StreamOverflow event.
-        let runtime_id = self
-            .runtimes
-            .iter()
-            .find(|(_, rt)| rt.attached_clients.contains_key(&client_id))
-            .map(|(&rid, _)| rid);
+        // Without a runtime context we cannot build a StreamOverflow event,
+        // so try to find the runtime this client is attached to.  Because
+        // per-runtime locks are held independently, we use try_lock to
+        // avoid blocking.
+        let runtime_id = self.runtimes.iter().find_map(|(&rid, rt_lock)| {
+            rt_lock
+                .try_lock()
+                .ok()
+                .filter(|rt| rt.attached_clients.contains_key(&client_id))
+                .map(|_| rid)
+        });
 
         if let Some(rid) = runtime_id {
             self.handle_single_push_overflow_for_runtime(client_id, rid);
@@ -655,9 +661,11 @@ impl Server {
         reason: TerminationReason,
         exclude_client_id: Option<Uuid>,
     ) -> Option<ClientMsg> {
-        let rt = self.runtimes.remove(&runtime_id)?;
+        let rt_lock = self.runtimes.remove(&runtime_id)?;
+        let rt = rt_lock.try_lock().expect("runtime removed from registry, no contention");
         let attached_client_ids: Vec<_> = rt.attached_clients.keys().copied().collect();
         let pane_ids: Vec<_> = rt.panes.keys().copied().collect();
+        drop(rt);
         for pane_id in pane_ids {
             self.pty_writers.remove(&pane_id);
             if let Some(kill_tx) = self.pty_kill_senders.remove(&pane_id) {
@@ -705,8 +713,14 @@ impl Server {
 
             proto::client_message::Msg::ListRuntimes(_) => {
                 let s = server.lock().await;
-                let infos = protocol::runtime_inventory_for(client_id, s.runtimes.values());
-                Some(protocol::runtime_list(infos))
+                let mut runtimes_snapshot = Vec::with_capacity(s.runtimes.len());
+                for rt_lock in s.runtimes.values() {
+                    let rt = rt_lock.lock().await;
+                    runtimes_snapshot.push(protocol::runtime_info_for_v2(client_id, &rt));
+                }
+                drop(s);
+                runtimes_snapshot.sort_by(|a, b| a.id.cmp(&b.id));
+                Some(protocol::runtime_list(runtimes_snapshot))
             }
 
             proto::client_message::Msg::GetDiagnostics(_) => {
@@ -727,7 +741,7 @@ impl Server {
                     RuntimePolicy::Persistent => "persistent",
                     RuntimePolicy::Ephemeral => "ephemeral",
                 };
-                s.runtimes.insert(runtime_id, rt);
+                s.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
                 tracing::info!("Runtime created: {label}, policy={policy_str}");
                 Some(protocol::runtime_created(runtime_id, revision))
             }
@@ -743,13 +757,19 @@ impl Server {
                     }
                 };
                 let attach_mode = AttachMode::from_proto(req.attach_mode);
-                let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-                    return Some(protocol::error(
-                        protocol::ERR_RUNTIME_NOT_FOUND,
-                        "runtime not found".into(),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(protocol::error(
+                                protocol::ERR_RUNTIME_NOT_FOUND,
+                                "runtime not found".into(),
+                            ));
+                        }
+                    }
                 };
+                let mut rt = rt_lock.lock().await;
                 let attach_outcome = match rt.attach_client(client_id, attach_mode) {
                     Ok(outcome) => outcome,
                     Err(AttachError::UnsupportedTakeOver) => {
@@ -792,7 +812,7 @@ impl Server {
                         sgr_mouse_mode: pane.screen.sgr_mouse_mode(),
                     })
                     .collect();
-                let runtime_label = s.runtime_label(runtime_id);
+                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
                     "Client {} attached to runtime {runtime_label} as {role:?}",
                     short_id(client_id),
@@ -810,17 +830,23 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-                    return Some(protocol::error(
-                        protocol::ERR_RUNTIME_NOT_FOUND,
-                        "runtime not found".into(),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(protocol::error(
+                                protocol::ERR_RUNTIME_NOT_FOUND,
+                                "runtime not found".into(),
+                            ));
+                        }
+                    }
                 };
+                let mut rt = rt_lock.lock().await;
                 match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
                     DetachOutcome::Detached { revision }
                     | DetachOutcome::NotAttached { revision } => {
-                        let runtime_label = s.runtime_label(runtime_id);
+                        let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                         tracing::info!(
                             "Client {} detached from runtime {runtime_label}",
                             short_id(client_id),
@@ -828,11 +854,13 @@ impl Server {
                         Some(protocol::runtime_detached(runtime_id, revision))
                     }
                     DetachOutcome::Terminated { final_revision, reason } => {
-                        let runtime_label = s.runtime_label(runtime_id);
+                        let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                         tracing::info!(
                             "Client {} detached from runtime {runtime_label} (terminated: {reason:?})",
                             short_id(client_id),
                         );
+                        drop(rt);
+                        let mut s = server.lock().await;
                         let _ = s.terminate_runtime(
                             runtime_id,
                             final_revision,
@@ -855,12 +883,13 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get(&runtime_id) else {
+                let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                     return Some(protocol::error(
                         protocol::ERR_RUNTIME_NOT_FOUND,
                         "runtime not found".into(),
                     ));
                 };
+                let rt = rt_lock.lock().await;
                 if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -868,7 +897,8 @@ impl Server {
                     ));
                 }
                 let final_revision = rt.revision().saturating_add(1);
-                let runtime_label = s.runtime_label(runtime_id);
+                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                drop(rt);
                 let _ = s.terminate_runtime(
                     runtime_id,
                     final_revision,
@@ -898,19 +928,20 @@ impl Server {
                 let no_persist = req.no_persist.unwrap_or(false);
                 let (pty_result, runtime_label, cols, rows, initial_cwd) = {
                     let s = server.lock().await;
-                    let Some(rt) = s.runtimes.get(&runtime_id) else {
+                    let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                         return Some(protocol::error(
                             protocol::ERR_RUNTIME_NOT_FOUND,
                             "runtime not found".into(),
                         ));
                     };
+                    let rt = rt_lock.lock().await;
                     if !rt.client_has_write_access(client_id) {
                         return Some(protocol::error(
                             protocol::ERR_OWNERSHIP_CONFLICT,
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    let label = s.runtime_label(runtime_id);
+                    let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                     let mut env = vec![];
                     if no_persist {
                         env.push(("HISTFILE".into(), "/dev/null".into()));
@@ -943,13 +974,14 @@ impl Server {
                         let (kill_tx, kill_rx) = oneshot::channel();
                         let (revision, runtime_name) = {
                             let mut s = server.lock().await;
-                            let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+                            let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                                 let _ = child.start_kill();
                                 return Some(protocol::error(
                                     protocol::ERR_RUNTIME_NOT_FOUND,
                                     "runtime not found".into(),
                                 ));
                             };
+                            let mut rt = rt_lock.lock().await;
                             let mut pane = Pane::new(pane_id, cols, rows);
                             pane.child_pid = child_pid;
                             pane.no_persist = no_persist;
@@ -957,6 +989,7 @@ impl Server {
                             rt.add_pane(pane);
                             let revision = rt.revision();
                             let name = rt.name.clone();
+                            drop(rt);
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
@@ -1012,12 +1045,13 @@ impl Server {
                     }
                 };
                 let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+                let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                     return Some(protocol::error(
                         protocol::ERR_RUNTIME_NOT_FOUND,
                         "runtime not found".into(),
                     ));
                 };
+                let mut rt = rt_lock.lock().await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -1031,7 +1065,8 @@ impl Server {
                     ));
                 };
                 let revision = rt.revision();
-                let runtime_label = s.runtime_label(runtime_id);
+                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                drop(rt);
                 s.pty_writers.remove(&pane_id);
                 if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
                     let _ = kill_tx.send(());
@@ -1049,7 +1084,10 @@ impl Server {
                 };
                 let (writer, runtime_label) = {
                     let s = server.lock().await;
-                    let rt = s.runtimes.get(&runtime_id)?;
+                    let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+                    let writer = s.pty_writers.get(&pane_id).cloned();
+                    drop(s);
+                    let rt = rt_lock.lock().await;
                     if !rt.panes.contains_key(&pane_id) {
                         return None;
                     }
@@ -1059,7 +1097,8 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    (s.pty_writers.get(&pane_id).cloned(), s.runtime_label(runtime_id))
+                    let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                    (writer, label)
                 };
                 if let Some(writer) = writer {
                     let pane_short = short_id(pane_id);
@@ -1092,9 +1131,14 @@ impl Server {
                     return None;
                 };
 
-                let writer = {
+                let (writer, rt_lock) = {
                     let s = server.lock().await;
-                    let rt = s.runtimes.get(&runtime_id)?;
+                    let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+                    let writer = s.pty_writers.get(&pane_id).cloned();
+                    (writer, rt_lock)
+                };
+                {
+                    let rt = rt_lock.lock().await;
                     if !rt.panes.contains_key(&pane_id) {
                         return None;
                     }
@@ -1104,29 +1148,24 @@ impl Server {
                             "runtime is currently owned by another client".into(),
                         ));
                     }
-                    s.pty_writers.get(&pane_id).cloned()
-                };
+                }
 
                 let writer = writer?;
 
                 {
                     let w = writer.lock().await;
                     if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
-                        let s = server.lock().await;
                         tracing::error!(
                             "Failed to resize PTY {} in runtime {}: {e}",
                             short_id(pane_id),
-                            s.runtime_label(runtime_id),
+                            short_id(runtime_id),
                         );
                         return None;
                     }
                 }
 
-                let revision = {
-                    let mut s = server.lock().await;
-                    let rt = s.runtimes.get_mut(&runtime_id)?;
-                    rt.resize_pane(pane_id, cols, rows)?
-                };
+                let mut rt = rt_lock.lock().await;
+                let revision = rt.resize_pane(pane_id, cols, rows)?;
 
                 Some(protocol::pane_resized(runtime_id, pane_id, cols, rows, revision))
             }
@@ -1150,13 +1189,19 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-                    return Some(protocol::error(
-                        protocol::ERR_RUNTIME_NOT_FOUND,
-                        "runtime not found".into(),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(protocol::error(
+                                protocol::ERR_RUNTIME_NOT_FOUND,
+                                "runtime not found".into(),
+                            ));
+                        }
+                    }
                 };
+                let mut rt = rt_lock.lock().await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -1182,13 +1227,19 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-                    return Some(protocol::error(
-                        protocol::ERR_RUNTIME_NOT_FOUND,
-                        "runtime not found".into(),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(protocol::error(
+                                protocol::ERR_RUNTIME_NOT_FOUND,
+                                "runtime not found".into(),
+                            ));
+                        }
+                    }
                 };
+                let mut rt = rt_lock.lock().await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -1241,11 +1292,13 @@ impl Server {
             v3::client_envelope::Command::ListRuntimes(_) => {
                 let s = server.lock().await;
                 let has_inventory_v2 = rttx_proto::v3_inventory::is_supported(effective_caps);
-                let infos = protocol::v3_runtime_inventory_for(
-                    client_id,
-                    s.runtimes.values(),
-                    has_inventory_v2,
-                );
+                let mut infos = Vec::with_capacity(s.runtimes.len());
+                for rt_lock in s.runtimes.values() {
+                    let rt = rt_lock.lock().await;
+                    infos.push(protocol::v3_runtime_info_for(client_id, &rt, has_inventory_v2));
+                }
+                drop(s);
+                infos.sort_by(|a, b| a.id.cmp(&b.id));
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
                     v3::server_envelope::Payload::RuntimeList(v3::RuntimeList { runtimes: infos }),
@@ -1285,7 +1338,7 @@ impl Server {
                     RuntimePolicy::Ephemeral => "ephemeral",
                 };
                 let revision = rt.revision();
-                s.runtimes.insert(runtime_id, rt);
+                s.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
                 tracing::info!("Runtime created: {label}, policy={policy_str}");
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
@@ -1346,17 +1399,23 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-                    return Some(rttx_proto::v3_error::build_error_response(
-                        request_id,
-                        rttx_proto::v3_error::build_error(
-                            v3::ErrorKind::RuntimeNotFound,
-                            "runtime not found",
-                            "RenameRuntime",
-                        ),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(rttx_proto::v3_error::build_error_response(
+                                request_id,
+                                rttx_proto::v3_error::build_error(
+                                    v3::ErrorKind::RuntimeNotFound,
+                                    "runtime not found",
+                                    "RenameRuntime",
+                                ),
+                            ));
+                        }
+                    }
                 };
+                let mut rt = rt_lock.lock().await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
@@ -1409,21 +1468,27 @@ impl Server {
                         ));
                     }
                 };
-                let s = server.lock().await;
-                let Some(rt) = s.runtimes.get(&runtime_id) else {
-                    return Some(rttx_proto::v3_error::build_error_response(
-                        request_id,
-                        rttx_proto::v3_error::build_error(
-                            v3::ErrorKind::RuntimeNotFound,
-                            "runtime not found",
-                            "ResyncRuntime",
-                        ),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(rttx_proto::v3_error::build_error_response(
+                                request_id,
+                                rttx_proto::v3_error::build_error(
+                                    v3::ErrorKind::RuntimeNotFound,
+                                    "runtime not found",
+                                    "ResyncRuntime",
+                                ),
+                            ));
+                        }
+                    }
                 };
+                let rt = rt_lock.lock().await;
                 let role = rt
                     .client_role(client_id)
                     .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto);
-                let snapshot = protocol::build_v3_runtime_snapshot(rt, runtime_id, role);
+                let snapshot = protocol::build_v3_runtime_snapshot(&rt, runtime_id, role);
                 Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
             }
 
@@ -1464,17 +1529,23 @@ impl Server {
                         ));
                     }
                 };
-                let s = server.lock().await;
-                let Some(rt) = s.runtimes.get(&runtime_id) else {
-                    return Some(rttx_proto::v3_error::build_error_response(
-                        request_id,
-                        rttx_proto::v3_error::build_error(
-                            v3::ErrorKind::RuntimeNotFound,
-                            "runtime not found",
-                            "GetScrollback",
-                        ),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(rttx_proto::v3_error::build_error_response(
+                                request_id,
+                                rttx_proto::v3_error::build_error(
+                                    v3::ErrorKind::RuntimeNotFound,
+                                    "runtime not found",
+                                    "GetScrollback",
+                                ),
+                            ));
+                        }
+                    }
                 };
+                let rt = rt_lock.lock().await;
                 let Some(pane) = rt.panes.get(&pane_id) else {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
@@ -1525,17 +1596,23 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
-                let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-                    return Some(rttx_proto::v3_error::build_error_response(
-                        request_id,
-                        rttx_proto::v3_error::build_error(
-                            v3::ErrorKind::RuntimeNotFound,
-                            "runtime not found",
-                            "TakeoverRuntime",
-                        ),
-                    ));
+                let rt_lock = {
+                    let s = server.lock().await;
+                    match s.runtimes.get(&runtime_id) {
+                        Some(rt) => Arc::clone(rt),
+                        None => {
+                            return Some(rttx_proto::v3_error::build_error_response(
+                                request_id,
+                                rttx_proto::v3_error::build_error(
+                                    v3::ErrorKind::RuntimeNotFound,
+                                    "runtime not found",
+                                    "TakeoverRuntime",
+                                ),
+                            ));
+                        }
+                    }
                 };
+                let mut rt = rt_lock.lock().await;
                 match rt.attach_client(client_id, AttachMode::TakeOver) {
                     Ok(AttachOutcome::Attached { revision, .. }) => {
                         Some(rttx_proto::v3_takeover::build_takeover_completed_response(
@@ -1601,17 +1678,23 @@ impl Server {
             }
         };
         let attach_mode = AttachMode::from_v3_proto(req.attach_mode);
-        let mut s = server.lock().await;
-        let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-            return Some(rttx_proto::v3_error::build_error_response(
-                request_id,
-                rttx_proto::v3_error::build_error(
-                    v3::ErrorKind::RuntimeNotFound,
-                    "runtime not found",
-                    "AttachRuntime",
-                ),
-            ));
+        let rt_lock = {
+            let s = server.lock().await;
+            match s.runtimes.get(&runtime_id) {
+                Some(rt) => Arc::clone(rt),
+                None => {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::RuntimeNotFound,
+                            "runtime not found",
+                            "AttachRuntime",
+                        ),
+                    ));
+                }
+            }
         };
+        let mut rt = rt_lock.lock().await;
         let attach_outcome = match rt.attach_client(client_id, attach_mode) {
             Ok(outcome) => outcome,
             Err(AttachError::UnsupportedTakeOver) => {
@@ -1628,8 +1711,8 @@ impl Server {
         match attach_outcome {
             AttachOutcome::Attached { role, .. } => {
                 let v3_role = role.as_v3_proto();
-                let snapshot = protocol::build_v3_runtime_snapshot(rt, runtime_id, v3_role);
-                let runtime_label = s.runtime_label(runtime_id);
+                let snapshot = protocol::build_v3_runtime_snapshot(&rt, runtime_id, v3_role);
+                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
                     "Client {} attached to runtime {runtime_label} as {role:?}",
                     short_id(client_id)
@@ -1673,20 +1756,26 @@ impl Server {
                 ));
             }
         };
-        let mut s = server.lock().await;
-        let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
-            return Some(rttx_proto::v3_error::build_error_response(
-                request_id,
-                rttx_proto::v3_error::build_error(
-                    v3::ErrorKind::RuntimeNotFound,
-                    "runtime not found",
-                    "DetachRuntime",
-                ),
-            ));
+        let rt_lock = {
+            let s = server.lock().await;
+            match s.runtimes.get(&runtime_id) {
+                Some(rt) => Arc::clone(rt),
+                None => {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::RuntimeNotFound,
+                            "runtime not found",
+                            "DetachRuntime",
+                        ),
+                    ));
+                }
+            }
         };
+        let mut rt = rt_lock.lock().await;
         match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
             DetachOutcome::Detached { revision } | DetachOutcome::NotAttached { revision } => {
-                let runtime_label = s.runtime_label(runtime_id);
+                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
                     "Client {} detached from runtime {runtime_label}",
                     short_id(client_id)
@@ -1700,11 +1789,13 @@ impl Server {
                 ))
             }
             DetachOutcome::Terminated { final_revision, reason } => {
-                let runtime_label = s.runtime_label(runtime_id);
+                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
                     "Client {} detached from runtime {runtime_label} (terminated: {reason:?})",
                     short_id(client_id)
                 );
+                drop(rt);
+                let mut s = server.lock().await;
                 let _ = s.terminate_runtime(runtime_id, final_revision, reason, Some(client_id));
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
@@ -1738,7 +1829,7 @@ impl Server {
             }
         };
         let mut s = server.lock().await;
-        let Some(rt) = s.runtimes.get(&runtime_id) else {
+        let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
                 rttx_proto::v3_error::build_error(
@@ -1748,6 +1839,7 @@ impl Server {
                 ),
             ));
         };
+        let rt = rt_lock.lock().await;
         if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
@@ -1759,7 +1851,8 @@ impl Server {
             ));
         }
         let final_revision = rt.revision().saturating_add(1);
-        let runtime_label = s.runtime_label(runtime_id);
+        let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+        drop(rt);
         let _ = s.terminate_runtime(
             runtime_id,
             final_revision,
@@ -1801,7 +1894,7 @@ impl Server {
         let no_persist = req.no_persist.unwrap_or(false);
         let (pty_result, runtime_label, cols, rows, initial_cwd) = {
             let s = server.lock().await;
-            let Some(rt) = s.runtimes.get(&runtime_id) else {
+            let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
                     rttx_proto::v3_error::build_error(
@@ -1811,6 +1904,7 @@ impl Server {
                     ),
                 ));
             };
+            let rt = rt_lock.lock().await;
             if !rt.client_has_write_access(client_id) {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
@@ -1821,7 +1915,7 @@ impl Server {
                     ),
                 ));
             }
-            let label = s.runtime_label(runtime_id);
+            let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
             let mut env = vec![];
             if no_persist {
                 env.push(("HISTFILE".into(), "/dev/null".into()));
@@ -1848,7 +1942,7 @@ impl Server {
                 let (kill_tx, kill_rx) = oneshot::channel();
                 let (revision, runtime_name) = {
                     let mut s = server.lock().await;
-                    let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+                    let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                         let _ = child.start_kill();
                         return Some(rttx_proto::v3_error::build_error_response(
                             request_id,
@@ -1859,6 +1953,7 @@ impl Server {
                             ),
                         ));
                     };
+                    let mut rt = rt_lock.lock().await;
                     let mut pane = Pane::new(pane_id, cols, rows);
                     pane.child_pid = child_pid;
                     pane.no_persist = no_persist;
@@ -1866,6 +1961,7 @@ impl Server {
                     rt.add_pane(pane);
                     let revision = rt.revision();
                     let name = rt.name.clone();
+                    drop(rt);
                     s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                     s.pty_kill_senders.insert(pane_id, kill_tx);
                     (revision, name)
@@ -1944,7 +2040,7 @@ impl Server {
             }
         };
         let mut s = server.lock().await;
-        let Some(rt) = s.runtimes.get_mut(&runtime_id) else {
+        let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
                 rttx_proto::v3_error::build_error(
@@ -1954,6 +2050,7 @@ impl Server {
                 ),
             ));
         };
+        let mut rt = rt_lock.lock().await;
         if !rt.client_has_write_access(client_id) {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
@@ -1975,7 +2072,8 @@ impl Server {
             ));
         }
         let revision = rt.revision();
-        let runtime_label = s.runtime_label(runtime_id);
+        let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+        drop(rt);
         s.pty_writers.remove(&pane_id);
         if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
             let _ = kill_tx.send(());
@@ -2000,7 +2098,10 @@ impl Server {
         let Ok(pane_id) = bytes_to_uuid(&input.pane_id) else { return None };
         let (writer, resolved_bytes) = {
             let s = server.lock().await;
-            let rt = s.runtimes.get(&runtime_id)?;
+            let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+            let writer = s.pty_writers.get(&pane_id).cloned();
+            drop(s);
+            let rt = rt_lock.lock().await;
             if !rt.panes.contains_key(&pane_id) {
                 return None;
             }
@@ -2010,7 +2111,7 @@ impl Server {
             let modes = rt.panes.get(&pane_id)?.screen.terminal_mode_state();
             let resolved =
                 rttx_proto::v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
-            (s.pty_writers.get(&pane_id).cloned(), resolved)
+            (writer, resolved)
         };
         if resolved_bytes.is_empty() {
             return None;
@@ -2037,32 +2138,34 @@ impl Server {
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
         let Ok(cols) = u16::try_from(req.cols) else { return None };
         let Ok(rows) = u16::try_from(req.rows) else { return None };
-        let writer = {
+        let (writer, rt_lock) = {
             let s = server.lock().await;
-            let rt = s.runtimes.get(&runtime_id)?;
+            let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+            let writer = s.pty_writers.get(&pane_id).cloned();
+            (writer, rt_lock)
+        };
+        {
+            let rt = rt_lock.lock().await;
             if !rt.panes.contains_key(&pane_id) {
                 return None;
             }
             if !rt.client_has_write_access(client_id) {
                 return None;
             }
-            s.pty_writers.get(&pane_id).cloned()
-        };
+        }
         let writer = writer?;
         {
             let w = writer.lock().await;
             if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
-                let s = server.lock().await;
                 tracing::error!(
                     "Failed to resize PTY {} in runtime {}: {e}",
                     short_id(pane_id),
-                    s.runtime_label(runtime_id)
+                    short_id(runtime_id)
                 );
                 return None;
             }
         }
-        let mut s = server.lock().await;
-        let rt = s.runtimes.get_mut(&runtime_id)?;
+        let mut rt = rt_lock.lock().await;
         rt.resize_pane(pane_id, cols, rows)?;
         None
     }
@@ -2074,8 +2177,11 @@ impl Server {
     ) -> Option<v3::ServerEnvelope> {
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
-        let mut s = server.lock().await;
-        let rt = s.runtimes.get_mut(&runtime_id)?;
+        let rt_lock = {
+            let s = server.lock().await;
+            s.runtimes.get(&runtime_id)?.clone()
+        };
+        let mut rt = rt_lock.lock().await;
         if !rt.client_has_write_access(client_id) {
             return None;
         }
@@ -2090,8 +2196,11 @@ impl Server {
     ) -> Option<v3::ServerEnvelope> {
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
-        let mut s = server.lock().await;
-        let rt = s.runtimes.get_mut(&runtime_id)?;
+        let rt_lock = {
+            let s = server.lock().await;
+            s.runtimes.get(&runtime_id)?.clone()
+        };
+        let mut rt = rt_lock.lock().await;
         if !rt.client_has_write_access(client_id) {
             return None;
         }
@@ -2128,6 +2237,17 @@ fn spawn_pty_read_loop(
     let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
     let pane_short = short_id(pane_id);
     tokio::spawn(async move {
+        // Grab the per-runtime lock once at startup so the hot path
+        // never touches the server mutex for runtime access.
+        let rt_lock: Option<RuntimeLock> = {
+            let s = server.lock().await;
+            s.runtimes.get(&runtime_id).cloned()
+        };
+        let Some(rt_lock) = rt_lock else {
+            tracing::error!("Runtime {runtime_label} not found at PTY read loop start");
+            return;
+        };
+
         let mut buf = [0u8; 4096];
         let mut batch = bytes::BytesMut::with_capacity(COALESCE_MAX_BYTES);
         loop {
@@ -2155,19 +2275,23 @@ fn spawn_pty_read_loop(
 
                             let data = batch.split().freeze();
 
-                            // Phase 1: accept raw bytes under the lock (fast memcpy, no VTE parsing).
+                            // Phase 1: accept raw bytes under the per-runtime lock
+                            // (fast memcpy, no VTE parsing).  The server mutex is
+                            // only touched briefly to collect client senders.
                             let (mut taken_screen, senders, output_seq, contended) = {
                                 let lock_start = std::time::Instant::now();
-                                let mut s = server.lock().await;
-                                let (screen, seq) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
-                                    && let Some(pane) = rt.panes.get_mut(&pane_id)
-                                {
+                                let mut rt = rt_lock.lock().await;
+                                let (screen, seq) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                     pane.accept_output(&data);
                                     (Some(pane.take_screen()), pane.output_seq)
                                 } else {
                                     (None, 0)
                                 };
-                                let senders = s.collect_runtime_senders(runtime_id);
+                                let client_ids: Vec<Uuid> =
+                                    rt.attached_clients.keys().copied().collect();
+                                drop(rt);
+                                let s = server.lock().await;
+                                let senders = s.collect_senders_for_clients(&client_ids);
                                 drop(s);
                                 let hold = lock_start.elapsed();
                                 if hold > MUTEX_HOLD_WARN_THRESHOLD {
@@ -2175,7 +2299,7 @@ fn spawn_pty_read_loop(
                                         hold_ms = hold.as_millis() as u64,
                                         pane = %pane_short,
                                         runtime = %runtime_label,
-                                        "server mutex held too long in PTY read loop",
+                                        "mutex held too long in PTY read loop",
                                     );
                                 }
                                 (screen, senders, seq, hold > MUTEX_HOLD_WARN_THRESHOLD)
@@ -2188,16 +2312,16 @@ fn spawn_pty_read_loop(
                                 tokio::time::sleep(CONTENTION_BACKOFF).await;
                             }
 
-                            // Phase 2: VTE parsing outside the server lock.
+                            // Phase 2: VTE parsing outside any lock.
                             if let Some(ref mut screen) = taken_screen {
                                 screen.parse(&data);
                             }
 
-                            // Phase 3: return parsed screen, extract metadata, collect PTY writer.
+                            // Phase 3: return parsed screen under per-runtime lock,
+                            // collect PTY writer from server.
                             let (new_cwd, new_title, pending_replies, pty_writer) = {
-                                let mut s = server.lock().await;
+                                let mut rt = rt_lock.lock().await;
                                 if let Some(screen) = taken_screen
-                                    && let Some(rt) = s.runtimes.get_mut(&runtime_id)
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
                                     let result = pane.return_screen(screen);
@@ -2209,10 +2333,13 @@ fn spawn_pty_read_loop(
                                         let rev = rt.set_pane_title(pane_id, title.clone())?;
                                         Some((title, rev))
                                     });
-                                    let writer = if result.pending_replies.is_empty() {
-                                        None
-                                    } else {
+                                    let needs_writer = !result.pending_replies.is_empty();
+                                    drop(rt);
+                                    let writer = if needs_writer {
+                                        let s = server.lock().await;
                                         s.pty_writers.get(&pane_id).cloned()
+                                    } else {
+                                        None
                                     };
                                     (cwd, title, result.pending_replies, writer)
                                 } else {
@@ -2220,7 +2347,7 @@ fn spawn_pty_read_loop(
                                 }
                             };
 
-                            // Phase 4: write DSR replies without the server lock.
+                            // Phase 4: write DSR replies without any lock.
                             if let Some(writer) = pty_writer {
                                 let mut w = writer.lock().await;
                                 for reply in &pending_replies {
@@ -2237,7 +2364,7 @@ fn spawn_pty_read_loop(
                                 }
                             }
 
-                            // Phase 5: broadcast to clients without the server lock.
+                            // Phase 5: broadcast to clients without any lock.
                             let client_data = crate::screen::strip_client_queries(&data);
                             let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
@@ -2284,47 +2411,73 @@ fn spawn_pty_read_loop(
             }
         };
 
-        let mut s = server.lock().await;
-
-        // Feed terminal cleanup sequence so the screen state and
-        // scrollback reflect a clean terminal (alt-screen off, cursor
-        // visible, mouse off, etc.) before marking the pane as exited.
-        if let Some(rt) = s.runtimes.get_mut(&runtime_id)
-            && let Some(pane) = rt.panes.get_mut(&pane_id)
+        // Feed terminal cleanup and broadcast exit under per-runtime lock.
         {
-            pane.feed_cleanup();
-        }
-        let cleanup_delta = ClientMsg::V2(protocol::delta(
-            runtime_id,
-            pane_id,
-            bytes::Bytes::from_static(crate::screen::terminal_cleanup_bytes()),
-        ));
-        s.broadcast_to_runtime(runtime_id, &cleanup_delta);
-
-        let exit_msg = if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
-            let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
-                ClientMsg::V2(protocol::pane_exited(runtime_id, pane_id, status, revision))
-            });
+            let mut rt = rt_lock.lock().await;
             if let Some(pane) = rt.panes.get_mut(&pane_id) {
-                pane.release_scrollback();
+                pane.feed_cleanup();
             }
-            msg
-        } else {
-            None
-        };
-        if let Some(msg) = exit_msg {
-            s.broadcast_to_runtime(runtime_id, &msg);
+            let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
+            drop(rt);
+
+            let cleanup_delta = ClientMsg::V2(protocol::delta(
+                runtime_id,
+                pane_id,
+                bytes::Bytes::from_static(crate::screen::terminal_cleanup_bytes()),
+            ));
+            let s = server.lock().await;
+            let senders = s.collect_senders_for_clients(&client_ids);
+            drop(s);
+            for (_, sender, protocol) in &senders {
+                let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
+                    convert_v2_push_to_v3(&cleanup_delta, 0)
+                } else {
+                    cleanup_delta.clone()
+                };
+                let _ = sender.try_send(outgoing);
+            }
         }
-        s.pty_writers.remove(&pane_id);
-        s.pty_kill_senders.remove(&pane_id);
-        drop(s);
+
+        {
+            let mut rt = rt_lock.lock().await;
+            let exit_msg = {
+                let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
+                    ClientMsg::V2(protocol::pane_exited(runtime_id, pane_id, status, revision))
+                });
+                if let Some(pane) = rt.panes.get_mut(&pane_id) {
+                    pane.release_scrollback();
+                }
+                msg
+            };
+            let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
+            drop(rt);
+
+            if let Some(msg) = exit_msg {
+                let s = server.lock().await;
+                let senders = s.collect_senders_for_clients(&client_ids);
+                drop(s);
+                for (_, sender, protocol) in &senders {
+                    let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
+                        convert_v2_push_to_v3(&msg, 0)
+                    } else {
+                        msg.clone()
+                    };
+                    let _ = sender.try_send(outgoing);
+                }
+            }
+        }
+
+        {
+            let mut s = server.lock().await;
+            s.pty_writers.remove(&pane_id);
+            s.pty_kill_senders.remove(&pane_id);
+        }
 
         tracing::info!(
             "PTY exited for pane {pane_short} in runtime {runtime_label}, status {status}"
         );
     });
 }
-
 /// Run the serialization loop, writing state to disk every `interval`.
 ///
 /// Uses v2 per-runtime files with symlink-based backup.
@@ -2351,64 +2504,58 @@ pub async fn serialization_loop(
             }
         }
 
-        let mut s = server.lock().await;
+        let s = server.lock().await;
         let state_dir = s.os.state_dir();
 
-        // Phase 1: drain pending scrollback bytes under the lock (cheap mem::take).
+        // Phase 1: drain pending scrollback bytes using per-runtime locks.
         let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
-        let runtime_ids: Vec<_> = s.runtimes.keys().copied().collect();
-        for runtime_id in runtime_ids {
-            if let Some(rt) = s.runtimes.get_mut(&runtime_id) {
-                for pane in rt.panes.values_mut() {
-                    if !pane.has_pending_flush() || pane.no_persist {
-                        if pane.no_persist {
-                            // Discard pending bytes for no-persist panes.
-                            let _ = pane.take_pending_flush();
-                        }
-                        continue;
+        let runtime_entries: Vec<(Uuid, RuntimeLock)> =
+            s.runtimes.iter().map(|(&id, rt)| (id, Arc::clone(rt))).collect();
+        drop(s);
+
+        for (runtime_id, rt_lock) in &runtime_entries {
+            let mut rt = rt_lock.lock().await;
+            for pane in rt.panes.values_mut() {
+                if !pane.has_pending_flush() || pane.no_persist {
+                    if pane.no_persist {
+                        let _ = pane.take_pending_flush();
                     }
-                    let path =
-                        crate::state::layout::scrollback_log(&state_dir, runtime_id, pane.id);
-                    let data = pane.take_pending_flush();
-                    pane.scrollback_log_path = Some(path.clone());
-                    flush_jobs.push((path, data));
+                    continue;
                 }
+                let path = crate::state::layout::scrollback_log(&state_dir, *runtime_id, pane.id);
+                let data = pane.take_pending_flush();
+                pane.scrollback_log_path = Some(path.clone());
+                flush_jobs.push((path, data));
             }
         }
 
         // Log diagnostics every 30 ticks (~30 seconds at 1s interval).
         diagnostics_counter += 1;
         if diagnostics_counter.is_multiple_of(30) {
+            let s = server.lock().await;
             s.log_diagnostics();
         }
 
         // Collect v2 runtime files only for dirty persistent runtimes.
-        let dirty_runtime_files: Vec<_> = s
-            .runtimes
-            .values()
-            .filter(|rt| rt.policy == RuntimePolicy::Persistent && rt.is_dirty())
-            .map(Runtime::to_runtime_file)
-            .collect();
+        let mut dirty_runtime_files = Vec::new();
+        let mut screen_snapshots = Vec::new();
+        let mut current_ids = Vec::new();
 
-        // Collect screen snapshots for all panes in dirty persistent runtimes.
-        let screen_snapshots: Vec<(Uuid, _)> = s
-            .runtimes
-            .values()
-            .filter(|rt| rt.policy == RuntimePolicy::Persistent && rt.is_dirty())
-            .flat_map(|rt| rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot())))
-            .collect();
+        for (runtime_id, rt_lock) in &runtime_entries {
+            let rt = rt_lock.lock().await;
+            if rt.policy == RuntimePolicy::Persistent {
+                current_ids.push(*runtime_id);
+                if rt.is_dirty() {
+                    dirty_runtime_files.push(rt.to_runtime_file());
+                    for pane in rt.panes.values() {
+                        screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
+                    }
+                }
+            }
+        }
 
-        // Check whether the set of persistent runtime IDs changed.
-        let mut current_ids: Vec<Uuid> = s
-            .runtimes
-            .values()
-            .filter(|rt| rt.policy == RuntimePolicy::Persistent)
-            .map(|rt| rt.id)
-            .collect();
         current_ids.sort();
         let index_changed = current_ids != last_persisted_ids;
-
-        drop(s);
 
         // Phase 2: flush scrollback to disk outside the lock.
         for (path, data) in &flush_jobs {
@@ -2449,13 +2596,13 @@ pub async fn serialization_loop(
 
         // Mark successfully written runtimes as persisted.
         if !written_ids.is_empty() {
-            let mut s = server.lock().await;
+            let s = server.lock().await;
             for id in &written_ids {
-                if let Some(rt) = s.runtimes.get_mut(id) {
+                if let Some(rt_lock) = s.runtimes.get(id) {
+                    let mut rt = rt_lock.lock().await;
                     rt.mark_persisted();
                 }
             }
-            drop(s);
         }
     }
 }
@@ -2465,12 +2612,17 @@ pub async fn serialization_loop(
 /// Writes all persistent runtimes unconditionally (ignoring dirty flags)
 /// because this is the last chance before shutdown.
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
-    let mut s = server.lock().await;
+    let s = server.lock().await;
     let state_dir = s.os.state_dir();
 
-    // Drain pending scrollback bytes under the lock.
+    // Collect runtime locks and drain pending scrollback.
+    let runtime_entries: Vec<(Uuid, RuntimeLock)> =
+        s.runtimes.iter().map(|(&id, rt)| (id, Arc::clone(rt))).collect();
+    drop(s);
+
     let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
-    for rt in s.runtimes.values_mut() {
+    for (runtime_id, rt_lock) in &runtime_entries {
+        let mut rt = rt_lock.lock().await;
         for pane in rt.panes.values_mut() {
             if !pane.has_pending_flush() || pane.no_persist {
                 if pane.no_persist {
@@ -2478,7 +2630,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
                 }
                 continue;
             }
-            let path = crate::state::layout::scrollback_log(&state_dir, rt.id, pane.id);
+            let path = crate::state::layout::scrollback_log(&state_dir, *runtime_id, pane.id);
             let data = pane.take_pending_flush();
             pane.scrollback_log_path = Some(path.clone());
             flush_jobs.push((path, data));
@@ -2486,31 +2638,20 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     }
 
     // Collect v2 per-runtime files (all persistent, not just dirty).
-    let runtime_files: Vec<_> = s
-        .runtimes
-        .values()
-        .filter(|rt| rt.policy == RuntimePolicy::Persistent)
-        .map(Runtime::to_runtime_file)
-        .collect();
+    let mut runtime_files = Vec::new();
+    let mut screen_snapshots = Vec::new();
 
-    // Collect screen snapshots for all persistent panes.
-    let screen_snapshots: Vec<(Uuid, _)> = s
-        .runtimes
-        .values()
-        .filter(|rt| rt.policy == RuntimePolicy::Persistent)
-        .flat_map(|rt| rt.panes.values().map(move |pane| (rt.id, pane.to_screen_snapshot())))
-        .collect();
-
-    // Mark all as persisted while still holding the lock.
-    for rt in s.runtimes.values_mut() {
+    for (runtime_id, rt_lock) in &runtime_entries {
+        let mut rt = rt_lock.lock().await;
         if rt.policy == RuntimePolicy::Persistent {
+            runtime_files.push(rt.to_runtime_file());
+            for pane in rt.panes.values() {
+                screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
+            }
             rt.mark_persisted();
         }
     }
-
-    drop(s);
-
-    // All I/O happens outside the lock.
+    // All I/O happens outside any lock.
     for (path, data) in &flush_jobs {
         if let Err(e) = crate::pane::write_scrollback_to_disk(path, data) {
             tracing::error!("Failed to flush scrollback to {} on shutdown: {e}", path.display());
@@ -2655,7 +2796,10 @@ where
         s.client_resp_senders.remove(&client_id);
         s.client_protocols.remove(&client_id);
         if handshake_completed {
-            for rt in s.runtimes.values_mut() {
+            let rt_locks: Vec<RuntimeLock> = s.runtimes.values().cloned().collect();
+            drop(s);
+            for rt_lock in rt_locks {
+                let mut rt = rt_lock.lock().await;
                 let _ = rt.detach_client(client_id, DetachReason::Disconnect);
             }
         }

@@ -67,12 +67,17 @@ where
     I: IntoIterator<Item = &'a Runtime>,
 {
     let mut inventory: Vec<_> =
-        runtimes.into_iter().map(|rt| runtime_info_for(client_id, rt)).collect();
+        runtimes.into_iter().map(|rt| runtime_info_for_v2(client_id, rt)).collect();
     inventory.sort_by(|left, right| left.id.cmp(&right.id));
     inventory
 }
 
-fn runtime_info_for(client_id: Uuid, rt: &Runtime) -> proto::RuntimeInfo {
+/// Build a v2 `RuntimeInfo` for a single runtime.
+///
+/// Public so callers with per-runtime locks can build inventory entries
+/// one at a time.
+#[must_use]
+pub fn runtime_info_for_v2(client_id: Uuid, rt: &Runtime) -> proto::RuntimeInfo {
     let mut panes: Vec<_> = rt.panes.values().map(pane_info).collect();
     panes.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -418,7 +423,16 @@ where
     inventory
 }
 
-fn v3_runtime_info_for(client_id: Uuid, rt: &Runtime, has_inventory_v2: bool) -> v3::RuntimeInfo {
+/// Build a v3 `RuntimeInfo` for a single runtime.
+///
+/// Public so callers with per-runtime locks can build inventory entries
+/// one at a time.
+#[must_use]
+pub fn v3_runtime_info_for(
+    client_id: Uuid,
+    rt: &Runtime,
+    has_inventory_v2: bool,
+) -> v3::RuntimeInfo {
     let policy = match rt.policy {
         crate::runtime::RuntimePolicy::Persistent => v3::RuntimePolicy::Persistent,
         crate::runtime::RuntimePolicy::Ephemeral => v3::RuntimePolicy::Ephemeral,
