@@ -304,8 +304,8 @@ impl Window {
             prefs.auto_start_daemon,
             prefs.reconnect_delay_secs,
         ) {
-            Ok((manager, rx)) => {
-                self.start_endpoint_event_poller(rx);
+            Ok((manager, rx, capacity_probe, backpressure)) => {
+                self.start_endpoint_event_poller(rx, capacity_probe, backpressure);
                 self.imp().connection_manager.replace(Some(manager));
                 true
             }
@@ -554,6 +554,8 @@ impl Window {
     pub(super) fn start_endpoint_event_poller(
         &self,
         mut rx: tokio::sync::mpsc::Receiver<crate::daemon_bridge::EndpointEvent>,
+        capacity_probe: tokio::sync::mpsc::Sender<crate::daemon_bridge::EndpointEvent>,
+        backpressure: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) {
         let win = self.downgrade();
         let source = glib::timeout_add_local(EVENT_POLL_INTERVAL, move || {
@@ -579,6 +581,17 @@ impl Window {
                 for event in batch.other_events {
                     win.handle_endpoint_event(event);
                 }
+            }
+
+            // Watermark-based backpressure: check how many slots are free.
+            let free = capacity_probe.capacity();
+            let is_paused = backpressure.load(std::sync::atomic::Ordering::Acquire);
+            if !is_paused && free <= crate::daemon_bridge::BACKPRESSURE_HIGH_WATERMARK {
+                tracing::warn!(free, "Event channel high watermark reached, pausing actors");
+                backpressure.store(true, std::sync::atomic::Ordering::Release);
+            } else if is_paused && free >= crate::daemon_bridge::BACKPRESSURE_LOW_WATERMARK {
+                tracing::info!(free, "Event channel low watermark reached, resuming actors");
+                backpressure.store(false, std::sync::atomic::Ordering::Release);
             }
 
             glib::ControlFlow::Continue
