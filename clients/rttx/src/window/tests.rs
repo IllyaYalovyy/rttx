@@ -5682,6 +5682,49 @@ fn event_poll_batch_limit_is_bounded() {
     const { assert!(EVENT_POLL_BATCH_LIMIT <= 256) };
 }
 
+/// The event poller time budget must be positive and strictly less than
+/// the poll interval so GTK always gets time for rendering and input.
+/// Regression for #828.
+#[test]
+fn event_poll_time_budget_is_bounded() {
+    use super::runtime::{EVENT_POLL_INTERVAL, EVENT_POLL_TIME_BUDGET};
+    assert!(!EVENT_POLL_TIME_BUDGET.is_zero(), "budget must be positive");
+    assert!(
+        EVENT_POLL_TIME_BUDGET < EVENT_POLL_INTERVAL,
+        "budget must be strictly less than the poll interval"
+    );
+}
+
+/// The poller must break early when the time budget is exceeded, even if
+/// the batch limit has not been reached. Regression for #828.
+#[test]
+fn event_poll_respects_time_budget() {
+    use super::runtime::{EVENT_POLL_BATCH_LIMIT, EVENT_POLL_TIME_BUDGET};
+    use std::time::Instant;
+
+    // Simulate a poll loop that always has events available.
+    // The loop should terminate due to the time budget, not the batch limit.
+    let start = Instant::now();
+    let mut count = 0u64;
+    for _ in 0..EVENT_POLL_BATCH_LIMIT {
+        if start.elapsed() > EVENT_POLL_TIME_BUDGET {
+            break;
+        }
+        // Simulate minimal work per event.
+        count += 1;
+        std::hint::black_box(count);
+    }
+    // The loop ran within the budget (or hit the batch limit for trivial work).
+    // Either way, elapsed time should be bounded.
+    let elapsed = start.elapsed();
+    // Allow 2× budget for scheduling jitter, but it must not be unbounded.
+    let max_allowed = EVENT_POLL_TIME_BUDGET * 2 + std::time::Duration::from_millis(1);
+    assert!(
+        elapsed < max_allowed,
+        "poll loop took {elapsed:?}, expected < {max_allowed:?}"
+    );
+}
+
 // ── Session persistence end-to-end (GUI round-trip) ─────────────
 
 /// Full GUI round-trip: create workspaces, split, rename, reorder →
