@@ -2525,6 +2525,12 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     tracing::info!("Final state persisted");
 }
 
+/// Maximum number of concurrent client connections.
+///
+/// Far more than any normal usage (1–5 GUI clients). Protects against
+/// resource exhaustion from connection bursts.
+pub const MAX_CONCURRENT_CLIENTS: usize = 128;
+
 /// Run the main server loop: accept clients, handle messages, manage PTYs.
 ///
 /// Returns when a cooperative shutdown is signaled (via `Shutdown` message
@@ -2546,12 +2552,19 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
         serialization_loop(ser_server, Duration::from_secs(1), &mut ser_shutdown_rx).await;
     });
 
+    let connection_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CLIENTS));
+
     loop {
         tokio::select! {
             result = listener.accept() => {
                 let conn = result?;
+                let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
+                    tracing::warn!("Connection limit reached ({MAX_CONCURRENT_CLIENTS}), rejecting client");
+                    continue;
+                };
                 let server = Arc::clone(&server);
                 tokio::spawn(async move {
+                    let _permit = permit;
                     let _ = handle_client(server, conn).await;
                 });
             }
