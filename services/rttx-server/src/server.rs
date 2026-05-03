@@ -2107,6 +2107,14 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(1);
 /// Warn when the server mutex is held longer than this in the PTY read loop.
 pub const MUTEX_HOLD_WARN_THRESHOLD: Duration = Duration::from_millis(10);
 
+/// How long a PTY read loop yields after detecting mutex contention.
+///
+/// When the Phase 1 lock hold exceeds [`MUTEX_HOLD_WARN_THRESHOLD`], the
+/// read loop sleeps for this duration before continuing. This breaks the
+/// convoy effect where N read loops continuously re-acquire the mutex,
+/// starving input handlers and the serialization loop.
+pub const CONTENTION_BACKOFF: Duration = Duration::from_micros(200);
+
 /// Spawn a background task that reads PTY output and broadcasts Deltas.
 fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
@@ -2148,7 +2156,7 @@ fn spawn_pty_read_loop(
                             let data = batch.split().freeze();
 
                             // Phase 1: accept raw bytes under the lock (fast memcpy, no VTE parsing).
-                            let (mut taken_screen, senders, output_seq) = {
+                            let (mut taken_screen, senders, output_seq, contended) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut s = server.lock().await;
                                 let (screen, seq) = if let Some(rt) = s.runtimes.get_mut(&runtime_id)
@@ -2170,8 +2178,15 @@ fn spawn_pty_read_loop(
                                         "server mutex held too long in PTY read loop",
                                     );
                                 }
-                                (screen, senders, seq)
+                                (screen, senders, seq, hold > MUTEX_HOLD_WARN_THRESHOLD)
                             };
+
+                            // Adaptive throttle: yield when contention is detected
+                            // so other tasks (input, serialization) can acquire the
+                            // mutex instead of being starved by N read loops.
+                            if contended {
+                                tokio::time::sleep(CONTENTION_BACKOFF).await;
+                            }
 
                             // Phase 2: VTE parsing outside the server lock.
                             if let Some(ref mut screen) = taken_screen {
