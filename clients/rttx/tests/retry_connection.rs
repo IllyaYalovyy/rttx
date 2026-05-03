@@ -8,7 +8,8 @@ use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
 
 #[test]
 fn reset_endpoint_creates_fresh_actor_on_next_access() {
-    let (manager, _event_rx) = EndpointConnectionManager::new(false, 10).unwrap();
+    let (manager, _event_rx, _capacity_probe, _backpressure) =
+        EndpointConnectionManager::new(false, 10).unwrap();
     let endpoint = RuntimeEndpoint::Local;
 
     // First access creates an actor.

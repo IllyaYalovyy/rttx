@@ -16,6 +16,8 @@ use rttx_proto::v3;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -29,6 +31,15 @@ const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Capacity for the event channel (`EndpointEvent` → GTK main loop).
 const EVENT_CHANNEL_BOUND: usize = 4096;
+
+/// When fewer than this many slots remain in the event channel, the GTK
+/// poller activates backpressure — actors stop reading from the daemon
+/// socket until the channel drains.  75% of capacity.
+pub(crate) const BACKPRESSURE_HIGH_WATERMARK: usize = EVENT_CHANNEL_BOUND / 4; // 1024 free slots
+
+/// When at least this many slots are available again, the GTK poller
+/// releases backpressure and actors resume reading.  75% of capacity free.
+pub(crate) const BACKPRESSURE_LOW_WATERMARK: usize = (EVENT_CHANNEL_BOUND * 3) / 4; // 3072 free slots
 
 /// Capacity for the command channel (`EndpointCommand` → actor).
 const CMD_CHANNEL_BOUND: usize = 4096;
@@ -185,29 +196,43 @@ pub struct EndpointConnectionManager {
     event_tx: mpsc::Sender<EndpointEvent>,
     auto_start_daemon: bool,
     reconnect_delay_secs: u32,
+    backpressure: Arc<AtomicBool>,
 }
 
 impl EndpointConnectionManager {
     /// Create a new endpoint-scoped manager and its event receiver.
+    ///
+    /// Returns `(manager, event_rx, event_tx_for_capacity, backpressure_flag)`.
+    /// The extra `Sender` clone is used by the GTK poller solely to query
+    /// `capacity()` for watermark checks. The `backpressure_flag` is shared
+    /// with all actors — when set, actors stop reading from the daemon socket.
+    #[allow(clippy::type_complexity)]
     pub fn new(
         auto_start_daemon: bool,
         reconnect_delay_secs: u32,
-    ) -> Result<(Self, mpsc::Receiver<EndpointEvent>), DaemonError> {
+    ) -> Result<
+        (Self, mpsc::Receiver<EndpointEvent>, mpsc::Sender<EndpointEvent>, Arc<AtomicBool>),
+        DaemonError,
+    > {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
             .build()
             .map_err(DaemonError::Io)?;
         let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let backpressure = Arc::new(AtomicBool::new(false));
         Ok((
             Self {
                 rt,
                 endpoints: RefCell::new(HashMap::new()),
-                event_tx,
+                event_tx: event_tx.clone(),
                 auto_start_daemon,
                 reconnect_delay_secs,
+                backpressure: Arc::clone(&backpressure),
             },
             event_rx,
+            event_tx,
+            backpressure,
         ))
     }
 
@@ -225,6 +250,7 @@ impl EndpointConnectionManager {
             cmd_rx,
             self.auto_start_daemon,
             self.reconnect_delay_secs,
+            Arc::clone(&self.backpressure),
         );
         self.rt.spawn(actor.run());
         self.endpoints.borrow_mut().insert(key, EndpointHandle { cmd_tx: cmd_tx.clone() });
@@ -425,6 +451,10 @@ struct EndpointActor {
     auto_start_daemon: bool,
     reconnect_delay_secs: u32,
     next_request_id: u64,
+    /// Shared flag set by the GTK poller when the event channel is nearly
+    /// full. While set, the actor skips `reader.recv()` so the daemon
+    /// socket buffer fills and natural backpressure propagates upstream.
+    backpressure: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,6 +529,7 @@ impl EndpointActor {
         cmd_rx: mpsc::Receiver<EndpointCommand>,
         auto_start_daemon: bool,
         reconnect_delay_secs: u32,
+        backpressure: Arc<AtomicBool>,
     ) -> Self {
         Self {
             endpoint,
@@ -517,6 +548,7 @@ impl EndpointActor {
             auto_start_daemon,
             reconnect_delay_secs,
             next_request_id: 1,
+            backpressure,
         }
     }
 
@@ -539,6 +571,7 @@ impl EndpointActor {
         loop {
             if let Some(reader) = self.reader.as_mut() {
                 let track_heartbeat = !self.tracked_workspaces.is_empty();
+                let paused = self.backpressure.load(Ordering::Acquire);
                 let heartbeat_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(
                     self.heartbeat_deadline,
                 ));
@@ -546,7 +579,7 @@ impl EndpointActor {
                 let event = tokio::select! {
                     biased;
                     command = self.cmd_rx.recv() => LoopEvent::Command(command),
-                    message = reader.recv() => LoopEvent::Message(message),
+                    message = reader.recv(), if !paused => LoopEvent::Message(message),
                     () = &mut heartbeat_sleep, if track_heartbeat => LoopEvent::HeartbeatTick,
                 };
 
@@ -1813,6 +1846,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1919,6 +1953,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
         (actor, event_rx)
     }
@@ -1927,7 +1962,15 @@ mod tests {
     fn endpoint_actor_construction_does_not_require_tokio_runtime() {
         let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+        let actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            true,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
         assert!(actor.reader.is_none());
         assert!(actor.writer.is_none());
     }
@@ -2146,7 +2189,15 @@ mod tests {
     fn daemon_start_attempted_flag_defaults_to_false() {
         let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let actor = EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+        let actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            true,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
         assert!(
             !actor.daemon_start_attempted,
             "new actor must not have daemon_start_attempted set"
@@ -2157,8 +2208,15 @@ mod tests {
     fn auto_start_daemon_flag_is_stored() {
         let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
         assert!(!actor.auto_start_daemon);
     }
 
@@ -2166,8 +2224,15 @@ mod tests {
     fn reconnect_delay_caps_at_configured_value() {
         let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            true,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         // Ramp-up: delay = min(attempt, 10)
         assert_eq!(actor.next_reconnect_delay_secs(), 1);
@@ -2184,8 +2249,15 @@ mod tests {
     fn reconnect_delay_respects_custom_cap() {
         let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 3);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            true,
+            3,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         assert_eq!(actor.next_reconnect_delay_secs(), 1);
         actor.reconnect_attempt = 2;
@@ -2198,8 +2270,15 @@ mod tests {
     async fn handle_disconnect_schedules_reconnect_for_tracked_workspaces() {
         let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            true,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
         actor.tracked_workspaces.insert("ws-1".into(), "rt-1".into());
 
         actor.handle_disconnect();
@@ -2229,8 +2308,15 @@ mod tests {
     fn handle_disconnect_without_tracked_workspaces_does_not_schedule() {
         let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, true, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            true,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         actor.handle_disconnect();
 
@@ -2260,6 +2346,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
 
         let stale_runtime = Uuid::new_v4();
@@ -2342,6 +2429,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
 
         let runtime_id = Uuid::new_v4();
@@ -2409,8 +2497,15 @@ mod tests {
         let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         let non_transient = ConnectionProblem::VersionMismatch;
         assert!(!non_transient.is_transient());
@@ -2432,8 +2527,15 @@ mod tests {
         let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         actor.schedule_reconnect_for_problem(&ConnectionProblem::DaemonUnavailable);
 
@@ -2473,6 +2575,7 @@ mod tests {
             cmd_rx,
             false,
             10,
+            Arc::new(AtomicBool::new(false)),
         );
 
         self_tx.send(EndpointCommand::Shutdown).await.unwrap();
@@ -2492,6 +2595,7 @@ mod tests {
             event_tx,
             auto_start_daemon: false,
             reconnect_delay_secs: 10,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
 
         let endpoint = RuntimeEndpoint::Local;
@@ -2549,6 +2653,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
 
         // Server: drop the connection immediately to cause I/O errors.
@@ -2670,8 +2775,15 @@ mod tests {
         let ws_runtime = Uuid::new_v4();
 
         let ((reader, writer), server_stream) = split_duplex_connection();
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
         // Simulate 5 prior reconnect cycles.
         actor.reconnect_attempt = 5;
         actor.tracked_workspaces.insert("ws-1".into(), ws_runtime.to_string());
@@ -2804,8 +2916,15 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
         actor.tracked_workspaces.insert("ws-diag".into(), Uuid::new_v4().to_string());
 
         actor.handle_disconnect();
@@ -2847,8 +2966,15 @@ mod tests {
         let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         // Exercise the tracing::warn! path inside schedule_reconnect.
         actor.schedule_reconnect(1);
@@ -2870,8 +2996,15 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         // No connection — ensure_connected will fail with transient error.
         // Simulate a CreatePane command that triggers ensure_connected.
@@ -2926,8 +3059,15 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
-        let mut actor =
-            EndpointActor::new(RuntimeEndpoint::Local, event_tx, self_tx, cmd_rx, false, 10);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         // Simulate first ensure_connected failure (schedules reconnect).
         let _ = actor.ensure_connected("ws-1").await;
@@ -3050,6 +3190,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
 
         let runtime_id = Uuid::new_v4();
@@ -3093,6 +3234,7 @@ mod tests {
             auto_start_daemon: true,
             reconnect_delay_secs: 10,
             next_request_id: 1,
+            backpressure: Arc::new(AtomicBool::new(false)),
         };
 
         let overflow = v3::StreamOverflow {
@@ -3201,5 +3343,138 @@ mod tests {
         server.await.expect("server task should complete");
 
         assert!(matches!(event_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    /// When the backpressure flag is set, the actor must not read from the
+    /// daemon socket. This causes the socket buffer to fill, propagating
+    /// backpressure upstream to the daemon.
+    #[tokio::test]
+    async fn actor_pauses_reading_when_backpressure_is_set() {
+        let ((reader, writer), mut server_stream) = split_duplex_connection();
+        let backpressure = Arc::new(AtomicBool::new(false));
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx: self_tx.clone(),
+            cmd_rx,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::from([("ws-1".into(), Uuid::new_v4().to_string())]),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+            next_request_id: 1,
+            backpressure: Arc::clone(&backpressure),
+        };
+
+        // Activate backpressure before starting the actor.
+        backpressure.store(true, Ordering::Release);
+
+        let actor_task = tokio::spawn(async move { actor.run().await });
+
+        // Send a delta from the server — the actor should NOT forward it
+        // while backpressure is active.
+        let runtime_id = Uuid::new_v4();
+        send_server_envelope(
+            &mut server_stream,
+            &v3::ServerEnvelope {
+                request_id: 0,
+                payload: Some(v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+                    pane_id: vec![0; 16],
+                    data: bytes::Bytes::from_static(b"paused output"),
+                    ..Default::default()
+                })),
+            },
+        )
+        .await;
+
+        // Give the actor time to process — it should only handle heartbeat
+        // ticks and commands, not the reader.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            event_rx.try_recv().is_err(),
+            "actor should not forward messages while backpressure is active"
+        );
+
+        // Release backpressure — the actor should now read and forward.
+        backpressure.store(false, Ordering::Release);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
+        let mut saw_delta = false;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(EndpointEvent::RuntimeMessage { .. }) = event_rx.try_recv() {
+                saw_delta = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(saw_delta, "actor should forward messages after backpressure is released");
+
+        self_tx.send(EndpointCommand::Shutdown).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), actor_task).await;
+    }
+
+    /// The actor must still process commands while backpressure is active.
+    /// This ensures `Shutdown`, `ForgetWorkspace`, and other control commands
+    /// are not blocked by the paused reader.
+    #[tokio::test]
+    async fn actor_processes_commands_while_paused() {
+        let ((reader, writer), _server) = split_duplex_connection();
+        let backpressure = Arc::new(AtomicBool::new(true));
+        let (event_tx, _event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let actor = EndpointActor {
+            endpoint: RuntimeEndpoint::Local,
+            event_tx,
+            self_tx: self_tx.clone(),
+            cmd_rx,
+            connection: None,
+            reader: Some(reader),
+            writer: Some(writer),
+            ssh_handle: None,
+            tracked_workspaces: HashMap::from([("ws-1".into(), Uuid::new_v4().to_string())]),
+            reconnect_attempt: 0,
+            heartbeat: HeartbeatMonitor::default(),
+            heartbeat_deadline: new_heartbeat_deadline(),
+            daemon_start_attempted: false,
+            auto_start_daemon: true,
+            reconnect_delay_secs: 10,
+            next_request_id: 1,
+            backpressure,
+        };
+
+        let actor_task = tokio::spawn(async move { actor.run().await });
+
+        // Shutdown command must be processed even while paused.
+        self_tx.send(EndpointCommand::Shutdown).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), actor_task)
+            .await
+            .expect("actor should exit after Shutdown even while paused")
+            .expect("actor task should not panic");
+    }
+
+    #[test]
+    fn watermark_constants_are_consistent() {
+        const {
+            assert!(
+                BACKPRESSURE_HIGH_WATERMARK < BACKPRESSURE_LOW_WATERMARK,
+                "high watermark (fewer free slots) must be below low watermark (more free slots)",
+            );
+            assert!(
+                BACKPRESSURE_HIGH_WATERMARK > 0,
+                "high watermark must leave some buffer before the channel is completely full",
+            );
+            assert!(
+                BACKPRESSURE_LOW_WATERMARK <= EVENT_CHANNEL_BOUND,
+                "low watermark cannot exceed channel capacity",
+            );
+        }
     }
 }
