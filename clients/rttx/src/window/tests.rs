@@ -5719,10 +5719,7 @@ fn event_poll_respects_time_budget() {
     let elapsed = start.elapsed();
     // Allow 2× budget for scheduling jitter, but it must not be unbounded.
     let max_allowed = EVENT_POLL_TIME_BUDGET * 2 + std::time::Duration::from_millis(1);
-    assert!(
-        elapsed < max_allowed,
-        "poll loop took {elapsed:?}, expected < {max_allowed:?}"
-    );
+    assert!(elapsed < max_allowed, "poll loop took {elapsed:?}, expected < {max_allowed:?}");
 }
 
 // ── Session persistence end-to-end (GUI round-trip) ─────────────
