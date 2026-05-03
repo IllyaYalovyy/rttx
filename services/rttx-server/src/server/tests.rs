@@ -1609,6 +1609,24 @@ fn mutex_hold_warn_threshold_is_reasonable() {
     assert!(threshold_ms <= 100, "threshold too lenient: {threshold_ms}ms");
 }
 
+#[test]
+fn contention_backoff_is_shorter_than_warn_threshold() {
+    // The backoff must be shorter than the warn threshold to avoid
+    // cascading delays, but long enough to let other tasks run.
+    assert!(
+        CONTENTION_BACKOFF < MUTEX_HOLD_WARN_THRESHOLD,
+        "backoff {CONTENTION_BACKOFF:?} must be shorter than warn threshold {MUTEX_HOLD_WARN_THRESHOLD:?}",
+    );
+    assert!(
+        CONTENTION_BACKOFF.as_micros() >= 50,
+        "backoff too short to be effective: {CONTENTION_BACKOFF:?}",
+    );
+    assert!(
+        CONTENTION_BACKOFF.as_millis() <= 5,
+        "backoff too long — would add visible latency: {CONTENTION_BACKOFF:?}",
+    );
+}
+
 // ── Probe connection logging (#641) ─────────────────────────────
 
 #[tokio::test]
