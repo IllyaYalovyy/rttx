@@ -83,6 +83,9 @@ impl fmt::Display for DiagnosticsReport {
 
 impl Server {
     /// Collect a diagnostics report from the current server state.
+    ///
+    /// Uses `try_lock` on per-runtime locks to avoid blocking.  Runtimes
+    /// whose lock cannot be acquired are silently skipped.
     #[must_use]
     pub fn diagnostics(&self) -> DiagnosticsReport {
         let mut runtimes = Vec::with_capacity(self.runtimes.len());
@@ -91,7 +94,10 @@ impl Server {
         let mut total_active_panes = 0usize;
         let mut total_exited_panes = 0usize;
 
-        for rt in self.runtimes.values() {
+        for rt_lock in self.runtimes.values() {
+            let Ok(rt) = rt_lock.try_lock() else {
+                continue;
+            };
             let mut panes = Vec::with_capacity(rt.panes.len());
             let mut active = 0usize;
             let mut exited = 0usize;
@@ -164,6 +170,7 @@ mod tests {
     use super::*;
     use crate::pane::Pane;
     use crate::runtime::{Runtime, RuntimePolicy};
+    use std::sync::Arc;
     use uuid::Uuid;
 
     fn test_server() -> Server {
@@ -214,7 +221,7 @@ mod tests {
         exited_pane.set_exited(0);
         rt.add_pane(exited_pane);
 
-        server.runtimes.insert(rt.id, rt);
+        server.runtimes.insert(rt.id, Arc::new(tokio::sync::Mutex::new(rt)));
 
         let report = server.diagnostics();
         assert_eq!(report.runtime_count, 1);
@@ -239,7 +246,7 @@ mod tests {
         let mut rt = Runtime::new("temp".into());
         let sid = rt.id;
         rt.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
-        server.runtimes.insert(sid, rt);
+        server.runtimes.insert(sid, Arc::new(tokio::sync::Mutex::new(rt)));
 
         assert_eq!(server.diagnostics().runtime_count, 1);
 

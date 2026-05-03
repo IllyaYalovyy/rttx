@@ -1,3 +1,5 @@
+#![allow(clippy::significant_drop_tightening)]
+
 use super::*;
 use crate::os::OsInterface;
 use crate::pane::Pane;
@@ -23,6 +25,22 @@ fn new_server() -> Arc<Mutex<Server>> {
     Arc::new(Mutex::new(Server::new(Box::new(StubOs))))
 }
 
+/// Broadcast a message to all clients attached to a runtime.
+///
+/// Test helper that replaces the old `Server::broadcast_to_runtime` by
+/// extracting client IDs from the per-runtime lock first.
+async fn broadcast_to_runtime(server: &Arc<Mutex<Server>>, runtime_id: Uuid, msg: &ClientMsg) {
+    let s = server.lock().await;
+    let Some(rt_lock) = s.runtimes.get(&runtime_id) else { return };
+    let rt = rt_lock.lock().await;
+    let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
+    drop(rt);
+    // Re-borrow mutably for broadcast_to_clients.
+    drop(s);
+    let mut s = server.lock().await;
+    s.broadcast_to_clients(client_ids, None, msg);
+}
+
 /// Insert a runtime with a pane and attach a client as writer.
 async fn setup_runtime_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -> (Uuid, Uuid) {
     let mut rt = Runtime::new("test".into());
@@ -31,7 +49,7 @@ async fn setup_runtime_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -
     let pane_id = pane.id;
     rt.add_pane(pane);
     let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
-    server.lock().await.runtimes.insert(runtime_id, rt);
+    server.lock().await.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
     (runtime_id, pane_id)
 }
 
@@ -48,7 +66,7 @@ fn runtime_label_includes_name_and_short_id() {
     let mut server = Server::new(Box::new(StubOs));
     let rt = Runtime::new("my-workspace".into());
     let runtime_id = rt.id;
-    server.runtimes.insert(runtime_id, rt);
+    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
     let label = server.runtime_label(runtime_id);
     assert!(label.starts_with("\"my-workspace\" ("), "got: {label}");
@@ -201,8 +219,10 @@ async fn create_runtime_returns_runtime_created() {
             assert!(!sc.runtime_id.is_empty());
             let id = bytes_to_uuid(&sc.runtime_id).unwrap();
             let s = server.lock().await;
-            assert_eq!(s.runtimes[&id].name, "workspace-1");
-            assert_eq!(s.runtimes[&id].policy, RuntimePolicy::Persistent);
+            let rt = s.runtimes[&id].lock().await;
+            assert_eq!(rt.name, "workspace-1");
+            assert_eq!(rt.policy, RuntimePolicy::Persistent);
+            drop(rt);
             drop(s);
         }
         other => panic!("expected RuntimeCreated, got {other:?}"),
@@ -217,8 +237,8 @@ async fn list_runtimes_returns_all_runtimes() {
     let client_id = Uuid::new_v4();
     {
         let mut s = server.lock().await;
-        s.runtimes.insert(Uuid::new_v4(), Runtime::new("a".into()));
-        s.runtimes.insert(Uuid::new_v4(), Runtime::new("b".into()));
+        s.runtimes.insert(Uuid::new_v4(), Arc::new(Mutex::new(Runtime::new("a".into()))));
+        s.runtimes.insert(Uuid::new_v4(), Arc::new(Mutex::new(Runtime::new("b".into()))));
     }
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
@@ -277,13 +297,12 @@ async fn attach_returns_snapshot_with_pane_data() {
     let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
     // Detach first so we can re-attach cleanly.
-    server
-        .lock()
-        .await
-        .runtimes
-        .get_mut(&runtime_id)
-        .unwrap()
-        .detach_client(client_id, DetachReason::ExplicitRequest);
+    {
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        rt.detach_client(client_id, DetachReason::ExplicitRequest);
+    }
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
@@ -596,13 +615,12 @@ async fn input_to_existing_pane_without_write_access_returns_ownership_error() {
     let owner = Uuid::new_v4();
     let reader = Uuid::new_v4();
     let (runtime_id, pane_id) = setup_runtime_with_pane(&server, owner).await;
-    let _ = server
-        .lock()
-        .await
-        .runtimes
-        .get_mut(&runtime_id)
-        .unwrap()
-        .attach_client(reader, AttachMode::ReadOnly);
+    {
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        let _ = rt.attach_client(reader, AttachMode::ReadOnly);
+    }
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Input(proto::Input {
@@ -628,13 +646,12 @@ async fn resize_without_write_access_returns_ownership_error() {
     let owner = Uuid::new_v4();
     let reader = Uuid::new_v4();
     let (runtime_id, pane_id) = setup_runtime_with_pane(&server, owner).await;
-    let _ = server
-        .lock()
-        .await
-        .runtimes
-        .get_mut(&runtime_id)
-        .unwrap()
-        .attach_client(reader, AttachMode::ReadOnly);
+    {
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        let _ = rt.attach_client(reader, AttachMode::ReadOnly);
+    }
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Resize(proto::Resize {
@@ -758,7 +775,7 @@ async fn detach_last_client_from_ephemeral_session_terminates() {
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
     rt.add_pane(pane);
     let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
-    server.lock().await.runtimes.insert(runtime_id, rt);
+    server.lock().await.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
@@ -800,8 +817,10 @@ async fn close_pane_removes_pane_from_runtime() {
         other => panic!("expected PaneClosed, got {other:?}"),
     }
     let s = server.lock().await;
-    assert!(!s.runtimes[&runtime_id].panes.contains_key(&pane_id));
+    let rt_lock = s.runtimes[&runtime_id].clone();
     drop(s);
+    let rt = rt_lock.lock().await;
+    assert!(!rt.panes.contains_key(&pane_id));
 }
 
 // ── ClosePane invalid pane UUID ─────────────────────────────────
@@ -935,13 +954,12 @@ async fn create_pane_without_write_access_returns_ownership_error() {
     let owner = Uuid::new_v4();
     let reader = Uuid::new_v4();
     let (runtime_id, _) = setup_runtime_with_pane(&server, owner).await;
-    let _ = server
-        .lock()
-        .await
-        .runtimes
-        .get_mut(&runtime_id)
-        .unwrap()
-        .attach_client(reader, AttachMode::ReadOnly);
+    {
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        let _ = rt.attach_client(reader, AttachMode::ReadOnly);
+    }
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
@@ -1048,8 +1066,10 @@ async fn create_runtime_with_ephemeral_policy() {
         Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
             let id = bytes_to_uuid(&sc.runtime_id).unwrap();
             let s = server.lock().await;
-            assert_eq!(s.runtimes[&id].policy, RuntimePolicy::Ephemeral);
+            let rt_lock = s.runtimes[&id].clone();
             drop(s);
+            let rt = rt_lock.lock().await;
+            assert_eq!(rt.policy, RuntimePolicy::Ephemeral);
         }
         other => panic!("expected RuntimeCreated, got {other:?}"),
     }
@@ -1118,13 +1138,12 @@ async fn attach_runtime_logs_lifecycle_event() {
     let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
 
     // Detach first so we can re-attach.
-    server
-        .lock()
-        .await
-        .runtimes
-        .get_mut(&runtime_id)
-        .unwrap()
-        .detach_client(client_id, DetachReason::ExplicitRequest);
+    {
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        rt.detach_client(client_id, DetachReason::ExplicitRequest);
+    }
 
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
@@ -1231,11 +1250,11 @@ async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
         bytes::Bytes::from(vec![0u8; 64]),
     ));
     for _ in 0..PUSH_CHANNEL_BOUND {
-        server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+        broadcast_to_runtime(&server, runtime_id, &msg).await;
     }
 
     // Next broadcast should trigger overflow handling (disconnect v2 client).
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     // Channel should have exactly PUSH_CHANNEL_BOUND messages (overflow was not silently added).
     let s = server.lock().await;
@@ -1268,12 +1287,10 @@ async fn delta_broadcast_shares_bytes_across_clients() {
 
     let client_id_b = Uuid::new_v4();
     {
-        let mut s = server.lock().await;
-        s.runtimes
-            .get_mut(&runtime_id)
-            .unwrap()
-            .attached_clients
-            .insert(client_id_b, crate::runtime::ClientRole::Writer);
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        rt.attached_clients.insert(client_id_b, crate::runtime::ClientRole::Writer);
     }
 
     let (tx_a, mut rx_a) = mpsc::channel(16);
@@ -1286,7 +1303,7 @@ async fn delta_broadcast_shares_bytes_across_clients() {
 
     let data = bytes::Bytes::from(vec![b'X'; 4096]);
     let msg = ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), data.clone()));
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     let msg_a = rx_a.try_recv().unwrap();
     let msg_b = rx_b.try_recv().unwrap();
@@ -1319,8 +1336,9 @@ async fn exited_pane_scrollback_is_released() {
     let client_id = Uuid::new_v4();
     let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
 
-    let mut s = server.lock().await;
-    let rt = s.runtimes.get_mut(&runtime_id).unwrap();
+    let s = server.lock().await;
+    let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+    let mut rt = rt_lock.lock().await;
 
     // Feed output to build up scrollback.
     let pane = rt.panes.get_mut(&pane_id).unwrap();
@@ -1337,6 +1355,7 @@ async fn exited_pane_scrollback_is_released() {
     assert!(pane.is_exited());
     assert!(pane.screen.raw_bytes().is_empty());
     assert!(!pane.has_pending_flush());
+    drop(rt);
     drop(s);
 }
 
@@ -1405,7 +1424,7 @@ async fn client_writer_prioritizes_resp_over_push() {
 // ── Lock-free broadcast via collected senders ───────────────────
 
 #[tokio::test]
-async fn collect_runtime_senders_returns_attached_client_senders() {
+async fn collect_senders_for_clients_returns_attached_client_senders() {
     let server = new_server();
     let client_a = Uuid::new_v4();
     let client_b = Uuid::new_v4();
@@ -1413,12 +1432,10 @@ async fn collect_runtime_senders_returns_attached_client_senders() {
 
     // Attach a second client.
     {
-        let mut s = server.lock().await;
-        s.runtimes
-            .get_mut(&runtime_id)
-            .unwrap()
-            .attached_clients
-            .insert(client_b, crate::runtime::ClientRole::Writer);
+        let s = server.lock().await;
+        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let mut rt = rt_lock.lock().await;
+        rt.attached_clients.insert(client_b, crate::runtime::ClientRole::Writer);
     }
 
     let (tx_a, _rx_a) = mpsc::channel(16);
@@ -1429,7 +1446,12 @@ async fn collect_runtime_senders_returns_attached_client_senders() {
         s.client_senders.insert(client_b, tx_b);
     }
 
-    let senders = server.lock().await.collect_runtime_senders(runtime_id);
+    let s = server.lock().await;
+    let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+    let rt = rt_lock.lock().await;
+    let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
+    drop(rt);
+    let senders = s.collect_senders_for_clients(&client_ids);
     let ids: std::collections::HashSet<Uuid> = senders.iter().map(|(id, _, _)| *id).collect();
     assert!(ids.contains(&client_a));
     assert!(ids.contains(&client_b));
@@ -1437,9 +1459,9 @@ async fn collect_runtime_senders_returns_attached_client_senders() {
 }
 
 #[tokio::test]
-async fn collect_runtime_senders_returns_empty_for_unknown_runtime() {
+async fn collect_senders_for_clients_returns_empty_for_unknown_runtime() {
     let server = new_server();
-    let senders = server.lock().await.collect_runtime_senders(Uuid::new_v4());
+    let senders = server.lock().await.collect_senders_for_clients(&[]);
     assert!(senders.is_empty());
 }
 
@@ -1504,9 +1526,9 @@ async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
     let msg =
         ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
     // Fill the push channel.
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should send StreamOverflow via resp channel.
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     let overflow_msg = resp_rx.try_recv().expect("should receive StreamOverflow via resp channel");
     match overflow_msg {
@@ -1537,9 +1559,9 @@ async fn broadcast_overflow_v2_removes_sender() {
     let msg =
         ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
     // Fill the push channel.
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     let sender_removed = !server.lock().await.has_client_sender(client_id);
     assert!(sender_removed, "v2 client sender should be removed on overflow");
@@ -1563,9 +1585,9 @@ async fn broadcast_overflow_v3_no_resync_removes_sender() {
     let msg =
         ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
     // Fill the push channel.
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
-    server.lock().await.broadcast_to_runtime(runtime_id, &msg);
+    broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     let sender_removed = !server.lock().await.has_client_sender(client_id);
     assert!(sender_removed, "v3 client without OPT_RESYNC should be disconnected on overflow");
@@ -2057,10 +2079,10 @@ async fn terminate_runtime_removes_state_directory() {
     let runtime_id = rt.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
     rt.add_pane(pane);
-    server.runtimes.insert(runtime_id, rt);
+    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
     // Persist the runtime to disk so there's a directory to clean up.
-    let rf = server.runtimes[&runtime_id].to_runtime_file();
+    let rf = server.runtimes[&runtime_id].try_lock().unwrap().to_runtime_file();
     crate::state::persistence::save_runtime(&state_dir, &rf).unwrap();
     let dir = crate::state::layout::runtime_dir(&state_dir, runtime_id);
     assert!(dir.exists());
