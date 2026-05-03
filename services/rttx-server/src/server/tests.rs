@@ -2276,3 +2276,28 @@ async fn connection_limit_rejects_excess_clients() {
     client1.abort();
     client2.abort();
 }
+
+// ── Per-runtime locking ─────────────────────────────────────────
+
+#[tokio::test]
+async fn per_runtime_locks_are_independent() {
+    // Regression: #834 — independent runtimes must not block each other.
+    // Verify that locking one runtime does not prevent access to another.
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+
+    // Create two independent runtimes.
+    let (runtime_a, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_b, _) = setup_runtime_with_pane(&server, client_id).await;
+
+    let s = server.lock().await;
+    let lock_a = s.runtimes.get(&runtime_a).unwrap().clone();
+    let lock_b = s.runtimes.get(&runtime_b).unwrap().clone();
+    drop(s);
+
+    // Hold runtime A's lock while accessing runtime B — must not deadlock.
+    let _guard_a = lock_a.lock().await;
+    let guard_b = lock_b.lock().await;
+    assert_ne!(guard_b.id, runtime_a);
+    drop(guard_b);
+}
