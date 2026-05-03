@@ -22,7 +22,7 @@ fn load_saved_window_state() -> WindowState {
         .as_ref()
         .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
         .unwrap_or(0);
-    WindowState {
+    let mut state = WindowState {
         workspaces,
         active_workspace_index,
         width: ui.window_width,
@@ -31,7 +31,10 @@ fn load_saved_window_state() -> WindowState {
         left_sidebar_width: ui.left_sidebar_width,
         right_sidebar_width: ui.right_sidebar_width,
         dismissed_runtime_ids: cache.dismissed_runtime_ids,
-    }
+        pane_reverse_index: std::collections::HashMap::new(),
+    };
+    state.rebuild_pane_reverse_index();
+    state
 }
 
 /// Save a `WindowState` through the `ClientStore` for test setup.

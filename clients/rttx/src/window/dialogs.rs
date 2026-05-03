@@ -634,16 +634,8 @@ impl Window {
             manager.rename_runtime(session_uuid, &endpoint, &runtime_id, new_name);
         }
 
-        let mut idx = 0;
-        while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
-            if let Some(session_row) =
-                row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
-                && session_row.uuid() == session_uuid
-            {
-                session_row.set_workspace_name(new_name);
-                return;
-            }
-            idx += 1;
+        if let Some(session_row) = self.sidebar_workspace_row(session_uuid) {
+            session_row.set_workspace_name(new_name);
         }
     }
 

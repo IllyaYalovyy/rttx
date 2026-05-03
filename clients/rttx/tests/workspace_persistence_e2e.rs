@@ -414,6 +414,7 @@ fn full_roundtrip_through_file_persistence() {
         left_sidebar_width: 200,
         right_sidebar_width: 350,
         dismissed_runtime_ids: dismissed,
+        pane_reverse_index: std::collections::HashMap::new(),
     };
 
     let loaded = save_and_load(&state);

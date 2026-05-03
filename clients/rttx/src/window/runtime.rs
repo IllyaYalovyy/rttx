@@ -895,17 +895,8 @@ impl Window {
             connection_icon(&session.runtime.endpoint, status, session.uses_managed_runtime());
         drop(state);
 
-        let list = &self.imp().sidebar_list;
-        let mut idx = 0;
-        while let Some(row) = list.row_at_index(idx) {
-            if let Some(session_row) =
-                row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
-                && session_row.uuid() == workspace_id
-            {
-                session_row.set_connection_icon(&icon);
-                break;
-            }
-            idx += 1;
+        if let Some(session_row) = self.sidebar_workspace_row(workspace_id) {
+            session_row.set_connection_icon(&icon);
         }
     }
 
@@ -1168,16 +1159,8 @@ impl Window {
     }
 
     fn update_sidebar_row_name(&self, session_uuid: &str, name: &str) {
-        let mut idx = 0;
-        while let Some(row) = self.imp().sidebar_list.row_at_index(idx) {
-            if let Some(session_row) =
-                row.child().and_then(|child| child.downcast::<WorkspaceRow>().ok())
-                && session_row.uuid() == session_uuid
-            {
-                session_row.set_workspace_name(name);
-                return;
-            }
-            idx += 1;
+        if let Some(session_row) = self.sidebar_workspace_row(session_uuid) {
+            session_row.set_workspace_name(name);
         }
     }
 

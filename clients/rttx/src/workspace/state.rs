@@ -248,7 +248,7 @@ const fn default_right_sidebar_width() -> i32 {
 }
 
 /// Persistent state of the entire application window.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
     pub workspaces: Vec<WorkspaceState>,
     pub active_workspace_index: usize,
@@ -263,6 +263,50 @@ pub struct WindowState {
     /// resurrection until the daemon actually removes the runtime.
     #[serde(default)]
     pub dismissed_runtime_ids: std::collections::BTreeSet<String>,
+    /// Reverse index: `"endpoint_key\0runtime_pane_id"` → `(workspace_id, layout_terminal_uuid)`.
+    /// Derived from pane bindings; not persisted.
+    #[serde(skip)]
+    pub pane_reverse_index: std::collections::HashMap<String, (String, String)>,
+}
+
+impl PartialEq for WindowState {
+    fn eq(&self, other: &Self) -> bool {
+        self.workspaces == other.workspaces
+            && self.active_workspace_index == other.active_workspace_index
+            && self.width == other.width
+            && self.height == other.height
+            && self.is_maximized == other.is_maximized
+            && self.left_sidebar_width == other.left_sidebar_width
+            && self.right_sidebar_width == other.right_sidebar_width
+            && self.dismissed_runtime_ids == other.dismissed_runtime_ids
+    }
+}
+
+impl Eq for WindowState {}
+
+impl WindowState {
+    /// Composite key for the pane reverse index.
+    pub(crate) fn pane_index_key(endpoint_key: &str, runtime_pane_id: &str) -> String {
+        format!("{endpoint_key}\0{runtime_pane_id}")
+    }
+
+    /// Rebuild the reverse index from all workspace pane bindings.
+    pub fn rebuild_pane_reverse_index(&mut self) {
+        self.pane_reverse_index.clear();
+        for session in &self.workspaces {
+            if !session.uses_managed_runtime() {
+                continue;
+            }
+            let endpoint_key = session.runtime.endpoint.key();
+            for (layout_uuid, runtime_pane_id) in &session.runtime.pane_bindings {
+                if session.runtime.is_layout_pane_pending(layout_uuid) {
+                    continue;
+                }
+                let key = Self::pane_index_key(&endpoint_key, runtime_pane_id);
+                self.pane_reverse_index.insert(key, (session.uuid.clone(), layout_uuid.clone()));
+            }
+        }
+    }
 }
 
 impl Default for WindowState {
@@ -276,6 +320,7 @@ impl Default for WindowState {
             left_sidebar_width: default_left_sidebar_width(),
             right_sidebar_width: default_right_sidebar_width(),
             dismissed_runtime_ids: std::collections::BTreeSet::new(),
+            pane_reverse_index: std::collections::HashMap::new(),
         }
     }
 }

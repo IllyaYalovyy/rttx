@@ -258,6 +258,10 @@ impl WindowState {
             recovered.push(session);
         }
 
+        if !recovered.is_empty() {
+            self.rebuild_pane_reverse_index();
+        }
+
         recovered
     }
 
@@ -339,21 +343,8 @@ impl WindowState {
         endpoint: &RuntimeEndpoint,
         runtime_pane_id: &str,
     ) -> Option<(String, String)> {
-        let session = self.workspaces.iter().find(|session| {
-            session.uses_managed_runtime()
-                && &session.runtime.endpoint == endpoint
-                && session
-                    .runtime
-                    .pane_bindings
-                    .values()
-                    .any(|bound_runtime_pane_id| bound_runtime_pane_id == runtime_pane_id)
-        })?;
-        session
-            .runtime
-            .pane_bindings
-            .iter()
-            .find(|(_, bound_runtime_pane_id)| *bound_runtime_pane_id == runtime_pane_id)
-            .map(|(layout_terminal_uuid, _)| (session.uuid.clone(), layout_terminal_uuid.clone()))
+        let key = Self::pane_index_key(&endpoint.key(), runtime_pane_id);
+        self.pane_reverse_index.get(&key).cloned()
     }
 
     /// Apply the state mutation for a daemon pane-create acknowledgement.
@@ -374,6 +365,7 @@ impl WindowState {
 
         session.runtime.runtime_id = Some(runtime_id.to_string());
         session.runtime.bind_runtime_pane(layout_terminal_uuid, runtime_pane_id);
+        self.rebuild_pane_reverse_index();
         true
     }
 
@@ -391,7 +383,9 @@ impl WindowState {
         session.runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
         session.prune_recovery();
         session.normalize_active_terminal();
-        Some(session.clone())
+        let result = session.clone();
+        self.rebuild_pane_reverse_index();
+        Some(result)
     }
 
     /// Apply the state mutation for attaching/reconciling a managed runtime snapshot.
@@ -517,8 +511,11 @@ impl WindowState {
             }
         }
 
+        let session_state = session.clone();
+        self.rebuild_pane_reverse_index();
+
         Some(ManagedWorkspaceOpenResult {
-            session_state: session.clone(),
+            session_state,
             panes_to_create,
             snapshot_restores,
             skipped_runtime_panes,
@@ -2139,5 +2136,219 @@ mod tests {
         assert_eq!(round_tripped.scrollback_lines, 5000);
         assert!(round_tripped.smart_clipboard);
         assert_eq!(round_tripped.paste_guard_threshold, 512);
+    }
+
+    // ── Reverse index tests ──────────────────────────────────────
+
+    #[test]
+    fn reverse_index_matches_linear_scan_for_bound_pane() {
+        let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+        let runtime_pane_id = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
+        let mut session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            term("pane-1"),
+            endpoint.clone(),
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
+        session.runtime.bind_runtime_pane("pane-1", runtime_pane_id);
+        let state = window_state(vec![session]);
+
+        assert_eq!(
+            state.runtime_pane_target(&endpoint, runtime_pane_id),
+            Some(("workspace-1".into(), "pane-1".into())),
+        );
+    }
+
+    #[test]
+    fn reverse_index_excludes_pending_placeholder_bindings() {
+        let state = window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
+
+        // Placeholder bindings (self-bindings) are pending — not in the index.
+        assert!(
+            state.runtime_pane_target(&RuntimeEndpoint::Local, "pane-1").is_none(),
+            "pending placeholder bindings must not appear in the reverse index",
+        );
+    }
+
+    #[test]
+    fn reverse_index_consistent_after_pane_create() {
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
+
+        state.apply_managed_pane_created(
+            "workspace-1",
+            "pane-1",
+            "d7d04564-b2bf-4302-9495-e65c4df12ac6",
+            "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
+        );
+
+        assert_eq!(
+            state.runtime_pane_target(
+                &RuntimeEndpoint::Local,
+                "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"
+            ),
+            Some(("workspace-1".into(), "pane-1".into())),
+        );
+    }
+
+    #[test]
+    fn reverse_index_consistent_after_pane_close() {
+        let mut session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
+        session.runtime.bind_runtime_pane("left", "07fa83b4-9ae3-4354-a1c5-1f685ffab370");
+        session.runtime.bind_runtime_pane("right", "0d88f17f-626d-40b8-a1d3-6a42af628ac9");
+        let mut state = window_state(vec![session]);
+
+        state.apply_managed_pane_closed("workspace-1", "left");
+
+        assert!(
+            state
+                .runtime_pane_target(
+                    &RuntimeEndpoint::Local,
+                    "07fa83b4-9ae3-4354-a1c5-1f685ffab370"
+                )
+                .is_none(),
+            "closed pane must be removed from the reverse index",
+        );
+        assert_eq!(
+            state.runtime_pane_target(
+                &RuntimeEndpoint::Local,
+                "0d88f17f-626d-40b8-a1d3-6a42af628ac9"
+            ),
+            Some(("workspace-1".into(), "right".into())),
+        );
+    }
+
+    #[test]
+    fn reverse_index_consistent_after_workspace_opened_reconciliation() {
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let runtime_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let runtime_pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+        let mut state = window_state(vec![managed_session(
+            "workspace-1",
+            "Workspace",
+            hsplit(term("left"), term("right")),
+        )]);
+
+        state.apply_managed_workspace_opened(
+            "workspace-1",
+            runtime_id,
+            &snapshot(
+                runtime_id,
+                vec![
+                    pane_snapshot(runtime_pane_a, "Shell", "/home", b""),
+                    pane_snapshot(runtime_pane_b, "Logs", "/var", b""),
+                ],
+            ),
+        );
+
+        assert_eq!(
+            state.runtime_pane_target(&RuntimeEndpoint::Local, runtime_pane_a),
+            Some(("workspace-1".into(), "left".into())),
+        );
+        assert_eq!(
+            state.runtime_pane_target(&RuntimeEndpoint::Local, runtime_pane_b),
+            Some(("workspace-1".into(), "right".into())),
+        );
+    }
+
+    #[test]
+    fn reverse_index_consistent_after_inventory_recovery() {
+        let runtime_id = uuid::Uuid::new_v4().to_string();
+        let pane_id = uuid::Uuid::new_v4().to_string();
+        let mut state = WindowState::default_for_test();
+
+        state.recover_managed_workspaces_from_inventory(
+            &RuntimeEndpoint::Local,
+            &[rt_info(
+                &runtime_id,
+                "Recovered",
+                v3::RuntimePolicy::Persistent,
+                vec![pane_info(&pane_id, "Shell", "/home")],
+                Some(&pane_id),
+            )],
+        );
+
+        // Inventory recovery creates self-bindings that are NOT pending
+        // (the pane IDs come from the daemon), so they should be in the index.
+        assert_eq!(
+            state.runtime_pane_target(&RuntimeEndpoint::Local, &pane_id),
+            Some((format!("inventory:local:{runtime_id}"), pane_id.clone())),
+        );
+    }
+
+    #[test]
+    fn reverse_index_not_serialized() {
+        let mut session = managed_session_with_runtime(
+            "ws-1",
+            "Work",
+            term("t1"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
+        session.runtime.bind_runtime_pane("t1", "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26");
+        let state = window_state(vec![session]);
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("pane_reverse_index"),
+            "reverse index must not appear in serialized JSON",
+        );
+
+        let deserialized: WindowState = serde_json::from_str(&json).unwrap();
+        assert!(
+            deserialized.pane_reverse_index.is_empty(),
+            "deserialized state must have empty reverse index",
+        );
+    }
+
+    #[test]
+    fn reverse_index_multi_workspace_multi_endpoint() {
+        let local_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let remote_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+        let remote_endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+
+        let mut local_session = managed_session_with_runtime(
+            "ws-local",
+            "Local",
+            term("local-t1"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
+        );
+        local_session.runtime.bind_runtime_pane("local-t1", local_pane);
+
+        let mut remote_session = managed_session_with_runtime(
+            "ws-remote",
+            "Remote",
+            term("remote-t1"),
+            remote_endpoint.clone(),
+            WorkspacePolicy::Persistent,
+            Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
+        );
+        remote_session.runtime.bind_runtime_pane("remote-t1", remote_pane);
+
+        let state = window_state(vec![local_session, remote_session]);
+
+        assert_eq!(
+            state.runtime_pane_target(&RuntimeEndpoint::Local, local_pane),
+            Some(("ws-local".into(), "local-t1".into())),
+        );
+        assert_eq!(
+            state.runtime_pane_target(&remote_endpoint, remote_pane),
+            Some(("ws-remote".into(), "remote-t1".into())),
+        );
+        // Cross-endpoint lookup must not match.
+        assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, remote_pane).is_none());
+        assert!(state.runtime_pane_target(&remote_endpoint, local_pane).is_none());
     }
 }

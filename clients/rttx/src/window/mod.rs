@@ -78,6 +78,8 @@ mod imp {
         pub host_selector_keys: RefCell<Vec<String>>,
         pub leader_keys: RefCell<Vec<String>>,
         pub leader_timeout_source: RefCell<Option<glib::SourceId>>,
+        /// Workspace UUID → sidebar row index for O(1) sidebar lookups.
+        pub sidebar_row_index: RefCell<HashMap<String, i32>>,
     }
 
     #[glib::object_subclass]
@@ -393,7 +395,7 @@ impl Window {
             .as_ref()
             .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
             .unwrap_or(0);
-        let state = if workspaces.is_empty() {
+        let mut state = if workspaces.is_empty() {
             WindowState::default()
         } else {
             WindowState {
@@ -405,8 +407,10 @@ impl Window {
                 left_sidebar_width: ui.left_sidebar_width,
                 right_sidebar_width: ui.right_sidebar_width,
                 dismissed_runtime_ids: cache.dismissed_runtime_ids,
+                pane_reverse_index: std::collections::HashMap::new(),
             }
         };
+        state.rebuild_pane_reverse_index();
 
         let active_index =
             state.active_workspace_index.min(state.workspaces.len().saturating_sub(1));
@@ -782,6 +786,7 @@ impl Window {
         let list_row = gtk4::ListBoxRow::new();
         list_row.set_child(Some(&row));
         imp.sidebar_list.append(&list_row);
+        self.rebuild_sidebar_row_index();
     }
 
     fn sync_sidebar_to_visible_session(&self) {
@@ -1034,6 +1039,7 @@ impl Window {
             drop(session);
             let new_index = pos.min(state.workspaces.len() - 1);
             state.active_workspace_index = new_index;
+            state.rebuild_pane_reverse_index();
             (uuids, new_index, info)
         };
 
@@ -1097,6 +1103,7 @@ impl Window {
                 {
                     state.dismissed_runtime_ids.insert(runtime_id.clone());
                 }
+                state.rebuild_pane_reverse_index();
                 drop(state);
                 if let Some((endpoint, runtime_id)) = managed_runtime
                     && let Some(manager) = imp.connection_manager.borrow().as_ref()
@@ -1121,6 +1128,7 @@ impl Window {
             };
             let new_index = pos.min(state.workspaces.len() - 1);
             state.active_workspace_index = new_index;
+            state.rebuild_pane_reverse_index();
             (uuids, new_index, managed_runtime)
         };
 
@@ -1174,6 +1182,27 @@ impl Window {
         self.renumber_session_rows();
     }
 
+    /// Rebuild the sidebar row index from the current `ListBox` contents.
+    pub(super) fn rebuild_sidebar_row_index(&self) {
+        let imp = self.imp();
+        let mut index = HashMap::new();
+        let mut idx = 0;
+        while let Some(row) = imp.sidebar_list.row_at_index(idx) {
+            if let Some(session_row) = row.child().and_then(|c| c.downcast::<WorkspaceRow>().ok()) {
+                index.insert(session_row.uuid(), idx);
+            }
+            idx += 1;
+        }
+        imp.sidebar_row_index.replace(index);
+    }
+
+    /// Look up the sidebar `WorkspaceRow` for a workspace UUID via the index.
+    fn sidebar_workspace_row(&self, workspace_uuid: &str) -> Option<WorkspaceRow> {
+        let imp = self.imp();
+        let idx = *imp.sidebar_row_index.borrow().get(workspace_uuid)?;
+        imp.sidebar_list.row_at_index(idx)?.child().and_then(|c| c.downcast::<WorkspaceRow>().ok())
+    }
+
     fn remove_sidebar_row(&self, session_uuid: &str) {
         let imp = self.imp();
         // Clear the stored popover — its parent (the ListBoxRow) is about
@@ -1189,6 +1218,7 @@ impl Window {
                 && sr.uuid() == session_uuid
             {
                 imp.sidebar_list.remove(&r);
+                self.rebuild_sidebar_row_index();
                 return;
             }
             idx += 1;

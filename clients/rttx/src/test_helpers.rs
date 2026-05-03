@@ -134,7 +134,9 @@ pub fn managed_session_with_runtime(
 /// Build a window state from workspaces.
 #[must_use]
 pub fn window_state(workspaces: Vec<WorkspaceState>) -> WindowState {
-    WindowState { active_workspace_index: 0, workspaces, ..WindowState::default() }
+    let mut state = WindowState { active_workspace_index: 0, workspaces, ..WindowState::default() };
+    state.rebuild_pane_reverse_index();
+    state
 }
 
 // ── Color scheme builder ─────────────────────────────────────────
