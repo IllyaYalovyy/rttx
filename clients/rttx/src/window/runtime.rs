@@ -6,6 +6,13 @@ use std::collections::BTreeMap;
 /// Keeps the main loop responsive during output bursts.
 pub(super) const EVENT_POLL_BATCH_LIMIT: usize = 64;
 
+/// Interval between GTK event poller ticks.
+pub(super) const EVENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// Time budget per poll tick. The poller breaks early when this is exceeded,
+/// ensuring GTK gets at least half the interval for rendering and input.
+pub(super) const EVENT_POLL_TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
+
 /// Result of partitioning a batch of endpoint events into coalesced output
 /// deltas and remaining non-delta events.
 pub(super) struct CoalescedBatch {
@@ -549,13 +556,17 @@ impl Window {
         mut rx: tokio::sync::mpsc::Receiver<crate::daemon_bridge::EndpointEvent>,
     ) {
         let win = self.downgrade();
-        let source = glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
+        let source = glib::timeout_add_local(EVENT_POLL_INTERVAL, move || {
             let Some(win) = win.upgrade() else {
                 return glib::ControlFlow::Break;
             };
 
+            let start = std::time::Instant::now();
             let mut events = Vec::new();
             for _ in 0..EVENT_POLL_BATCH_LIMIT {
+                if start.elapsed() > EVENT_POLL_TIME_BUDGET {
+                    break;
+                }
                 match rx.try_recv() {
                     Ok(event) => events.push(event),
                     Err(_) => break,
