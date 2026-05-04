@@ -45,6 +45,7 @@ async fn start_binary_server(tmp: &tempfile::TempDir) -> (PathBuf, Child) {
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .env("XDG_CACHE_HOME", &cache_dir)
         .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_STATE_HOME", tmp.path())
         .env("HOME", &home_dir)
         .env("SHELL", &shell_path)
         .env("TERM", "xterm-256color")
