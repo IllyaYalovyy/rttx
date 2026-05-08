@@ -1,8 +1,6 @@
 //! Integration tests for import file validation (issue #854).
 
-use rttx::store::models::export::{
-    ExportBundle, ExportEnvelope, ImportError, parse_export_file,
-};
+use rttx::store::models::export::{ExportBundle, ExportEnvelope, ImportError, parse_export_file};
 
 #[test]
 fn parse_export_file_round_trips_through_serialized_envelope() {
