@@ -1132,23 +1132,28 @@ impl EndpointActor {
                 );
 
                 // Preserve the backoff counter across the reconnect cycle.
-                // ensure_connected resets it to 0 on successful socket
-                // connect, but if the subsequent reattach fails we must
-                // continue ramping up instead of dropping back to 1 second.
+                // If ensure_connected succeeds but reattach fails, we restore
+                // the counter so backoff continues ramping instead of resetting
+                // to 1 second (which would cause a reconnect storm).
                 let saved_attempt = self.reconnect_attempt;
-                // Allow ensure_connected to attempt a real connection.
+                // Temporarily clear to bypass the ensure_connected guard that
+                // blocks when a reconnect is "in progress". Restore immediately
+                // after so that if the connection fails, backoff continues.
                 self.reconnect_attempt = 0;
 
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
-                    // ensure_connected already scheduled a reconnect for
-                    // transient problems. Only schedule for non-transient
-                    // ones (which still retry at max delay).
+                    // ensure_connected scheduled a reconnect (incrementing the
+                    // counter). Ensure we don't regress below saved_attempt.
+                    self.reconnect_attempt = self.reconnect_attempt.max(saved_attempt);
                     if !problem.is_transient() {
                         self.schedule_reconnect_for_problem(&problem);
                     }
                     return;
                 }
+                // Connection succeeded at socket level — restore saved counter.
+                // It will be reset to 0 only after all reattaches succeed.
+                self.reconnect_attempt = saved_attempt;
 
                 // Split before reattaching so that `read_response` is used
                 // for each attach. The unsplit path cannot handle interleaved
@@ -1200,6 +1205,9 @@ impl EndpointActor {
                     // where it was before this cycle, not from 0.
                     self.reconnect_attempt = saved_attempt;
                     self.handle_disconnect();
+                } else {
+                    // All reattaches succeeded — connection is stable.
+                    self.reconnect_attempt = 0;
                 }
             }
             EndpointCommand::RenameRuntime { workspace_id, runtime_id, name } => {
@@ -1320,7 +1328,10 @@ impl EndpointActor {
 
         match self.connect_endpoint().await {
             Ok(()) => {
-                self.reconnect_attempt = 0;
+                // Don't reset reconnect_attempt here — the connection may
+                // immediately fail during reattach. The counter is reset
+                // only after a stable session is established (successful
+                // reattach in the Reconnect handler).
                 self.emit_status(workspace_id, ConnectionStatus::Connected);
                 Ok(())
             }
