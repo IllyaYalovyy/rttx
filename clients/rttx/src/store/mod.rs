@@ -266,6 +266,139 @@ impl ClientStore {
         );
         atomic_save(&path, &envelope)
     }
+
+    // ── Export / Import / Reset ──────────────────────────────
+
+    /// Load all exportable documents into an `ExportBundle`.
+    ///
+    /// Missing documents become `None` in the bundle.
+    #[must_use]
+    pub fn export_bundle(&self) -> models::export::ExportBundle {
+        let preferences = load_if_present(
+            &self.paths.config().join("preferences.json"),
+            models::preferences::SCHEMA,
+            models::preferences::CURRENT_VERSION,
+            &self.paths.backups(),
+        );
+
+        let library = load_if_present(
+            &self.paths.config().join("library.json"),
+            models::library::SCHEMA,
+            models::library::CURRENT_VERSION,
+            &self.paths.backups(),
+        );
+
+        let hosts = load_if_present(
+            &self.paths.config().join("hosts.json"),
+            models::hosts::SCHEMA,
+            models::hosts::CURRENT_VERSION,
+            &self.paths.backups(),
+        );
+
+        let workspaces = load_if_present(
+            &self.paths.state().join("workspaces.json"),
+            models::workspaces::SCHEMA,
+            models::workspaces::CURRENT_VERSION,
+            &self.paths.backups(),
+        );
+
+        models::export::ExportBundle { preferences, library, hosts, workspaces }
+    }
+
+    /// Import an `ExportBundle`, writing each present sub-document.
+    ///
+    /// Clears `runtime_ref` from all imported workspace records since runtime
+    /// bindings are machine-specific and not portable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if any atomic write fails. Documents written before
+    /// the failure remain on disk.
+    pub fn import_bundle(&self, bundle: &models::export::ExportBundle) -> std::io::Result<()> {
+        if let Some(prefs) = &bundle.preferences {
+            let path = self.paths.config().join("preferences.json");
+            let envelope = DocumentEnvelope::new(
+                models::preferences::SCHEMA,
+                models::preferences::CURRENT_VERSION,
+                prefs.clone(),
+            );
+            atomic_save(&path, &envelope)?;
+        }
+
+        if let Some(library) = &bundle.library {
+            let path = self.paths.config().join("library.json");
+            let envelope = DocumentEnvelope::new(
+                models::library::SCHEMA,
+                models::library::CURRENT_VERSION,
+                library.clone(),
+            );
+            atomic_save(&path, &envelope)?;
+        }
+
+        if let Some(hosts) = &bundle.hosts {
+            let path = self.paths.config().join("hosts.json");
+            let envelope = DocumentEnvelope::new(
+                models::hosts::SCHEMA,
+                models::hosts::CURRENT_VERSION,
+                hosts.clone(),
+            );
+            atomic_save(&path, &envelope)?;
+        }
+
+        if let Some(workspaces) = &bundle.workspaces {
+            let mut sanitized = workspaces.clone();
+            for ws in &mut sanitized.workspaces {
+                ws.runtime_ref = None;
+            }
+            let path = self.paths.state().join("workspaces.json");
+            let envelope = DocumentEnvelope::new(
+                models::workspaces::SCHEMA,
+                models::workspaces::CURRENT_VERSION,
+                sanitized,
+            );
+            atomic_save(&path, &envelope)?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove all user-facing configuration and workspace state files.
+    ///
+    /// Deletes `preferences.json`, `library.json`, `hosts.json`, and
+    /// `workspaces.json`. Missing files are silently ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if a file exists but cannot be removed.
+    pub fn reset_config(&self) -> std::io::Result<()> {
+        let files = [
+            self.paths.config().join("preferences.json"),
+            self.paths.config().join("library.json"),
+            self.paths.config().join("hosts.json"),
+            self.paths.state().join("workspaces.json"),
+        ];
+        for path in &files {
+            if let Err(e) = std::fs::remove_file(path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Load a document, returning `Some` only if the file actually existed.
+fn load_if_present<T: for<'de> serde::Deserialize<'de> + Default>(
+    path: &std::path::Path,
+    schema: Schema,
+    version: u32,
+    backups: &std::path::Path,
+) -> Option<T> {
+    match atomic_load(path, schema, version, backups) {
+        LoadOutcome::Loaded(v) | LoadOutcome::Recovered(v) => Some(v),
+        _ => None,
+    }
 }
 
 impl<T> LoadOutcome<T> {
@@ -730,5 +863,156 @@ mod tests {
         assert_eq!(restored.layout.terminal_count(), 2);
         assert!(restored.layout.contains_terminal("t1"));
         assert!(restored.layout.contains_terminal("t2"));
+    }
+
+    // ── Export / Import / Reset ──────────────────────────────
+
+    fn populated_bundle() -> models::export::ExportBundle {
+        models::export::ExportBundle {
+            preferences: Some(models::preferences::PreferencesV1 {
+                font: "Fira Code 12".into(),
+                ..Default::default()
+            }),
+            library: Some(models::library::Library {
+                places: vec![models::library::PlaceRecord {
+                    id: "p1".into(),
+                    name: "Home".into(),
+                    path: "~".into(),
+                    host_tags: vec![],
+                }],
+                commands: vec![],
+            }),
+            hosts: Some(models::hosts::HostCatalog {
+                hosts: vec![models::hosts::HostRecord {
+                    key: "srv".into(),
+                    name: "Server".into(),
+                    kind: models::hosts::HostKind::Remote,
+                    ssh_target: Some("user@srv".into()),
+                    labels: vec![],
+                }],
+            }),
+            workspaces: Some(models::workspaces::WorkspaceStore {
+                active_workspace_id: Some("ws-1".into()),
+                workspaces: vec![models::workspaces::WorkspaceRecord {
+                    id: "ws-1".into(),
+                    name: "Dev".into(),
+                    user_renamed: false,
+                    endpoint_key: "local".into(),
+                    policy: models::workspaces::WorkspacePolicy::Ephemeral,
+                    runtime_ref: Some(models::workspaces::RuntimeRef {
+                        runtime_id: "rt-old".into(),
+                        attachment_kind: models::workspaces::RuntimeAttachmentKind::Created,
+                    }),
+                    layout: models::workspaces::LayoutNode::Terminal {
+                        uuid: "t-1".into(),
+                        profile: None,
+                        cwd: Some("/tmp".into()),
+                        custom_title: None,
+                    },
+                    active_pane_id: Some("t-1".into()),
+                    zoomed_pane_id: None,
+                    input_sync: models::workspaces::InputSyncState::Off,
+                    color: models::workspaces::WorkspaceColor::Green,
+                    pane_recovery: std::collections::BTreeMap::new(),
+                }],
+            }),
+        }
+    }
+
+    #[test]
+    fn export_bundle_round_trips_through_store() {
+        let (_tmp, store) = test_store();
+        let bundle = populated_bundle();
+
+        store.import_bundle(&bundle).unwrap();
+
+        let exported = store.export_bundle();
+        assert_eq!(exported.preferences.as_ref().unwrap().font, "Fira Code 12");
+        assert_eq!(exported.library.as_ref().unwrap().places.len(), 1);
+        assert_eq!(exported.hosts.as_ref().unwrap().hosts.len(), 1);
+        assert_eq!(exported.workspaces.as_ref().unwrap().workspaces.len(), 1);
+    }
+
+    #[test]
+    fn export_bundle_returns_none_for_missing_documents() {
+        let (_tmp, store) = test_store();
+        let exported = store.export_bundle();
+        assert!(exported.preferences.is_none());
+        assert!(exported.library.is_none());
+        assert!(exported.hosts.is_none());
+        assert!(exported.workspaces.is_none());
+    }
+
+    #[test]
+    fn import_bundle_with_partial_fields() {
+        let (_tmp, store) = test_store();
+        let bundle = models::export::ExportBundle {
+            preferences: Some(models::preferences::PreferencesV1 {
+                scrollback_lines: 9999,
+                ..Default::default()
+            }),
+            library: None,
+            hosts: None,
+            workspaces: None,
+        };
+
+        store.import_bundle(&bundle).unwrap();
+
+        let prefs = store.load_preferences().into_value().unwrap();
+        assert_eq!(prefs.scrollback_lines, 9999);
+        assert!(store.export_bundle().library.is_none());
+        assert!(store.export_bundle().hosts.is_none());
+        assert!(store.export_bundle().workspaces.is_none());
+    }
+
+    #[test]
+    fn import_bundle_clears_runtime_ref() {
+        let (_tmp, store) = test_store();
+        let bundle = populated_bundle();
+        assert!(bundle.workspaces.as_ref().unwrap().workspaces[0].runtime_ref.is_some());
+
+        store.import_bundle(&bundle).unwrap();
+
+        let ws = store.load_workspaces().into_value().unwrap();
+        assert!(ws.workspaces[0].runtime_ref.is_none());
+    }
+
+    #[test]
+    fn reset_config_removes_all_files() {
+        let (_tmp, store) = test_store();
+        let bundle = populated_bundle();
+        store.import_bundle(&bundle).unwrap();
+
+        assert!(store.paths.config().join("preferences.json").exists());
+        assert!(store.paths.config().join("library.json").exists());
+        assert!(store.paths.config().join("hosts.json").exists());
+        assert!(store.paths.state().join("workspaces.json").exists());
+
+        store.reset_config().unwrap();
+
+        assert!(!store.paths.config().join("preferences.json").exists());
+        assert!(!store.paths.config().join("library.json").exists());
+        assert!(!store.paths.config().join("hosts.json").exists());
+        assert!(!store.paths.state().join("workspaces.json").exists());
+    }
+
+    #[test]
+    fn reset_config_succeeds_when_files_missing() {
+        let (_tmp, store) = test_store();
+        store.reset_config().unwrap();
+    }
+
+    #[test]
+    fn export_after_reset_returns_empty_bundle() {
+        let (_tmp, store) = test_store();
+        let bundle = populated_bundle();
+        store.import_bundle(&bundle).unwrap();
+        store.reset_config().unwrap();
+
+        let exported = store.export_bundle();
+        assert!(exported.preferences.is_none());
+        assert!(exported.library.is_none());
+        assert!(exported.hosts.is_none());
+        assert!(exported.workspaces.is_none());
     }
 }
