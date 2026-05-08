@@ -1693,6 +1693,28 @@ impl EndpointActor {
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+
+        // Circuit breaker: after too many consecutive failures, stop
+        // auto-retrying and declare the endpoint unreachable. The user
+        // can manually retry via "Retry Connection" in the UI.
+        // Threshold: 3× max_delay gives the remote ~30 chances at full
+        // backoff before giving up (e.g., 30 attempts × 10s = 5 minutes).
+        let circuit_breaker_limit = self.reconnect_delay_secs.saturating_mul(3);
+        if self.reconnect_attempt > circuit_breaker_limit {
+            tracing::error!(
+                "Circuit breaker: giving up on {} after {} attempts",
+                self.endpoint.key(),
+                self.reconnect_attempt
+            );
+            for workspace_id in self.tracked_workspaces.keys() {
+                self.emit_status(
+                    workspace_id,
+                    ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+                );
+            }
+            return;
+        }
+
         tracing::warn!(
             "Scheduling reconnect to {} (attempt {}, delay {}s)",
             self.endpoint.key(),
