@@ -19,6 +19,8 @@ pub enum Schema {
     RuntimeCache,
     #[serde(rename = "rttx.client.migrations")]
     Migrations,
+    #[serde(rename = "rttx.client.export")]
+    Export,
 }
 
 /// Self-describing envelope wrapping every persisted client document.
@@ -114,7 +116,7 @@ impl std::error::Error for EnvelopeError {
     }
 }
 
-fn now_iso8601() -> String {
+pub(crate) fn now_iso8601() -> String {
     // Use SystemTime for a simple UTC timestamp without adding chrono.
     use std::time::SystemTime;
     let duration = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
@@ -228,6 +230,7 @@ mod tests {
             Schema::Ui,
             Schema::RuntimeCache,
             Schema::Migrations,
+            Schema::Export,
         ];
         for schema in schemas {
             let json = serde_json::to_string(&schema).unwrap();
