@@ -98,6 +98,27 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     init_tracing(dev_mode, &os.cache_dir());
 
+    // Install a panic hook that logs to the daemon log file before aborting.
+    // Without this, panics in spawned tasks are completely silent because
+    // stderr goes to /dev/null in daemonized mode.
+    std::panic::set_hook(Box::new(|info| {
+        let location = info.location().map_or_else(
+            || "unknown location".to_string(),
+            |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+        );
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "Box<dyn Any>".to_string());
+        tracing::error!(
+            location = %location,
+            payload = %payload,
+            "PANIC — daemon aborting"
+        );
+    }));
+
     tracing::info!("rttx-server {} ({}) starting", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"),);
 
     if dev_mode {
