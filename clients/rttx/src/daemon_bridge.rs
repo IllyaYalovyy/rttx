@@ -3487,4 +3487,37 @@ mod tests {
             );
         }
     }
+
+    /// Verify that `ensure_connected` with `reconnect_attempt` > 0 returns
+    /// `DaemonUnavailable` without emitting any status events.
+    #[tokio::test]
+    async fn ensure_connected_with_pending_reconnect_returns_immediately() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Remote { host: "nonexistent.invalid".into() },
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        // Simulate a prior failure that scheduled a reconnect.
+        actor.reconnect_attempt = 1;
+
+        let result = actor.ensure_connected("ws-1").await;
+        assert!(
+            matches!(result, Err(ConnectionProblem::DaemonUnavailable)),
+            "should return DaemonUnavailable when reconnect is pending"
+        );
+
+        // No status events should be emitted.
+        assert!(
+            event_rx.try_recv().is_err(),
+            "no events should be emitted when reconnect is already scheduled"
+        );
+    }
 }
