@@ -2997,7 +2997,7 @@ mod tests {
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Local,
+            RuntimeEndpoint::Remote { host: "nonexistent.invalid".into() },
             event_tx,
             self_tx,
             cmd_rx,
@@ -3006,8 +3006,27 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
 
-        // No connection — ensure_connected will fail with transient error.
-        // Simulate a CreatePane command that triggers ensure_connected.
+        // Trigger a transient connection failure so reconnect_attempt > 0
+        // and the Reconnecting status is emitted.
+        let _ = actor.ensure_connected("ws-1").await;
+
+        // Drain the statuses from the initial failure.
+        let mut statuses = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged { workspace_id, status } = event
+                && workspace_id == "ws-1"
+            {
+                statuses.push(status);
+            }
+        }
+        assert!(
+            matches!(statuses.last(), Some(ConnectionStatus::Reconnecting { .. })),
+            "initial failure should produce Reconnecting, got {statuses:?}"
+        );
+
+        // Now issue a CreatePane command. Since reconnect_attempt > 0,
+        // ensure_connected returns immediately with a transient error.
+        // The handler must NOT emit Blocked.
         actor
             .handle_command(EndpointCommand::CreatePane {
                 workspace_id: "ws-1".into(),
@@ -3021,30 +3040,21 @@ mod tests {
             })
             .await;
 
-        // Collect all status events for ws-1.
-        let mut statuses = Vec::new();
+        // Collect any new status events for ws-1.
         while let Ok(event) = event_rx.try_recv() {
-            match event {
-                EndpointEvent::WorkspaceConnectionChanged { workspace_id, status }
-                    if workspace_id == "ws-1" =>
-                {
-                    statuses.push(status);
-                }
-                EndpointEvent::WorkspaceError { workspace_id, .. } if workspace_id == "ws-1" => {
-                    // WorkspaceError is acceptable for diagnostics, but
-                    // the status must not be Blocked.
-                }
-                _ => {}
+            if let EndpointEvent::WorkspaceConnectionChanged { workspace_id, status } = event
+                && workspace_id == "ws-1"
+            {
+                statuses.push(status);
             }
         }
 
-        // The final status must NOT be Blocked.
+        // The final status must still be Reconnecting, not Blocked.
         let last_status = statuses.last().expect("should emit at least one status");
         assert!(
             !matches!(last_status, ConnectionStatus::Blocked(_)),
             "transient connection failure must not produce Blocked status, got {last_status:?}"
         );
-        // Should end with Reconnecting.
         assert!(
             matches!(last_status, ConnectionStatus::Reconnecting { .. }),
             "transient failure should end with Reconnecting, got {last_status:?}"
