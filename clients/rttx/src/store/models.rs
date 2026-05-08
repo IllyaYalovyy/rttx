@@ -4,6 +4,7 @@
 //! Version 1 is the initial schema for all domains.
 
 pub mod commands;
+pub mod export;
 pub mod hosts;
 pub mod library;
 pub mod preferences;
