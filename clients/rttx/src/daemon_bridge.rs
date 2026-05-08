@@ -2993,6 +2993,11 @@ mod tests {
     /// final word so panes show "Retry Ns" instead of "Action Required".
     #[tokio::test]
     async fn command_handler_does_not_emit_blocked_for_transient_error() {
+        // Point socket path to a non-existent directory so the test never
+        // accidentally connects to a real running daemon.
+        let tmp = tempfile::TempDir::new().unwrap();
+        crate::test_helpers::set_env("XDG_RUNTIME_DIR", tmp.path());
+
         let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
