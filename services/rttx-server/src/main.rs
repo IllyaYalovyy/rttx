@@ -98,6 +98,21 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     init_tracing(dev_mode, &os.cache_dir());
 
+    std::panic::set_hook(Box::new(|info| {
+        let location = info.location().map_or_else(
+            || "unknown location".to_string(),
+            |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+        );
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<dyn Any>".to_string()
+        };
+        tracing::error!(location = %location, payload = %payload, "PANIC — daemon aborting");
+    }));
+
     tracing::info!("rttx-server {} ({}) starting", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"),);
 
     if dev_mode {
