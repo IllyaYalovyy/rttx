@@ -103,13 +103,12 @@ fn start(foreground: bool) -> anyhow::Result<()> {
             || "unknown location".to_string(),
             |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
         );
-        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Box<dyn Any>".to_string()
-        };
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "Box<dyn Any>".to_string());
         tracing::error!(location = %location, payload = %payload, "PANIC — daemon aborting");
     }));
 
