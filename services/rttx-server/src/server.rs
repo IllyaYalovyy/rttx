@@ -662,7 +662,16 @@ impl Server {
         exclude_client_id: Option<Uuid>,
     ) -> Option<ClientMsg> {
         let rt_lock = self.runtimes.remove(&runtime_id)?;
-        let rt = rt_lock.try_lock().expect("runtime removed from registry, no contention");
+        let Ok(rt) = rt_lock.try_lock() else {
+            // Runtime lock is held (e.g., PTY read loop). Re-insert and let
+            // the caller retry or handle gracefully.
+            tracing::warn!(
+                "Cannot terminate runtime {} — lock contended, re-inserting",
+                short_id(runtime_id)
+            );
+            self.runtimes.insert(runtime_id, rt_lock);
+            return None;
+        };
         let attached_client_ids: Vec<_> = rt.attached_clients.keys().copied().collect();
         let pane_ids: Vec<_> = rt.panes.keys().copied().collect();
         drop(rt);
