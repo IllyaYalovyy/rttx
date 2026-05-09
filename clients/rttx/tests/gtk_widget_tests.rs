@@ -17,6 +17,7 @@ use gtk4::gio::prelude::*;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::ObjectSubclassIsExt;
 use libadwaita as adw;
+use libadwaita::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Once;
@@ -2771,4 +2772,136 @@ fn menu_model_contains_label(model: &gtk4::gio::MenuModel, label: &str) -> bool 
         }
     }
     false
+}
+
+// ── Preferences Data section tests ──────────────────────────────────────────
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_data_group_has_three_rows() {
+    require_display!();
+
+    let window = adw::PreferencesWindow::new();
+    let group = rttx::preferences_window::build_data_group(&window);
+
+    let mut row_count = 0;
+    let mut child = group.first_child();
+    while let Some(widget) = child {
+        if widget.downcast_ref::<adw::ActionRow>().is_some() {
+            row_count += 1;
+        }
+        // ActionRows are inside a GtkListBox inside the group
+        if let Some(list_box) = widget.downcast_ref::<gtk4::ListBox>() {
+            let mut row_child = list_box.first_child();
+            while let Some(row_widget) = row_child {
+                if row_widget.downcast_ref::<adw::ActionRow>().is_some() {
+                    row_count += 1;
+                }
+                row_child = row_widget.next_sibling();
+            }
+        }
+        child = widget.next_sibling();
+    }
+    assert_eq!(row_count, 3, "Data group should contain exactly 3 action rows");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_data_group_export_row_has_no_destructive_class() {
+    require_display!();
+
+    let window = adw::PreferencesWindow::new();
+    let group = rttx::preferences_window::build_data_group(&window);
+
+    let first_row = find_action_row_by_title(&group, "Export Configuration\u{2026}");
+    assert!(first_row.is_some(), "Export row should exist");
+    let row = first_row.unwrap();
+    assert!(
+        !row.has_css_class("destructive-action"),
+        "Export row should NOT have destructive-action class"
+    );
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_data_group_import_row_has_destructive_class() {
+    require_display!();
+
+    let window = adw::PreferencesWindow::new();
+    let group = rttx::preferences_window::build_data_group(&window);
+
+    let row = find_action_row_by_title(&group, "Import Configuration\u{2026}");
+    assert!(row.is_some(), "Import row should exist");
+    assert!(
+        row.unwrap().has_css_class("destructive-action"),
+        "Import row should have destructive-action class"
+    );
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_data_group_reset_row_has_destructive_class() {
+    require_display!();
+
+    let window = adw::PreferencesWindow::new();
+    let group = rttx::preferences_window::build_data_group(&window);
+
+    let row = find_action_row_by_title(&group, "Reset to Defaults");
+    assert!(row.is_some(), "Reset row should exist");
+    assert!(
+        row.unwrap().has_css_class("destructive-action"),
+        "Reset row should have destructive-action class"
+    );
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_data_group_rows_have_subtitles() {
+    require_display!();
+
+    let window = adw::PreferencesWindow::new();
+    let group = rttx::preferences_window::build_data_group(&window);
+
+    let export = find_action_row_by_title(&group, "Export Configuration\u{2026}").unwrap();
+    assert!(export.subtitle().is_some_and(|s| !s.is_empty()), "Export row should have a subtitle");
+
+    let import = find_action_row_by_title(&group, "Import Configuration\u{2026}").unwrap();
+    assert!(import.subtitle().is_some_and(|s| !s.is_empty()), "Import row should have a subtitle");
+
+    let reset = find_action_row_by_title(&group, "Reset to Defaults").unwrap();
+    assert!(reset.subtitle().is_some_and(|s| !s.is_empty()), "Reset row should have a subtitle");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_data_group_title_is_data() {
+    require_display!();
+
+    let window = adw::PreferencesWindow::new();
+    let group = rttx::preferences_window::build_data_group(&window);
+    assert_eq!(group.title().as_str(), "Data");
+}
+
+fn find_action_row_by_title(group: &adw::PreferencesGroup, title: &str) -> Option<adw::ActionRow> {
+    let mut child = group.first_child();
+    while let Some(widget) = child {
+        if let Some(row) = widget.downcast_ref::<adw::ActionRow>()
+            && row.title().as_str() == title
+        {
+            return Some(row.clone());
+        }
+        if let Some(list_box) = widget.downcast_ref::<gtk4::ListBox>() {
+            let mut row_child = list_box.first_child();
+            while let Some(row_widget) = row_child {
+                if let Some(row) = row_widget.downcast_ref::<adw::ActionRow>()
+                    && row.title().as_str() == title
+                {
+                    return Some(row.clone());
+                }
+                row_child = row_widget.next_sibling();
+            }
+        }
+        child = widget.next_sibling();
+    }
+    None
 }

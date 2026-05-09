@@ -214,6 +214,8 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
         keyboard_group.add(&row);
     }
 
+    let data_group = build_data_group(&window);
+
     let page = adw::PreferencesPage::new();
     page.set_icon_name(Some("preferences-system-symbolic"));
     page.set_title("General");
@@ -221,6 +223,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     page.add(&terminal_group);
     page.add(&session_group);
     page.add(&keyboard_group);
+    page.add(&data_group);
     window.add(&page);
 
     let parent_window = parent.as_ref().clone();
@@ -278,6 +281,58 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     });
 
     window.present();
+}
+
+#[must_use]
+pub fn build_data_group(window: &adw::PreferencesWindow) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Data");
+
+    let export_row = adw::ActionRow::builder()
+        .title("Export Configuration\u{2026}")
+        .subtitle("Save all settings, bookmarks, and hosts to a file")
+        .activatable(true)
+        .build();
+    let export_icon = gtk4::Image::from_icon_name("document-save-symbolic");
+    export_icon.set_valign(gtk4::Align::Center);
+    export_row.add_suffix(&export_icon);
+    let window_ref = window.clone();
+    export_row.connect_activated(move |_| {
+        window_ref.activate_action("app.export-config", None).ok();
+    });
+    group.add(&export_row);
+
+    let import_row = adw::ActionRow::builder()
+        .title("Import Configuration\u{2026}")
+        .subtitle("Replace current settings from a previously exported file")
+        .activatable(true)
+        .build();
+    import_row.add_css_class("destructive-action");
+    let import_icon = gtk4::Image::from_icon_name("document-open-symbolic");
+    import_icon.set_valign(gtk4::Align::Center);
+    import_row.add_suffix(&import_icon);
+    let window_ref = window.clone();
+    import_row.connect_activated(move |_| {
+        window_ref.activate_action("app.import-config", None).ok();
+    });
+    group.add(&import_row);
+
+    let reset_row = adw::ActionRow::builder()
+        .title("Reset to Defaults")
+        .subtitle("Restore all preferences to their original values")
+        .activatable(true)
+        .build();
+    reset_row.add_css_class("destructive-action");
+    let reset_icon = gtk4::Image::from_icon_name("edit-clear-all-symbolic");
+    reset_icon.set_valign(gtk4::Align::Center);
+    reset_row.add_suffix(&reset_icon);
+    let window_ref = window.clone();
+    reset_row.connect_activated(move |_| {
+        window_ref.activate_action("app.reset-config", None).ok();
+    });
+    group.add(&reset_row);
+
+    group
 }
 
 fn load_scheme_names() -> Vec<String> {
