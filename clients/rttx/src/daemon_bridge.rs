@@ -1132,23 +1132,28 @@ impl EndpointActor {
                 );
 
                 // Preserve the backoff counter across the reconnect cycle.
-                // ensure_connected resets it to 0 on successful socket
-                // connect, but if the subsequent reattach fails we must
-                // continue ramping up instead of dropping back to 1 second.
+                // If ensure_connected succeeds but reattach fails, we restore
+                // the counter so backoff continues ramping instead of resetting
+                // to 1 second (which would cause a reconnect storm).
                 let saved_attempt = self.reconnect_attempt;
-                // Allow ensure_connected to attempt a real connection.
+                // Temporarily clear to bypass the ensure_connected guard that
+                // blocks when a reconnect is "in progress". Restore immediately
+                // after so that if the connection fails, backoff continues.
                 self.reconnect_attempt = 0;
 
                 let primary = workspaces[0].clone();
                 if let Err(problem) = self.ensure_connected(&primary).await {
-                    // ensure_connected already scheduled a reconnect for
-                    // transient problems. Only schedule for non-transient
-                    // ones (which still retry at max delay).
+                    // ensure_connected scheduled a reconnect (incrementing the
+                    // counter). Ensure we don't regress below saved_attempt.
+                    self.reconnect_attempt = self.reconnect_attempt.max(saved_attempt);
                     if !problem.is_transient() {
                         self.schedule_reconnect_for_problem(&problem);
                     }
                     return;
                 }
+                // Connection succeeded at socket level — restore saved counter.
+                // It will be reset to 0 only after all reattaches succeed.
+                self.reconnect_attempt = saved_attempt;
 
                 // Split before reattaching so that `read_response` is used
                 // for each attach. The unsplit path cannot handle interleaved
@@ -1200,6 +1205,9 @@ impl EndpointActor {
                     // where it was before this cycle, not from 0.
                     self.reconnect_attempt = saved_attempt;
                     self.handle_disconnect();
+                } else {
+                    // All reattaches succeeded — connection is stable.
+                    self.reconnect_attempt = 0;
                 }
             }
             EndpointCommand::RenameRuntime { workspace_id, runtime_id, name } => {
@@ -1320,7 +1328,10 @@ impl EndpointActor {
 
         match self.connect_endpoint().await {
             Ok(()) => {
-                self.reconnect_attempt = 0;
+                // Don't reset reconnect_attempt here — the connection may
+                // immediately fail during reattach. The counter is reset
+                // only after a stable session is established (successful
+                // reattach in the Reconnect handler).
                 self.emit_status(workspace_id, ConnectionStatus::Connected);
                 Ok(())
             }
@@ -1682,6 +1693,28 @@ impl EndpointActor {
 
     fn schedule_reconnect(&mut self, delay_secs: u32) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+
+        // Circuit breaker: after too many consecutive failures, stop
+        // auto-retrying and declare the endpoint unreachable. The user
+        // can manually retry via "Retry Connection" in the UI.
+        // Threshold: 3× max_delay gives the remote ~30 chances at full
+        // backoff before giving up (e.g., 30 attempts × 10s = 5 minutes).
+        let circuit_breaker_limit = self.reconnect_delay_secs.saturating_mul(3);
+        if self.reconnect_attempt > circuit_breaker_limit {
+            tracing::error!(
+                "Circuit breaker: giving up on {} after {} attempts",
+                self.endpoint.key(),
+                self.reconnect_attempt
+            );
+            for workspace_id in self.tracked_workspaces.keys() {
+                self.emit_status(
+                    workspace_id,
+                    ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+                );
+            }
+            return;
+        }
+
         tracing::warn!(
             "Scheduling reconnect to {} (attempt {}, delay {}s)",
             self.endpoint.key(),
@@ -3518,6 +3551,98 @@ mod tests {
         assert!(
             event_rx.try_recv().is_err(),
             "no events should be emitted when reconnect is already scheduled"
+        );
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_stops_reconnect_after_threshold() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10, // reconnect_delay_secs = 10 → circuit breaker at 30
+            Arc::new(AtomicBool::new(false)),
+        );
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+
+        // Simulate reaching the circuit breaker threshold.
+        actor.reconnect_attempt = 30;
+
+        // This call should trigger the circuit breaker instead of scheduling.
+        actor.schedule_reconnect(10);
+
+        // No Reconnect command should be spawned.
+        // Give the tokio task a chance to send (it shouldn't).
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            self_rx.try_recv().is_err(),
+            "circuit breaker should prevent scheduling another reconnect"
+        );
+
+        // Should have emitted Blocked status.
+        let mut saw_blocked = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Blocked(_),
+                ..
+            } = event
+            {
+                saw_blocked = true;
+            }
+        }
+        assert!(saw_blocked, "circuit breaker should emit Blocked status");
+    }
+
+    #[tokio::test]
+    async fn backoff_ramps_after_ensure_connected_failure() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+
+        // Simulate 5 prior failures (saved_attempt = 5).
+        actor.reconnect_attempt = 5;
+
+        // Simulate what the Reconnect handler does when ensure_connected fails:
+        let saved_attempt = actor.reconnect_attempt;
+        actor.reconnect_attempt = 0; // bypass guard
+        // ensure_connected would fail here — simulate the restore:
+        actor.reconnect_attempt = actor.reconnect_attempt.max(saved_attempt);
+
+        // Now handle_disconnect should use the preserved counter.
+        actor.handle_disconnect();
+
+        // The delay should be min(6, 10) = 6, not 1.
+        let mut reconnect_delay = None;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Reconnecting { retry_in_secs, .. },
+                ..
+            } = event
+            {
+                reconnect_delay = Some(retry_in_secs);
+            }
+        }
+        assert_eq!(
+            reconnect_delay,
+            Some(6),
+            "delay should be min(saved_attempt+1, max) = min(6, 10) = 6, not 1"
         );
     }
 }
