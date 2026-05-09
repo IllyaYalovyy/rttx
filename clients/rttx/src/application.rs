@@ -300,10 +300,8 @@ pub fn run() -> glib::ExitCode {
 
 fn today_date_string() -> String {
     use std::time::SystemTime;
-    let secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let secs =
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
     let days = secs / 86400;
     let (year, month, day) = crate::store::envelope::days_to_ymd(days);
     format!("{year:04}-{month:02}-{day:02}")
