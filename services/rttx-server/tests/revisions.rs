@@ -223,7 +223,13 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
 
         let runtimes = list_runtimes(&mut client).await;
         assert_eq!(runtimes.len(), 1);
-        assert_eq!(runtimes[0].revision, 3);
+        // Revision is at least 3 (persisted). Login shells may emit OSC 7
+        // on startup which bumps it further — that's expected behavior.
+        let pre_attach_revision = runtimes[0].revision;
+        assert!(
+            pre_attach_revision >= 3,
+            "revision after restart should be >= 3, got {pre_attach_revision}"
+        );
 
         client
             .send(&proto::ClientMessage {
@@ -235,7 +241,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             .await;
         match client.recv().await.msg {
             Some(proto::server_message::Msg::Snapshot(snapshot)) => {
-                assert_eq!(snapshot.revision, 4);
+                assert_eq!(snapshot.revision, pre_attach_revision + 1);
                 assert_eq!(snapshot.runtime_id, runtime_id);
             }
             other => panic!("expected Snapshot, got {other:?}"),

@@ -62,7 +62,9 @@ async fn osc0_triggers_title_changed_broadcast() {
 
     // Send a printf that emits an OSC 0 (set window title) escape sequence.
     let title = "rttx-title-test-42";
-    let osc0_cmd = format!("printf '\\033]0;{title}\\007'\n");
+    // Use `cat` to hold the shell after setting the title, preventing
+    // PROMPT_COMMAND from overwriting it with the default title.
+    let osc0_cmd = format!("printf '\\033]0;{title}\\007'; cat\n");
     send_input(&mut client, &runtime_id, &pane_id, osc0_cmd.as_bytes()).await;
 
     // Collect messages — we should see a TitleChanged with our title among them.

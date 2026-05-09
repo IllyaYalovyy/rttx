@@ -57,6 +57,11 @@ impl Pty {
         let mut cmd = pty_process::Command::new(&config.command[0]);
         if config.command.len() > 1 {
             cmd = cmd.args(&config.command[1..]);
+        } else {
+            // Spawn as a login shell (argv[0] = "-shell") so that
+            // /etc/profile.d/ scripts are sourced. This is critical for
+            // OSC 7 (CWD reporting) which is set up by vte-2.91.sh.
+            cmd = cmd.arg0(format!("-{}", basename(&config.command[0])));
         }
         let effective_cwd = config.cwd.clone().or_else(home_dir).filter(|p| p.is_dir());
         if let Some(ref cwd) = effective_cwd {
@@ -131,6 +136,11 @@ impl Pty {
 /// Determine the user's default shell.
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+/// Extract the filename from a path (e.g., "/bin/bash" → "bash").
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// Resolve the user's home directory from the environment.
@@ -217,5 +227,31 @@ mod tests {
         let result = home_dir();
         let expected = std::env::var("HOME").ok().map(PathBuf::from);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn default_shell_spawns_as_login_shell() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let config = PtyConfig::default();
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let pid = pty.pid().expect("child must be running");
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))
+                .expect("read /proc cmdline");
+            let argv0 = cmdline.split(|&b| b == 0).next().unwrap_or(&[]);
+            let argv0_str = std::str::from_utf8(argv0).expect("valid utf8");
+            assert!(
+                argv0_str.starts_with('-'),
+                "default shell must be spawned as login shell (argv[0] starts with '-'), got: {argv0_str}"
+            );
+            pty.kill().expect("kill must succeed");
+        });
+    }
+
+    #[test]
+    fn basename_extracts_filename() {
+        assert_eq!(basename("/bin/bash"), "bash");
+        assert_eq!(basename("/usr/local/bin/zsh"), "zsh");
+        assert_eq!(basename("sh"), "sh");
     }
 }
