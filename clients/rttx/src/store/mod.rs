@@ -4,7 +4,7 @@
 //! `version`, and diagnostic fields. Writes are atomic (temp + fsync + rename).
 //! Loads recover from malformed files by falling back to the last-good backup.
 
-mod envelope;
+pub(crate) mod envelope;
 mod io;
 pub mod models;
 mod paths;
