@@ -3553,4 +3553,96 @@ mod tests {
             "no events should be emitted when reconnect is already scheduled"
         );
     }
+
+    #[tokio::test]
+    async fn circuit_breaker_stops_reconnect_after_threshold() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, mut self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10, // reconnect_delay_secs = 10 → circuit breaker at 30
+            Arc::new(AtomicBool::new(false)),
+        );
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+
+        // Simulate reaching the circuit breaker threshold.
+        actor.reconnect_attempt = 30;
+
+        // This call should trigger the circuit breaker instead of scheduling.
+        actor.schedule_reconnect(10);
+
+        // No Reconnect command should be spawned.
+        // Give the tokio task a chance to send (it shouldn't).
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            self_rx.try_recv().is_err(),
+            "circuit breaker should prevent scheduling another reconnect"
+        );
+
+        // Should have emitted Blocked status.
+        let mut saw_blocked = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Blocked(_),
+                ..
+            } = event
+            {
+                saw_blocked = true;
+            }
+        }
+        assert!(saw_blocked, "circuit breaker should emit Blocked status");
+    }
+
+    #[tokio::test]
+    async fn backoff_ramps_after_ensure_connected_failure() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+
+        // Simulate 5 prior failures (saved_attempt = 5).
+        actor.reconnect_attempt = 5;
+
+        // Simulate what the Reconnect handler does when ensure_connected fails:
+        let saved_attempt = actor.reconnect_attempt;
+        actor.reconnect_attempt = 0; // bypass guard
+        // ensure_connected would fail here — simulate the restore:
+        actor.reconnect_attempt = actor.reconnect_attempt.max(saved_attempt);
+
+        // Now handle_disconnect should use the preserved counter.
+        actor.handle_disconnect();
+
+        // The delay should be min(6, 10) = 6, not 1.
+        let mut reconnect_delay = None;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Reconnecting { retry_in_secs, .. },
+                ..
+            } = event
+            {
+                reconnect_delay = Some(retry_in_secs);
+            }
+        }
+        assert_eq!(
+            reconnect_delay,
+            Some(6),
+            "delay should be min(saved_attempt+1, max) = min(6, 10) = 6, not 1"
+        );
+    }
 }
