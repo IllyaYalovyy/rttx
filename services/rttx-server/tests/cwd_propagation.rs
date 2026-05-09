@@ -60,19 +60,20 @@ async fn osc7_triggers_cwd_changed_broadcast() {
     let mut client = TestClient::connect(&sock).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
-    // Send a printf that emits an OSC 7 escape sequence.
+    // cd + manual OSC 7 emission + hold with cat. The manual printf
+    // ensures the test works even without /etc/profile.d/vte-2.91.sh
+    // (e.g., in CI containers). `cat` prevents PROMPT_COMMAND from
+    // overwriting the CWD on the next prompt.
     let target = "/tmp";
-    let osc7_cmd = format!("printf '\\033]7;file://localhost{target}\\033\\\\'\n");
-    send_input(&mut client, &runtime_id, &pane_id, osc7_cmd.as_bytes()).await;
+    let cmd = format!("cd {target} && printf '\\033]7;file://localhost{target}\\033\\\\'; cat\n");
+    send_input(&mut client, &runtime_id, &pane_id, cmd.as_bytes()).await;
 
-    // Collect messages — we should see a CwdChanged among the Deltas.
+    // Collect messages — we should see a CwdChanged with /tmp.
     let msgs = client.drain(Duration::from_secs(5)).await;
     let cwd_msg = msgs.iter().find_map(|m| match &m.msg {
-        Some(proto::server_message::Msg::CwdChanged(c)) => Some(c),
+        Some(proto::server_message::Msg::CwdChanged(c)) if c.cwd == target => Some(c),
         _ => None,
     });
 
-    assert!(cwd_msg.is_some(), "expected CwdChanged message, got: {msgs:?}");
-    let cwd = &cwd_msg.unwrap().cwd;
-    assert_eq!(cwd, target, "CwdChanged should contain the OSC 7 path");
+    assert!(cwd_msg.is_some(), "expected CwdChanged with path {target}");
 }

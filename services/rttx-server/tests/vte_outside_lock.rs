@@ -26,18 +26,23 @@ async fn title_and_cwd_propagated_after_two_phase_parsing() {
     let mut client = TestClient::connect(&sock).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
 
-    // Emit OSC 0 (title) and OSC 7 (CWD) in a single printf.
-    let cmd = "printf '\\033]0;my-project\\007\\033]7;file://localhost/tmp/project\\007'\n";
+    // Emit OSC 0 (title) and OSC 7 (CWD) in a single printf, then hold
+    // with `cat` to prevent PROMPT_COMMAND from overwriting them.
+    let cmd = "printf '\\033]0;my-project\\007\\033]7;file://localhost/tmp/project\\007'; cat\n";
     send_input(&mut client, &runtime_id, &pane_id, cmd.as_bytes()).await;
 
     let msgs = client.drain(Duration::from_secs(5)).await;
 
     let title_msg = msgs.iter().find_map(|m| match &m.msg {
-        Some(proto::server_message::Msg::TitleChanged(t)) => Some(t.title.clone()),
+        Some(proto::server_message::Msg::TitleChanged(t)) if t.title == "my-project" => {
+            Some(t.title.clone())
+        }
         _ => None,
     });
     let cwd_msg = msgs.iter().find_map(|m| match &m.msg {
-        Some(proto::server_message::Msg::CwdChanged(c)) => Some(c.cwd.clone()),
+        Some(proto::server_message::Msg::CwdChanged(c)) if c.cwd == "/tmp/project" => {
+            Some(c.cwd.clone())
+        }
         _ => None,
     });
 
