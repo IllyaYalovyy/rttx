@@ -134,7 +134,7 @@ pub(crate) fn now_iso8601() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
-const fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+pub(crate) const fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     // Algorithm from Howard Hinnant's `civil_from_days`.
     days += 719_468;
     let era = days / 146_097;

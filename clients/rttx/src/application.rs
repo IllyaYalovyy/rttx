@@ -273,10 +273,13 @@ pub fn run() -> glib::ExitCode {
     });
     app.add_action(&save_state_action);
 
-    // Data management actions (placeholders — logic in subsequent tasks).
+    // Data management actions.
     let export_action = gtk4::gio::SimpleAction::new("export-config", None);
-    export_action.connect_activate(|_, _| {
-        tracing::info!("export-config action triggered (not yet implemented)");
+    let app_ref = app.clone();
+    export_action.connect_activate(move |_, _| {
+        let Some(win) = app_ref.active_window() else { return };
+        let Some(win) = win.downcast_ref::<Window>() else { return };
+        export_config_dialog(win);
     });
     app.add_action(&export_action);
 
@@ -295,9 +298,85 @@ pub fn run() -> glib::ExitCode {
     app.run()
 }
 
+fn today_date_string() -> String {
+    use std::time::SystemTime;
+    let secs =
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let days = secs / 86400;
+    let (year, month, day) = crate::store::envelope::days_to_ymd(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn export_config_dialog(win: &Window) {
+    let filter = gtk4::FileFilter::new();
+    filter.add_suffix("json");
+    filter.set_name(Some("JSON files"));
+
+    let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+    filters.append(&filter);
+
+    let dialog = gtk4::FileDialog::builder()
+        .title("Export Configuration")
+        .initial_name(format!("rttx-config-{}.json", today_date_string()))
+        .default_filter(&filter)
+        .filters(&filters)
+        .build();
+
+    let win_clone = win.clone();
+    dialog.save(Some(win), gtk4::gio::Cancellable::NONE, move |result| {
+        let file = match result {
+            Ok(f) => f,
+            Err(e) => {
+                if !e.matches(gtk4::gio::IOErrorEnum::Cancelled) {
+                    win_clone.show_toast(&format!("Export failed: {e}"));
+                }
+                return;
+            }
+        };
+
+        let Some(path) = file.path() else {
+            win_clone.show_toast("Export failed: invalid file path");
+            return;
+        };
+
+        let store = crate::store::default_store();
+        let bundle = store.export_bundle();
+        let envelope = crate::store::models::export::ExportEnvelope::new(bundle);
+
+        let json = match serde_json::to_string_pretty(&envelope) {
+            Ok(j) => j,
+            Err(e) => {
+                win_clone.show_toast(&format!("Export failed: {e}"));
+                return;
+            }
+        };
+
+        if let Err(e) = std::fs::write(&path, json) {
+            win_clone.show_toast(&format!("Export failed: {e}"));
+            return;
+        }
+
+        win_clone.show_toast("Configuration exported");
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn today_date_string_matches_yyyy_mm_dd_format() {
+        let date = today_date_string();
+        assert_eq!(date.len(), 10);
+        assert_eq!(&date[4..5], "-");
+        assert_eq!(&date[7..8], "-");
+        let year: u32 = date[..4].parse().unwrap();
+        let month: u32 = date[5..7].parse().unwrap();
+        let day: u32 = date[8..10].parse().unwrap();
+        assert!(year >= 2024);
+        assert!((1..=12).contains(&month));
+        assert!((1..=31).contains(&day));
+    }
 
     #[test]
     fn cleanup_old_logs_keeps_recent_files() {
