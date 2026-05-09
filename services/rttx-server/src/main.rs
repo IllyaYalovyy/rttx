@@ -72,7 +72,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
     let pid_path = runtime_dir.join("rttx-server.pid");
 
     // Acquire the single-instance lock before any other initialization.
-    // The lock is inherited across fork (daemonize) and held until process exit.
+    // The lock is inherited across fork (daemonix) and held until process exit.
     let _instance_guard =
         match rttx_server::single_instance::SingleInstanceGuard::try_acquire(&lock_path) {
             Ok(guard) => guard,
@@ -85,7 +85,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         };
 
     if !foreground {
-        let daemon = daemonize::Daemonize::new().pid_file(&pid_path).working_directory("/");
+        let daemon = daemonix::Daemonize::new().pid_file(&pid_path).working_directory("/");
 
         match daemon.start() {
             Ok(()) => {}
@@ -123,7 +123,7 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         );
     }
 
-    // Write PID file in foreground mode (daemonize writes it in daemon mode).
+    // Write PID file in foreground mode (daemonix writes it in daemon mode).
     if foreground {
         std::fs::create_dir_all(&runtime_dir)?;
         std::fs::write(&pid_path, std::process::id().to_string())?;
