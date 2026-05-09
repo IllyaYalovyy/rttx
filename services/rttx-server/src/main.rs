@@ -568,4 +568,14 @@ mod tests {
         let cli = Cli::try_parse_from(["rttx-server", "diagnostics"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Diagnostics)));
     }
+
+    #[test]
+    fn daemonize_builder_accepts_pid_file_and_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("test.pid");
+        // Verify the daemonix API surface we rely on compiles and builds correctly.
+        let _daemon = daemonix::Daemonize::new()
+            .pid_file(&pid_path)
+            .working_directory("/");
+    }
 }
