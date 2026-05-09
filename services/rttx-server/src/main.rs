@@ -40,6 +40,8 @@ enum Command {
     Logs,
     /// Show runtime memory diagnostics
     Diagnostics,
+    /// Show resolved paths and configuration
+    Config,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -56,6 +58,10 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Diagnostics => diagnostics(),
+        Command::Config => {
+            config();
+            Ok(())
+        }
     }
 }
 
@@ -165,6 +171,24 @@ fn logs() {
     let os = UnixOs;
     let log_dir = os.cache_dir();
     println!("{}", log_dir.display());
+}
+
+fn config() {
+    let dev_mode = rttx_server::os::unix::dev_mode_enabled();
+    let os = UnixOs;
+
+    let mode = if dev_mode { "development" } else { "production" };
+    let socket = os.runtime_dir().join("rttx-server.sock");
+    let state = os.state_dir();
+    let scrollback = os.state_dir().join("runtimes");
+    let log_dir = os.cache_dir();
+
+    println!("Mode: {mode}");
+    println!("Socket: {}", socket.display());
+    println!("State: {}", state.display());
+    println!("Scrollback: {}", scrollback.display());
+    println!("Logs: {}", log_dir.display());
+    println!("Protocol version: {}", rttx_proto::PROTOCOL_VERSION);
 }
 
 fn diagnostics() -> anyhow::Result<()> {
@@ -567,6 +591,12 @@ mod tests {
     fn cli_parses_diagnostics_command() {
         let cli = Cli::try_parse_from(["rttx-server", "diagnostics"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Diagnostics)));
+    }
+
+    #[test]
+    fn cli_parses_config_command() {
+        let cli = Cli::try_parse_from(["rttx-server", "config"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Config)));
     }
 
     #[test]
