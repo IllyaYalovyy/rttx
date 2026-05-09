@@ -50,6 +50,18 @@ sudo dnf install rttx
 
 Launch from the app grid or run `rttx` in a terminal. To remove: `sudo dnf remove rttx`.
 
+### Debian / Ubuntu (DEB)
+
+Download the `.deb` package from the
+[latest GitHub release](https://github.com/IllyaYalovyy/rttx/releases/latest):
+
+```bash
+sudo apt install ./rttx_<version>_amd64.deb
+```
+
+The package includes both the GUI (`rttx`) and the daemon (`rttx-server`). Launch from the app
+grid or run `rttx` in a terminal. To remove: `sudo apt remove rttx`.
+
 ### Flatpak
 
 Flatpak works on any Linux distribution. The bundle includes everything rttx needs.

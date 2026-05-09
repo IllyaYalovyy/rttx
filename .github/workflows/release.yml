@@ -86,8 +86,11 @@ jobs:
       - name: Install cargo-deb
         run: cargo install cargo-deb
 
-      - name: Build release binary
-        run: cargo build --release -p rttx
+      - name: Build release binaries
+        run: cargo build --release -p rttx -p rttx-server
+
+      - name: Strip binaries
+        run: strip target/release/rttx target/release/rttx-server
 
       - name: Build DEB
         working-directory: clients/rttx
@@ -130,11 +133,11 @@ jobs:
       - name: Install cargo-generate-rpm
         run: cargo install cargo-generate-rpm
 
-      - name: Build release binary
-        run: cargo build --release -p rttx
+      - name: Build release binaries
+        run: cargo build --release -p rttx -p rttx-server
 
-      - name: Strip binary
-        run: strip target/release/rttx
+      - name: Strip binaries
+        run: strip target/release/rttx target/release/rttx-server
 
       - name: Build RPM
         working-directory: clients/rttx

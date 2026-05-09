@@ -39,6 +39,7 @@ appstream-util validate-relax --nonet %{buildroot}%{_datadir}/metainfo/io.github
 %license LICENSE
 %doc clients/rttx/README.md
 %{_bindir}/rttx
+%{_bindir}/rttx-server
 %{_datadir}/applications/io.github.IllyaYalovyy.rttx.desktop
 %{_datadir}/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.svg
