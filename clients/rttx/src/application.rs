@@ -273,6 +273,25 @@ pub fn run() -> glib::ExitCode {
     });
     app.add_action(&save_state_action);
 
+    // Data management actions (placeholders — logic in subsequent tasks).
+    let export_action = gtk4::gio::SimpleAction::new("export-config", None);
+    export_action.connect_activate(|_, _| {
+        tracing::info!("export-config action triggered (not yet implemented)");
+    });
+    app.add_action(&export_action);
+
+    let import_action = gtk4::gio::SimpleAction::new("import-config", None);
+    import_action.connect_activate(|_, _| {
+        tracing::info!("import-config action triggered (not yet implemented)");
+    });
+    app.add_action(&import_action);
+
+    let reset_action = gtk4::gio::SimpleAction::new("reset-config", None);
+    reset_action.connect_activate(|_, _| {
+        tracing::info!("reset-config action triggered (not yet implemented)");
+    });
+    app.add_action(&reset_action);
+
     app.run()
 }
 
