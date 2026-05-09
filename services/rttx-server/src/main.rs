@@ -34,6 +34,11 @@ enum Command {
     Status,
     /// Remove all runtimes with no connected clients
     Clean,
+    /// Terminate a specific runtime by ID
+    Kill {
+        /// Runtime ID (UUID) to terminate
+        runtime_id: String,
+    },
     /// Serve one client over stdin/stdout (for SSH)
     AttachStdio,
     /// Show the path to the daemon log file
@@ -52,6 +57,7 @@ fn main() -> anyhow::Result<()> {
         Command::Stop => stop(),
         Command::Status => status(),
         Command::Clean => clean(),
+        Command::Kill { runtime_id } => kill(&runtime_id),
         Command::AttachStdio => attach_stdio(),
         Command::Logs => {
             logs();
@@ -555,6 +561,85 @@ fn clean() -> anyhow::Result<()> {
     })
 }
 
+fn kill(runtime_id_str: &str) -> anyhow::Result<()> {
+    use bytes::BytesMut;
+    use rttx_proto::{decode_frame, encode_frame};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let runtime_id: uuid::Uuid = runtime_id_str
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid runtime ID: not a valid UUID"))?;
+
+    let os = UnixOs;
+    let socket_path = os.runtime_dir().join("rttx-server.sock");
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        if !ipc::is_server_running(&socket_path).await {
+            eprintln!("Daemon is not running");
+            std::process::exit(1);
+        }
+
+        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
+        let mut buf = BytesMut::new();
+        let mut read_buf = BytesMut::with_capacity(8192);
+
+        // Hello handshake.
+        let hello = proto::ClientMessage {
+            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+                protocol_version: rttx_proto::PROTOCOL_VERSION,
+                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+            })),
+        };
+        encode_frame(&hello, &mut buf)?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        loop {
+            stream.read_buf(&mut read_buf).await?;
+            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
+                break;
+            }
+        }
+
+        // TerminateRuntime.
+        buf.clear();
+        encode_frame(
+            &proto::ClientMessage {
+                msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+                    runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+                })),
+            },
+            &mut buf,
+        )?;
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+
+        // Wait for RuntimeTerminated or Error.
+        let resp: proto::ServerMessage = loop {
+            stream.read_buf(&mut read_buf).await?;
+            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
+                Ok(msg) => break msg,
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => anyhow::bail!("decode error: {e}"),
+            }
+        };
+
+        match resp.msg {
+            Some(proto::server_message::Msg::RuntimeTerminated(_)) => {
+                println!("Runtime terminated.");
+            }
+            Some(proto::server_message::Msg::Error(e)) => {
+                eprintln!("Error: {}", e.message);
+                std::process::exit(1);
+            }
+            _ => anyhow::bail!("unexpected response from daemon"),
+        }
+
+        Ok(())
+    })
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max - 1]) }
 }
@@ -597,6 +682,25 @@ mod tests {
     fn cli_parses_config_command() {
         let cli = Cli::try_parse_from(["rttx-server", "config"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Config)));
+    }
+
+    #[test]
+    fn cli_parses_kill_command_with_uuid() {
+        let cli =
+            Cli::try_parse_from(["rttx-server", "kill", "d7d04564-b2bf-4302-9495-e65c4df12ac6"])
+                .unwrap();
+        match cli.command {
+            Some(Command::Kill { runtime_id }) => {
+                assert_eq!(runtime_id, "d7d04564-b2bf-4302-9495-e65c4df12ac6");
+            }
+            _ => panic!("expected Kill command"),
+        }
+    }
+
+    #[test]
+    fn cli_kill_requires_runtime_id_argument() {
+        let result = Cli::try_parse_from(["rttx-server", "kill"]);
+        assert!(result.is_err());
     }
 
     #[test]
