@@ -14,7 +14,9 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = common::create_runtime(&mut client, "login-shell-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        common::create_runtime(&mut client, "login-shell-test", proto::RuntimePolicy::Persistent)
+            .await;
 
     let create_pane = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
@@ -49,13 +51,12 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
     send_input(&mut client, &runtime_id, &pane_id, b"cd /tmp\n").await;
 
     let msgs = client.drain(Duration::from_secs(5)).await;
-    let saw_tmp_cwd = msgs.iter().any(|m| matches!(
-        &m.msg,
-        Some(proto::server_message::Msg::CwdChanged(c)) if c.cwd == "/tmp"
-    ));
+    let saw_tmp_cwd = msgs.iter().any(|m| {
+        matches!(
+            &m.msg,
+            Some(proto::server_message::Msg::CwdChanged(c)) if c.cwd == "/tmp"
+        )
+    });
 
-    assert!(
-        saw_tmp_cwd,
-        "login shell should emit OSC 7 after cd, triggering CwdChanged with /tmp"
-    );
+    assert!(saw_tmp_cwd, "login shell should emit OSC 7 after cd, triggering CwdChanged with /tmp");
 }
