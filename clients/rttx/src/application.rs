@@ -1,6 +1,7 @@
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
+use libadwaita::prelude::*;
 
 use crate::config;
 use crate::window::Window;
@@ -284,8 +285,11 @@ pub fn run() -> glib::ExitCode {
     app.add_action(&export_action);
 
     let import_action = gtk4::gio::SimpleAction::new("import-config", None);
-    import_action.connect_activate(|_, _| {
-        tracing::info!("import-config action triggered (not yet implemented)");
+    let app_ref = app.clone();
+    import_action.connect_activate(move |_, _| {
+        let Some(win) = app_ref.active_window() else { return };
+        let Some(win) = win.downcast_ref::<Window>() else { return };
+        import_config_confirm(win);
     });
     app.add_action(&import_action);
 
@@ -358,6 +362,99 @@ fn export_config_dialog(win: &Window) {
 
         win_clone.show_toast("Configuration exported");
     });
+}
+
+fn import_config_confirm(win: &Window) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Replace Configuration?")
+        .body(
+            "This will replace all current settings, bookmarks, hosts, and workspaces \
+             with the contents of the imported file. This cannot be undone.",
+        )
+        .close_response("cancel")
+        .default_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("replace", "Replace");
+    dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
+
+    let win_clone = win.clone();
+    dialog.connect_response(None, move |_, response| {
+        if response == "replace" {
+            import_config_file_dialog(&win_clone);
+        }
+    });
+    dialog.present(Some(win));
+}
+
+fn import_config_file_dialog(win: &Window) {
+    let filter = gtk4::FileFilter::new();
+    filter.add_suffix("json");
+    filter.set_name(Some("JSON files"));
+
+    let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+    filters.append(&filter);
+
+    let dialog = gtk4::FileDialog::builder()
+        .title("Import Configuration")
+        .default_filter(&filter)
+        .filters(&filters)
+        .build();
+
+    let win_clone = win.clone();
+    dialog.open(Some(win), gtk4::gio::Cancellable::NONE, move |result| {
+        let file = match result {
+            Ok(f) => f,
+            Err(e) => {
+                if !e.matches(gtk4::gio::IOErrorEnum::Cancelled) {
+                    show_error_dialog(&win_clone, &format!("Import failed: {e}"));
+                }
+                return;
+            }
+        };
+
+        let Some(path) = file.path() else {
+            show_error_dialog(&win_clone, "Import failed: invalid file path");
+            return;
+        };
+
+        let json = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                show_error_dialog(&win_clone, &format!("Could not read the file: {e}"));
+                return;
+            }
+        };
+
+        let bundle = match crate::store::models::export::parse_export_file(&json) {
+            Ok(b) => b,
+            Err(e) => {
+                show_error_dialog(&win_clone, &e.to_string());
+                return;
+            }
+        };
+
+        if let Err(e) = crate::store::default_store().import_bundle(&bundle) {
+            show_error_dialog(&win_clone, &format!("Import failed: {e}"));
+            return;
+        }
+
+        win_clone.show_toast("Configuration imported. Please restart rttx.");
+        glib::timeout_add_seconds_local_once(2, move || {
+            std::process::exit(0);
+        });
+    });
+}
+
+fn show_error_dialog(win: &Window, message: &str) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Import Error")
+        .body(message)
+        .close_response("ok")
+        .default_response("ok")
+        .build();
+    dialog.add_response("ok", "OK");
+    dialog.present(Some(win));
 }
 
 #[cfg(test)]
