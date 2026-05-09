@@ -2882,6 +2882,41 @@ fn preferences_data_group_title_is_data() {
     assert_eq!(group.title().as_str(), "Data");
 }
 
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn preferences_reset_row_activates_reset_config_action() {
+    require_display!();
+
+    let app = adw::Application::builder()
+        .application_id("io.github.IllyaYalovyy.rttx.test.reset_action")
+        .build();
+    app.register(None::<&gtk4::gio::Cancellable>).unwrap();
+
+    let triggered = std::rc::Rc::new(std::cell::Cell::new(false));
+    let triggered_clone = triggered.clone();
+
+    let action = gtk4::gio::SimpleAction::new("reset-config", None);
+    action.connect_activate(move |_, _| {
+        triggered_clone.set(true);
+    });
+    app.add_action(&action);
+
+    let window = adw::PreferencesWindow::new();
+    window.set_application(Some(&app));
+
+    let group = rttx::preferences_window::build_data_group(&window);
+    let page = adw::PreferencesPage::new();
+    page.add(&group);
+    window.add(&page);
+    window.present();
+
+    let row = find_action_row_by_title(&group, "Reset to Defaults").unwrap();
+    row.emit_activate();
+
+    assert!(triggered.get(), "reset-config action should have been triggered");
+    window.close();
+}
+
 fn find_action_row_by_title(group: &adw::PreferencesGroup, title: &str) -> Option<adw::ActionRow> {
     let mut child = group.first_child();
     while let Some(widget) = child {

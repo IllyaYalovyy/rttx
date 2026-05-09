@@ -294,8 +294,11 @@ pub fn run() -> glib::ExitCode {
     app.add_action(&import_action);
 
     let reset_action = gtk4::gio::SimpleAction::new("reset-config", None);
-    reset_action.connect_activate(|_, _| {
-        tracing::info!("reset-config action triggered (not yet implemented)");
+    let app_ref = app.clone();
+    reset_action.connect_activate(move |_, _| {
+        let Some(win) = app_ref.active_window() else { return };
+        let Some(win) = win.downcast_ref::<Window>() else { return };
+        reset_config_confirm(win);
     });
     app.add_action(&reset_action);
 
@@ -407,21 +410,25 @@ fn import_config_file_dialog(win: &Window) {
             Ok(f) => f,
             Err(e) => {
                 if !e.matches(gtk4::gio::IOErrorEnum::Cancelled) {
-                    show_error_dialog(&win_clone, &format!("Import failed: {e}"));
+                    show_error_dialog(&win_clone, "Import Error", &format!("Import failed: {e}"));
                 }
                 return;
             }
         };
 
         let Some(path) = file.path() else {
-            show_error_dialog(&win_clone, "Import failed: invalid file path");
+            show_error_dialog(&win_clone, "Import Error", "Import failed: invalid file path");
             return;
         };
 
         let json = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
-                show_error_dialog(&win_clone, &format!("Could not read the file: {e}"));
+                show_error_dialog(
+                    &win_clone,
+                    "Import Error",
+                    &format!("Could not read the file: {e}"),
+                );
                 return;
             }
         };
@@ -429,13 +436,13 @@ fn import_config_file_dialog(win: &Window) {
         let bundle = match crate::store::models::export::parse_export_file(&json) {
             Ok(b) => b,
             Err(e) => {
-                show_error_dialog(&win_clone, &e.to_string());
+                show_error_dialog(&win_clone, "Import Error", &e.to_string());
                 return;
             }
         };
 
         if let Err(e) = crate::store::default_store().import_bundle(&bundle) {
-            show_error_dialog(&win_clone, &format!("Import failed: {e}"));
+            show_error_dialog(&win_clone, "Import Error", &format!("Import failed: {e}"));
             return;
         }
 
@@ -446,9 +453,39 @@ fn import_config_file_dialog(win: &Window) {
     });
 }
 
-fn show_error_dialog(win: &Window, message: &str) {
+fn reset_config_confirm(win: &Window) {
     let dialog = adw::AlertDialog::builder()
-        .heading("Import Error")
+        .heading("Reset All Configuration?")
+        .body(
+            "This will permanently delete all settings, commands, places, hosts, \
+             and workspace layout. Terminal sessions on the daemon are not affected.",
+        )
+        .close_response("cancel")
+        .default_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("reset", "Reset");
+    dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+
+    let win_clone = win.clone();
+    dialog.connect_response(None, move |_, response| {
+        if response == "reset" {
+            if let Err(e) = crate::store::default_store().reset_config() {
+                show_error_dialog(&win_clone, "Reset Error", &format!("Reset failed: {e}"));
+                return;
+            }
+            win_clone.show_toast("Configuration reset. Please restart rttx.");
+            glib::timeout_add_seconds_local_once(2, move || {
+                std::process::exit(0);
+            });
+        }
+    });
+    dialog.present(Some(win));
+}
+
+fn show_error_dialog(win: &Window, heading: &str, message: &str) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(heading)
         .body(message)
         .close_response("ok")
         .default_response("ok")
