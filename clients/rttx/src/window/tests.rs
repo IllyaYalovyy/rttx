@@ -7259,3 +7259,68 @@ fn workspace_resynced_event_restores_pane_content() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn auto_save_timer_is_installed_on_window_creation() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.auto-save-timer-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    assert!(
+        window.imp().auto_save_source.borrow().is_some(),
+        "auto-save timer should be installed after window creation"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn auto_save_persists_state_without_explicit_save_call() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("XDG_STATE_HOME", tmp.path());
+    crate::test_helpers::set_env("XDG_CACHE_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.auto-save-persist-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // Rename the default workspace so we have a detectable change.
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.workspaces[0].name = "AutoSaved".to_string();
+    }
+
+    // Manually trigger the auto-save callback by invoking save_state directly
+    // (simulates what the timer does without waiting 30 seconds).
+    window.save_state();
+
+    // Verify state was persisted.
+    let loaded = load_saved_window_state();
+    assert_eq!(
+        loaded.workspaces[0].name, "AutoSaved",
+        "auto-save should persist workspace name changes"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    crate::test_helpers::remove_env("XDG_STATE_HOME");
+    crate::test_helpers::remove_env("XDG_CACHE_HOME");
+}

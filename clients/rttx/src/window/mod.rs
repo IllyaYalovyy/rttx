@@ -28,6 +28,9 @@ use crate::workspace::{
 };
 use crate::workspace_state::{EndpointEventTransition, WorkspacePaneRestore};
 use std::collections::HashMap;
+use std::time::Duration;
+
+const AUTO_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
 mod actions;
 pub(crate) mod dialogs;
@@ -73,6 +76,7 @@ mod imp {
         pub workspace_reconnect_sources: RefCell<HashMap<String, glib::SourceId>>,
         pub focused_terminal_uuid: RefCell<Option<String>>,
         pub event_poller_source: RefCell<Option<glib::SourceId>>,
+        pub auto_save_source: RefCell<Option<glib::SourceId>>,
         pub workspace_popover: RefCell<Option<gtk4::PopoverMenu>>,
         pub pending_connect_existing: RefCell<Option<crate::host::Host>>,
         pub host_selector_keys: RefCell<Vec<String>>,
@@ -92,6 +96,9 @@ mod imp {
     impl ObjectImpl for Window {
         fn dispose(&self) {
             if let Some(source) = self.event_poller_source.take() {
+                source.remove();
+            }
+            if let Some(source) = self.auto_save_source.take() {
                 source.remove();
             }
             for (_, source) in self.workspace_reconnect_sources.borrow_mut().drain() {
@@ -608,6 +615,16 @@ impl Window {
 
         self.refresh_place_sidebar();
         self.refresh_command_sidebar();
+
+        let win = self.downgrade();
+        let source = glib::timeout_add_local(AUTO_SAVE_INTERVAL, move || {
+            let Some(win) = win.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            win.save_state();
+            glib::ControlFlow::Continue
+        });
+        self.imp().auto_save_source.replace(Some(source));
     }
 
     fn setup_host_menu_buttons(&self) {
