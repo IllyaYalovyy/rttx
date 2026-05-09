@@ -574,8 +574,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pid_path = dir.path().join("test.pid");
         // Verify the daemonix API surface we rely on compiles and builds correctly.
-        let _daemon = daemonix::Daemonize::new()
-            .pid_file(&pid_path)
-            .working_directory("/");
+        let _daemon = daemonix::Daemonize::new().pid_file(&pid_path).working_directory("/");
     }
 }
