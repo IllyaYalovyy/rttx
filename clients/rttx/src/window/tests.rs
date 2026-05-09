@@ -7269,9 +7269,8 @@ fn auto_save_timer_is_installed_on_window_creation() {
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
     crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
 
-    let app = adw::Application::builder()
-        .application_id("com.illya.rttx.auto-save-timer-tests")
-        .build();
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.auto-save-timer-tests").build();
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
