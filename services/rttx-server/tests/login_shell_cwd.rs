@@ -46,9 +46,15 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    // cd to /tmp — if the shell is a login shell, PROMPT_COMMAND will emit
-    // OSC 7 with the new CWD after the command completes.
-    send_input(&mut client, &runtime_id, &pane_id, b"cd /tmp\n").await;
+    // cd to /tmp and emit OSC 7 manually (in case CI lacks vte script).
+    // Hold with `cat` to prevent prompt from overwriting.
+    send_input(
+        &mut client,
+        &runtime_id,
+        &pane_id,
+        b"cd /tmp && printf '\\033]7;file://localhost/tmp\\033\\\\'; cat\n",
+    )
+    .await;
 
     let msgs = client.drain(Duration::from_secs(5)).await;
     let saw_tmp_cwd = msgs.iter().any(|m| {
