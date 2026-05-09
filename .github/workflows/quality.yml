@@ -219,3 +219,17 @@ jobs:
 
       - name: Validate Flatpak manifest JSON
         run: python3 -m json.tool packaging/rttx/io.github.IllyaYalovyy.rttx.json > /dev/null
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run dependency audit
+        run: cargo deny check
