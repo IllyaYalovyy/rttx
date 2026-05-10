@@ -5,13 +5,13 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-prost = { version = "0.13", features = ["std", "prost-derive"] }
-bytes = "1"
-uuid = { version = "1", features = ["v4"] }
-thiserror = "2"
+prost.workspace = true
+bytes.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
-proptest = "1"
+proptest.workspace = true
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build.workspace = true
