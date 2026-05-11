@@ -7324,3 +7324,174 @@ fn auto_save_persists_state_without_explicit_save_call() {
     crate::test_helpers::remove_env("XDG_STATE_HOME");
     crate::test_helpers::remove_env("XDG_CACHE_HOME");
 }
+
+// ── Command CRUD sidebar workflow tests ─────────────────────────
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_crud_create_shows_in_sidebar() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-crud-create-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Initially empty
+    assert!(window.imp().command_empty.is_visible(), "empty state should show before any commands");
+
+    // Create a command via the store and refresh
+    let cmd = crate::commands::SavedCommand::new("Build project", "cargo build --release");
+    store().save_commands(&[cmd]).unwrap();
+    window.refresh_command_sidebar();
+    pump_events(50);
+
+    assert!(
+        !window.imp().command_empty.is_visible(),
+        "empty state should hide after adding a command"
+    );
+    assert!(
+        window.imp().command_scroll.is_visible(),
+        "command list should be visible after adding a command"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_crud_delete_removes_from_sidebar() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let cmd = crate::commands::SavedCommand::new("Temporary", "echo bye");
+    let uuid = cmd.uuid.clone();
+    store().save_commands(&[cmd]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-crud-delete-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Command should be visible
+    assert!(window.imp().command_scroll.is_visible(), "command list should show the saved command");
+
+    // Delete via store and refresh (simulates what confirm_delete_command does)
+    let mut items = store().load_commands();
+    items.retain(|c| c.uuid != uuid);
+    store().save_commands(&items).unwrap();
+    window.refresh_command_sidebar();
+    pump_events(50);
+
+    assert!(
+        window.imp().command_empty.is_visible(),
+        "empty state should show after deleting the last command"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_crud_edit_updates_sidebar_display() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut cmd = crate::commands::SavedCommand::new("Old title", "echo old");
+    cmd.host_tags = vec!["local".into()];
+    store().save_commands(&[cmd.clone()]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-crud-edit-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Verify original title is shown
+    let row = window.imp().command_list.row_at_index(1).unwrap();
+    let action_row = row.downcast::<adw::ActionRow>().unwrap();
+    assert_eq!(action_row.title().as_str(), "Old title");
+
+    // Edit: update title and body, preserve UUID
+    let mut items = store().load_commands();
+    items[0].title = "New title".into();
+    items[0].body = "echo new".into();
+    store().save_commands(&items).unwrap();
+    window.refresh_command_sidebar();
+    pump_events(50);
+
+    // Verify updated title is shown
+    let row = window.imp().command_list.row_at_index(1).unwrap();
+    let action_row = row.downcast::<adw::ActionRow>().unwrap();
+    assert_eq!(action_row.title().as_str(), "New title");
+    assert_eq!(action_row.subtitle().unwrap().as_str(), "echo new");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn command_crud_duplicate_adds_copy_to_sidebar() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut cmd = crate::commands::SavedCommand::new("Deploy", "cargo build");
+    cmd.host_tags = vec!["local".into()];
+    store().save_commands(&[cmd.clone()]).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.command-crud-duplicate-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    // Duplicate and save (simulates what the duplicate action does)
+    let mut items = store().load_commands();
+    let copy = items[0].duplicate();
+    items.push(copy);
+    store().save_commands(&items).unwrap();
+    window.refresh_command_sidebar();
+    pump_events(50);
+
+    // Should now have section header + 2 command rows
+    let count = window.imp().command_list.observe_children().n_items();
+    assert_eq!(count, 3, "should show header + original + copy, got {count}");
+
+    // Verify the copy has the "(copy)" suffix
+    let copy_row = window.imp().command_list.row_at_index(2).unwrap();
+    let copy_action_row = copy_row.downcast::<adw::ActionRow>().unwrap();
+    assert_eq!(copy_action_row.title().as_str(), "Deploy (copy)");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
