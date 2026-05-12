@@ -645,17 +645,17 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 async fn handle_signals(server: Arc<Mutex<Server>>) {
-    use signal_hook::consts::{SIGINT, SIGTERM};
+    use signal_hook::consts::{SIGINT, SIGTERM, SIGHUP};
     use signal_hook_tokio::Signals;
     use tokio_stream::StreamExt;
 
-    let Ok(mut signals) = Signals::new([SIGTERM, SIGINT]) else {
+    let Ok(mut signals) = Signals::new([SIGTERM, SIGINT, SIGHUP]) else {
         tracing::error!("Failed to register signal handlers");
         return;
     };
 
-    if signals.next().await.is_some() {
-        tracing::info!("Received OS shutdown signal, triggering cooperative shutdown");
+    if let Some(sig) = signals.next().await {
+        tracing::info!(signal = sig, "Received signal, triggering cooperative shutdown");
         let s = server.lock().await;
         s.request_shutdown();
     }
