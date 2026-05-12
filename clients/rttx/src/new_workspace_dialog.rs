@@ -12,7 +12,8 @@ use crate::window::Window;
 /// host. The user picks a place to create a new daemon-backed workspace.
 pub fn show(window: &Window, host: &Host) {
     let title = format!("New Workspace: {}", host.name);
-    let dialog = adw::Dialog::builder().title(&title).content_width(400).content_height(450).build();
+    let dialog =
+        adw::Dialog::builder().title(&title).content_width(400).content_height(450).build();
 
     let header = adw::HeaderBar::new();
 
