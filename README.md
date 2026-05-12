@@ -22,10 +22,16 @@ modern GNOME desktop.
 - Save folder, SSH, tmux, or combined bookmarks for quick access
 - Run bookmarks in the current pane or open them as new workspaces
 - Save and search reusable commands in the right sidebar
+- Clone commands, add descriptions and labels for organization
+- Use env-var parameters for dynamic command values
+- Run commands in the current pane or a new split pane
+- Copy raw command text to clipboard
+- Assign per-command keyboard shortcuts via leader prefix (Ctrl+;)
 
 ### Recovery and reconnect
 
 - Workspace layouts, split sizes, and working directories persist automatically
+- Periodic auto-save ensures no state loss on unexpected exit
 - Bookmark-driven panes restore as explicit targets (local folder, SSH, tmux, or combined)
 - Failed SSH/tmux pane recovery offers in-pane retry — no modal dialogs
 - tmux recovery reattaches to existing sessions, never creates new ones silently
@@ -38,6 +44,11 @@ modern GNOME desktop.
 - Optional smart clipboard: plain Ctrl+C copies selected text, Ctrl+V pastes
 - Built-in Nightfall and Daybreak themes, with Tilix color scheme compatibility
 - Background process notifications via toast (foreground) or desktop notification (background)
+
+### Configuration
+
+- Export, import, and reset configuration from Preferences
+- Customizable keyboard shortcuts via Preferences
 
 ## Install
 
@@ -176,6 +187,7 @@ workspaces will fail to connect.
 | Toggle workspace sidebar | Ctrl+Shift+N |
 | Toggle tools sidebar | Ctrl+Shift+B |
 | Copy / Paste | Ctrl+Shift+C / Ctrl+Shift+V |
+| Search | Ctrl+Shift+F |
 | Input sync toggle | Ctrl+Shift+I |
 | Next / previous workspace | Ctrl+Tab / Ctrl+Shift+Tab |
 | Jump to workspace 1-9 | Alt+1 through Alt+9 |
@@ -184,6 +196,9 @@ workspaces will fail to connect.
 | Rotate layout | Ctrl+Shift+R |
 | Repair terminal | Ctrl+Shift+X |
 | Navigate panes | Alt+Arrow (configurable) |
+| Connect to existing workspace | Ctrl+Shift+A |
+| New direct terminal | Ctrl+Shift+D |
+| Commands leader key | Ctrl+; |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |
 
