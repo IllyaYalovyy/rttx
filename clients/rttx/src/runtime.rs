@@ -395,6 +395,7 @@ pub fn present_workspace_actions(
 pub struct WorkspaceMenuItems {
     pub show_edit_connection: bool,
     pub show_reconnect: bool,
+    pub show_reconnect_host: bool,
     pub show_detach: bool,
 }
 
@@ -406,6 +407,7 @@ pub struct WorkspaceMenuContext {
     pub is_persistent: bool,
     pub is_attached: bool,
     pub is_disconnected: bool,
+    pub has_other_disconnected_from_same_host: bool,
 }
 
 /// Determine which context menu items are relevant for a workspace.
@@ -414,6 +416,9 @@ pub const fn workspace_menu_items(ctx: &WorkspaceMenuContext) -> WorkspaceMenuIt
     WorkspaceMenuItems {
         show_edit_connection: ctx.is_remote,
         show_reconnect: ctx.is_managed && ctx.is_disconnected,
+        show_reconnect_host: ctx.is_managed
+            && ctx.is_disconnected
+            && ctx.has_other_disconnected_from_same_host,
         show_detach: ctx.is_persistent && ctx.is_attached,
     }
 }
@@ -1193,9 +1198,11 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: false,
+            has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
         assert!(!items.show_reconnect);
+        assert!(!items.show_reconnect_host);
         assert!(items.show_detach);
     }
 
@@ -1207,9 +1214,11 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: true,
+            has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_edit_connection);
         assert!(items.show_reconnect);
+        assert!(!items.show_reconnect_host);
         assert!(items.show_detach);
     }
 
@@ -1221,9 +1230,11 @@ mod tests {
             is_persistent: false,
             is_attached: true,
             is_disconnected: false,
+            has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
         assert!(!items.show_reconnect);
+        assert!(!items.show_reconnect_host);
         assert!(!items.show_detach);
     }
 
@@ -1235,8 +1246,10 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_reconnect);
+        assert!(!items.show_reconnect_host);
         assert!(!items.show_detach);
     }
 
@@ -1248,10 +1261,39 @@ mod tests {
             is_persistent: false,
             is_attached: false,
             is_disconnected: false,
+            has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
         assert!(!items.show_reconnect);
+        assert!(!items.show_reconnect_host);
         assert!(!items.show_detach);
+    }
+
+    #[test]
+    fn menu_items_reconnect_host_shown_when_multiple_disconnected() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: true,
+            has_other_disconnected_from_same_host: true,
+        });
+        assert!(items.show_reconnect);
+        assert!(items.show_reconnect_host);
+    }
+
+    #[test]
+    fn menu_items_reconnect_host_hidden_when_connected() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: true,
+            is_disconnected: false,
+            has_other_disconnected_from_same_host: true,
+        });
+        assert!(!items.show_reconnect_host);
     }
 
     // ── SessionMissing state ────────────────────────────────────
@@ -1307,6 +1349,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: false,
+            has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_reconnect);
     }

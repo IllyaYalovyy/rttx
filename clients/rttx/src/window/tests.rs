@@ -7495,3 +7495,181 @@ fn command_crud_duplicate_adds_copy_to_sidebar() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn reconnect_host_action_shown_when_multiple_disconnected_from_same_host() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.reconnect-host-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let ws1 = crate::test_helpers::managed_session_with_runtime(
+        "ws-remote-1",
+        "Remote 1",
+        LayoutNode::new_terminal_with_uuid("pane-r1"),
+        RuntimeEndpoint::Remote { host: "server.example.com".into() },
+        WorkspacePolicy::Persistent,
+        Some("rt-1"),
+    );
+    let ws2 = crate::test_helpers::managed_session_with_runtime(
+        "ws-remote-2",
+        "Remote 2",
+        LayoutNode::new_terminal_with_uuid("pane-r2"),
+        RuntimeEndpoint::Remote { host: "server.example.com".into() },
+        WorkspacePolicy::Persistent,
+        Some("rt-2"),
+    );
+
+    window.imp().state.borrow_mut().workspaces.push(ws1.clone());
+    window.build_session(&ws1, false);
+    window.imp().state.borrow_mut().workspaces.push(ws2.clone());
+    window.build_session(&ws2, false);
+    pump_events(50);
+
+    // Mark both as disconnected.
+    window.set_workspace_connection_status(&ws1.uuid, &ConnectionStatus::Disconnected);
+    window.set_workspace_connection_status(&ws2.uuid, &ConnectionStatus::Disconnected);
+
+    let row = session_row_for_uuid(&window, &ws1.uuid);
+    window.show_workspace_popover_menu(&row, &ws1.uuid);
+
+    assert!(
+        window.lookup_action("ctx-reconnect-host").is_some(),
+        "reconnect-host action should be registered when multiple workspaces from same host are disconnected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn reconnect_host_action_hidden_when_only_one_disconnected() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.reconnect-host-single-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let ws1 = crate::test_helpers::managed_session_with_runtime(
+        "ws-solo-1",
+        "Solo Remote",
+        LayoutNode::new_terminal_with_uuid("pane-solo"),
+        RuntimeEndpoint::Remote { host: "solo.example.com".into() },
+        WorkspacePolicy::Persistent,
+        Some("rt-solo"),
+    );
+
+    window.imp().state.borrow_mut().workspaces.push(ws1.clone());
+    window.build_session(&ws1, false);
+    pump_events(50);
+
+    window.set_workspace_connection_status(&ws1.uuid, &ConnectionStatus::Disconnected);
+
+    let row = session_row_for_uuid(&window, &ws1.uuid);
+    window.show_workspace_popover_menu(&row, &ws1.uuid);
+
+    assert!(
+        window.lookup_action("ctx-reconnect-host").is_none(),
+        "reconnect-host action should NOT be registered when only one workspace is disconnected"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn reconnect_host_reconnects_all_disconnected_workspaces_from_same_endpoint() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.reconnect-host-all-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let ws1 = crate::test_helpers::managed_session_with_runtime(
+        "ws-host-a1",
+        "Host A - 1",
+        LayoutNode::new_terminal_with_uuid("pane-a1"),
+        RuntimeEndpoint::Remote { host: "host-a.example.com".into() },
+        WorkspacePolicy::Persistent,
+        Some("rt-a1"),
+    );
+    let ws2 = crate::test_helpers::managed_session_with_runtime(
+        "ws-host-a2",
+        "Host A - 2",
+        LayoutNode::new_terminal_with_uuid("pane-a2"),
+        RuntimeEndpoint::Remote { host: "host-a.example.com".into() },
+        WorkspacePolicy::Persistent,
+        Some("rt-a2"),
+    );
+    let ws3 = crate::test_helpers::managed_session_with_runtime(
+        "ws-host-b1",
+        "Host B - 1",
+        LayoutNode::new_terminal_with_uuid("pane-b1"),
+        RuntimeEndpoint::Remote { host: "host-b.example.com".into() },
+        WorkspacePolicy::Persistent,
+        Some("rt-b1"),
+    );
+
+    window.imp().state.borrow_mut().workspaces.push(ws1.clone());
+    window.build_session(&ws1, false);
+    window.imp().state.borrow_mut().workspaces.push(ws2.clone());
+    window.build_session(&ws2, false);
+    window.imp().state.borrow_mut().workspaces.push(ws3.clone());
+    window.build_session(&ws3, false);
+    pump_events(50);
+
+    // Mark all three as disconnected.
+    window.set_workspace_connection_status(&ws1.uuid, &ConnectionStatus::Disconnected);
+    window.set_workspace_connection_status(&ws2.uuid, &ConnectionStatus::Disconnected);
+    window.set_workspace_connection_status(&ws3.uuid, &ConnectionStatus::Disconnected);
+
+    // Trigger reconnect-all for host-a endpoint via ws1.
+    window.retry_all_workspaces_for_endpoint(&ws1.uuid);
+    pump_events(50);
+
+    // ws1 and ws2 (same host) should now be Connecting.
+    let statuses = window.imp().workspace_connection_status.borrow();
+    assert_eq!(
+        statuses.get(&ws1.uuid),
+        Some(&ConnectionStatus::Connecting),
+        "ws1 should be reconnecting"
+    );
+    assert_eq!(
+        statuses.get(&ws2.uuid),
+        Some(&ConnectionStatus::Connecting),
+        "ws2 should be reconnecting (same host)"
+    );
+    // ws3 (different host) should remain Disconnected.
+    assert_eq!(
+        statuses.get(&ws3.uuid),
+        Some(&ConnectionStatus::Disconnected),
+        "ws3 should remain disconnected (different host)"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

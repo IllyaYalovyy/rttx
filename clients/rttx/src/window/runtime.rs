@@ -471,6 +471,47 @@ impl Window {
         self.connect_managed_workspace(&session_state);
     }
 
+    /// Reconnect all managed workspaces sharing the same endpoint as the given workspace.
+    pub(super) fn retry_all_workspaces_for_endpoint(&self, workspace_id: &str) {
+        let targets: Vec<WorkspaceState> = {
+            let state = self.imp().state.borrow();
+            let Some(origin) = state.workspaces.iter().find(|s| s.uuid == workspace_id) else {
+                return;
+            };
+            let endpoint_key = origin.runtime.endpoint.key();
+            let statuses = self.imp().workspace_connection_status.borrow();
+            state
+                .workspaces
+                .iter()
+                .filter(|s| {
+                    s.uses_managed_runtime()
+                        && s.runtime.endpoint.key() == endpoint_key
+                        && statuses.get(&s.uuid).is_some_and(|st| {
+                            matches!(
+                                st,
+                                ConnectionStatus::Disconnected
+                                    | ConnectionStatus::Reconnecting { .. }
+                                    | ConnectionStatus::Blocked(_)
+                            )
+                        })
+                })
+                .cloned()
+                .collect()
+        };
+        if let Some(first) = targets.first()
+            && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
+        {
+            manager.reset_endpoint(&first.runtime.endpoint);
+        }
+        for session_state in &targets {
+            self.set_workspace_connection_status(
+                &session_state.uuid,
+                &ConnectionStatus::Connecting,
+            );
+            self.connect_managed_workspace(session_state);
+        }
+    }
+
     pub(super) fn send_managed_terminal_input(&self, terminal_uuid: &str, data: &[u8]) {
         let (primary, sync_targets) = {
             let state = self.imp().state.borrow();
