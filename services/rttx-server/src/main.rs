@@ -661,6 +661,7 @@ async fn handle_signals(server: Arc<Mutex<Server>>) {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
