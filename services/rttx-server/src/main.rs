@@ -709,4 +709,12 @@ mod tests {
         // Verify the daemonix API surface we rely on compiles and builds correctly.
         let _daemon = daemonix::Daemonize::new().pid_file(&pid_path).working_directory("/");
     }
+
+    #[test]
+    fn signal_handler_registers_sighup() {
+        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+        use signal_hook::iterator::Signals;
+        let signals = Signals::new([SIGTERM, SIGINT, SIGHUP]);
+        assert!(signals.is_ok(), "SIGTERM, SIGINT, SIGHUP must all be registerable");
+    }
 }
