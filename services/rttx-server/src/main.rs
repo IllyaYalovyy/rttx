@@ -645,17 +645,17 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 async fn handle_signals(server: Arc<Mutex<Server>>) {
-    use signal_hook::consts::{SIGINT, SIGTERM};
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     use signal_hook_tokio::Signals;
     use tokio_stream::StreamExt;
 
-    let Ok(mut signals) = Signals::new([SIGTERM, SIGINT]) else {
+    let Ok(mut signals) = Signals::new([SIGTERM, SIGINT, SIGHUP]) else {
         tracing::error!("Failed to register signal handlers");
         return;
     };
 
-    if signals.next().await.is_some() {
-        tracing::info!("Received OS shutdown signal, triggering cooperative shutdown");
+    if let Some(sig) = signals.next().await {
+        tracing::info!(signal = sig, "Received signal, triggering cooperative shutdown");
         let s = server.lock().await;
         s.request_shutdown();
     }
@@ -709,5 +709,13 @@ mod tests {
         let pid_path = dir.path().join("test.pid");
         // Verify the daemonix API surface we rely on compiles and builds correctly.
         let _daemon = daemonix::Daemonize::new().pid_file(&pid_path).working_directory("/");
+    }
+
+    #[test]
+    fn signal_handler_registers_sighup() {
+        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+        use signal_hook::iterator::Signals;
+        let signals = Signals::new([SIGTERM, SIGINT, SIGHUP]);
+        assert!(signals.is_ok(), "SIGTERM, SIGINT, SIGHUP must all be registerable");
     }
 }
