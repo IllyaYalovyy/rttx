@@ -12,7 +12,7 @@ use crate::window::Window;
 /// host. The user picks a place to create a new daemon-backed workspace.
 pub fn show(window: &Window, host: &Host) {
     let title = format!("New Workspace: {}", host.name);
-    let dialog = adw::Dialog::builder().title(&title).content_width(400).build();
+    let dialog = adw::Dialog::builder().title(&title).content_width(400).content_height(450).build();
 
     let header = adw::HeaderBar::new();
 
@@ -32,7 +32,7 @@ pub fn show(window: &Window, host: &Host) {
     let scroll = gtk4::ScrolledWindow::builder()
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vexpand(true)
-        .min_content_height(200)
+        .min_content_height(300)
         .child(&list_box)
         .build();
 
