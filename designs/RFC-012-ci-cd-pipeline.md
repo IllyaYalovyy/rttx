@@ -312,8 +312,8 @@ cache). All steps are within the free tier.
 
 ## Development Plan
 
-- [ ] **W1** — Add `[package.metadata.deb]` to `clients/rttx/Cargo.toml` for `cargo-deb`
-- [ ] **W2** — Add `[package.metadata.generate-rpm]` to `clients/rttx/Cargo.toml` for `cargo-generate-rpm`
+- [x] **W1** — Add `[package.metadata.deb]` to `clients/rttx/Cargo.toml` for `cargo-deb` — PR #873
+- [x] **W2** — Add `[package.metadata.generate-rpm]` to `clients/rttx/Cargo.toml` for `cargo-generate-rpm` — PR #873
 - [x] **W3** — Create `.github/workflows/quality.yml` — fmt, clippy, test, manifest validation
 - [x] **W4** — Create `.github/workflows/release.yml` — scaffold with build-flatpak, build-deb, build-rpm, github-release, copr-submit jobs
 - [x] **W5** — Set COPR credentials as repository secrets
