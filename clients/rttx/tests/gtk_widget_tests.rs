@@ -2994,18 +2994,9 @@ fn header_bar_workspace_buttons_are_icon_only() {
     );
 
     // All buttons must have tooltips for discoverability.
-    assert!(
-        imp.new_button.tooltip_text().is_some(),
-        "New button must have a tooltip"
-    );
-    assert!(
-        imp.connect_button.tooltip_text().is_some(),
-        "Connect button must have a tooltip"
-    );
-    assert!(
-        imp.new_direct_button.tooltip_text().is_some(),
-        "Direct button must have a tooltip"
-    );
+    assert!(imp.new_button.tooltip_text().is_some(), "New button must have a tooltip");
+    assert!(imp.connect_button.tooltip_text().is_some(), "Connect button must have a tooltip");
+    assert!(imp.new_direct_button.tooltip_text().is_some(), "Direct button must have a tooltip");
 
     window.close();
     remove_env("RTTX_DISABLE_SHELL_SPAWN");
