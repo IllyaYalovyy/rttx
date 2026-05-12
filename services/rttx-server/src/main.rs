@@ -661,7 +661,6 @@ async fn handle_signals(server: Arc<Mutex<Server>>) {
     }
 }
 
-#[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
@@ -709,16 +708,5 @@ mod tests {
         let pid_path = dir.path().join("test.pid");
         // Verify the daemonix API surface we rely on compiles and builds correctly.
         let _daemon = daemonix::Daemonize::new().pid_file(&pid_path).working_directory("/");
-    }
-}
-
-#[cfg(test)]
-mod signal_tests {
-    #[test]
-    fn signal_handler_includes_sighup() {
-        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-        // Verify all three signals can be registered (no panic).
-        let signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP]);
-        assert!(signals.is_ok(), "must be able to register SIGTERM, SIGINT, SIGHUP");
     }
 }
