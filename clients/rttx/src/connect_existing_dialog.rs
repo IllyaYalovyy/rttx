@@ -6,6 +6,10 @@ use rttx_proto::v3;
 use crate::host::Host;
 use crate::window::Window;
 
+pub const DIALOG_CONTENT_WIDTH: i32 = 400;
+pub const DIALOG_CONTENT_HEIGHT: i32 = 450;
+pub const SCROLL_MIN_CONTENT_HEIGHT: i32 = 300;
+
 /// Classification of a daemon session for the Connect to Existing dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeAvailability {
@@ -79,7 +83,11 @@ pub fn matches_query(entry: &RuntimeEntry, query: &str) -> bool {
 /// Show the Connect to Existing dialog for a specific host.
 pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
     let title = format!("Connect to Existing: {}", host.name);
-    let dialog = adw::Dialog::builder().title(&title).content_width(400).build();
+    let dialog = adw::Dialog::builder()
+        .title(&title)
+        .content_width(DIALOG_CONTENT_WIDTH)
+        .content_height(DIALOG_CONTENT_HEIGHT)
+        .build();
 
     let header = adw::HeaderBar::new();
 
@@ -99,7 +107,7 @@ pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
     let scroll = gtk4::ScrolledWindow::builder()
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vexpand(true)
-        .min_content_height(200)
+        .min_content_height(SCROLL_MIN_CONTENT_HEIGHT)
         .child(&list_box)
         .build();
 
