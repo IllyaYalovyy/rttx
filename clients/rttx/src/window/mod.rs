@@ -123,26 +123,24 @@ mod imp {
             toggle_sidebar.set_active(true);
             header.pack_start(&toggle_sidebar);
 
-            self.new_button.set_label("New");
-            self.new_button.set_tooltip_text(Some("New workspace"));
             self.new_button.set_icon_name("list-add-symbolic");
+            self.new_button.set_tooltip_text(Some("New workspace"));
             self.new_button.add_css_class("flat");
             self.new_button.update_property(&[gtk4::accessible::Property::Label("New workspace")]);
             header.pack_start(&self.new_button);
 
-            self.connect_button.set_label("Connect");
-            self.connect_button.set_tooltip_text(Some("Connect to existing workspace"));
             self.connect_button.set_icon_name("network-server-symbolic");
+            self.connect_button.set_tooltip_text(Some("Connect to existing workspace"));
             self.connect_button.add_css_class("flat");
             self.connect_button
                 .update_property(&[gtk4::accessible::Property::Label("Connect to existing")]);
             header.pack_start(&self.connect_button);
 
-            self.new_direct_button.set_label("Direct");
-            self.new_direct_button.set_tooltip_text(Some("New direct workspace"));
+            self.new_direct_button.set_icon_name("utilities-terminal-symbolic");
+            self.new_direct_button.set_tooltip_text(Some("New direct terminal"));
             self.new_direct_button.add_css_class("flat");
             self.new_direct_button
-                .update_property(&[gtk4::accessible::Property::Label("New direct workspace")]);
+                .update_property(&[gtk4::accessible::Property::Label("New direct terminal")]);
             header.pack_start(&self.new_direct_button);
 
             if let Some(label) = config::badge_label() {
