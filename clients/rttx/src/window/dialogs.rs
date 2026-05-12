@@ -437,17 +437,30 @@ impl Window {
             let Some(session) = state.workspaces.iter().find(|s| s.uuid == session_uuid) else {
                 return;
             };
-            let disconnected =
-                self.imp().workspace_connection_status.borrow().get(session_uuid).is_some_and(
-                    |s| {
+            let statuses = self.imp().workspace_connection_status.borrow();
+            let disconnected = statuses.get(session_uuid).is_some_and(|s| {
+                matches!(
+                    s,
+                    ConnectionStatus::Disconnected
+                        | ConnectionStatus::Reconnecting { .. }
+                        | ConnectionStatus::Blocked(_)
+                )
+            });
+            let endpoint_key = session.runtime.endpoint.key();
+            let has_other_disconnected = state.workspaces.iter().any(|s| {
+                s.uuid != session_uuid
+                    && s.uses_managed_runtime()
+                    && s.runtime.endpoint.key() == endpoint_key
+                    && statuses.get(&s.uuid).is_some_and(|st| {
                         matches!(
-                            s,
+                            st,
                             ConnectionStatus::Disconnected
                                 | ConnectionStatus::Reconnecting { .. }
                                 | ConnectionStatus::Blocked(_)
                         )
-                    },
-                );
+                    })
+            });
+            drop(statuses);
             crate::runtime::workspace_menu_items(&crate::runtime::WorkspaceMenuContext {
                 is_remote: matches!(session.runtime.endpoint, RuntimeEndpoint::Remote { .. }),
                 is_managed: session.uses_managed_runtime(),
@@ -455,6 +468,7 @@ impl Window {
                     && matches!(session.runtime.policy, WorkspacePolicy::Persistent),
                 is_attached: session.runtime.runtime_id.is_some(),
                 is_disconnected: disconnected,
+                has_other_disconnected_from_same_host: has_other_disconnected,
             })
         };
 
@@ -465,6 +479,9 @@ impl Window {
         }
         if items.show_reconnect {
             menu.append(Some("Reconnect"), Some("win.ctx-reconnect"));
+        }
+        if items.show_reconnect_host {
+            menu.append(Some("Reconnect All from Host"), Some("win.ctx-reconnect-host"));
         }
         if items.show_detach {
             menu.append(Some("Detach"), Some("win.ctx-detach"));
@@ -505,6 +522,16 @@ impl Window {
                 w.retry_workspace_connection(&u);
             });
             self.add_action(&reconnect_action);
+        }
+
+        if items.show_reconnect_host {
+            let w = self.clone();
+            let u = session_uuid.to_string();
+            let reconnect_host_action = gtk4::gio::SimpleAction::new("ctx-reconnect-host", None);
+            reconnect_host_action.connect_activate(move |_, _| {
+                w.retry_all_workspaces_for_endpoint(&u);
+            });
+            self.add_action(&reconnect_host_action);
         }
 
         if items.show_detach {

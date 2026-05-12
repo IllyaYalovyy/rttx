@@ -1026,6 +1026,7 @@ fn workspace_menu_items_contract() {
         is_persistent: true,
         is_attached: true,
         is_disconnected: true,
+        has_other_disconnected_from_same_host: false,
     });
     assert!(all.show_edit_connection);
     assert!(all.show_reconnect);
@@ -1038,6 +1039,7 @@ fn workspace_menu_items_contract() {
         is_persistent: false,
         is_attached: true,
         is_disconnected: false,
+        has_other_disconnected_from_same_host: false,
     });
     assert!(!minimal.show_edit_connection);
     assert!(!minimal.show_reconnect);
@@ -1109,4 +1111,43 @@ fn contract_rotate_preserves_structure_and_serializes() {
     let json = serde_json::to_string(&rotated).unwrap();
     let restored: LayoutNode = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, rotated);
+}
+
+/// Reconnect-host menu item requires both disconnected state and sibling workspaces.
+#[test]
+fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
+    use rttx::runtime::{WorkspaceMenuContext, workspace_menu_items};
+
+    // Disconnected with other disconnected siblings → show reconnect-host.
+    let with_siblings = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: false,
+        is_disconnected: true,
+        has_other_disconnected_from_same_host: true,
+    });
+    assert!(with_siblings.show_reconnect_host);
+
+    // Disconnected without siblings → hide reconnect-host.
+    let without_siblings = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: false,
+        is_disconnected: true,
+        has_other_disconnected_from_same_host: false,
+    });
+    assert!(!without_siblings.show_reconnect_host);
+
+    // Connected with siblings → hide reconnect-host.
+    let connected = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: true,
+        is_disconnected: false,
+        has_other_disconnected_from_same_host: true,
+    });
+    assert!(!connected.show_reconnect_host);
 }
