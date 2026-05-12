@@ -2017,6 +2017,27 @@ fn connect_existing_dialog_search_filters_sessions() {
     );
 }
 
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn connect_existing_dialog_has_sufficient_height_for_item_visibility() {
+    require_display!();
+
+    assert_eq!(rttx::connect_existing_dialog::DIALOG_CONTENT_HEIGHT, 450);
+    assert_eq!(rttx::connect_existing_dialog::SCROLL_MIN_CONTENT_HEIGHT, 300);
+
+    let dialog = libadwaita::Dialog::builder()
+        .content_width(rttx::connect_existing_dialog::DIALOG_CONTENT_WIDTH)
+        .content_height(rttx::connect_existing_dialog::DIALOG_CONTENT_HEIGHT)
+        .build();
+    assert_eq!(dialog.content_height(), 450);
+    assert_eq!(dialog.content_width(), 400);
+
+    let scroll = gtk4::ScrolledWindow::builder()
+        .min_content_height(rttx::connect_existing_dialog::SCROLL_MIN_CONTENT_HEIGHT)
+        .build();
+    assert_eq!(scroll.min_content_height(), 300);
+}
+
 // ── Mouse reporting vs gestures (#459) ──────────────────────────
 
 /// The link click gesture on a direct terminal must use capture phase so it
