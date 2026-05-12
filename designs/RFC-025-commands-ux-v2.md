@@ -2,7 +2,7 @@
 
 | Field         | Value         |
 |---------------|---------------|
-| Status        | Accepted      |
+| Status        | Implemented   |
 | Author(s)     | Illya Yalovyy |
 | Supersedes    | —             |
 | Superseded by | —             |
@@ -468,35 +468,34 @@ AT-SPI behavioural tests (follow-up):
 
 ## Development Plan
 
-- [ ] **Step 1** — Add `CommandParameter`, extend `SavedCommand` with
+- [x] **Step 1** — Add `CommandParameter`, extend `SavedCommand` with
   `parameters`/`description`/`labels`. Add `shell_escape`, `render_env_block`, and
-  runtime fallback helpers. Unit tests. *(prerequisite: —)*
-- [ ] **Step 2** — Extend the command editor dialog with the Parameters group. GTK
-  widget tests. *(prerequisite: Step 1)*
-- [ ] **Step 3** — Implement the runtime parameter dialog (`adw::Dialog` + combo
+  runtime fallback helpers. Unit tests. *(prerequisite: —)* — PR #801
+- [x] **Step 2** — Extend the command editor dialog with the Parameters group. GTK
+  widget tests. *(prerequisite: Step 1)* — PR #801
+- [x] **Step 3** — Implement the runtime parameter dialog (`adw::Dialog` + combo
   rows + live preview) and route sidebar activation through it for parameterized
-  commands. *(prerequisite: Step 2)*
-- [ ] **Step 4** — "Duplicate" action in the per-row overflow menu. *(prerequisite:
-  Step 1)*
-- [ ] **Step 5** — "Copy body" action; toast feedback. *(prerequisite: Step 1)*
-- [ ] **Step 6** — Sidebar chip/icon for parameterized commands. *(prerequisite:
-  Step 1)*
-- [ ] **Step 7** — Description field in the editor and row tooltip. *(prerequisite:
-  Step 1, tracked as a follow-up issue)*
-- [ ] **Step 8** — Labels + filter chip bar in the Commands tab. *(prerequisite:
-  Step 1, tracked as a follow-up issue)*
-- [ ] **Step 9** — Run-in-new-pane mode. *(follow-up issue; requires touching the
-  layout module and may warrant its own mini-RFC)*
+  commands. *(prerequisite: Step 2)* — PR #801
+- [x] **Step 4** — "Duplicate" action in the per-row overflow menu. *(prerequisite:
+  Step 1)* — PR #801
+- [x] **Step 5** — "Copy body" action; toast feedback. *(prerequisite: Step 1)* — PR #801
+- [x] **Step 6** — Sidebar chip/icon for parameterized commands. *(prerequisite:
+  Step 1)* — PR #801
+- [x] **Step 7** — Description field in the editor and row tooltip. *(prerequisite:
+  Step 1)* — PR #802
+- [x] **Step 8** — Labels + filter chip bar in the Commands tab. *(prerequisite:
+  Step 1)* — PR #803
+- [x] **Step 9** — Run-in-new-pane mode. *(follow-up issue)* — PR #806
 - [ ] **Step 10** — Command palette (Ctrl+K). *(follow-up issue; binds through the
-  RFC-024 shortcut registry)*
-- [ ] **Step 11** — Per-command keyboard shortcuts via leader-prefix chord.
+  RFC-024 shortcut registry)* — tracked in #796
+- [x] **Step 11** — Per-command keyboard shortcuts via leader-prefix chord.
   Reuses the RFC-024 registry with `command:<uuid>` keys; adds a leader-mode
   controller, capture dialog, and (optionally, later) a `which-key`-style
   popover. Duplicate sequences remain allowed; resolution is host/context-aware
-  and uses the first matching visible command. *(follow-up issue)*
+  and uses the first matching visible command. — PR #807
 
-Steps 1–6 are the MVP that satisfies the user-raised asks. Steps 7–11 are the
-scaling roadmap — each gets its own issue once this RFC reaches Accepted.
+Steps 1–9 and 11 are implemented. Step 10 (command palette) is tracked as a
+separate follow-up in #796.
 
 ---
 
