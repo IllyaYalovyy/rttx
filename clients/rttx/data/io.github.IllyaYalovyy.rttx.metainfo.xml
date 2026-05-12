@@ -7,9 +7,11 @@
   <summary>A tiling terminal emulator for GNOME</summary>
   <description>
     <p>
-      rttx is a tiling terminal emulator built with GTK4 and Libadwaita.
-      It features split-screen terminals, sidebar-based session management,
-      session persistence, input synchronization, and drag-and-drop rearrangement.
+      rttx is a tiling terminal emulator built with GTK4 and Libadwaita,
+      organized around named workspaces and split panes. It features
+      daemon-backed persistent sessions, workspace recovery, input
+      synchronization, reusable command snippets, and drag-and-drop
+      layout rearrangement.
     </p>
   </description>
   <launchable type="desktop-id">io.github.IllyaYalovyy.rttx.desktop</launchable>
