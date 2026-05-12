@@ -2940,3 +2940,74 @@ fn find_action_row_by_title(group: &adw::PreferencesGroup, title: &str) -> Optio
     }
     None
 }
+
+/// Regression for #887: header bar workspace buttons must be icon-only and consistent.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn header_bar_workspace_buttons_are_icon_only() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    set_env("XDG_CONFIG_HOME", tmp.path());
+    set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.header-button-style-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = rttx::window::Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let imp = window.imp();
+
+    // All buttons must have an icon.
+    assert_eq!(
+        imp.new_button.icon_name().as_deref(),
+        Some("list-add-symbolic"),
+        "New button must use list-add-symbolic icon"
+    );
+    assert_eq!(
+        imp.connect_button.icon_name().as_deref(),
+        Some("network-server-symbolic"),
+        "Connect button must use network-server-symbolic icon"
+    );
+    assert_eq!(
+        imp.new_direct_button.icon_name().as_deref(),
+        Some("utilities-terminal-symbolic"),
+        "Direct button must use utilities-terminal-symbolic icon"
+    );
+
+    // No button should have a text label (icon-only style).
+    assert!(
+        imp.new_button.label().is_none_or(|l| l.is_empty()),
+        "New button must not have a text label"
+    );
+    assert!(
+        imp.connect_button.label().is_none_or(|l| l.is_empty()),
+        "Connect button must not have a text label"
+    );
+    assert!(
+        imp.new_direct_button.label().is_none_or(|l| l.is_empty()),
+        "Direct button must not have a text label"
+    );
+
+    // All buttons must have tooltips for discoverability.
+    assert!(
+        imp.new_button.tooltip_text().is_some(),
+        "New button must have a tooltip"
+    );
+    assert!(
+        imp.connect_button.tooltip_text().is_some(),
+        "Connect button must have a tooltip"
+    );
+    assert!(
+        imp.new_direct_button.tooltip_text().is_some(),
+        "Direct button must have a tooltip"
+    );
+
+    window.close();
+    remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    remove_env("XDG_CONFIG_HOME");
+}
