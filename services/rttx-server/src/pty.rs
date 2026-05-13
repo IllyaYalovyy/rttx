@@ -63,12 +63,8 @@ impl Pty {
             // OSC 7 (CWD reporting) which is set up by vte-2.91.sh.
             cmd = cmd.arg0(format!("-{}", basename(&config.command[0])));
         }
-        let effective_cwd = config
-            .cwd
-            .as_ref()
-            .map(resolve_cwd)
-            .or_else(home_dir)
-            .filter(|p| p.is_dir());
+        let effective_cwd =
+            config.cwd.as_ref().map(resolve_cwd).or_else(home_dir).filter(|p| p.is_dir());
         if let Some(ref cwd) = effective_cwd {
             cmd = cmd.current_dir(cwd);
         }

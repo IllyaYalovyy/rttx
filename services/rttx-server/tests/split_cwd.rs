@@ -299,9 +299,7 @@ async fn create_pane_with_tilde_cwd_expands_to_home() {
             }
         }
     }
-    panic!(
-        "tilde CWD pane should start in $HOME ({home:?}) within timeout.\nOutput: {output}"
-    );
+    panic!("tilde CWD pane should start in $HOME ({home:?}) within timeout.\nOutput: {output}");
 }
 
 /// Pane created with a tilde-prefixed CWD (`~/subdir`) should expand to
