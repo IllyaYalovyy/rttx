@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod engine;
 pub mod ipc;
 pub mod logging;
+pub mod metrics;
 pub mod os;
 pub mod pane;
 pub mod protocol;
