@@ -43,6 +43,7 @@ pub enum EventType {
     Enter = 0,
     Exit = 1,
     Event = 2,
+    Panic = 3,
 }
 
 /// Span kinds identifying the subsystem that produced the event.
@@ -143,6 +144,11 @@ impl RingWriter {
     #[must_use]
     pub fn write_pos(&self) -> u64 {
         self.write_pos.load(Ordering::Relaxed)
+    }
+
+    /// Flush the file to disk, ensuring all recorded events are durable.
+    pub fn flush(&self) -> io::Result<()> {
+        self.file.sync_all()
     }
 
     /// Path to the flight recorder file.
@@ -264,6 +270,7 @@ fn deserialize_event(buf: &[u8; SLOT_SIZE]) -> FlightEvent {
         event_type: match event_type_raw {
             0 => EventType::Enter,
             1 => EventType::Exit,
+            3 => EventType::Panic,
             _ => EventType::Event,
         },
         span_kind: match span_kind_raw {

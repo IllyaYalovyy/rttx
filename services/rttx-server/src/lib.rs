@@ -1,5 +1,6 @@
 //! rttx-server: persistent runtime daemon for the rttx terminal emulator.
 
+pub mod crash_report;
 pub mod diagnostics;
 pub mod engine;
 pub mod flight;
