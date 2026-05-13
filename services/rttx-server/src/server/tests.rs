@@ -22,7 +22,14 @@ impl OsInterface for StubOs {
 }
 
 fn new_server() -> Arc<Mutex<Server>> {
-    Arc::new(Mutex::new(Server::new(Box::new(StubOs))))
+    Arc::new(Mutex::new(Server::new(
+        Box::new(StubOs),
+        Arc::new(crate::metrics::DaemonMetrics::new()),
+    )))
+}
+
+fn test_metrics() -> Arc<crate::metrics::DaemonMetrics> {
+    Arc::new(crate::metrics::DaemonMetrics::new())
 }
 
 /// Broadcast a message to all clients attached to a runtime.
@@ -63,7 +70,7 @@ fn short_id_returns_first_eight_characters() {
 
 #[test]
 fn runtime_label_includes_name_and_short_id() {
-    let mut server = Server::new(Box::new(StubOs));
+    let mut server = Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()));
     let rt = Runtime::new("my-workspace".into());
     let runtime_id = rt.id;
     server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
@@ -76,7 +83,7 @@ fn runtime_label_includes_name_and_short_id() {
 
 #[test]
 fn runtime_label_falls_back_for_unknown_runtime() {
-    let server = Server::new(Box::new(StubOs));
+    let server = Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()));
     let unknown_id = Uuid::new_v4();
     let label = server.runtime_label(unknown_id);
     assert!(label.starts_with('('), "got: {label}");
@@ -95,7 +102,7 @@ async fn input_to_missing_runtime_returns_none() {
             data: bytes::Bytes::from_static(b"hello"),
         })),
     };
-    assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    assert!(Server::handle_message(&server, client_id, msg, &test_metrics()).await.is_none());
 }
 
 #[tokio::test]
@@ -110,7 +117,7 @@ async fn resize_missing_runtime_returns_none() {
             rows: 24,
         })),
     };
-    assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    assert!(Server::handle_message(&server, client_id, msg, &test_metrics()).await.is_none());
 }
 
 // ── Empty message ───────────────────────────────────────────────
@@ -119,7 +126,7 @@ async fn resize_missing_runtime_returns_none() {
 async fn empty_message_returns_error() {
     let server = new_server();
     let msg = proto::ClientMessage { msg: None };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_EMPTY_MESSAGE);
@@ -140,7 +147,7 @@ async fn hello_with_correct_version_returns_hello_ack() {
             client_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::HelloAck(ack)) => {
             assert_eq!(bytes_to_uuid(&ack.server_id).unwrap(), server_id);
@@ -158,7 +165,7 @@ async fn hello_with_wrong_version_returns_version_mismatch() {
             client_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_VERSION_MISMATCH);
@@ -175,7 +182,7 @@ async fn ping_returns_pong_with_same_nonce() {
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 42 })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Pong(pong)) => {
             assert_eq!(pong.nonce, 42);
@@ -213,7 +220,7 @@ async fn create_runtime_returns_runtime_created() {
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
             assert!(!sc.runtime_id.is_empty());
@@ -243,7 +250,7 @@ async fn list_runtimes_returns_all_runtimes() {
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::RuntimeList(sl)) => {
             assert_eq!(sl.runtimes.len(), 2);
@@ -263,7 +270,7 @@ async fn attach_nonexistent_runtime_returns_runtime_not_found() {
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
@@ -281,7 +288,7 @@ async fn attach_with_invalid_uuid_returns_invalid_parameter() {
             attach_mode: 0,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -310,7 +317,7 @@ async fn attach_returns_snapshot_with_pane_data() {
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Snapshot(snap)) => {
             assert_eq!(snap.panes.len(), 1);
@@ -330,7 +337,7 @@ async fn detach_nonexistent_runtime_returns_runtime_not_found() {
             runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
@@ -347,7 +354,7 @@ async fn detach_with_invalid_uuid_returns_invalid_parameter() {
             runtime_id: vec![0u8; 2],
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -366,7 +373,7 @@ async fn terminate_nonexistent_runtime_returns_runtime_not_found() {
             runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
@@ -387,7 +394,7 @@ async fn terminate_owned_by_other_client_returns_ownership_conflict() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    let resp = Server::handle_message(&server, other, msg).await.unwrap();
+    let resp = Server::handle_message(&server, other, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -407,7 +414,7 @@ async fn terminate_removes_runtime_from_state() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     assert!(matches!(resp.msg, Some(proto::server_message::Msg::RuntimeTerminated(_))));
     assert!(!server.lock().await.runtimes.contains_key(&runtime_id));
 }
@@ -423,7 +430,7 @@ async fn close_pane_nonexistent_runtime_returns_runtime_not_found() {
             pane_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
@@ -444,7 +451,7 @@ async fn close_pane_nonexistent_pane_returns_pane_not_found() {
             pane_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_PANE_NOT_FOUND);
@@ -466,7 +473,7 @@ async fn close_pane_ownership_violation_returns_error() {
             pane_id: uuid_to_bytes(pane_id),
         })),
     };
-    let resp = Server::handle_message(&server, other, msg).await.unwrap();
+    let resp = Server::handle_message(&server, other, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -490,7 +497,7 @@ async fn set_pane_title_returns_title_changed() {
             title: "new-title".into(),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::TitleChanged(tc)) => {
             assert_eq!(tc.title, "new-title");
@@ -512,7 +519,7 @@ async fn set_pane_title_nonexistent_pane_returns_pane_not_found() {
             title: "x".into(),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_PANE_NOT_FOUND);
@@ -535,7 +542,7 @@ async fn set_pane_title_ownership_violation_returns_error() {
             title: "hijack".into(),
         })),
     };
-    let resp = Server::handle_message(&server, other, msg).await.unwrap();
+    let resp = Server::handle_message(&server, other, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -558,7 +565,7 @@ async fn rename_runtime_returns_runtime_renamed() {
             name: "renamed".into(),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::RuntimeRenamed(sr)) => {
             assert_eq!(sr.name, "renamed");
@@ -576,7 +583,7 @@ async fn rename_nonexistent_runtime_returns_runtime_not_found() {
             name: "x".into(),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
@@ -598,7 +605,7 @@ async fn rename_runtime_ownership_violation_returns_error() {
             name: "hijack".into(),
         })),
     };
-    let resp = Server::handle_message(&server, other, msg).await.unwrap();
+    let resp = Server::handle_message(&server, other, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -629,7 +636,7 @@ async fn input_to_existing_pane_without_write_access_returns_ownership_error() {
             data: bytes::Bytes::from_static(b"hello"),
         })),
     };
-    let resp = Server::handle_message(&server, reader, msg).await.unwrap();
+    let resp = Server::handle_message(&server, reader, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -661,7 +668,7 @@ async fn resize_without_write_access_returns_ownership_error() {
             rows: 40,
         })),
     };
-    let resp = Server::handle_message(&server, reader, msg).await.unwrap();
+    let resp = Server::handle_message(&server, reader, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -685,7 +692,7 @@ async fn input_to_nonexistent_pane_in_existing_runtime_returns_none() {
             data: bytes::Bytes::from_static(b"hello"),
         })),
     };
-    assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    assert!(Server::handle_message(&server, client_id, msg, &test_metrics()).await.is_none());
 }
 
 // ── Resize with invalid dimensions ──────────────────────────────
@@ -701,7 +708,7 @@ async fn resize_with_overflow_cols_returns_none() {
             rows: 24,
         })),
     };
-    assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
+    assert!(Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.is_none());
 }
 
 #[tokio::test]
@@ -715,7 +722,7 @@ async fn resize_with_overflow_rows_returns_none() {
             rows: u32::from(u16::MAX) + 1,
         })),
     };
-    assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
+    assert!(Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.is_none());
 }
 
 // ── Resize nonexistent pane in existing runtime ─────────────────
@@ -734,7 +741,7 @@ async fn resize_nonexistent_pane_in_existing_runtime_returns_none() {
             rows: 40,
         })),
     };
-    assert!(Server::handle_message(&server, client_id, msg).await.is_none());
+    assert!(Server::handle_message(&server, client_id, msg, &test_metrics()).await.is_none());
 }
 
 // ── DetachRuntime success ───────────────────────────────────────
@@ -750,7 +757,7 @@ async fn detach_attached_client_returns_runtime_detached() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::RuntimeDetached(sd)) => {
             assert_eq!(bytes_to_uuid(&sd.runtime_id).unwrap(), runtime_id);
@@ -782,7 +789,7 @@ async fn detach_last_client_from_ephemeral_session_terminates() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::RuntimeTerminated(st)) => {
             assert_eq!(bytes_to_uuid(&st.runtime_id).unwrap(), runtime_id);
@@ -808,7 +815,7 @@ async fn close_pane_removes_pane_from_runtime() {
             pane_id: uuid_to_bytes(pane_id),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::PaneClosed(pc)) => {
             assert_eq!(bytes_to_uuid(&pc.runtime_id).unwrap(), runtime_id);
@@ -837,7 +844,7 @@ async fn close_pane_with_invalid_pane_uuid_returns_invalid_parameter() {
             pane_id: vec![0u8; 3],
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -856,7 +863,7 @@ async fn terminate_with_invalid_uuid_returns_invalid_parameter() {
             runtime_id: vec![0u8; 5],
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -875,7 +882,7 @@ async fn set_pane_title_with_invalid_session_uuid_returns_invalid_parameter() {
             title: "x".into(),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -897,7 +904,7 @@ async fn set_pane_title_with_invalid_pane_uuid_returns_invalid_parameter() {
             title: "x".into(),
         })),
     };
-    let resp = Server::handle_message(&server, client_id, msg).await.unwrap();
+    let resp = Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -915,7 +922,7 @@ async fn rename_runtime_with_invalid_uuid_returns_invalid_parameter() {
             name: "x".into(),
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -937,7 +944,7 @@ async fn create_pane_with_invalid_uuid_returns_invalid_parameter() {
             no_persist: None,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_INVALID_PARAMETER);
@@ -971,7 +978,7 @@ async fn create_pane_without_write_access_returns_ownership_error() {
             no_persist: None,
         })),
     };
-    let resp = Server::handle_message(&server, reader, msg).await.unwrap();
+    let resp = Server::handle_message(&server, reader, msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_OWNERSHIP_CONFLICT);
@@ -995,7 +1002,7 @@ async fn create_pane_nonexistent_runtime_returns_runtime_not_found() {
             no_persist: None,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_RUNTIME_NOT_FOUND);
@@ -1018,7 +1025,7 @@ async fn attach_with_takeover_returns_unsupported() {
             attach_mode: proto::RuntimeAttachMode::TakeOver as i32,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::Error(e)) => {
             assert_eq!(e.code, protocol::ERR_UNSUPPORTED);
@@ -1041,7 +1048,7 @@ async fn second_writer_attach_returns_attach_blocked() {
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::AttachBlocked(ab)) => {
             assert_eq!(bytes_to_uuid(&ab.runtime_id).unwrap(), runtime_id);
@@ -1061,7 +1068,7 @@ async fn create_runtime_with_ephemeral_policy() {
             policy: proto::RuntimePolicy::Ephemeral as i32,
         })),
     };
-    let resp = Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    let resp = Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
     match resp.msg {
         Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
             let id = bytes_to_uuid(&sc.runtime_id).unwrap();
@@ -1083,7 +1090,7 @@ async fn shutdown_message_returns_none() {
     let msg = proto::ClientMessage {
         msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
     };
-    assert!(Server::handle_message(&server, Uuid::new_v4(), msg).await.is_none());
+    assert!(Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.is_none());
 }
 
 // ── Terminate cleans up PTY state ───────────────────────────────
@@ -1103,7 +1110,7 @@ async fn terminate_runtime_cleans_up_pty_writers() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    Server::handle_message(&server, client_id, msg).await.unwrap();
+    Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
 
     let s = server.lock().await;
     assert!(!s.runtimes.contains_key(&runtime_id));
@@ -1123,7 +1130,7 @@ async fn create_runtime_logs_lifecycle_event() {
             policy: proto::RuntimePolicy::Persistent as i32,
         })),
     };
-    Server::handle_message(&server, Uuid::new_v4(), msg).await.unwrap();
+    Server::handle_message(&server, Uuid::new_v4(), msg, &test_metrics()).await.unwrap();
 
     assert!(logs_contain("Runtime created"));
     assert!(logs_contain("log-test"));
@@ -1151,7 +1158,7 @@ async fn attach_runtime_logs_lifecycle_event() {
             attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
-    Server::handle_message(&server, client_id, msg).await.unwrap();
+    Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
 
     assert!(logs_contain("Client"));
     assert!(logs_contain("attached to runtime"));
@@ -1169,7 +1176,7 @@ async fn detach_runtime_logs_lifecycle_event() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    Server::handle_message(&server, client_id, msg).await.unwrap();
+    Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
 
     assert!(logs_contain("Client"));
     assert!(logs_contain("detached from runtime"));
@@ -1187,7 +1194,7 @@ async fn terminate_runtime_logs_lifecycle_event() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    Server::handle_message(&server, client_id, msg).await.unwrap();
+    Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
 
     assert!(logs_contain("Runtime terminated"));
 }
@@ -1205,7 +1212,7 @@ async fn close_pane_logs_lifecycle_event() {
             pane_id: uuid_to_bytes(pane_id),
         })),
     };
-    Server::handle_message(&server, client_id, msg).await.unwrap();
+    Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
 
     assert!(logs_contain("Pane"));
     assert!(logs_contain("closed in runtime"));
@@ -1224,7 +1231,7 @@ async fn rename_runtime_logs_lifecycle_event() {
             name: "new-name".into(),
         })),
     };
-    Server::handle_message(&server, client_id, msg).await.unwrap();
+    Server::handle_message(&server, client_id, msg, &test_metrics()).await.unwrap();
 
     assert!(logs_contain("Runtime renamed"));
     assert!(logs_contain("new-name"));
@@ -1472,9 +1479,10 @@ async fn send_to_collected_delivers_messages() {
     let (tx, mut rx) = mpsc::channel(16);
     let client_id = Uuid::new_v4();
     let senders = vec![(client_id, tx, None)];
+    let metrics = crate::metrics::DaemonMetrics::new();
 
     let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"hi")));
-    send_to_collected(&senders, runtime_id, pane_id, &msg, 0);
+    send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics);
 
     let received = rx.try_recv().unwrap();
     assert!(
@@ -1490,13 +1498,14 @@ async fn send_to_collected_returns_overflowed_clients() {
     let (tx, rx) = mpsc::channel(1);
     let client_id = Uuid::new_v4();
     let senders = vec![(client_id, tx, None)];
+    let metrics = crate::metrics::DaemonMetrics::new();
 
     let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"a")));
-    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0);
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics);
     assert!(overflows.is_empty(), "first send should succeed");
 
     // Channel is now full.
-    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0);
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics);
     assert_eq!(overflows.len(), 1, "second send should report overflow");
     assert_eq!(overflows[0], client_id);
     assert!(logs_contain("channel full"));
@@ -1717,7 +1726,9 @@ async fn v3_empty_envelope_returns_invalid_argument() {
     let caps =
         rttx_proto::v3_handshake::CORE_CAPABILITIES.iter().map(|c| *c as i32).collect::<Vec<_>>();
     let env = v3::ClientEnvelope { request_id: 1, command: None };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
             assert_eq!(e.kind, v3::ErrorKind::InvalidArgument as i32);
@@ -1734,7 +1745,9 @@ async fn v3_ping_returns_pong() {
         request_id: 7,
         command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 42 })),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     assert_eq!(resp.request_id, 7);
     match resp.payload {
         Some(v3::server_envelope::Payload::Pong(p)) => assert_eq!(p.nonce, 42),
@@ -1753,7 +1766,9 @@ async fn v3_create_runtime_returns_runtime_created() {
             policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     assert_eq!(resp.request_id, 1);
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => {
@@ -1776,7 +1791,8 @@ async fn v3_attach_returns_snapshot() {
             attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    let resp =
+        Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 2);
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
@@ -1800,7 +1816,8 @@ async fn v3_detach_returns_runtime_detached() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    let resp =
+        Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 3);
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeDetached(rd)) => {
@@ -1822,7 +1839,8 @@ async fn v3_terminate_returns_runtime_terminated() {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    let resp =
+        Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 4);
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeTerminated(rt)) => {
@@ -1843,7 +1861,8 @@ async fn v3_list_runtimes_returns_inventory() {
         request_id: 5,
         command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    let resp =
+        Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 5);
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeList(rl)) => {
@@ -1862,7 +1881,9 @@ async fn v3_get_diagnostics_requires_capability() {
         request_id: 6,
         command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
             assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
@@ -1879,7 +1900,9 @@ async fn v3_get_diagnostics_with_capability_returns_report() {
         request_id: 7,
         command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     assert_eq!(resp.request_id, 7);
     assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::DiagnosticsReport(_))));
 }
@@ -1897,7 +1920,8 @@ async fn v3_rename_runtime_returns_renamed() {
             name: "new-name".into(),
         })),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    let resp =
+        Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 8);
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeRenamed(rr)) => {
@@ -1923,7 +1947,7 @@ async fn v3_terminal_input_is_fire_and_forget() {
             })),
         })),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await;
+    let resp = Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await;
     assert!(resp.is_none());
 }
 
@@ -1937,7 +1961,9 @@ async fn v3_resync_requires_capability() {
             runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
             assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
@@ -1959,7 +1985,9 @@ async fn v3_get_scrollback_requires_capability() {
             limit: 1024,
         })),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
             assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
@@ -1978,7 +2006,9 @@ async fn v3_takeover_requires_capability() {
             runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
-    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env).await.unwrap();
+    let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
+        .await
+        .unwrap();
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
             assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
@@ -2026,7 +2056,8 @@ async fn v3_snapshot_includes_terminal_modes() {
             attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
-    let resp = Server::handle_v3_message(&server, client_id, &caps, env).await.unwrap();
+    let resp =
+        Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     if let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = resp.payload {
         for pane_snap in &snap.panes {
             assert!(pane_snap.terminal_modes.is_some());
@@ -2073,7 +2104,7 @@ async fn terminate_runtime_removes_state_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
     let state_dir = os.state_dir();
-    let mut server = Server::new(Box::new(os));
+    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
 
     let mut rt = Runtime::new("cleanup-test".into());
     let runtime_id = rt.id;
@@ -2132,7 +2163,7 @@ fn load_persisted_state_sweeps_orphans() {
     // Save daemon index referencing only the known runtime.
     crate::state::persistence::save_daemon_index(&state_dir, &[known_id]).unwrap();
 
-    let mut server = Server::new(Box::new(os));
+    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
     server.load_persisted_state();
 
     // Known runtime should be loaded.
@@ -2150,7 +2181,7 @@ fn fresh_start_log_includes_state_directory_path() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
     let expected_state_dir = os.state_dir().to_string_lossy().to_string();
-    let mut server = Server::new(Box::new(os));
+    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
     server.load_persisted_state();
 
     assert!(
@@ -2191,7 +2222,7 @@ fn v1_state_json_in_cache_dir_is_ignored() {
     )
     .unwrap();
 
-    let mut server = Server::new(Box::new(os));
+    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
     server.load_persisted_state();
 
     assert!(

@@ -123,7 +123,8 @@ pub async fn start_test_server(
     let socket_path = runtime_dir.join("rttx-server.sock");
 
     let os = TestOs { runtime_dir, cache_dir };
-    let server = Arc::new(Mutex::new(Server::new(Box::new(os))));
+    let metrics = Arc::new(rttx_server::metrics::DaemonMetrics::new());
+    let server = Arc::new(Mutex::new(Server::new(Box::new(os), metrics)));
 
     // Load persisted state and reconstruct sessions (if any).
     {

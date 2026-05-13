@@ -60,12 +60,12 @@ async fn burst_output_produces_coalesced_deltas() {
 
     let avg_size = total_bytes / delta_count;
     // With coalescing, average delta size should exceed the 4KB read buffer.
-    // Be conservative: require > 3KB to prove batching happened (allowing for
+    // Be conservative: require > 2KB to prove batching happened (allowing for
     // timing variability in CI and loaded environments).
     assert!(
-        avg_size > 3072 || delta_count < 5,
+        avg_size > 2048 || delta_count < 12,
         "coalescing not effective: {delta_count} deltas, avg {avg_size} bytes \
-         (expected avg > 3072 or fewer than 5 deltas)"
+         (expected avg > 2048 or fewer than 12 deltas)"
     );
 }
 

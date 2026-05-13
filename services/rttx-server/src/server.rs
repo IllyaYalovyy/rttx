@@ -69,6 +69,7 @@ fn send_to_collected(
     pane_id: Uuid,
     msg: &ClientMsg,
     pane_output_seq: u64,
+    metrics: &crate::metrics::DaemonMetrics,
 ) -> Vec<Uuid> {
     let mut v3_msg: Option<ClientMsg> = None;
     let mut overflowed = Vec::new();
@@ -78,7 +79,9 @@ fn send_to_collected(
         } else {
             msg
         };
-        if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(outgoing.clone()) {
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            crate::instrument::instrumented_try_send(sender, outgoing.clone(), metrics)
+        {
             tracing::warn!(
                 "Client {} push channel full — dropping message (runtime={}, pane={})",
                 short_id(*client_id),
@@ -185,6 +188,8 @@ pub struct Server {
     pub engine: Box<dyn Engine>,
     /// OS abstraction for paths.
     pub os: Box<dyn OsInterface>,
+    /// Always-on profiling metrics shared with the profiling layer.
+    pub metrics: Arc<crate::metrics::DaemonMetrics>,
     /// Per-client bounded push channels for server-initiated messages (Deltas, etc.).
     client_senders: HashMap<Uuid, mpsc::Sender<ClientMsg>>,
     /// Per-client response channels for request/response messages.
@@ -202,13 +207,14 @@ pub struct Server {
 impl Server {
     /// Create a new server with the native engine.
     #[must_use]
-    pub fn new(os: Box<dyn OsInterface>) -> Self {
+    pub fn new(os: Box<dyn OsInterface>, metrics: Arc<crate::metrics::DaemonMetrics>) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
         Self {
             runtimes: HashMap::new(),
             server_id: Uuid::new_v4(),
             engine: Box::new(NativeEngine),
             os,
+            metrics,
             client_senders: HashMap::new(),
             client_resp_senders: HashMap::new(),
             client_protocols: HashMap::new(),
@@ -316,15 +322,18 @@ impl Server {
             None,
         }
 
+        // Extract metrics for instrumented lock helpers and PTY read loops.
+        let metrics = { server.lock().await.metrics.clone() };
+
         // Phase 1: collect pane metadata and paths under the server lock.
         let replay_targets: Vec<(Uuid, Uuid, String, Option<std::path::PathBuf>)>;
         let state_dir;
         {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, &metrics).await;
             state_dir = s.os.state_dir();
             let mut targets = Vec::new();
             for rt_lock in s.runtimes.values() {
-                let rt = rt_lock.lock().await;
+                let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
                 let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
                 for pane in rt.panes.values() {
                     targets.push((rt.id, pane.id, label.clone(), pane.scrollback_log_path.clone()));
@@ -405,10 +414,10 @@ impl Server {
             bool,
         )>;
         {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, &metrics).await;
             for (runtime_id, pane_id, _, data) in replay_results {
                 if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
-                    let mut rt = rt_lock.lock().await;
+                    let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
                     if let Some(pane) = rt.panes.get_mut(&pane_id) {
                         match data {
                             ReplayData::Snapshot(snap) => pane.restore_from_snapshot(&snap),
@@ -421,7 +430,7 @@ impl Server {
 
             let mut targets = Vec::new();
             for rt_lock in s.runtimes.values() {
-                let rt = rt_lock.lock().await;
+                let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
                 let name = rt.name.clone();
                 for pane in rt.panes.values() {
                     targets.push((
@@ -449,7 +458,7 @@ impl Server {
             let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
             let pane_short = short_id(pane_id);
             let pty_result = {
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(server, &metrics).await;
                 let mut env = vec![];
                 if no_persist {
                     env.push(("HISTFILE".into(), "/dev/null".into()));
@@ -472,11 +481,11 @@ impl Server {
                     let (reader, writer, child) = pty.into_parts();
                     let (kill_tx, kill_rx) = oneshot::channel();
                     {
-                        let mut s = server.lock().await;
+                        let mut s = crate::instrument::lock_server(server, &metrics).await;
                         s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                         s.pty_kill_senders.insert(pane_id, kill_tx);
                         if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
-                            let mut rt = rt_lock.lock().await;
+                            let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
                             let _ = rt.set_pane_exit_status(pane_id, None);
                             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                 pane.child_pid = child_pid;
@@ -491,6 +500,7 @@ impl Server {
                         reader,
                         child,
                         kill_rx,
+                        Arc::clone(&metrics),
                     );
                     tracing::info!("Reconstructed pane {pane_short} in runtime {runtime_label}");
                 }
@@ -498,9 +508,9 @@ impl Server {
                     tracing::error!(
                         "Failed to reconstruct pane {pane_short} in runtime {runtime_label}: {e}"
                     );
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, &metrics).await;
                     if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
-                        let mut rt = rt_lock.lock().await;
+                        let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
                         let _ = rt.set_pane_exit_status(pane_id, Some(-1));
                     }
                 }
@@ -538,7 +548,9 @@ impl Server {
                 } else {
                     msg
                 };
-            if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(outgoing.clone()) {
+            if let Err(mpsc::error::TrySendError::Full(_)) =
+                crate::instrument::instrumented_try_send(sender, outgoing.clone(), &self.metrics)
+            {
                 tracing::warn!(
                     "Client {} push channel full — dropping message",
                     short_id(client_id),
@@ -695,6 +707,7 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         msg: proto::ClientMessage,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<proto::ServerMessage> {
         let Some(inner) = msg.msg else {
             return Some(protocol::error(protocol::ERR_EMPTY_MESSAGE, "empty message".into()));
@@ -712,17 +725,17 @@ impl Server {
                         ),
                     ));
                 }
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(server, metrics).await;
                 Some(protocol::hello_ack(s.server_id))
             }
 
             proto::client_message::Msg::Ping(ping) => Some(protocol::pong(ping.nonce)),
 
             proto::client_message::Msg::ListRuntimes(_) => {
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(server, metrics).await;
                 let mut runtimes_snapshot = Vec::with_capacity(s.runtimes.len());
                 for rt_lock in s.runtimes.values() {
-                    let rt = rt_lock.lock().await;
+                    let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                     runtimes_snapshot.push(protocol::runtime_info_for_v2(client_id, &rt));
                 }
                 drop(s);
@@ -731,12 +744,12 @@ impl Server {
             }
 
             proto::client_message::Msg::GetDiagnostics(_) => {
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(server, metrics).await;
                 Some(protocol::diagnostics_report(&s))
             }
 
             proto::client_message::Msg::CreateRuntime(req) => {
-                let mut s = server.lock().await;
+                let mut s = crate::instrument::lock_server(server, metrics).await;
                 let rt = Runtime::new(req.name);
                 let runtime_id = rt.id;
                 let policy = RuntimePolicy::from_proto(req.policy);
@@ -765,7 +778,7 @@ impl Server {
                 };
                 let attach_mode = AttachMode::from_proto(req.attach_mode);
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -776,7 +789,7 @@ impl Server {
                         }
                     }
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 let attach_outcome = match rt.attach_client(client_id, attach_mode) {
                     Ok(outcome) => outcome,
                     Err(AttachError::UnsupportedTakeOver) => {
@@ -838,7 +851,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -849,7 +862,7 @@ impl Server {
                         }
                     }
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
                     DetachOutcome::Detached { revision }
                     | DetachOutcome::NotAttached { revision } => {
@@ -867,7 +880,7 @@ impl Server {
                             short_id(client_id),
                         );
                         drop(rt);
-                        let mut s = server.lock().await;
+                        let mut s = crate::instrument::lock_server(server, metrics).await;
                         let _ = s.terminate_runtime(
                             runtime_id,
                             final_revision,
@@ -889,14 +902,14 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
+                let mut s = crate::instrument::lock_server(server, metrics).await;
                 let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                     return Some(protocol::error(
                         protocol::ERR_RUNTIME_NOT_FOUND,
                         "runtime not found".into(),
                     ));
                 };
-                let rt = rt_lock.lock().await;
+                let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                 if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -934,14 +947,14 @@ impl Server {
                 let pane_id = Uuid::new_v4();
                 let no_persist = req.no_persist.unwrap_or(false);
                 let (pty_result, runtime_label, cols, rows, initial_cwd) = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                         return Some(protocol::error(
                             protocol::ERR_RUNTIME_NOT_FOUND,
                             "runtime not found".into(),
                         ));
                     };
-                    let rt = rt_lock.lock().await;
+                    let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                     if !rt.client_has_write_access(client_id) {
                         return Some(protocol::error(
                             protocol::ERR_OWNERSHIP_CONFLICT,
@@ -979,8 +992,8 @@ impl Server {
                         let child_pid = pty.pid();
                         let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
-                        let (revision, runtime_name) = {
-                            let mut s = server.lock().await;
+                        let (revision, runtime_name, metrics) = {
+                            let mut s = crate::instrument::lock_server(server, metrics).await;
                             let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                                 let _ = child.start_kill();
                                 return Some(protocol::error(
@@ -988,7 +1001,7 @@ impl Server {
                                     "runtime not found".into(),
                                 ));
                             };
-                            let mut rt = rt_lock.lock().await;
+                            let mut rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                             let mut pane = Pane::new(pane_id, cols, rows);
                             pane.child_pid = child_pid;
                             pane.no_persist = no_persist;
@@ -1000,7 +1013,8 @@ impl Server {
                             s.pty_writers
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
-                            (revision, name)
+                            let m = s.metrics.clone();
+                            (revision, name, m)
                         };
                         spawn_pty_read_loop(
                             Arc::clone(server),
@@ -1010,6 +1024,7 @@ impl Server {
                             reader,
                             child,
                             kill_rx,
+                            metrics,
                         );
                         tracing::info!(
                             "Pane {} created in runtime \"{}\" ({})",
@@ -1051,14 +1066,14 @@ impl Server {
                         ));
                     }
                 };
-                let mut s = server.lock().await;
+                let mut s = crate::instrument::lock_server(server, metrics).await;
                 let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                     return Some(protocol::error(
                         protocol::ERR_RUNTIME_NOT_FOUND,
                         "runtime not found".into(),
                     ));
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -1090,11 +1105,11 @@ impl Server {
                     return None;
                 };
                 let (writer, runtime_label) = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
                     let writer = s.pty_writers.get(&pane_id).cloned();
                     drop(s);
-                    let rt = rt_lock.lock().await;
+                    let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                     if !rt.panes.contains_key(&pane_id) {
                         return None;
                     }
@@ -1139,13 +1154,13 @@ impl Server {
                 };
 
                 let (writer, rt_lock) = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
                     let writer = s.pty_writers.get(&pane_id).cloned();
                     (writer, rt_lock)
                 };
                 {
-                    let rt = rt_lock.lock().await;
+                    let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                     if !rt.panes.contains_key(&pane_id) {
                         return None;
                     }
@@ -1171,7 +1186,7 @@ impl Server {
                     }
                 }
 
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 let revision = rt.resize_pane(pane_id, cols, rows)?;
 
                 Some(protocol::pane_resized(runtime_id, pane_id, cols, rows, revision))
@@ -1197,7 +1212,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -1208,7 +1223,7 @@ impl Server {
                         }
                     }
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -1235,7 +1250,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -1246,7 +1261,7 @@ impl Server {
                         }
                     }
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(protocol::error(
                         protocol::ERR_OWNERSHIP_CONFLICT,
@@ -1275,6 +1290,7 @@ impl Server {
         client_id: Uuid,
         effective_caps: &[i32],
         envelope: v3::ClientEnvelope,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let request_id = envelope.request_id;
         let Some(command) = envelope.command else {
@@ -1297,11 +1313,11 @@ impl Server {
             }
 
             v3::client_envelope::Command::ListRuntimes(_) => {
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(server, metrics).await;
                 let has_inventory_v2 = rttx_proto::v3_inventory::is_supported(effective_caps);
                 let mut infos = Vec::with_capacity(s.runtimes.len());
                 for rt_lock in s.runtimes.values() {
-                    let rt = rt_lock.lock().await;
+                    let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                     infos.push(protocol::v3_runtime_info_for(client_id, &rt, has_inventory_v2));
                 }
                 drop(s);
@@ -1323,7 +1339,7 @@ impl Server {
                         ),
                     ));
                 }
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(server, metrics).await;
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
                     v3::server_envelope::Payload::DiagnosticsReport(
@@ -1333,7 +1349,7 @@ impl Server {
             }
 
             v3::client_envelope::Command::CreateRuntime(req) => {
-                let mut s = server.lock().await;
+                let mut s = crate::instrument::lock_server(server, metrics).await;
                 let rt = Runtime::new(req.name);
                 let runtime_id = rt.id;
                 let policy = RuntimePolicy::from_v3_proto(req.policy);
@@ -1357,39 +1373,39 @@ impl Server {
             }
 
             v3::client_envelope::Command::AttachRuntime(req) => {
-                Self::handle_v3_attach(server, client_id, request_id, req).await
+                Self::handle_v3_attach(server, client_id, request_id, req, metrics).await
             }
 
             v3::client_envelope::Command::DetachRuntime(req) => {
-                Self::handle_v3_detach(server, client_id, request_id, req).await
+                Self::handle_v3_detach(server, client_id, request_id, req, metrics).await
             }
 
             v3::client_envelope::Command::TerminateRuntime(req) => {
-                Self::handle_v3_terminate(server, client_id, request_id, req).await
+                Self::handle_v3_terminate(server, client_id, request_id, req, metrics).await
             }
 
             v3::client_envelope::Command::CreatePane(req) => {
-                Self::handle_v3_create_pane(server, client_id, request_id, req).await
+                Self::handle_v3_create_pane(server, client_id, request_id, req, metrics).await
             }
 
             v3::client_envelope::Command::ClosePane(req) => {
-                Self::handle_v3_close_pane(server, client_id, request_id, req).await
+                Self::handle_v3_close_pane(server, client_id, request_id, req, metrics).await
             }
 
             v3::client_envelope::Command::TerminalInput(input) => {
-                Self::handle_v3_terminal_input(server, client_id, input).await
+                Self::handle_v3_terminal_input(server, client_id, input, metrics).await
             }
 
             v3::client_envelope::Command::ResizePane(req) => {
-                Self::handle_v3_resize(server, client_id, req).await
+                Self::handle_v3_resize(server, client_id, req, metrics).await
             }
 
             v3::client_envelope::Command::SetPaneTitle(req) => {
-                Self::handle_v3_set_pane_title(server, client_id, req).await
+                Self::handle_v3_set_pane_title(server, client_id, req, metrics).await
             }
 
             v3::client_envelope::Command::SetPaneNoPersist(req) => {
-                Self::handle_v3_set_pane_no_persist(server, client_id, req).await
+                Self::handle_v3_set_pane_no_persist(server, client_id, req, metrics).await
             }
 
             v3::client_envelope::Command::RenameRuntime(req) => {
@@ -1407,7 +1423,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -1422,7 +1438,7 @@ impl Server {
                         }
                     }
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
@@ -1476,7 +1492,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -1491,7 +1507,7 @@ impl Server {
                         }
                     }
                 };
-                let rt = rt_lock.lock().await;
+                let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 let role = rt
                     .client_role(client_id)
                     .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto);
@@ -1537,7 +1553,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -1552,7 +1568,7 @@ impl Server {
                         }
                     }
                 };
-                let rt = rt_lock.lock().await;
+                let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 let Some(pane) = rt.panes.get(&pane_id) else {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
@@ -1604,7 +1620,7 @@ impl Server {
                     }
                 };
                 let rt_lock = {
-                    let s = server.lock().await;
+                    let s = crate::instrument::lock_server(server, metrics).await;
                     match s.runtimes.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
@@ -1619,7 +1635,7 @@ impl Server {
                         }
                     }
                 };
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
                 match rt.attach_client(client_id, AttachMode::TakeOver) {
                     Ok(AttachOutcome::Attached { revision, .. }) => {
                         Some(rttx_proto::v3_takeover::build_takeover_completed_response(
@@ -1670,6 +1686,7 @@ impl Server {
         client_id: Uuid,
         request_id: u64,
         req: v3::AttachRuntime,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
             Ok(id) => id,
@@ -1686,7 +1703,7 @@ impl Server {
         };
         let attach_mode = AttachMode::from_v3_proto(req.attach_mode);
         let rt_lock = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             match s.runtimes.get(&runtime_id) {
                 Some(rt) => Arc::clone(rt),
                 None => {
@@ -1701,7 +1718,7 @@ impl Server {
                 }
             }
         };
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
         let attach_outcome = match rt.attach_client(client_id, attach_mode) {
             Ok(outcome) => outcome,
             Err(AttachError::UnsupportedTakeOver) => {
@@ -1749,6 +1766,7 @@ impl Server {
         client_id: Uuid,
         request_id: u64,
         req: v3::DetachRuntime,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
             Ok(id) => id,
@@ -1764,7 +1782,7 @@ impl Server {
             }
         };
         let rt_lock = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             match s.runtimes.get(&runtime_id) {
                 Some(rt) => Arc::clone(rt),
                 None => {
@@ -1779,7 +1797,7 @@ impl Server {
                 }
             }
         };
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
         match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
             DetachOutcome::Detached { revision } | DetachOutcome::NotAttached { revision } => {
                 let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
@@ -1802,7 +1820,7 @@ impl Server {
                     short_id(client_id)
                 );
                 drop(rt);
-                let mut s = server.lock().await;
+                let mut s = crate::instrument::lock_server(server, metrics).await;
                 let _ = s.terminate_runtime(runtime_id, final_revision, reason, Some(client_id));
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
@@ -1821,6 +1839,7 @@ impl Server {
         client_id: Uuid,
         request_id: u64,
         req: v3::TerminateRuntime,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
             Ok(id) => id,
@@ -1835,7 +1854,7 @@ impl Server {
                 ));
             }
         };
-        let mut s = server.lock().await;
+        let mut s = crate::instrument::lock_server(server, metrics).await;
         let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
@@ -1846,7 +1865,7 @@ impl Server {
                 ),
             ));
         };
-        let rt = rt_lock.lock().await;
+        let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
         if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
@@ -1883,6 +1902,7 @@ impl Server {
         client_id: Uuid,
         request_id: u64,
         req: v3::CreatePane,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
             Ok(id) => id,
@@ -1900,7 +1920,7 @@ impl Server {
         let pane_id = Uuid::new_v4();
         let no_persist = req.no_persist.unwrap_or(false);
         let (pty_result, runtime_label, cols, rows, initial_cwd) = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
@@ -1911,7 +1931,7 @@ impl Server {
                     ),
                 ));
             };
-            let rt = rt_lock.lock().await;
+            let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
             if !rt.client_has_write_access(client_id) {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
@@ -1947,8 +1967,8 @@ impl Server {
                 let child_pid = pty.pid();
                 let (reader, writer, mut child) = pty.into_parts();
                 let (kill_tx, kill_rx) = oneshot::channel();
-                let (revision, runtime_name) = {
-                    let mut s = server.lock().await;
+                let (revision, runtime_name, metrics) = {
+                    let mut s = crate::instrument::lock_server(server, metrics).await;
                     let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                         let _ = child.start_kill();
                         return Some(rttx_proto::v3_error::build_error_response(
@@ -1960,7 +1980,7 @@ impl Server {
                             ),
                         ));
                     };
-                    let mut rt = rt_lock.lock().await;
+                    let mut rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
                     let mut pane = Pane::new(pane_id, cols, rows);
                     pane.child_pid = child_pid;
                     pane.no_persist = no_persist;
@@ -1971,7 +1991,8 @@ impl Server {
                     drop(rt);
                     s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                     s.pty_kill_senders.insert(pane_id, kill_tx);
-                    (revision, name)
+                    let m = s.metrics.clone();
+                    (revision, name, m)
                 };
                 spawn_pty_read_loop(
                     Arc::clone(server),
@@ -1981,6 +2002,7 @@ impl Server {
                     reader,
                     child,
                     kill_rx,
+                    metrics,
                 );
                 tracing::info!(
                     "Pane {} created in runtime \"{}\" ({})",
@@ -2019,6 +2041,7 @@ impl Server {
         client_id: Uuid,
         request_id: u64,
         req: v3::ClosePane,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
             Ok(id) => id,
@@ -2046,7 +2069,7 @@ impl Server {
                 ));
             }
         };
-        let mut s = server.lock().await;
+        let mut s = crate::instrument::lock_server(server, metrics).await;
         let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
@@ -2057,7 +2080,7 @@ impl Server {
                 ),
             ));
         };
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
         if !rt.client_has_write_access(client_id) {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
@@ -2100,15 +2123,16 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         input: v3::TerminalInput,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let Ok(runtime_id) = bytes_to_uuid(&input.runtime_id) else { return None };
         let Ok(pane_id) = bytes_to_uuid(&input.pane_id) else { return None };
         let (writer, resolved_bytes) = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
             let writer = s.pty_writers.get(&pane_id).cloned();
             drop(s);
-            let rt = rt_lock.lock().await;
+            let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
             if !rt.panes.contains_key(&pane_id) {
                 return None;
             }
@@ -2140,19 +2164,20 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         req: v3::ResizePane,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
         let Ok(cols) = u16::try_from(req.cols) else { return None };
         let Ok(rows) = u16::try_from(req.rows) else { return None };
         let (writer, rt_lock) = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
             let writer = s.pty_writers.get(&pane_id).cloned();
             (writer, rt_lock)
         };
         {
-            let rt = rt_lock.lock().await;
+            let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
             if !rt.panes.contains_key(&pane_id) {
                 return None;
             }
@@ -2172,7 +2197,7 @@ impl Server {
                 return None;
             }
         }
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
         rt.resize_pane(pane_id, cols, rows)?;
         None
     }
@@ -2181,14 +2206,15 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         req: v3::SetPaneTitle,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
         let rt_lock = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             s.runtimes.get(&runtime_id)?.clone()
         };
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
         if !rt.client_has_write_access(client_id) {
             return None;
         }
@@ -2200,14 +2226,15 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         req: v3::SetPaneNoPersist,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
         let rt_lock = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(server, metrics).await;
             s.runtimes.get(&runtime_id)?.clone()
         };
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
         if !rt.client_has_write_access(client_id) {
             return None;
         }
@@ -2232,6 +2259,7 @@ pub const MUTEX_HOLD_WARN_THRESHOLD: Duration = Duration::from_millis(10);
 pub const CONTENTION_BACKOFF: Duration = Duration::from_micros(200);
 
 /// Spawn a background task that reads PTY output and broadcasts Deltas.
+#[allow(clippy::too_many_arguments)] // metrics parameter required for instrumentation
 fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
     runtime_id: Uuid,
@@ -2240,6 +2268,7 @@ fn spawn_pty_read_loop(
     mut reader: pty_process::OwnedReadPty,
     mut child: tokio::process::Child,
     mut kill_rx: oneshot::Receiver<()>,
+    metrics: Arc<crate::metrics::DaemonMetrics>,
 ) {
     let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
     let pane_short = short_id(pane_id);
@@ -2247,7 +2276,7 @@ fn spawn_pty_read_loop(
         // Grab the per-runtime lock once at startup so the hot path
         // never touches the server mutex for runtime access.
         let rt_lock: Option<RuntimeLock> = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(&server, &metrics).await;
             s.runtimes.get(&runtime_id).cloned()
         };
         let Some(rt_lock) = rt_lock else {
@@ -2287,7 +2316,7 @@ fn spawn_pty_read_loop(
                             // only touched briefly to collect client senders.
                             let (mut taken_screen, senders, output_seq, contended) = {
                                 let lock_start = std::time::Instant::now();
-                                let mut rt = rt_lock.lock().await;
+                                let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
                                 let (screen, seq) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                     pane.accept_output(&data);
                                     (Some(pane.take_screen()), pane.output_seq)
@@ -2297,7 +2326,7 @@ fn spawn_pty_read_loop(
                                 let client_ids: Vec<Uuid> =
                                     rt.attached_clients.keys().copied().collect();
                                 drop(rt);
-                                let s = server.lock().await;
+                                let s = crate::instrument::lock_server(&server, &metrics).await;
                                 let senders = s.collect_senders_for_clients(&client_ids);
                                 drop(s);
                                 let hold = lock_start.elapsed();
@@ -2327,7 +2356,7 @@ fn spawn_pty_read_loop(
                             // Phase 3: return parsed screen under per-runtime lock,
                             // collect PTY writer from server.
                             let (new_cwd, new_title, pending_replies, pty_writer) = {
-                                let mut rt = rt_lock.lock().await;
+                                let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
                                 if let Some(screen) = taken_screen
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
@@ -2343,7 +2372,7 @@ fn spawn_pty_read_loop(
                                     let needs_writer = !result.pending_replies.is_empty();
                                     drop(rt);
                                     let writer = if needs_writer {
-                                        let s = server.lock().await;
+                                        let s = crate::instrument::lock_server(&server, &metrics).await;
                                         s.pty_writers.get(&pane_id).cloned()
                                     } else {
                                         None
@@ -2376,20 +2405,20 @@ fn spawn_pty_read_loop(
                             let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
                                 let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data.clone())));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, output_seq));
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, output_seq, &metrics));
                             }
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = ClientMsg::V2(protocol::cwd_changed(runtime_id, pane_id, cwd, revision));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0));
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics));
                             }
                             if let Some((title, revision)) = new_title {
                                 let msg = ClientMsg::V2(protocol::title_changed(runtime_id, pane_id, title, revision));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0));
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics));
                             }
                             if !all_overflows.is_empty() {
                                 all_overflows.sort_unstable();
                                 all_overflows.dedup();
-                                let mut s = server.lock().await;
+                                let mut s = crate::instrument::lock_server(&server, &metrics).await;
                                 s.handle_push_overflows(&all_overflows, runtime_id);
                             }
                         }
@@ -2420,7 +2449,7 @@ fn spawn_pty_read_loop(
 
         // Feed terminal cleanup and broadcast exit under per-runtime lock.
         {
-            let mut rt = rt_lock.lock().await;
+            let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                 pane.feed_cleanup();
             }
@@ -2432,7 +2461,7 @@ fn spawn_pty_read_loop(
                 pane_id,
                 bytes::Bytes::from_static(crate::screen::terminal_cleanup_bytes()),
             ));
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(&server, &metrics).await;
             let senders = s.collect_senders_for_clients(&client_ids);
             drop(s);
             for (_, sender, protocol) in &senders {
@@ -2446,7 +2475,7 @@ fn spawn_pty_read_loop(
         }
 
         {
-            let mut rt = rt_lock.lock().await;
+            let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
             let exit_msg = {
                 let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
                     ClientMsg::V2(protocol::pane_exited(runtime_id, pane_id, status, revision))
@@ -2460,7 +2489,7 @@ fn spawn_pty_read_loop(
             drop(rt);
 
             if let Some(msg) = exit_msg {
-                let s = server.lock().await;
+                let s = crate::instrument::lock_server(&server, &metrics).await;
                 let senders = s.collect_senders_for_clients(&client_ids);
                 drop(s);
                 for (_, sender, protocol) in &senders {
@@ -2475,7 +2504,7 @@ fn spawn_pty_read_loop(
         }
 
         {
-            let mut s = server.lock().await;
+            let mut s = crate::instrument::lock_server(&server, &metrics).await;
             s.pty_writers.remove(&pane_id);
             s.pty_kill_senders.remove(&pane_id);
         }
@@ -2499,6 +2528,7 @@ pub async fn serialization_loop(
     interval: Duration,
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
+    let metrics = { server.lock().await.metrics.clone() };
     let mut ticker = tokio::time::interval(interval);
     let mut diagnostics_counter = 0u64;
     let mut last_persisted_ids: Vec<Uuid> = Vec::new();
@@ -2511,7 +2541,7 @@ pub async fn serialization_loop(
             }
         }
 
-        let s = server.lock().await;
+        let s = crate::instrument::lock_server(&server, &metrics).await;
         let state_dir = s.os.state_dir();
 
         // Phase 1: drain pending scrollback bytes using per-runtime locks.
@@ -2521,7 +2551,7 @@ pub async fn serialization_loop(
         drop(s);
 
         for (runtime_id, rt_lock) in &runtime_entries {
-            let mut rt = rt_lock.lock().await;
+            let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
             for pane in rt.panes.values_mut() {
                 if !pane.has_pending_flush() || pane.no_persist {
                     if pane.no_persist {
@@ -2539,7 +2569,7 @@ pub async fn serialization_loop(
         // Log diagnostics every 30 ticks (~30 seconds at 1s interval).
         diagnostics_counter += 1;
         if diagnostics_counter.is_multiple_of(30) {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(&server, &metrics).await;
             s.log_diagnostics();
         }
 
@@ -2549,7 +2579,7 @@ pub async fn serialization_loop(
         let mut current_ids = Vec::new();
 
         for (runtime_id, rt_lock) in &runtime_entries {
-            let rt = rt_lock.lock().await;
+            let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
             if rt.policy == RuntimePolicy::Persistent {
                 current_ids.push(*runtime_id);
                 if rt.is_dirty() {
@@ -2603,10 +2633,10 @@ pub async fn serialization_loop(
 
         // Mark successfully written runtimes as persisted.
         if !written_ids.is_empty() {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(&server, &metrics).await;
             for id in &written_ids {
                 if let Some(rt_lock) = s.runtimes.get(id) {
-                    let mut rt = rt_lock.lock().await;
+                    let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
                     rt.mark_persisted();
                 }
             }
@@ -2619,7 +2649,8 @@ pub async fn serialization_loop(
 /// Writes all persistent runtimes unconditionally (ignoring dirty flags)
 /// because this is the last chance before shutdown.
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
-    let s = server.lock().await;
+    let metrics = { server.lock().await.metrics.clone() };
+    let s = crate::instrument::lock_server(server, &metrics).await;
     let state_dir = s.os.state_dir();
 
     // Collect runtime locks and drain pending scrollback.
@@ -2629,7 +2660,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
 
     let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
     for (runtime_id, rt_lock) in &runtime_entries {
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
         for pane in rt.panes.values_mut() {
             if !pane.has_pending_flush() || pane.no_persist {
                 if pane.no_persist {
@@ -2649,7 +2680,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let mut screen_snapshots = Vec::new();
 
     for (runtime_id, rt_lock) in &runtime_entries {
-        let mut rt = rt_lock.lock().await;
+        let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
         if rt.policy == RuntimePolicy::Persistent {
             runtime_files.push(rt.to_runtime_file());
             for pane in rt.panes.values() {
@@ -2700,8 +2731,9 @@ pub const MAX_CONCURRENT_CLIENTS: usize = 128;
 /// or OS signal). The caller is responsible for process-level cleanup
 /// (PID file removal, `process::exit`).
 pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
+    let metrics = { server.lock().await.metrics.clone() };
     let (socket_path, mut shutdown_rx) = {
-        let s = server.lock().await;
+        let s = crate::instrument::lock_server(&server, &metrics).await;
         (s.os.runtime_dir().join("rttx-server.sock"), s.shutdown_rx())
     };
 
@@ -2766,8 +2798,9 @@ where
 
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(RESP_CHANNEL_BOUND);
+    let metrics = { server.lock().await.metrics.clone() };
     {
-        let mut s = server.lock().await;
+        let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.client_senders.insert(client_id, tx);
         s.client_resp_senders.insert(client_id, resp_tx.clone());
     }
@@ -2775,14 +2808,16 @@ where
     // Read the first raw frame to detect v2 vs v3 protocol.
     let Some(raw_frame) = conn.read_raw_frame().await? else {
         tracing::debug!("Client probe from {client_short} (disconnected before handshake)");
-        let mut s = server.lock().await;
+        let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.client_senders.remove(&client_id);
         s.client_resp_senders.remove(&client_id);
         return Ok(());
     };
 
     // Try v3 ClientHello first, then fall back to v2 ClientMessage.
-    let is_v3 = try_v3_handshake(&server, client_id, &client_short, &mut conn, &raw_frame).await?;
+    let is_v3 =
+        try_v3_handshake(&server, client_id, &client_short, &mut conn, &raw_frame, &metrics)
+            .await?;
 
     let (reader, writer) = conn.into_split();
     let write_short = client_short.clone();
@@ -2790,15 +2825,24 @@ where
 
     let (result, handshake_completed) = if is_v3 {
         tracing::info!("Client {client_short} connected (v3)");
-        v3_client_reader(server.clone(), client_id, &client_short, reader, resp_tx).await
-    } else {
-        v2_client_reader(server.clone(), client_id, &client_short, reader, resp_tx, &raw_frame)
+        v3_client_reader(server.clone(), client_id, &client_short, reader, resp_tx, metrics.clone())
             .await
+    } else {
+        v2_client_reader(
+            server.clone(),
+            client_id,
+            &client_short,
+            reader,
+            resp_tx,
+            &raw_frame,
+            metrics.clone(),
+        )
+        .await
     };
 
     // Cleanup: remove sender and detach from all runtimes.
     {
-        let mut s = server.lock().await;
+        let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.client_senders.remove(&client_id);
         s.client_resp_senders.remove(&client_id);
         s.client_protocols.remove(&client_id);
@@ -2806,7 +2850,7 @@ where
             let rt_locks: Vec<RuntimeLock> = s.runtimes.values().cloned().collect();
             drop(s);
             for rt_lock in rt_locks {
-                let mut rt = rt_lock.lock().await;
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
                 let _ = rt.detach_client(client_id, DetachReason::Disconnect);
             }
         }
@@ -2831,6 +2875,7 @@ async fn try_v3_handshake<S>(
     client_short: &str,
     conn: &mut ClientConnection<S>,
     raw_frame: &[u8],
+    metrics: &Arc<crate::metrics::DaemonMetrics>,
 ) -> anyhow::Result<bool>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -2849,7 +2894,7 @@ where
     }
 
     let server_version = env!("CARGO_PKG_VERSION");
-    let server_id = server.lock().await.server_id;
+    let server_id = crate::instrument::lock_server(server, metrics).await.server_id;
 
     match rttx_proto::v3_handshake::negotiate_version(
         client_hello.min_protocol_version,
@@ -2882,7 +2927,7 @@ where
             conn.send_v3_server_hello(&hello).await?;
 
             {
-                let mut s = server.lock().await;
+                let mut s = crate::instrument::lock_server(server, metrics).await;
                 s.set_client_protocol(client_id, ClientProtocol::V3 { effective_caps });
             }
 
@@ -2910,6 +2955,7 @@ async fn v2_client_reader(
     mut reader: ClientConnectionReader,
     resp_tx: mpsc::Sender<ClientMsg>,
     first_frame: &[u8],
+    metrics: Arc<crate::metrics::DaemonMetrics>,
 ) -> (anyhow::Result<()>, bool) {
     use prost::Message;
 
@@ -2924,14 +2970,14 @@ async fn v2_client_reader(
 
     // Register as v2 client.
     {
-        let mut s = server.lock().await;
+        let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.set_client_protocol(client_id, ClientProtocol::V2);
     }
 
     // Process the first message (Hello).
     if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
         tracing::info!("Shutdown requested by client {client_short}");
-        server.lock().await.request_shutdown();
+        crate::instrument::lock_server(&server, &metrics).await.request_shutdown();
         return (Ok(()), true);
     }
 
@@ -2939,7 +2985,7 @@ async fn v2_client_reader(
         if resp_tx.send(ClientMsg::V2(protocol::pong(ping.nonce))).await.is_err() {
             return (Ok(()), true);
         }
-    } else if let Some(response) = Server::handle_message(&server, client_id, msg).await
+    } else if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
         && resp_tx.send(ClientMsg::V2(response)).await.is_err()
     {
         return (Ok(()), true);
@@ -2958,7 +3004,7 @@ async fn v2_client_reader(
 
         if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
             tracing::info!("Shutdown requested by client {client_short}");
-            server.lock().await.request_shutdown();
+            crate::instrument::lock_server(&server, &metrics).await.request_shutdown();
             return (Ok(()), true);
         }
 
@@ -2969,7 +3015,7 @@ async fn v2_client_reader(
             continue;
         }
 
-        if let Some(response) = Server::handle_message(&server, client_id, msg).await
+        if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
             && resp_tx.send(ClientMsg::V2(response)).await.is_err()
         {
             return (Ok(()), true);
@@ -2984,6 +3030,7 @@ async fn v3_client_reader(
     client_short: &str,
     mut reader: ClientConnectionReader,
     resp_tx: mpsc::Sender<ClientMsg>,
+    metrics: Arc<crate::metrics::DaemonMetrics>,
 ) -> (anyhow::Result<()>, bool) {
     loop {
         let envelope = match reader.read_v3_envelope().await {
@@ -2998,7 +3045,7 @@ async fn v3_client_reader(
         // Check for Shutdown (fire-and-forget).
         if matches!(envelope.command, Some(v3::client_envelope::Command::Shutdown(_))) {
             tracing::info!("Shutdown requested by client {client_short}");
-            server.lock().await.request_shutdown();
+            crate::instrument::lock_server(&server, &metrics).await.request_shutdown();
             return (Ok(()), true);
         }
 
@@ -3016,7 +3063,7 @@ async fn v3_client_reader(
 
         // Look up effective capabilities for this client.
         let effective_caps = {
-            let s = server.lock().await;
+            let s = crate::instrument::lock_server(&server, &metrics).await;
             match s.client_protocol(client_id) {
                 Some(ClientProtocol::V3 { effective_caps }) => effective_caps.clone(),
                 _ => Vec::new(),
@@ -3024,7 +3071,7 @@ async fn v3_client_reader(
         };
 
         if let Some(response) =
-            Server::handle_v3_message(&server, client_id, &effective_caps, envelope).await
+            Server::handle_v3_message(&server, client_id, &effective_caps, envelope, &metrics).await
             && resp_tx.send(ClientMsg::V3(response)).await.is_err()
         {
             return (Ok(()), true);
