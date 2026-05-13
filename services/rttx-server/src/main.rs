@@ -232,7 +232,8 @@ fn profile(opts: &ProfileOpts) -> anyhow::Result<()> {
     let flight_path = state_dir.join(filename);
 
     if !flight_path.exists() {
-        let label = if opts.last_crash { "previous instance flight recorder" } else { "flight recorder" };
+        let label =
+            if opts.last_crash { "previous instance flight recorder" } else { "flight recorder" };
         eprintln!("No {label} found at {}", flight_path.display());
         if !opts.last_crash {
             eprintln!("Is the daemon running? Start it with: rttx-server start");
@@ -253,11 +254,7 @@ fn profile(opts: &ProfileOpts) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn profile_once(
-    flight_path: &std::path::Path,
-    pid: Option<u32>,
-    json: bool,
-) -> anyhow::Result<()> {
+fn profile_once(flight_path: &std::path::Path, pid: Option<u32>, json: bool) -> anyhow::Result<()> {
     let report = rttx_server::profile::generate_report(flight_path, pid)?;
     if json {
         let json_report: rttx_server::profile::JsonReport = (&report).into();

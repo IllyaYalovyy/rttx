@@ -216,11 +216,7 @@ impl fmt::Display for ProfileReport {
         // Contention section
         writeln!(f)?;
         writeln!(f, "── Contention ──────────────────────────────────────────────")?;
-        writeln!(
-            f,
-            "Mutex contentions (>1ms): {} total",
-            self.contention.mutex_contentions
-        )?;
+        writeln!(f, "Mutex contentions (>1ms): {} total", self.contention.mutex_contentions)?;
         writeln!(f, "Long holds (>10ms):       {} total", self.contention.long_holds)?;
         writeln!(f, "Channel overflows:        {} total", self.contention.channel_overflows)?;
 
@@ -232,7 +228,11 @@ impl fmt::Display for ProfileReport {
                 let dur_ms = op.duration_ns as f64 / 1_000_000.0;
                 let kind_str = span_kind_display(op.span_kind);
                 let ctx = format_context(&op.context);
-                write!(f, "[{:>10}] {kind_str:<30} dur={dur_ms:.1}ms", format_ns_timestamp(op.timestamp_ns))?;
+                write!(
+                    f,
+                    "[{:>10}] {kind_str:<30} dur={dur_ms:.1}ms",
+                    format_ns_timestamp(op.timestamp_ns)
+                )?;
                 if !ctx.is_empty() {
                     write!(f, "  ({ctx})")?;
                 }
@@ -244,7 +244,11 @@ impl fmt::Display for ProfileReport {
     }
 }
 
-fn write_latency_line(f: &mut fmt::Formatter<'_>, label: &str, stats: &LatencyStats) -> fmt::Result {
+fn write_latency_line(
+    f: &mut fmt::Formatter<'_>,
+    label: &str,
+    stats: &LatencyStats,
+) -> fmt::Result {
     if stats.count == 0 {
         writeln!(f, "{label:<18} (no data)")
     } else {
@@ -473,7 +477,7 @@ mod tests {
     #[test]
     fn contention_counted_above_1ms() {
         let events = vec![
-            make_exit_event(1_000_000, SpanKind::MutexAcquire, 500_000),   // 0.5ms - not contention
+            make_exit_event(1_000_000, SpanKind::MutexAcquire, 500_000), // 0.5ms - not contention
             make_exit_event(2_000_000, SpanKind::MutexAcquire, 2_000_000), // 2ms - contention
             make_exit_event(3_000_000, SpanKind::MutexAcquire, 1_500_000), // 1.5ms - contention
         ];
@@ -484,7 +488,7 @@ mod tests {
     #[test]
     fn long_holds_counted_above_10ms() {
         let events = vec![
-            make_exit_event(1_000_000, SpanKind::MutexAcquire, 5_000_000),  // 5ms - not long
+            make_exit_event(1_000_000, SpanKind::MutexAcquire, 5_000_000), // 5ms - not long
             make_exit_event(2_000_000, SpanKind::MutexAcquire, 15_000_000), // 15ms - long
         ];
         let report = build_report(&events, None);
@@ -494,8 +498,8 @@ mod tests {
     #[test]
     fn slow_ops_collected_above_5ms() {
         let events = vec![
-            make_exit_event(1_000_000, SpanKind::PtyRead, 3_000_000),  // 3ms - not slow
-            make_exit_event(2_000_000, SpanKind::IoFlush, 8_000_000),  // 8ms - slow
+            make_exit_event(1_000_000, SpanKind::PtyRead, 3_000_000), // 3ms - not slow
+            make_exit_event(2_000_000, SpanKind::IoFlush, 8_000_000), // 8ms - slow
             make_exit_event(3_000_000, SpanKind::PtyRead, 12_000_000), // 12ms - slow
         ];
         let report = build_report(&events, None);
@@ -517,7 +521,7 @@ mod tests {
     #[test]
     fn uptime_computed_from_event_range() {
         let events = vec![
-            make_enter_event(1_000_000_000, SpanKind::PtyRead),  // 1s
+            make_enter_event(1_000_000_000, SpanKind::PtyRead), // 1s
             make_exit_event(5_000_000_000, SpanKind::PtyRead, 100), // 5s
         ];
         let report = build_report(&events, None);
