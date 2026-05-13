@@ -3,6 +3,7 @@
 pub mod diagnostics;
 pub mod engine;
 pub mod flight;
+pub mod instrument;
 pub mod ipc;
 pub mod logging;
 pub mod metrics;

@@ -190,7 +190,7 @@ mod tests {
                 PathBuf::from("/tmp/test-state/rttx/daemon")
             }
         }
-        Server::new(Box::new(TestOs))
+        Server::new(Box::new(TestOs), std::sync::Arc::new(crate::metrics::DaemonMetrics::new()))
     }
 
     #[test]
