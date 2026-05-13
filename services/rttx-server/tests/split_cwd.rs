@@ -238,3 +238,153 @@ async fn create_pane_without_cwd_inherits_sibling_cwd() {
         "second pane pwd should contain sibling CWD {target_str:?} within timeout.\nOutput: {output}"
     );
 }
+
+/// Pane created with a tilde CWD (`~`) should expand to $HOME. Regression
+/// test for #905.
+#[tokio::test]
+async fn create_pane_with_tilde_cwd_expands_to_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let create = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            name: "tilde-cwd-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    client.send(&create).await;
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
+
+    let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some("~".into())).await;
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    client.send(&attach).await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            runtime_id: runtime_id.clone(),
+            pane_id: pane_id.clone(),
+            data: bytes::Bytes::from_static(b"pwd\n"),
+        })),
+    };
+    client.send(&input).await;
+
+    let home = std::env::var("HOME").expect("HOME must be set");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut output = String::new();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
+            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+        {
+            output.push_str(&String::from_utf8_lossy(&delta.data));
+            if output.contains(&home) {
+                return;
+            }
+        }
+    }
+    panic!(
+        "tilde CWD pane should start in $HOME ({home:?}) within timeout.\nOutput: {output}"
+    );
+}
+
+/// Pane created with a tilde-prefixed CWD (`~/subdir`) should expand to
+/// `$HOME/subdir`. Regression test for #905.
+#[tokio::test]
+async fn create_pane_with_tilde_prefix_cwd_expands_correctly() {
+    let home = std::env::var("HOME").expect("HOME must be set");
+    // Use a subdirectory that exists under $HOME — pick one that's very
+    // likely to exist on any Linux system.
+    let subdir = std::path::Path::new(&home)
+        .read_dir()
+        .ok()
+        .and_then(|mut entries| {
+            entries.find_map(|e| {
+                let e = e.ok()?;
+                if e.file_type().ok()?.is_dir() {
+                    Some(e.file_name().to_string_lossy().into_owned())
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("$HOME must contain at least one subdirectory");
+
+    let tilde_path = format!("~/{subdir}");
+    let expected_abs = format!("{home}/{subdir}");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let create = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            name: "tilde-prefix-test".into(),
+            policy: proto::RuntimePolicy::Persistent as i32,
+        })),
+    };
+    client.send(&create).await;
+    let runtime_id = match client.recv_or_timeout().await.msg {
+        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
+
+    let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some(tilde_path)).await;
+
+    let attach = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            runtime_id: runtime_id.clone(),
+            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
+    client.send(&attach).await;
+    loop {
+        match client.recv_or_timeout().await.msg {
+            Some(proto::server_message::Msg::Snapshot(_)) => break,
+            Some(proto::server_message::Msg::Delta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+
+    let input = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Input(proto::Input {
+            runtime_id: runtime_id.clone(),
+            pane_id: pane_id.clone(),
+            data: bytes::Bytes::from_static(b"pwd\n"),
+        })),
+    };
+    client.send(&input).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut output = String::new();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
+            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+        {
+            output.push_str(&String::from_utf8_lossy(&delta.data));
+            if output.contains(&expected_abs) {
+                return;
+            }
+        }
+    }
+    panic!(
+        "tilde-prefix CWD pane should start in {expected_abs:?} within timeout.\nOutput: {output}"
+    );
+}
