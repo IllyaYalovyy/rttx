@@ -47,6 +47,21 @@ enum Command {
     Diagnostics,
     /// Show resolved paths and configuration
     Config,
+    /// Show profiling report from flight recorder data
+    Profile {
+        /// Dump all ring buffer events chronologically
+        #[arg(long)]
+        dump: bool,
+        /// Read flight.prev.bin from previous daemon instance
+        #[arg(long)]
+        last_crash: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Continuously refresh every 2 seconds
+        #[arg(long)]
+        watch: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -68,7 +83,17 @@ fn main() -> anyhow::Result<()> {
             config();
             Ok(())
         }
+        Command::Profile { dump, last_crash, json, watch } => {
+            profile(&ProfileOpts { dump, last_crash, json, watch })
+        }
     }
+}
+
+struct ProfileOpts {
+    dump: bool,
+    last_crash: bool,
+    json: bool,
+    watch: bool,
 }
 
 fn init_tracing(dev_mode: bool, log_dir: &std::path::Path) {
@@ -196,6 +221,81 @@ fn config() {
     println!("Scrollback: {}", scrollback.display());
     println!("Logs: {}", log_dir.display());
     println!("Protocol version: {}", rttx_proto::PROTOCOL_VERSION);
+}
+
+fn profile(opts: &ProfileOpts) -> anyhow::Result<()> {
+    let os = UnixOs;
+    let state_dir = os.state_dir();
+    let runtime_dir = os.runtime_dir();
+
+    let filename = if opts.last_crash { "flight.prev.bin" } else { "flight.bin" };
+    let flight_path = state_dir.join(filename);
+
+    if !flight_path.exists() {
+        let label =
+            if opts.last_crash { "previous instance flight recorder" } else { "flight recorder" };
+        eprintln!("No {label} found at {}", flight_path.display());
+        if !opts.last_crash {
+            eprintln!("Is the daemon running? Start it with: rttx-server start");
+        }
+        std::process::exit(1);
+    }
+
+    let pid = read_pid(&runtime_dir.join("rttx-server.pid"));
+
+    if opts.watch {
+        profile_watch(&flight_path, pid, opts.json, opts.dump)?;
+    } else if opts.dump {
+        profile_dump(&flight_path, opts.json)?;
+    } else {
+        profile_once(&flight_path, pid, opts.json)?;
+    }
+
+    Ok(())
+}
+
+fn profile_once(flight_path: &std::path::Path, pid: Option<u32>, json: bool) -> anyhow::Result<()> {
+    let report = rttx_server::profile::generate_report(flight_path, pid)?;
+    if json {
+        let json_report: rttx_server::profile::JsonReport = (&report).into();
+        println!("{}", serde_json::to_string_pretty(&json_report)?);
+    } else {
+        print!("{report}");
+    }
+    Ok(())
+}
+
+fn profile_dump(flight_path: &std::path::Path, json: bool) -> anyhow::Result<()> {
+    let reader = rttx_server::flight::RingReader::open(flight_path)?;
+    let events = reader.read_all();
+    if json {
+        println!("{}", rttx_server::profile::format_dump_json(&events));
+    } else {
+        print!("{}", rttx_server::profile::format_dump(&events));
+    }
+    Ok(())
+}
+
+fn profile_watch(
+    flight_path: &std::path::Path,
+    pid: Option<u32>,
+    json: bool,
+    dump: bool,
+) -> anyhow::Result<()> {
+    loop {
+        // Clear screen.
+        print!("\x1B[2J\x1B[H");
+        if dump {
+            profile_dump(flight_path, json)?;
+        } else {
+            profile_once(flight_path, pid, json)?;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
+
+fn read_pid(pid_path: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(pid_path).ok().and_then(|s| s.trim().parse().ok())
 }
 
 fn diagnostics() -> anyhow::Result<()> {
@@ -718,5 +818,82 @@ mod tests {
         use signal_hook::iterator::Signals;
         let signals = Signals::new([SIGTERM, SIGINT, SIGHUP]);
         assert!(signals.is_ok(), "SIGTERM, SIGINT, SIGHUP must all be registerable");
+    }
+
+    #[test]
+    fn cli_parses_profile_command_default() {
+        let cli = Cli::try_parse_from(["rttx-server", "profile"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { dump, last_crash, json, watch }) => {
+                assert!(!dump);
+                assert!(!last_crash);
+                assert!(!json);
+                assert!(!watch);
+            }
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_profile_dump() {
+        let cli = Cli::try_parse_from(["rttx-server", "profile", "--dump"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { dump, .. }) => assert!(dump),
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_profile_last_crash() {
+        let cli = Cli::try_parse_from(["rttx-server", "profile", "--last-crash"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { last_crash, .. }) => assert!(last_crash),
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_profile_json() {
+        let cli = Cli::try_parse_from(["rttx-server", "profile", "--json"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { json, .. }) => assert!(json),
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_profile_watch() {
+        let cli = Cli::try_parse_from(["rttx-server", "profile", "--watch"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { watch, .. }) => assert!(watch),
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_profile_combined_flags() {
+        let cli = Cli::try_parse_from(["rttx-server", "profile", "--json", "--watch"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { json, watch, dump, last_crash }) => {
+                assert!(json);
+                assert!(watch);
+                assert!(!dump);
+                assert!(!last_crash);
+            }
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn read_pid_from_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("test.pid");
+        std::fs::write(&pid_path, "12345\n").unwrap();
+        assert_eq!(read_pid(&pid_path), Some(12345));
+    }
+
+    #[test]
+    fn read_pid_missing_file_returns_none() {
+        assert_eq!(read_pid(std::path::Path::new("/nonexistent/pid")), None);
     }
 }
