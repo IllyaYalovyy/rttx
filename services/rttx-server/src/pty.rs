@@ -63,7 +63,8 @@ impl Pty {
             // OSC 7 (CWD reporting) which is set up by vte-2.91.sh.
             cmd = cmd.arg0(format!("-{}", basename(&config.command[0])));
         }
-        let effective_cwd = config.cwd.clone().or_else(home_dir).filter(|p| p.is_dir());
+        let effective_cwd =
+            config.cwd.as_ref().map(resolve_cwd).or_else(home_dir).filter(|p| p.is_dir());
         if let Some(ref cwd) = effective_cwd {
             cmd = cmd.current_dir(cwd);
         }
@@ -146,6 +147,26 @@ fn basename(path: &str) -> &str {
 /// Resolve the user's home directory from the environment.
 fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
+}
+
+/// Expand a CWD path so it can be validated and used with `current_dir`.
+///
+/// - `~/…` → `$HOME/…`
+/// - bare `~` → `$HOME`
+/// - relative paths (no leading `/`) → `$HOME/path`
+/// - absolute paths → unchanged
+fn resolve_cwd(path: &PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s == "~" {
+        return home_dir().unwrap_or_else(|| path.clone());
+    }
+    if let Some(rest) = s.strip_prefix("~/") {
+        return home_dir().map_or_else(|| path.clone(), |h| h.join(rest));
+    }
+    if path.is_relative() {
+        return home_dir().map_or_else(|| path.clone(), |h| h.join(path));
+    }
+    path.clone()
 }
 
 #[cfg(test)]
@@ -253,5 +274,52 @@ mod tests {
         assert_eq!(basename("/bin/bash"), "bash");
         assert_eq!(basename("/usr/local/bin/zsh"), "zsh");
         assert_eq!(basename("sh"), "sh");
+    }
+
+    // ── resolve_cwd unit tests ──────────────────────────────────
+
+    #[test]
+    fn resolve_cwd_expands_bare_tilde() {
+        let home = std::env::var("HOME").expect("HOME must be set");
+        assert_eq!(resolve_cwd(&PathBuf::from("~")), PathBuf::from(&home));
+    }
+
+    #[test]
+    fn resolve_cwd_expands_tilde_prefix() {
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let resolved = resolve_cwd(&PathBuf::from("~/projects"));
+        assert_eq!(resolved, PathBuf::from(format!("{home}/projects")));
+    }
+
+    #[test]
+    fn resolve_cwd_resolves_relative_path_against_home() {
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let resolved = resolve_cwd(&PathBuf::from("projects/myapp"));
+        assert_eq!(resolved, PathBuf::from(format!("{home}/projects/myapp")));
+    }
+
+    #[test]
+    fn resolve_cwd_preserves_absolute_path() {
+        let resolved = resolve_cwd(&PathBuf::from("/tmp/test"));
+        assert_eq!(resolved, PathBuf::from("/tmp/test"));
+    }
+
+    // ── PTY spawn with tilde CWD ────────────────────────────────
+
+    #[test]
+    fn tilde_cwd_expands_to_home() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let home = std::env::var("HOME").expect("HOME must be set");
+            let config = PtyConfig {
+                command: vec!["/bin/sh".into(), "-c".into(), "pwd".into()],
+                cwd: Some(PathBuf::from("~")),
+                ..PtyConfig::default()
+            };
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let output = read_pty_output(&mut pty).await;
+            let cwd = output.trim();
+            assert_eq!(cwd, home, "PTY with cwd=~ must start in $HOME, got {cwd}");
+        });
     }
 }
