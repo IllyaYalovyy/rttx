@@ -1,12 +1,21 @@
 //! File logging with daily rotation and automatic cleanup.
 
 use std::path::Path;
-use tracing_subscriber::EnvFilter;
+use std::sync::Arc;
 
-/// Initialize file-based logging with daily rotation.
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+use crate::flight::RingWriter;
+use crate::metrics::DaemonMetrics;
+use crate::profiling::ProfilingLayer;
+
+/// Initialize file-based logging with daily rotation and profiling layer.
 ///
-/// Logs are written to `log_dir/<prefix>.log.<date>`. Old log files beyond
-/// `keep_days` are removed on startup.
+/// Composes the file-logging layer with the `ProfilingLayer` via the
+/// tracing subscriber registry. The profiling layer records span events
+/// to the ring buffer and updates `DaemonMetrics` histograms.
 pub fn init_file_logging(log_dir: &Path, prefix: &str, dev_mode: bool) {
     let default_level = if dev_mode { "debug" } else { "info" };
     let filter =
@@ -16,11 +25,35 @@ pub fn init_file_logging(log_dir: &Path, prefix: &str, dev_mode: bool) {
     let file_appender = tracing_appender::rolling::daily(log_dir, format!("{prefix}.log"));
     cleanup_old_logs(log_dir, &format!("{prefix}.log"), 3);
 
-    tracing_subscriber::fmt()
-        .with_writer(file_appender)
-        .with_env_filter(filter)
-        .with_ansi(false)
-        .init();
+    let fmt_layer = tracing_subscriber::fmt::layer().with_writer(file_appender).with_ansi(false);
+
+    tracing_subscriber::registry().with(filter).with(fmt_layer).init();
+}
+
+/// Initialize file-based logging composed with the profiling layer.
+///
+/// The profiling layer writes span events to the ring buffer and updates
+/// latency histograms in `DaemonMetrics`.
+pub fn init_logging_with_profiling(
+    log_dir: &Path,
+    prefix: &str,
+    dev_mode: bool,
+    metrics: Arc<DaemonMetrics>,
+    ring: Arc<RingWriter>,
+) {
+    let default_level = if dev_mode { "debug" } else { "info" };
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+
+    let _ = std::fs::create_dir_all(log_dir);
+    let file_appender = tracing_appender::rolling::daily(log_dir, format!("{prefix}.log"));
+    cleanup_old_logs(log_dir, &format!("{prefix}.log"), 3);
+
+    let fmt_layer = tracing_subscriber::fmt::layer().with_writer(file_appender).with_ansi(false);
+
+    let profiling_layer = ProfilingLayer::new(metrics, ring);
+
+    tracing_subscriber::registry().with(filter).with(fmt_layer).with(profiling_layer).init();
 }
 
 /// Remove rotated log files older than `keep_days`.
