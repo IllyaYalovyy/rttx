@@ -96,10 +96,6 @@ struct ProfileOpts {
     watch: bool,
 }
 
-fn init_tracing(dev_mode: bool, log_dir: &std::path::Path) {
-    rttx_server::logging::init_file_logging(log_dir, "rttx-server", dev_mode);
-}
-
 fn start(foreground: bool) -> anyhow::Result<()> {
     let dev_mode = rttx_server::os::unix::dev_mode_enabled();
 
@@ -133,21 +129,52 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         }
     }
 
-    init_tracing(dev_mode, &os.cache_dir());
+    let state_dir = os.state_dir();
+    let cache_dir = os.cache_dir();
 
-    std::panic::set_hook(Box::new(|info| {
-        let location = info.location().map_or_else(
-            || "unknown location".to_string(),
-            |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
-        );
-        let payload = info
-            .payload()
-            .downcast_ref::<&str>()
-            .map(|s| (*s).to_string())
-            .or_else(|| info.payload().downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "Box<dyn Any>".to_string());
-        tracing::error!(location = %location, payload = %payload, "PANIC — daemon aborting");
-    }));
+    // Create ring writer and metrics before logging so the panic hook can use them.
+    let metrics = Arc::new(rttx_server::metrics::DaemonMetrics::new());
+    let ring = Arc::new(rttx_server::flight::RingWriter::open(&state_dir)?);
+    let start_time = std::time::Instant::now();
+
+    rttx_server::logging::init_logging_with_profiling(
+        &cache_dir,
+        "rttx-server",
+        dev_mode,
+        Arc::clone(&metrics),
+        Arc::clone(&ring),
+    );
+
+    {
+        let panic_metrics = Arc::clone(&metrics);
+        let panic_ring = Arc::clone(&ring);
+        let crash_report_path = cache_dir.join("crash-report.txt");
+
+        std::panic::set_hook(Box::new(move |info| {
+            let location = info.location().map_or_else(
+                || "unknown location".to_string(),
+                |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+            );
+            let payload = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "Box<dyn Any>".to_string());
+
+            tracing::error!(location = %location, payload = %payload, "PANIC — daemon aborting");
+
+            rttx_server::crash_report::record_panic_event(&panic_ring, start_time);
+            rttx_server::crash_report::write_crash_report(
+                &crash_report_path,
+                &payload,
+                &location,
+                &panic_metrics,
+                &panic_ring,
+                start_time,
+            );
+        }));
+    }
 
     tracing::info!("rttx-server {} ({}) starting", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"),);
 
@@ -155,8 +182,8 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         tracing::info!("Running in DEVELOPMENT mode");
         tracing::debug!(
             runtime_dir = %runtime_dir.display(),
-            state_dir = %os.state_dir().display(),
-            cache_dir = %os.cache_dir().display(),
+            state_dir = %state_dir.display(),
+            cache_dir = %cache_dir.display(),
         );
     }
 
@@ -168,7 +195,6 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async {
-        let metrics = Arc::new(rttx_server::metrics::DaemonMetrics::new());
         let server = Arc::new(Mutex::new(Server::new(Box::new(os), Arc::clone(&metrics))));
 
         {
@@ -405,7 +431,7 @@ fn diagnostics() -> anyhow::Result<()> {
 fn attach_stdio() -> anyhow::Result<()> {
     let dev_mode = rttx_server::os::unix::dev_mode_enabled();
     let os = UnixOs;
-    init_tracing(dev_mode, &os.cache_dir());
+    rttx_server::logging::init_file_logging(&os.cache_dir(), "rttx-server", dev_mode);
 
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 

@@ -307,6 +307,7 @@ pub fn format_dump(events: &[FlightEvent]) -> String {
             EventType::Enter => "ENTER",
             EventType::Exit => "EXIT ",
             EventType::Event => "EVENT",
+            EventType::Panic => "PANIC",
         };
         let value_str = if event.event_type == EventType::Exit {
             let dur_us = event.value / 1_000;
@@ -419,6 +420,7 @@ pub fn format_dump_json(events: &[FlightEvent]) -> String {
                 EventType::Enter => "enter",
                 EventType::Exit => "exit",
                 EventType::Event => "event",
+                EventType::Panic => "panic",
             },
             span_kind: span_kind_display(e.span_kind),
             value: e.value,
