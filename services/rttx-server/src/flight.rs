@@ -46,7 +46,7 @@ pub enum EventType {
 }
 
 /// Span kinds identifying the subsystem that produced the event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum SpanKind {
     MutexAcquire = 0,

@@ -9,6 +9,7 @@ pub mod logging;
 pub mod metrics;
 pub mod os;
 pub mod pane;
+pub mod profile;
 pub mod profiling;
 pub mod protocol;
 pub mod pty;
