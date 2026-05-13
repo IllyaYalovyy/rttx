@@ -307,25 +307,13 @@ async fn create_pane_with_tilde_cwd_expands_to_home() {
 #[tokio::test]
 async fn create_pane_with_tilde_prefix_cwd_expands_correctly() {
     let home = std::env::var("HOME").expect("HOME must be set");
-    // Use a subdirectory that exists under $HOME — pick one that's very
-    // likely to exist on any Linux system.
-    let subdir = std::path::Path::new(&home)
-        .read_dir()
-        .ok()
-        .and_then(|mut entries| {
-            entries.find_map(|e| {
-                let e = e.ok()?;
-                if e.file_type().ok()?.is_dir() {
-                    Some(e.file_name().to_string_lossy().into_owned())
-                } else {
-                    None
-                }
-            })
-        })
-        .expect("$HOME must contain at least one subdirectory");
+    // Create a temporary subdirectory under $HOME for the test.
+    let subdir_name = format!("rttx-test-{}", uuid::Uuid::new_v4());
+    let subdir_path = std::path::PathBuf::from(&home).join(&subdir_name);
+    std::fs::create_dir(&subdir_path).expect("create test subdir under $HOME");
 
-    let tilde_path = format!("~/{subdir}");
-    let expected_abs = format!("{home}/{subdir}");
+    let tilde_path = format!("~/{subdir_name}");
+    let expected_abs = subdir_path.to_string_lossy().to_string();
 
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, _handle) = start_test_server(tmp.path()).await;
@@ -378,10 +366,12 @@ async fn create_pane_with_tilde_prefix_cwd_expands_correctly() {
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(&expected_abs) {
+                let _ = std::fs::remove_dir(&subdir_path);
                 return;
             }
         }
     }
+    let _ = std::fs::remove_dir(&subdir_path);
     panic!(
         "tilde-prefix CWD pane should start in {expected_abs:?} within timeout.\nOutput: {output}"
     );
