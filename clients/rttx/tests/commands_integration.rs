@@ -66,6 +66,7 @@ fn commands_with_parameters_roundtrip() {
         label: "Service name".into(),
         choices: vec!["api".into(), "web".into(), "worker".into()],
         default: Some("api".into()),
+        description: String::new(),
     }];
     command.description = "Restart a systemd service".into();
     command.labels = vec!["ops".into()];
@@ -85,6 +86,7 @@ fn duplicate_command_persists_with_new_uuid() {
         label: "Environment".into(),
         choices: vec!["prod".into(), "dev".into()],
         default: Some("dev".into()),
+        description: String::new(),
     }];
 
     store.save_commands(&[command.clone()]).unwrap();
@@ -209,4 +211,38 @@ fn legacy_json_without_shortcut_keys_deserializes_with_empty_vec() {
     }]"#;
     let commands: Vec<SavedCommand> = serde_json::from_str(json).unwrap();
     assert!(commands[0].shortcut_keys.is_empty());
+}
+
+#[test]
+fn parameter_description_roundtrip_through_store() {
+    let (_tmp, store) = test_store();
+
+    let mut command = SavedCommand::new("Restart", "systemctl restart $SERVICE");
+    command.parameters = vec![rttx::commands::CommandParameter {
+        name: "SERVICE".into(),
+        label: "Service".into(),
+        choices: vec!["api".into(), "web".into()],
+        default: Some("api".into()),
+        description: "Which systemd service to restart".into(),
+    }];
+
+    store.save_commands(&[command]).unwrap();
+    let loaded = store.load_commands();
+    assert_eq!(loaded[0].parameters[0].description, "Which systemd service to restart");
+}
+
+#[test]
+fn legacy_parameters_without_description_load_with_empty_string() {
+    // Verify that CommandParameter without a description field deserializes
+    // with an empty string (backward compatibility).
+    let json = r#"{
+        "name": "ENV",
+        "label": "Environment",
+        "choices": ["prod", "staging"],
+        "default": "prod"
+    }"#;
+    let param: rttx::commands::CommandParameter = serde_json::from_str(json).unwrap();
+    assert_eq!(param.name, "ENV");
+    assert_eq!(param.choices, vec!["prod", "staging"]);
+    assert!(param.description.is_empty());
 }

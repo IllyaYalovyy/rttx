@@ -20,6 +20,8 @@ pub struct CommandParameter {
     pub choices: Vec<String>,
     #[serde(default)]
     pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -489,6 +491,7 @@ mod tests {
             label: "Environment".into(),
             choices: vec!["dev".into(), "staging".into(), "prod".into()],
             default: Some("staging".into()),
+            description: String::new(),
         };
         assert_eq!(resolve_default(&param), "staging");
     }
@@ -500,6 +503,7 @@ mod tests {
             label: "Environment".into(),
             choices: vec!["dev".into(), "prod".into()],
             default: Some("staging".into()),
+            description: String::new(),
         };
         assert_eq!(resolve_default(&param), "dev");
     }
@@ -511,6 +515,7 @@ mod tests {
             label: "Environment".into(),
             choices: vec!["dev".into(), "prod".into()],
             default: None,
+            description: String::new(),
         };
         assert_eq!(resolve_default(&param), "dev");
     }
@@ -522,6 +527,7 @@ mod tests {
             label: "Environment".into(),
             choices: vec![],
             default: None,
+            description: String::new(),
         };
         assert_eq!(resolve_default(&param), "");
     }
@@ -534,6 +540,7 @@ mod tests {
             label: "Environment".into(),
             choices: vec!["prod".into()],
             default: None,
+            description: String::new(),
         }];
         original.description = "Deploys the app".into();
         original.labels = vec!["deploy".into()];
@@ -562,6 +569,7 @@ mod tests {
             label: "X".into(),
             choices: vec!["1".into()],
             default: None,
+            description: String::new(),
         }];
         assert!(command.has_parameters());
     }
@@ -574,6 +582,7 @@ mod tests {
             label: "Service name".into(),
             choices: vec!["api".into(), "web".into(), "worker".into()],
             default: Some("api".into()),
+            description: String::new(),
         }];
         command.description = "Restart a service".into();
         command.labels = vec!["ops".into(), "restart".into()];
@@ -685,5 +694,62 @@ mod tests {
         original.shortcut_keys = vec!["d".into()];
         let copy = original.duplicate();
         assert_eq!(copy.shortcut_keys, vec!["d"]);
+    }
+
+    // ── Parameter description ───────────────────────────────────
+
+    #[test]
+    fn parameter_description_serde_roundtrip() {
+        let mut command = SavedCommand::new("Restart", "systemctl restart $SERVICE");
+        command.parameters = vec![CommandParameter {
+            name: "SERVICE".into(),
+            label: "Service".into(),
+            choices: vec!["api".into(), "web".into()],
+            default: None,
+            description: "Which systemd service to restart".into(),
+        }];
+
+        let json = serde_json::to_string(&[&command]).unwrap();
+        let loaded: Vec<SavedCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded[0].parameters[0].description, "Which systemd service to restart");
+    }
+
+    #[test]
+    fn parameter_empty_description_not_serialized() {
+        let param = CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["prod".into()],
+            default: None,
+            description: String::new(),
+        };
+        let json = serde_json::to_string(&param).unwrap();
+        assert!(!json.contains("description"));
+    }
+
+    #[test]
+    fn legacy_parameter_json_without_description_deserializes() {
+        let json = r#"{
+            "name": "ENV",
+            "label": "Environment",
+            "choices": ["prod", "staging"],
+            "default": "prod"
+        }"#;
+        let param: CommandParameter = serde_json::from_str(json).unwrap();
+        assert!(param.description.is_empty());
+    }
+
+    #[test]
+    fn duplicate_preserves_parameter_description() {
+        let mut original = SavedCommand::new("Deploy", "cargo build");
+        original.parameters = vec![CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["prod".into()],
+            default: None,
+            description: "Target deployment environment".into(),
+        }];
+        let copy = original.duplicate();
+        assert_eq!(copy.parameters[0].description, "Target deployment environment");
     }
 }

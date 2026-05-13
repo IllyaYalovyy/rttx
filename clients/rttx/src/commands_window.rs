@@ -178,12 +178,14 @@ fn append_parameter_row(list: &gtk4::ListBox, param: Option<&CommandParameter>) 
 
     let name_entry = adw::EntryRow::builder().title("Variable name").build();
     let label_entry = adw::EntryRow::builder().title("Label").build();
+    let description_entry = adw::EntryRow::builder().title("Description").build();
     let choices_entry = adw::EntryRow::builder().title("Choices (comma-separated)").build();
     let default_entry = adw::EntryRow::builder().title("Default").build();
 
     if let Some(p) = param {
         name_entry.set_text(&p.name);
         label_entry.set_text(&p.label);
+        description_entry.set_text(&p.description);
         choices_entry.set_text(&p.choices.join(", "));
         if let Some(ref d) = p.default {
             default_entry.set_text(d);
@@ -201,6 +203,7 @@ fn append_parameter_row(list: &gtk4::ListBox, param: Option<&CommandParameter>) 
     let entries_group = adw::PreferencesGroup::new();
     entries_group.add(&name_entry);
     entries_group.add(&label_entry);
+    entries_group.add(&description_entry);
     entries_group.add(&choices_entry);
     entries_group.add(&default_entry);
 
@@ -279,7 +282,7 @@ fn extract_parameters(list: &gtk4::ListBox) -> Result<Vec<CommandParameter>, Str
         };
 
         let entries = collect_entry_rows(&group);
-        if entries.len() < 4 {
+        if entries.len() < 5 {
             continue;
         }
 
@@ -291,16 +294,17 @@ fn extract_parameters(list: &gtk4::ListBox) -> Result<Vec<CommandParameter>, Str
         if label.is_empty() {
             return Err("Parameter label is required".into());
         }
-        let choices_text = entries[2].text().trim().to_string();
+        let description = entries[2].text().trim().to_string();
+        let choices_text = entries[3].text().trim().to_string();
         let choices: Vec<String> = choices_text
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let default_text = entries[3].text().trim().to_string();
+        let default_text = entries[4].text().trim().to_string();
         let default = if default_text.is_empty() { None } else { Some(default_text) };
 
-        params.push(CommandParameter { name, label, choices, default });
+        params.push(CommandParameter { name, label, choices, default, description });
     }
     Ok(params)
 }

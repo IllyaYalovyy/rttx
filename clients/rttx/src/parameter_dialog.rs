@@ -36,7 +36,11 @@ pub fn show(parent: &Window, command: &SavedCommand, run_mode: CommandRunMode) {
         .map(|param| {
             let choices: Vec<&str> = param.choices.iter().map(String::as_str).collect();
             let string_list = gtk4::StringList::new(&choices);
-            let row = adw::ComboRow::builder().title(&param.label).model(&string_list).build();
+            let mut builder = adw::ComboRow::builder().title(&param.label).model(&string_list);
+            if !param.description.is_empty() {
+                builder = builder.subtitle(&param.description);
+            }
+            let row = builder.build();
 
             let default_idx = resolve_default_index(param);
             row.set_selected(default_idx);

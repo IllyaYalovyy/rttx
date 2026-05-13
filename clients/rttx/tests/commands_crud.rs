@@ -32,6 +32,7 @@ fn create_command_persists_all_fields() {
         label: "Environment".into(),
         choices: vec!["prod".into(), "staging".into()],
         default: Some("staging".into()),
+        description: String::new(),
     }];
     cmd.description = "Build and deploy".into();
     cmd.labels = vec!["ops".into(), "deploy".into()];
