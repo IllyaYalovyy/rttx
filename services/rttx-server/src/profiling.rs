@@ -67,6 +67,7 @@ fn parse_span_kind(attrs: &span::Attributes<'_>) -> SpanKind {
                     "serialization_tick" => SpanKind::SerializationTick,
                     "io_flush" => SpanKind::IoFlush,
                     "client_session" => SpanKind::ClientSession,
+                    "watchdog_timeout" => SpanKind::WatchdogTimeout,
                     _ => SpanKind::Shutdown,
                 };
             }

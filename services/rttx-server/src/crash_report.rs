@@ -183,6 +183,7 @@ const fn span_kind_label(kind: SpanKind) -> &'static str {
         SpanKind::SerializationTick => "serialization.tick",
         SpanKind::IoFlush => "io.flush",
         SpanKind::ClientSession => "client.session",
+        SpanKind::WatchdogTimeout => "watchdog.timeout",
         SpanKind::Shutdown => "shutdown",
     }
 }

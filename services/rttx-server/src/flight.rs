@@ -60,6 +60,7 @@ pub enum SpanKind {
     IoFlush = 7,
     ClientSession = 8,
     Shutdown = 9,
+    WatchdogTimeout = 10,
 }
 
 /// A single flight recorder event (64 bytes when serialized).
@@ -283,6 +284,7 @@ fn deserialize_event(buf: &[u8; SLOT_SIZE]) -> FlightEvent {
             6 => SpanKind::SerializationTick,
             7 => SpanKind::IoFlush,
             8 => SpanKind::ClientSession,
+            10 => SpanKind::WatchdogTimeout,
             _ => SpanKind::Shutdown,
         },
         context,
@@ -497,6 +499,7 @@ mod tests {
             SpanKind::IoFlush,
             SpanKind::ClientSession,
             SpanKind::Shutdown,
+            SpanKind::WatchdogTimeout,
         ];
 
         for (i, &kind) in kinds.iter().enumerate() {

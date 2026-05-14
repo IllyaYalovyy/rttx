@@ -19,3 +19,4 @@ pub mod screen;
 pub mod server;
 pub mod single_instance;
 pub mod state;
+pub mod watchdog;

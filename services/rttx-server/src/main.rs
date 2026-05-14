@@ -205,6 +205,19 @@ fn start(foreground: bool) -> anyhow::Result<()> {
         // Reconstruct runtimes: replay scrollback, spawn fresh shells.
         Server::reconstruct_runtimes(&server).await;
 
+        // Start watchdog for hang detection.
+        {
+            let shutdown_rx = server.lock().await.shutdown_rx();
+            rttx_server::watchdog::spawn_watchdog(
+                Arc::clone(&server),
+                Arc::clone(&metrics),
+                Arc::clone(&ring),
+                cache_dir.clone(),
+                shutdown_rx,
+                start_time,
+            );
+        }
+
         {
             let sig_server = Arc::clone(&server);
             tokio::spawn(async move {
