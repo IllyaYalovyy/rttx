@@ -2391,10 +2391,11 @@ async fn client_writer_records_bytes_written_metric() {
     assert!(bytes_written > 0, "bytes_written_to_clients should be non-zero after writing");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn client_writer_records_write_latency() {
     use crate::flight::RingWriter;
     use crate::profiling::ProfilingLayer;
+    use tracing::Dispatch;
     use tracing_subscriber::layer::SubscriberExt;
 
     let metrics = Arc::new(crate::metrics::DaemonMetrics::new());
@@ -2402,7 +2403,8 @@ async fn client_writer_records_write_latency() {
     let ring = Arc::new(RingWriter::open(dir.path()).unwrap());
     let layer = ProfilingLayer::new(Arc::clone(&metrics), ring);
     let subscriber = tracing_subscriber::registry().with(layer);
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let dispatch = Dispatch::new(subscriber);
+    let _guard = tracing::dispatcher::set_default(&dispatch);
 
     let (push_tx, push_rx) = mpsc::channel::<ClientMsg>(16);
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
