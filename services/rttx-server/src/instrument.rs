@@ -196,8 +196,13 @@ mod tests {
     async fn lock_server_returns_working_guard() {
         let metrics = Arc::new(DaemonMetrics::new());
         let os = crate::os::unix::UnixOs;
-        let server =
-            tokio::sync::Mutex::new(crate::server::Server::new(Box::new(os), Arc::clone(&metrics)));
+        let dir = tempfile::TempDir::new().unwrap();
+        let ring = Arc::new(crate::flight::RingWriter::open(dir.path()).unwrap());
+        let server = tokio::sync::Mutex::new(crate::server::Server::new(
+            Box::new(os),
+            Arc::clone(&metrics),
+            ring,
+        ));
 
         let guard = lock_server(&server, &metrics).await;
         assert!(!guard.server_id.is_nil());

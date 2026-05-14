@@ -195,6 +195,14 @@ fn build_hang_report(metrics: &DaemonMetrics, consecutive_timeouts: u32) -> Stri
         "Client write latency (µs): {:?}",
         metrics.client_write_latency_us.snapshot()
     );
+    let _ =
+        writeln!(report, "VTE parse latency (µs): {:?}", metrics.vte_parse_latency_us.snapshot());
+    let _ = writeln!(
+        report,
+        "Serialization tick latency (µs): {:?}",
+        metrics.serialization_tick_latency_us.snapshot()
+    );
+    let _ = writeln!(report, "IO flush latency (µs): {:?}", metrics.io_flush_latency_us.snapshot());
     report
 }
 
@@ -490,6 +498,11 @@ mod tests {
                 PathBuf::from("/tmp/test-state/rttx/daemon")
             }
         }
-        Server::new(Box::new(TestOs), Arc::new(DaemonMetrics::new()))
+        Server::new(Box::new(TestOs), Arc::new(DaemonMetrics::new()), {
+            let dir = tempfile::TempDir::new().unwrap();
+            let ring = std::sync::Arc::new(crate::flight::RingWriter::open(dir.path()).unwrap());
+            std::mem::forget(dir);
+            ring
+        })
     }
 }

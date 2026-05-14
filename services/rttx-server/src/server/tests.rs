@@ -22,10 +22,22 @@ impl OsInterface for StubOs {
 }
 
 fn new_server() -> Arc<Mutex<Server>> {
+    let dir = tempfile::TempDir::new().unwrap();
+    let ring = Arc::new(crate::flight::RingWriter::open(dir.path()).unwrap());
+    // Leak the TempDir so it lives for the test duration.
+    std::mem::forget(dir);
     Arc::new(Mutex::new(Server::new(
         Box::new(StubOs),
         Arc::new(crate::metrics::DaemonMetrics::new()),
+        ring,
     )))
+}
+
+fn test_ring() -> Arc<crate::flight::RingWriter> {
+    let dir = tempfile::TempDir::new().unwrap();
+    let ring = Arc::new(crate::flight::RingWriter::open(dir.path()).unwrap());
+    std::mem::forget(dir);
+    ring
 }
 
 fn test_metrics() -> Arc<crate::metrics::DaemonMetrics> {
@@ -70,7 +82,8 @@ fn short_id_returns_first_eight_characters() {
 
 #[test]
 fn runtime_label_includes_name_and_short_id() {
-    let mut server = Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()));
+    let mut server =
+        Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
     let rt = Runtime::new("my-workspace".into());
     let runtime_id = rt.id;
     server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
@@ -83,7 +96,8 @@ fn runtime_label_includes_name_and_short_id() {
 
 #[test]
 fn runtime_label_falls_back_for_unknown_runtime() {
-    let server = Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()));
+    let server =
+        Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
     let unknown_id = Uuid::new_v4();
     let label = server.runtime_label(unknown_id);
     assert!(label.starts_with('('), "got: {label}");
@@ -2104,7 +2118,8 @@ async fn terminate_runtime_removes_state_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
     let state_dir = os.state_dir();
-    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
+    let mut server =
+        Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
 
     let mut rt = Runtime::new("cleanup-test".into());
     let runtime_id = rt.id;
@@ -2163,7 +2178,8 @@ fn load_persisted_state_sweeps_orphans() {
     // Save daemon index referencing only the known runtime.
     crate::state::persistence::save_daemon_index(&state_dir, &[known_id]).unwrap();
 
-    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
+    let mut server =
+        Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
     server.load_persisted_state();
 
     // Known runtime should be loaded.
@@ -2181,7 +2197,8 @@ fn fresh_start_log_includes_state_directory_path() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
     let expected_state_dir = os.state_dir().to_string_lossy().to_string();
-    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
+    let mut server =
+        Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
     server.load_persisted_state();
 
     assert!(
@@ -2222,7 +2239,8 @@ fn v1_state_json_in_cache_dir_is_ignored() {
     )
     .unwrap();
 
-    let mut server = Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()));
+    let mut server =
+        Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
     server.load_persisted_state();
 
     assert!(

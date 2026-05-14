@@ -121,6 +121,9 @@ fn write_metrics_snapshot(out: &mut String, metrics: &DaemonMetrics) {
     write_histogram(out, "  dispatch_latency_us", &metrics.dispatch_latency_us);
     write_histogram(out, "  pty_read_latency_us", &metrics.pty_read_latency_us);
     write_histogram(out, "  client_write_latency_us", &metrics.client_write_latency_us);
+    write_histogram(out, "  vte_parse_latency_us", &metrics.vte_parse_latency_us);
+    write_histogram(out, "  serialization_tick_latency_us", &metrics.serialization_tick_latency_us);
+    write_histogram(out, "  io_flush_latency_us", &metrics.io_flush_latency_us);
 }
 
 fn write_histogram(out: &mut String, label: &str, h: &crate::metrics::LatencyHistogram) {

@@ -195,7 +195,11 @@ fn start(foreground: bool) -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async {
-        let server = Arc::new(Mutex::new(Server::new(Box::new(os), Arc::clone(&metrics))));
+        let server = Arc::new(Mutex::new(Server::new(
+            Box::new(os),
+            Arc::clone(&metrics),
+            Arc::clone(&ring),
+        )));
 
         {
             let mut s = server.lock().await;

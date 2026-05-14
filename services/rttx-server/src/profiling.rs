@@ -146,8 +146,13 @@ where
         match kind {
             SpanKind::MutexAcquire => self.metrics.mutex_wait_us.record(duration_us),
             SpanKind::PtyRead => self.metrics.pty_read_latency_us.record(duration_us),
+            SpanKind::VteParse => self.metrics.vte_parse_latency_us.record(duration_us),
             SpanKind::ClientDispatch => self.metrics.dispatch_latency_us.record(duration_us),
             SpanKind::ClientWrite => self.metrics.client_write_latency_us.record(duration_us),
+            SpanKind::SerializationTick => {
+                self.metrics.serialization_tick_latency_us.record(duration_us);
+            }
+            SpanKind::IoFlush => self.metrics.io_flush_latency_us.record(duration_us),
             _ => {}
         }
     }
@@ -349,5 +354,70 @@ mod tests {
         let reader = RingReader::open(&dir.path().join("flight.bin")).unwrap();
         let events = reader.read_all();
         assert_eq!(events[0].span_kind, SpanKind::Shutdown);
+    }
+
+    #[test]
+    fn vte_parse_span_updates_histogram() {
+        let (metrics, ring, _dir) = setup();
+        let layer = ProfilingLayer::new(Arc::clone(&metrics), Arc::clone(&ring));
+
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::span!(
+                target: "rttx_profile",
+                tracing::Level::INFO,
+                "vte.parse",
+                span_kind = "vte_parse"
+            );
+            let _guard = span.enter();
+            std::thread::sleep(std::time::Duration::from_micros(10));
+        });
+
+        let snap = metrics.vte_parse_latency_us.snapshot();
+        let total: u64 = snap.iter().sum();
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn serialization_tick_span_updates_histogram() {
+        let (metrics, ring, _dir) = setup();
+        let layer = ProfilingLayer::new(Arc::clone(&metrics), Arc::clone(&ring));
+
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::span!(
+                target: "rttx_profile",
+                tracing::Level::INFO,
+                "serialization.tick",
+                span_kind = "serialization_tick"
+            );
+            let _guard = span.enter();
+        });
+
+        let snap = metrics.serialization_tick_latency_us.snapshot();
+        let total: u64 = snap.iter().sum();
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn io_flush_span_updates_histogram() {
+        let (metrics, ring, _dir) = setup();
+        let layer = ProfilingLayer::new(Arc::clone(&metrics), Arc::clone(&ring));
+
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::span!(
+                target: "rttx_profile",
+                tracing::Level::INFO,
+                "io.flush",
+                span_kind = "io_flush"
+            );
+            let _guard = span.enter();
+            std::thread::sleep(std::time::Duration::from_micros(10));
+        });
+
+        let snap = metrics.io_flush_latency_us.snapshot();
+        let total: u64 = snap.iter().sum();
+        assert_eq!(total, 1);
     }
 }

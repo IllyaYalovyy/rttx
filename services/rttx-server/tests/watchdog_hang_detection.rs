@@ -33,7 +33,10 @@ fn create_test_server() -> Server {
             PathBuf::from("/tmp/test-state/rttx/daemon")
         }
     }
-    Server::new(Box::new(TestOs), Arc::new(DaemonMetrics::new()))
+    let dir = tempfile::TempDir::new().unwrap();
+    let ring = Arc::new(rttx_server::flight::RingWriter::open(dir.path()).unwrap());
+    std::mem::forget(dir);
+    Server::new(Box::new(TestOs), Arc::new(DaemonMetrics::new()), ring)
 }
 
 #[tokio::test]

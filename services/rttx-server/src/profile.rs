@@ -53,6 +53,9 @@ pub struct ProfileReport {
     pub dispatch_latency: LatencyStats,
     pub pty_read_latency: LatencyStats,
     pub client_write_latency: LatencyStats,
+    pub vte_parse_latency: LatencyStats,
+    pub serialization_tick_latency: LatencyStats,
+    pub io_flush_latency: LatencyStats,
     pub contention: ContentionStats,
     pub slow_ops: Vec<SlowOp>,
 }
@@ -125,6 +128,10 @@ pub fn build_report(events: &[FlightEvent], pid: Option<u32>) -> ProfileReport {
     let dispatch_latency = compute_latency_stats(durations.get(&SpanKind::ClientDispatch));
     let pty_read_latency = compute_latency_stats(durations.get(&SpanKind::PtyRead));
     let client_write_latency = compute_latency_stats(durations.get(&SpanKind::ClientWrite));
+    let vte_parse_latency = compute_latency_stats(durations.get(&SpanKind::VteParse));
+    let serialization_tick_latency =
+        compute_latency_stats(durations.get(&SpanKind::SerializationTick));
+    let io_flush_latency = compute_latency_stats(durations.get(&SpanKind::IoFlush));
 
     ProfileReport {
         pid,
@@ -134,6 +141,9 @@ pub fn build_report(events: &[FlightEvent], pid: Option<u32>) -> ProfileReport {
         dispatch_latency,
         pty_read_latency,
         client_write_latency,
+        vte_parse_latency,
+        serialization_tick_latency,
+        io_flush_latency,
         contention,
         slow_ops,
     }
@@ -211,7 +221,10 @@ impl fmt::Display for ProfileReport {
         write_latency_line(f, "Mutex wait", &self.mutex_latency)?;
         write_latency_line(f, "Message dispatch", &self.dispatch_latency)?;
         write_latency_line(f, "PTY read batch", &self.pty_read_latency)?;
+        write_latency_line(f, "VTE parse", &self.vte_parse_latency)?;
         write_latency_line(f, "Client write", &self.client_write_latency)?;
+        write_latency_line(f, "Serialization tick", &self.serialization_tick_latency)?;
+        write_latency_line(f, "IO flush", &self.io_flush_latency)?;
 
         // Contention section
         writeln!(f)?;
@@ -340,6 +353,9 @@ pub struct JsonLatency {
     pub dispatch: JsonLatencyStats,
     pub pty_read: JsonLatencyStats,
     pub client_write: JsonLatencyStats,
+    pub vte_parse: JsonLatencyStats,
+    pub serialization_tick: JsonLatencyStats,
+    pub io_flush: JsonLatencyStats,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -375,6 +391,9 @@ impl From<&ProfileReport> for JsonReport {
                 dispatch: (&r.dispatch_latency).into(),
                 pty_read: (&r.pty_read_latency).into(),
                 client_write: (&r.client_write_latency).into(),
+                vte_parse: (&r.vte_parse_latency).into(),
+                serialization_tick: (&r.serialization_tick_latency).into(),
+                io_flush: (&r.io_flush_latency).into(),
             },
             contention: JsonContention {
                 mutex_contentions: r.contention.mutex_contentions,
@@ -700,5 +719,57 @@ mod tests {
         ];
         let report = build_report(&events, None);
         assert_eq!(report.contention.channel_overflows, 2);
+    }
+
+    #[test]
+    fn vte_parse_latency_computed() {
+        let events = vec![make_exit_event(1_000_000, SpanKind::VteParse, 200_000)]; // 200µs
+        let report = build_report(&events, None);
+        assert_eq!(report.vte_parse_latency.count, 1);
+        assert_eq!(report.vte_parse_latency.p50_us, 200);
+    }
+
+    #[test]
+    fn serialization_tick_latency_computed() {
+        let events = vec![make_exit_event(1_000_000, SpanKind::SerializationTick, 5_000_000)]; // 5ms
+        let report = build_report(&events, None);
+        assert_eq!(report.serialization_tick_latency.count, 1);
+        assert_eq!(report.serialization_tick_latency.p50_us, 5_000);
+    }
+
+    #[test]
+    fn io_flush_latency_computed() {
+        let events = vec![make_exit_event(1_000_000, SpanKind::IoFlush, 1_000_000)]; // 1ms
+        let report = build_report(&events, None);
+        assert_eq!(report.io_flush_latency.count, 1);
+        assert_eq!(report.io_flush_latency.p50_us, 1_000);
+    }
+
+    #[test]
+    fn display_format_includes_new_latency_lines() {
+        let events = vec![
+            make_exit_event(1_000_000, SpanKind::VteParse, 100_000),
+            make_exit_event(2_000_000, SpanKind::SerializationTick, 5_000_000),
+            make_exit_event(3_000_000, SpanKind::IoFlush, 2_000_000),
+        ];
+        let report = build_report(&events, None);
+        let output = report.to_string();
+        assert!(output.contains("VTE parse"), "report should show VTE parse latency");
+        assert!(output.contains("Serialization tick"), "report should show serialization tick");
+        assert!(output.contains("IO flush"), "report should show IO flush latency");
+    }
+
+    #[test]
+    fn json_report_includes_new_latency_fields() {
+        let events = vec![
+            make_exit_event(1_000_000, SpanKind::VteParse, 100_000),
+            make_exit_event(2_000_000, SpanKind::SerializationTick, 5_000_000),
+        ];
+        let report = build_report(&events, None);
+        let json: JsonReport = (&report).into();
+        let serialized = serde_json::to_string(&json).unwrap();
+        assert!(serialized.contains("\"vte_parse\""));
+        assert!(serialized.contains("\"serialization_tick\""));
+        assert!(serialized.contains("\"io_flush\""));
     }
 }
