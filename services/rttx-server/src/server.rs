@@ -18,6 +18,7 @@ use crate::screen::{restart_safe_scrollback, strip_client_queries};
 use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
@@ -2855,6 +2856,53 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Extract the message type name from a v2 `ClientMessage` for profiling.
+const fn v2_msg_type(msg: &proto::ClientMessage) -> &'static str {
+    match &msg.msg {
+        Some(proto::client_message::Msg::Hello(_)) => "Hello",
+        Some(proto::client_message::Msg::Ping(_)) => "Ping",
+        Some(proto::client_message::Msg::ListRuntimes(_)) => "ListRuntimes",
+        Some(proto::client_message::Msg::CreateRuntime(_)) => "CreateRuntime",
+        Some(proto::client_message::Msg::AttachRuntime(_)) => "AttachRuntime",
+        Some(proto::client_message::Msg::DetachRuntime(_)) => "DetachRuntime",
+        Some(proto::client_message::Msg::TerminateRuntime(_)) => "TerminateRuntime",
+        Some(proto::client_message::Msg::CreatePane(_)) => "CreatePane",
+        Some(proto::client_message::Msg::ClosePane(_)) => "ClosePane",
+        Some(proto::client_message::Msg::Input(_)) => "Input",
+        Some(proto::client_message::Msg::Resize(_)) => "Resize",
+        Some(proto::client_message::Msg::SetPaneTitle(_)) => "SetPaneTitle",
+        Some(proto::client_message::Msg::Shutdown(_)) => "Shutdown",
+        Some(proto::client_message::Msg::GetDiagnostics(_)) => "GetDiagnostics",
+        Some(proto::client_message::Msg::RenameRuntime(_)) => "RenameRuntime",
+        None => "Empty",
+    }
+}
+
+/// Extract the command type name from a v3 `ClientEnvelope` for profiling.
+const fn v3_msg_type(envelope: &v3::ClientEnvelope) -> &'static str {
+    match &envelope.command {
+        Some(v3::client_envelope::Command::Ping(_)) => "Ping",
+        Some(v3::client_envelope::Command::ListRuntimes(_)) => "ListRuntimes",
+        Some(v3::client_envelope::Command::CreateRuntime(_)) => "CreateRuntime",
+        Some(v3::client_envelope::Command::AttachRuntime(_)) => "AttachRuntime",
+        Some(v3::client_envelope::Command::DetachRuntime(_)) => "DetachRuntime",
+        Some(v3::client_envelope::Command::TerminateRuntime(_)) => "TerminateRuntime",
+        Some(v3::client_envelope::Command::CreatePane(_)) => "CreatePane",
+        Some(v3::client_envelope::Command::ClosePane(_)) => "ClosePane",
+        Some(v3::client_envelope::Command::TerminalInput(_)) => "TerminalInput",
+        Some(v3::client_envelope::Command::ResizePane(_)) => "ResizePane",
+        Some(v3::client_envelope::Command::SetPaneTitle(_)) => "SetPaneTitle",
+        Some(v3::client_envelope::Command::SetPaneNoPersist(_)) => "SetPaneNoPersist",
+        Some(v3::client_envelope::Command::Shutdown(_)) => "Shutdown",
+        Some(v3::client_envelope::Command::GetDiagnostics(_)) => "GetDiagnostics",
+        Some(v3::client_envelope::Command::RenameRuntime(_)) => "RenameRuntime",
+        Some(v3::client_envelope::Command::TakeoverRuntime(_)) => "TakeoverRuntime",
+        Some(v3::client_envelope::Command::ResyncRuntime(_)) => "ResyncRuntime",
+        Some(v3::client_envelope::Command::GetScrollback(_)) => "GetScrollback",
+        None => "Empty",
+    }
+}
+
 /// Handle a single stdio client (for `attach-stdio` SSH tunneling).
 ///
 /// Serves one client over stdin/stdout using the same protocol as the
@@ -2880,11 +2928,19 @@ where
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(RESP_CHANNEL_BOUND);
     let metrics = { server.lock().await.metrics.clone() };
+    metrics.connected_clients.fetch_add(1, Ordering::Relaxed);
     {
         let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.client_senders.insert(client_id, tx);
         s.client_resp_senders.insert(client_id, resp_tx.clone());
     }
+
+    let _session_span = tracing::info_span!(
+        target: "rttx_profile",
+        "client.session",
+        span_kind = "client_session",
+        client_id = %client_short,
+    );
 
     // Read the first raw frame to detect v2 vs v3 protocol.
     let Some(raw_frame) = conn.read_raw_frame().await? else {
@@ -2892,6 +2948,8 @@ where
         let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.client_senders.remove(&client_id);
         s.client_resp_senders.remove(&client_id);
+        metrics.connected_clients.fetch_sub(1, Ordering::Relaxed);
+        metrics.client_disconnects.fetch_add(1, Ordering::Relaxed);
         return Ok(());
     };
 
@@ -2900,9 +2958,19 @@ where
         try_v3_handshake(&server, client_id, &client_short, &mut conn, &raw_frame, &metrics)
             .await?;
 
+    let protocol_version = if is_v3 { "v3" } else { "v2" };
+    tracing::info!(
+        target: "rttx_profile",
+        client_id = %client_short,
+        protocol_version,
+        "client session started",
+    );
+
     let (reader, writer) = conn.into_split();
     let write_short = client_short.clone();
-    let writer_task = tokio::spawn(client_writer(writer, rx, resp_rx, write_short));
+    let writer_metrics = Arc::clone(&metrics);
+    let writer_task =
+        tokio::spawn(client_writer(writer, rx, resp_rx, write_short, writer_metrics));
 
     let (result, handshake_completed) = if is_v3 {
         tracing::info!("Client {client_short} connected (v3)");
@@ -2938,6 +3006,17 @@ where
     }
 
     writer_task.abort();
+
+    // Record disconnect reason.
+    let disconnect_reason = if result.is_err() { "error" } else { "eof" };
+    tracing::info!(
+        target: "rttx_profile",
+        client_id = %client_short,
+        reason = disconnect_reason,
+        "client disconnected",
+    );
+    metrics.connected_clients.fetch_sub(1, Ordering::Relaxed);
+    metrics.client_disconnects.fetch_add(1, Ordering::Relaxed);
 
     if let Err(ref e) = result {
         tracing::error!("Client {client_short} error: {e}");
@@ -3063,13 +3142,25 @@ async fn v2_client_reader(
     }
 
     if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
+        metrics.messages_dispatched.fetch_add(1, Ordering::Relaxed);
         if resp_tx.send(ClientMsg::V2(protocol::pong(ping.nonce))).await.is_err() {
             return (Ok(()), true);
         }
-    } else if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
-        && resp_tx.send(ClientMsg::V2(response)).await.is_err()
-    {
-        return (Ok(()), true);
+    } else {
+        let _msg_type = v2_msg_type(&msg);
+        metrics.messages_dispatched.fetch_add(1, Ordering::Relaxed);
+        let dispatch_start = std::time::Instant::now();
+        if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
+            && resp_tx.send(ClientMsg::V2(response)).await.is_err()
+        {
+            metrics
+                .dispatch_latency_us
+                .record(dispatch_start.elapsed().as_micros() as u64);
+            return (Ok(()), true);
+        }
+        metrics
+            .dispatch_latency_us
+            .record(dispatch_start.elapsed().as_micros() as u64);
     }
 
     // Continue with normal v2 read loop.
@@ -3090,17 +3181,27 @@ async fn v2_client_reader(
         }
 
         if let Some(proto::client_message::Msg::Ping(ping)) = &msg.msg {
+            metrics.messages_dispatched.fetch_add(1, Ordering::Relaxed);
             if resp_tx.send(ClientMsg::V2(protocol::pong(ping.nonce))).await.is_err() {
                 return (Ok(()), true);
             }
             continue;
         }
 
+        let _msg_type = v2_msg_type(&msg);
+        metrics.messages_dispatched.fetch_add(1, Ordering::Relaxed);
+        let dispatch_start = std::time::Instant::now();
         if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
             && resp_tx.send(ClientMsg::V2(response)).await.is_err()
         {
+            metrics
+                .dispatch_latency_us
+                .record(dispatch_start.elapsed().as_micros() as u64);
             return (Ok(()), true);
         }
+        metrics
+            .dispatch_latency_us
+            .record(dispatch_start.elapsed().as_micros() as u64);
     }
 }
 
@@ -3132,6 +3233,7 @@ async fn v3_client_reader(
 
         // Fast-path: respond to Ping without acquiring the server mutex.
         if let Some(v3::client_envelope::Command::Ping(ref ping)) = envelope.command {
+            metrics.messages_dispatched.fetch_add(1, Ordering::Relaxed);
             let response = rttx_proto::v3_envelope::build_response_envelope(
                 envelope.request_id,
                 v3::server_envelope::Payload::Pong(v3::Pong { nonce: ping.nonce }),
@@ -3141,6 +3243,10 @@ async fn v3_client_reader(
             }
             continue;
         }
+
+        let _msg_type = v3_msg_type(&envelope);
+        metrics.messages_dispatched.fetch_add(1, Ordering::Relaxed);
+        let dispatch_start = std::time::Instant::now();
 
         // Look up effective capabilities for this client.
         let effective_caps = {
@@ -3155,8 +3261,14 @@ async fn v3_client_reader(
             Server::handle_v3_message(&server, client_id, &effective_caps, envelope, &metrics).await
             && resp_tx.send(ClientMsg::V3(response)).await.is_err()
         {
+            metrics
+                .dispatch_latency_us
+                .record(dispatch_start.elapsed().as_micros() as u64);
             return (Ok(()), true);
         }
+        metrics
+            .dispatch_latency_us
+            .record(dispatch_start.elapsed().as_micros() as u64);
     }
 }
 
@@ -3168,7 +3280,11 @@ async fn client_writer(
     mut push_rx: mpsc::Receiver<ClientMsg>,
     mut resp_rx: mpsc::Receiver<ClientMsg>,
     client_short: String,
+    metrics: Arc<crate::metrics::DaemonMetrics>,
 ) {
+    use prost::Message;
+    use tracing::Instrument;
+
     loop {
         let msg = tokio::select! {
             biased;
@@ -3187,13 +3303,39 @@ async fn client_writer(
                 },
             },
         };
-        let result = match &msg {
-            ClientMsg::V2(v2_msg) => writer.send_message(v2_msg).await,
-            ClientMsg::V3(v3_msg) => writer.send_v3_envelope(v3_msg).await,
+
+        let bytes_len = match &msg {
+            ClientMsg::V2(v2_msg) => 4 + v2_msg.encoded_len(),
+            ClientMsg::V3(v3_msg) => 4 + v3_msg.encoded_len(),
         };
-        if let Err(e) = result {
-            tracing::error!("Client {client_short} write error: {e}");
-            break;
+
+        let write_span = tracing::info_span!(
+            target: "rttx_profile",
+            "client.write",
+            span_kind = "client_write",
+            client_id = %client_short,
+            bytes_written = bytes_len,
+        );
+
+        let result = async {
+            match &msg {
+                ClientMsg::V2(v2_msg) => writer.send_message(v2_msg).await,
+                ClientMsg::V3(v3_msg) => writer.send_v3_envelope(v3_msg).await,
+            }
+        }
+        .instrument(write_span)
+        .await;
+
+        match result {
+            Ok(()) => {
+                metrics
+                    .bytes_written_to_clients
+                    .fetch_add(bytes_len as u64, Ordering::Relaxed);
+            }
+            Err(e) => {
+                tracing::error!("Client {client_short} write error: {e}");
+                break;
+            }
         }
     }
 }
