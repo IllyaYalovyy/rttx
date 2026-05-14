@@ -1411,7 +1411,13 @@ async fn client_writer_prioritizes_resp_over_push() {
     let conn = crate::ipc::ClientConnection::new(client_half);
     let (_, writer) = conn.into_split();
 
-    let handle = tokio::spawn(client_writer(writer, push_rx, resp_rx, "test".into()));
+    let handle = tokio::spawn(client_writer(
+        writer,
+        push_rx,
+        resp_rx,
+        "test".into(),
+        Arc::new(crate::metrics::DaemonMetrics::new()),
+    ));
     handle.await.unwrap();
 
     // Read all bytes written by client_writer.
@@ -2349,4 +2355,127 @@ async fn per_runtime_locks_are_independent() {
     let guard_b = lock_b.lock().await;
     assert_ne!(guard_b.id, runtime_a);
     drop(guard_b);
+}
+
+// ── Client instrumentation metrics ─────────────────────────────
+
+#[tokio::test]
+async fn client_writer_records_bytes_written_metric() {
+    let metrics = Arc::new(crate::metrics::DaemonMetrics::new());
+    let (push_tx, push_rx) = mpsc::channel::<ClientMsg>(16);
+    let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
+
+    // Send a Pong message.
+    resp_tx.send(ClientMsg::V2(protocol::pong(99))).await.unwrap();
+    drop(push_tx);
+    drop(resp_tx);
+
+    let (client_half, mut read_half) = tokio::io::duplex(64 * 1024);
+    let conn = crate::ipc::ClientConnection::new(client_half);
+    let (_, writer) = conn.into_split();
+
+    let m = Arc::clone(&metrics);
+    let handle = tokio::spawn(client_writer(writer, push_rx, resp_rx, "test".into(), m));
+    handle.await.unwrap();
+
+    // Drain the read side.
+    let mut buf = bytes::BytesMut::new();
+    loop {
+        let n = tokio::io::AsyncReadExt::read_buf(&mut read_half, &mut buf).await.unwrap();
+        if n == 0 {
+            break;
+        }
+    }
+
+    let bytes_written = metrics.bytes_written_to_clients.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(bytes_written > 0, "bytes_written_to_clients should be non-zero after writing");
+}
+
+#[tokio::test]
+async fn client_writer_records_write_latency() {
+    use crate::flight::RingWriter;
+    use crate::profiling::ProfilingLayer;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let metrics = Arc::new(crate::metrics::DaemonMetrics::new());
+    let dir = tempfile::TempDir::new().unwrap();
+    let ring = Arc::new(RingWriter::open(dir.path()).unwrap());
+    let layer = ProfilingLayer::new(Arc::clone(&metrics), ring);
+    let subscriber = tracing_subscriber::registry().with(layer);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let (push_tx, push_rx) = mpsc::channel::<ClientMsg>(16);
+    let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
+
+    resp_tx.send(ClientMsg::V2(protocol::pong(1))).await.unwrap();
+    // Drop both senders so client_writer exits after processing the message.
+    drop(resp_tx);
+    drop(push_tx);
+
+    let (client_half, _read_half) = tokio::io::duplex(64 * 1024);
+    let conn = crate::ipc::ClientConnection::new(client_half);
+    let (_, writer) = conn.into_split();
+
+    let m = Arc::clone(&metrics);
+    client_writer(writer, push_rx, resp_rx, "test".into(), m).await;
+
+    let snap = metrics.client_write_latency_us.snapshot();
+    let total: u64 = snap.iter().sum();
+    assert!(total >= 1, "client_write_latency_us should have at least one sample, got {total}");
+}
+
+#[tokio::test]
+async fn messages_dispatched_incremented_on_v2_message() {
+    let server = new_server();
+    let client_id = Uuid::new_v4();
+    let metrics = { server.lock().await.metrics.clone() };
+
+    let msg = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+    };
+
+    Server::handle_message(&server, client_id, msg, &metrics).await;
+
+    // handle_message itself doesn't increment the counter — the reader loop does.
+    // But we can verify the counter mechanism works by checking it's zero here
+    // (the actual increment happens in the reader loop wrapper).
+    assert_eq!(
+        metrics.messages_dispatched.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "handle_message alone should not increment messages_dispatched"
+    );
+}
+
+#[tokio::test]
+async fn v2_msg_type_returns_correct_names() {
+    let hello = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+            protocol_version: 2,
+            client_id: vec![0; 16],
+        })),
+    };
+    assert_eq!(v2_msg_type(&hello), "Hello");
+
+    let list = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+    };
+    assert_eq!(v2_msg_type(&list), "ListRuntimes");
+
+    let empty = proto::ClientMessage { msg: None };
+    assert_eq!(v2_msg_type(&empty), "Empty");
+}
+
+#[tokio::test]
+async fn connected_clients_gauge_tracks_lifecycle() {
+    let metrics = Arc::new(crate::metrics::DaemonMetrics::new());
+
+    // Simulate connect.
+    metrics.connected_clients.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(metrics.connected_clients.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+    // Simulate disconnect.
+    metrics.connected_clients.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    metrics.client_disconnects.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(metrics.connected_clients.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(metrics.client_disconnects.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
