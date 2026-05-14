@@ -44,9 +44,10 @@ impl Listener {
     }
 
     /// Accept the next client connection.
-    pub async fn accept(&self) -> Result<ClientConnection<UnixStream>, IpcError> {
+    pub async fn accept(&self) -> Result<(ClientConnection<UnixStream>, Option<u32>), IpcError> {
         let (stream, _addr) = self.inner.accept().await?;
-        Ok(ClientConnection::new(stream))
+        let peer_pid = stream.peer_cred().ok().and_then(|c| c.pid().map(|p| p as u32));
+        Ok((ClientConnection::new(stream), peer_pid))
     }
 
     /// Return the socket path.
@@ -360,7 +361,7 @@ mod tests {
             conn.stream.write_all(&buf).await.unwrap();
         });
 
-        let mut server_conn = listener.accept().await.unwrap();
+        let (mut server_conn, _) = listener.accept().await.unwrap();
         let msg = server_conn.read_message().await.unwrap().unwrap();
         assert!(msg.msg.is_some());
         if let Some(proto::client_message::Msg::Hello(hello)) = msg.msg {
@@ -383,7 +384,7 @@ mod tests {
             let _stream = UnixStream::connect(&path_clone).await.unwrap();
         });
 
-        let mut server_conn = listener.accept().await.unwrap();
+        let (mut server_conn, _) = listener.accept().await.unwrap();
         client_task.await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

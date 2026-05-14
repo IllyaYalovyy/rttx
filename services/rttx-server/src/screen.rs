@@ -505,8 +505,18 @@ fn csi_query_len(data: &[u8]) -> Option<usize> {
     let seq_len = pos + 1;
 
     match final_byte {
-        // DSR: CSI 5 n, CSI 6 n
-        b'n' if intermediates.is_empty() && matches!(params, b"5" | b"6") => Some(seq_len),
+        // DSR: CSI 5 n, CSI 6 n, CSI ? 5 n, CSI ? 6 n
+        b'n' if intermediates.is_empty() && matches!(params, b"5" | b"6" | b"?5" | b"?6") => {
+            Some(seq_len)
+        }
+        // CPR (Cursor Position Report): CSI <digits> ; <digits> R
+        // These are responses to DSR queries — never useful as display output.
+        b'R' if intermediates.is_empty()
+            && !params.is_empty()
+            && params.iter().all(|&b| b.is_ascii_digit() || b == b';') =>
+        {
+            Some(seq_len)
+        }
         // DA1: CSI c, CSI 0 c
         b'c' if intermediates.is_empty() && matches!(params, b"" | b"0") => Some(seq_len),
         // DA2: ESC [ > c or ESC [ > 0 c
@@ -1245,6 +1255,20 @@ mod tests {
     #[test]
     fn strip_removes_dsr_operating_status() {
         assert_eq!(strip_client_queries(b"before\x1b[5nafter"), b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_cpr_response() {
+        // CSI 63;1 R — cursor position report (row 63, col 1)
+        assert_eq!(strip_client_queries(b"before\x1b[63;1Rafter"), b"beforeafter");
+        // Multiple CPR responses in sequence
+        assert_eq!(strip_client_queries(b"\x1b[63;1R\x1b[63;2R\x1b[30;1R"), b"");
+    }
+
+    #[test]
+    fn strip_removes_decxcpr_query() {
+        // CSI ? 6 n — extended cursor position query
+        assert_eq!(strip_client_queries(b"before\x1b[?6nafter"), b"beforeafter");
     }
 
     #[test]

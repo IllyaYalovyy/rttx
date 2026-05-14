@@ -2834,7 +2834,7 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     loop {
         tokio::select! {
             result = listener.accept() => {
-                let conn = result?;
+                let (conn, peer_pid) = result?;
                 let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
                     tracing::warn!("Connection limit reached ({MAX_CONCURRENT_CLIENTS}), rejecting client");
                     continue;
@@ -2842,7 +2842,7 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
                 let server = Arc::clone(&server);
                 tokio::spawn(async move {
                     let _permit = permit;
-                    let _ = handle_client(server, conn).await;
+                    let _ = handle_client(server, conn, peer_pid).await;
                 });
             }
             _ = shutdown_rx.changed() => {
@@ -2911,19 +2911,27 @@ const fn v3_msg_type(envelope: &v3::ClientEnvelope) -> &'static str {
 pub async fn handle_stdio_client(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     let stream = crate::ipc::StdioStream::new();
     let conn = ClientConnection::new(stream);
-    handle_client(server, conn).await
+    handle_client(server, conn, None).await
 }
 
 #[allow(clippy::significant_drop_tightening)]
 async fn handle_client<S>(
     server: Arc<Mutex<Server>>,
     mut conn: ClientConnection<S>,
+    peer_pid: Option<u32>,
 ) -> anyhow::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let client_id = Uuid::new_v4();
     let client_short = short_id(client_id);
+    let peer_info = peer_pid.map_or_else(
+        || "stdio".to_string(),
+        |pid| {
+            let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            format!("pid={pid} ({})", name.trim())
+        },
+    );
 
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(RESP_CHANNEL_BOUND);
@@ -2984,6 +2992,7 @@ where
             resp_tx,
             &raw_frame,
             metrics.clone(),
+            &peer_info,
         )
         .await
     };
@@ -3107,6 +3116,7 @@ where
 /// The first frame was already read during protocol detection and is passed
 /// in as `first_frame`. It is decoded as a v2 `ClientMessage` and processed
 /// before entering the normal read loop.
+#[allow(clippy::too_many_arguments)]
 async fn v2_client_reader(
     server: Arc<Mutex<Server>>,
     client_id: Uuid,
@@ -3115,6 +3125,7 @@ async fn v2_client_reader(
     resp_tx: mpsc::Sender<ClientMsg>,
     first_frame: &[u8],
     metrics: Arc<crate::metrics::DaemonMetrics>,
+    peer_info: &str,
 ) -> (anyhow::Result<()>, bool) {
     use prost::Message;
 
@@ -3135,7 +3146,10 @@ async fn v2_client_reader(
 
     // Process the first message (Hello).
     if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
-        tracing::info!("Shutdown requested by client {client_short}");
+        tracing::warn!(
+            peer = %peer_info,
+            "Shutdown requested by client {client_short}"
+        );
         crate::instrument::lock_server(&server, &metrics).await.request_shutdown();
         return (Ok(()), true);
     }
@@ -3170,7 +3184,7 @@ async fn v2_client_reader(
         };
 
         if matches!(msg.msg, Some(proto::client_message::Msg::Shutdown(_))) {
-            tracing::info!("Shutdown requested by client {client_short}");
+            tracing::warn!("Shutdown requested by client {client_short} (v2 reader loop)");
             crate::instrument::lock_server(&server, &metrics).await.request_shutdown();
             return (Ok(()), true);
         }
@@ -3217,7 +3231,7 @@ async fn v3_client_reader(
 
         // Check for Shutdown (fire-and-forget).
         if matches!(envelope.command, Some(v3::client_envelope::Command::Shutdown(_))) {
-            tracing::info!("Shutdown requested by client {client_short}");
+            tracing::warn!("Shutdown requested by client {client_short} (v3)");
             crate::instrument::lock_server(&server, &metrics).await.request_shutdown();
             return (Ok(()), true);
         }
