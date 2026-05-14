@@ -764,6 +764,14 @@ impl Window {
             return;
         };
 
+        // Reset VTE so residual escape sequences from a previous session
+        // do not corrupt the recovery commands.
+        if let Some(pane) =
+            self.imp().persistent_terminals.borrow().get(terminal_uuid).cloned()
+        {
+            pane.vte().reset(true, true);
+        }
+
         if let Some(target) = recovery.target.as_ref()
             && let Some(startup_input) = target.managed_startup_input()
         {
@@ -824,6 +832,7 @@ impl Window {
 
     fn attempt_recovery_for_terminal(&self, term: &TerminalWidget, recovery: &PaneRecovery) {
         term.hide_recovery_message();
+        term.reset_terminal_state();
 
         if let Some(target) = &recovery.target
             && let Some(startup_input) = target.managed_startup_input()
