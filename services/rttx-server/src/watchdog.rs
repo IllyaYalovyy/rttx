@@ -111,8 +111,7 @@ pub fn spawn_watchdog_with_config(
             if let Ok(_guard) = result {
                 state_clone.consecutive_timeouts.store(0, Ordering::Relaxed);
             } else {
-                let count =
-                    state_clone.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
+                let count = state_clone.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
 
                 // Record timeout event in ring buffer.
                 ring.record(&FlightEvent {
@@ -124,10 +123,7 @@ pub fn spawn_watchdog_with_config(
                     value: u64::from(count),
                 });
 
-                tracing::warn!(
-                    consecutive = count,
-                    "Watchdog: server mutex acquisition timed out"
-                );
+                tracing::warn!(consecutive = count, "Watchdog: server mutex acquisition timed out");
 
                 if count >= config.max_consecutive_timeouts {
                     let report = build_hang_report(&metrics, count);
@@ -159,16 +155,9 @@ fn build_hang_report(metrics: &DaemonMetrics, consecutive_timeouts: u32) -> Stri
         "Connected clients: {}",
         metrics.connected_clients.load(Ordering::Relaxed)
     );
-    let _ = writeln!(
-        report,
-        "Active panes: {}",
-        metrics.active_panes.load(Ordering::Relaxed)
-    );
-    let _ = writeln!(
-        report,
-        "Channel depth: {}",
-        metrics.total_channel_depth.load(Ordering::Relaxed)
-    );
+    let _ = writeln!(report, "Active panes: {}", metrics.active_panes.load(Ordering::Relaxed));
+    let _ =
+        writeln!(report, "Channel depth: {}", metrics.total_channel_depth.load(Ordering::Relaxed));
     let _ = writeln!(
         report,
         "Messages dispatched: {}",
@@ -194,24 +183,13 @@ fn build_hang_report(metrics: &DaemonMetrics, consecutive_timeouts: u32) -> Stri
         "Mutex contentions: {}",
         metrics.mutex_contentions.load(Ordering::Relaxed)
     );
-    let _ = writeln!(
-        report,
-        "Mutex long holds: {}",
-        metrics.mutex_long_holds.load(Ordering::Relaxed)
-    );
+    let _ =
+        writeln!(report, "Mutex long holds: {}", metrics.mutex_long_holds.load(Ordering::Relaxed));
     let _ = writeln!(report);
     let _ = writeln!(report, "-- Latency histograms --");
     let _ = writeln!(report, "Mutex wait (µs): {:?}", metrics.mutex_wait_us.snapshot());
-    let _ = writeln!(
-        report,
-        "Dispatch latency (µs): {:?}",
-        metrics.dispatch_latency_us.snapshot()
-    );
-    let _ = writeln!(
-        report,
-        "PTY read latency (µs): {:?}",
-        metrics.pty_read_latency_us.snapshot()
-    );
+    let _ = writeln!(report, "Dispatch latency (µs): {:?}", metrics.dispatch_latency_us.snapshot());
+    let _ = writeln!(report, "PTY read latency (µs): {:?}", metrics.pty_read_latency_us.snapshot());
     let _ = writeln!(
         report,
         "Client write latency (µs): {:?}",
@@ -383,8 +361,10 @@ mod tests {
         let reader = crate::flight::RingReader::open(&dir.path().join("flight.bin")).unwrap();
         let events = reader.read_all();
         assert!(
-            events.iter().any(|e| e.span_kind == SpanKind::WatchdogTimeout
-                && e.event_type == EventType::Event),
+            events
+                .iter()
+                .any(|e| e.span_kind == SpanKind::WatchdogTimeout
+                    && e.event_type == EventType::Event),
             "expected WatchdogTimeout event in ring buffer"
         );
     }
