@@ -766,9 +766,7 @@ impl Window {
 
         // Reset VTE so residual escape sequences from a previous session
         // do not corrupt the recovery commands.
-        if let Some(pane) =
-            self.imp().persistent_terminals.borrow().get(terminal_uuid).cloned()
-        {
+        if let Some(pane) = self.imp().persistent_terminals.borrow().get(terminal_uuid).cloned() {
             pane.vte().reset(true, true);
         }
 
