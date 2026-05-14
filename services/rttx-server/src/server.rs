@@ -2969,8 +2969,7 @@ where
     let (reader, writer) = conn.into_split();
     let write_short = client_short.clone();
     let writer_metrics = Arc::clone(&metrics);
-    let writer_task =
-        tokio::spawn(client_writer(writer, rx, resp_rx, write_short, writer_metrics));
+    let writer_task = tokio::spawn(client_writer(writer, rx, resp_rx, write_short, writer_metrics));
 
     let (result, handshake_completed) = if is_v3 {
         tracing::info!("Client {client_short} connected (v3)");
@@ -3153,14 +3152,10 @@ async fn v2_client_reader(
         if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
             && resp_tx.send(ClientMsg::V2(response)).await.is_err()
         {
-            metrics
-                .dispatch_latency_us
-                .record(dispatch_start.elapsed().as_micros() as u64);
+            metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
             return (Ok(()), true);
         }
-        metrics
-            .dispatch_latency_us
-            .record(dispatch_start.elapsed().as_micros() as u64);
+        metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
     }
 
     // Continue with normal v2 read loop.
@@ -3194,14 +3189,10 @@ async fn v2_client_reader(
         if let Some(response) = Server::handle_message(&server, client_id, msg, &metrics).await
             && resp_tx.send(ClientMsg::V2(response)).await.is_err()
         {
-            metrics
-                .dispatch_latency_us
-                .record(dispatch_start.elapsed().as_micros() as u64);
+            metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
             return (Ok(()), true);
         }
-        metrics
-            .dispatch_latency_us
-            .record(dispatch_start.elapsed().as_micros() as u64);
+        metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
     }
 }
 
@@ -3261,14 +3252,10 @@ async fn v3_client_reader(
             Server::handle_v3_message(&server, client_id, &effective_caps, envelope, &metrics).await
             && resp_tx.send(ClientMsg::V3(response)).await.is_err()
         {
-            metrics
-                .dispatch_latency_us
-                .record(dispatch_start.elapsed().as_micros() as u64);
+            metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
             return (Ok(()), true);
         }
-        metrics
-            .dispatch_latency_us
-            .record(dispatch_start.elapsed().as_micros() as u64);
+        metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
     }
 }
 
@@ -3328,9 +3315,7 @@ async fn client_writer(
 
         match result {
             Ok(()) => {
-                metrics
-                    .bytes_written_to_clients
-                    .fetch_add(bytes_len as u64, Ordering::Relaxed);
+                metrics.bytes_written_to_clients.fetch_add(bytes_len as u64, Ordering::Relaxed);
             }
             Err(e) => {
                 tracing::error!("Client {client_short} write error: {e}");
