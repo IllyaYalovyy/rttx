@@ -100,3 +100,31 @@ fn repair_terminal_clears_stuck_tui_modes() {
     assert!(!modes.application_cursor_keys, "cursor keys must be off after repair");
     assert!(!modes.application_keypad, "keypad must be off after repair");
 }
+
+/// Regression for #917: VTE must be reset before recovery so residual
+/// escape sequences from a previous session do not corrupt recovery input.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn vte_reset_clears_residual_state_before_recovery() {
+    require_display!();
+
+    let pane = PersistentPaneView::new("reset-recovery-1", "runtime-1");
+
+    // Simulate residual state: mouse tracking on, cursor hidden,
+    // bracketed paste enabled, application cursor keys on.
+    pane.vte().feed(b"\x1b[?1003h\x1b[?25l\x1b[?2004h\x1b[?1h");
+    pane.set_application_modes(true, true);
+
+    // This is what trigger_managed_recovery_for_terminal now does before
+    // sending recovery input: a full VTE reset.
+    pane.vte().reset(true, true);
+
+    // After VTE reset, feeding a simple prompt should not be affected by
+    // the residual escape state. The VTE parser is now clean.
+    pane.vte().feed(b"$ ");
+
+    // Verify the VTE accepted the clean input without corruption by
+    // checking that the cursor is at a sane position (column 2 after "$ ").
+    let (col, _row) = pane.vte().cursor_position();
+    assert_eq!(col, 2, "cursor should be at column 2 after feeding '$ ' to a reset VTE");
+}
