@@ -124,7 +124,8 @@ pub async fn start_test_server(
 
     let os = TestOs { runtime_dir, cache_dir };
     let metrics = Arc::new(rttx_server::metrics::DaemonMetrics::new());
-    let server = Arc::new(Mutex::new(Server::new(Box::new(os), metrics)));
+    let ring = Arc::new(rttx_server::flight::RingWriter::open(tmp_dir).unwrap());
+    let server = Arc::new(Mutex::new(Server::new(Box::new(os), metrics, ring)));
 
     // Load persisted state and reconstruct sessions (if any).
     {

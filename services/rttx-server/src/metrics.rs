@@ -94,6 +94,9 @@ impl LatencyHistogram {
 /// All fields use atomic operations — no locks required for reads or writes.
 #[derive(Debug)]
 pub struct DaemonMetrics {
+    // Epoch for ring buffer timestamps
+    pub epoch: std::time::Instant,
+
     // Gauges
     pub connected_clients: AtomicU32,
     pub active_panes: AtomicU32,
@@ -114,6 +117,9 @@ pub struct DaemonMetrics {
     pub dispatch_latency_us: LatencyHistogram,
     pub pty_read_latency_us: LatencyHistogram,
     pub client_write_latency_us: LatencyHistogram,
+    pub vte_parse_latency_us: LatencyHistogram,
+    pub serialization_tick_latency_us: LatencyHistogram,
+    pub io_flush_latency_us: LatencyHistogram,
 }
 
 impl Default for DaemonMetrics {
@@ -124,8 +130,10 @@ impl Default for DaemonMetrics {
 
 impl DaemonMetrics {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
+            epoch: std::time::Instant::now(),
+
             connected_clients: AtomicU32::new(0),
             active_panes: AtomicU32::new(0),
             total_channel_depth: AtomicU64::new(0),
@@ -143,6 +151,9 @@ impl DaemonMetrics {
             dispatch_latency_us: LatencyHistogram::new(),
             pty_read_latency_us: LatencyHistogram::new(),
             client_write_latency_us: LatencyHistogram::new(),
+            vte_parse_latency_us: LatencyHistogram::new(),
+            serialization_tick_latency_us: LatencyHistogram::new(),
+            io_flush_latency_us: LatencyHistogram::new(),
         }
     }
 }

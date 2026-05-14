@@ -190,6 +190,8 @@ pub struct Server {
     pub os: Box<dyn OsInterface>,
     /// Always-on profiling metrics shared with the profiling layer.
     pub metrics: Arc<crate::metrics::DaemonMetrics>,
+    /// Ring buffer writer for direct flight event recording.
+    pub ring: Arc<crate::flight::RingWriter>,
     /// Per-client bounded push channels for server-initiated messages (Deltas, etc.).
     client_senders: HashMap<Uuid, mpsc::Sender<ClientMsg>>,
     /// Per-client response channels for request/response messages.
@@ -207,7 +209,11 @@ pub struct Server {
 impl Server {
     /// Create a new server with the native engine.
     #[must_use]
-    pub fn new(os: Box<dyn OsInterface>, metrics: Arc<crate::metrics::DaemonMetrics>) -> Self {
+    pub fn new(
+        os: Box<dyn OsInterface>,
+        metrics: Arc<crate::metrics::DaemonMetrics>,
+        ring: Arc<crate::flight::RingWriter>,
+    ) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
         Self {
             runtimes: HashMap::new(),
@@ -215,6 +221,7 @@ impl Server {
             engine: Box::new(NativeEngine),
             os,
             metrics,
+            ring,
             client_senders: HashMap::new(),
             client_resp_senders: HashMap::new(),
             client_protocols: HashMap::new(),
@@ -501,6 +508,10 @@ impl Server {
                         child,
                         kill_rx,
                         Arc::clone(&metrics),
+                        {
+                            let s = crate::instrument::lock_server(server, &metrics).await;
+                            Arc::clone(&s.ring)
+                        },
                     );
                     tracing::info!("Reconstructed pane {pane_short} in runtime {runtime_label}");
                 }
@@ -992,7 +1003,7 @@ impl Server {
                         let child_pid = pty.pid();
                         let (reader, writer, mut child) = pty.into_parts();
                         let (kill_tx, kill_rx) = oneshot::channel();
-                        let (revision, runtime_name, metrics) = {
+                        let (revision, runtime_name, metrics, ring) = {
                             let mut s = crate::instrument::lock_server(server, metrics).await;
                             let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                                 let _ = child.start_kill();
@@ -1014,7 +1025,8 @@ impl Server {
                                 .insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                             s.pty_kill_senders.insert(pane_id, kill_tx);
                             let m = s.metrics.clone();
-                            (revision, name, m)
+                            let r = Arc::clone(&s.ring);
+                            (revision, name, m, r)
                         };
                         spawn_pty_read_loop(
                             Arc::clone(server),
@@ -1025,6 +1037,7 @@ impl Server {
                             child,
                             kill_rx,
                             metrics,
+                            ring,
                         );
                         tracing::info!(
                             "Pane {} created in runtime \"{}\" ({})",
@@ -1967,7 +1980,7 @@ impl Server {
                 let child_pid = pty.pid();
                 let (reader, writer, mut child) = pty.into_parts();
                 let (kill_tx, kill_rx) = oneshot::channel();
-                let (revision, runtime_name, metrics) = {
+                let (revision, runtime_name, metrics, ring) = {
                     let mut s = crate::instrument::lock_server(server, metrics).await;
                     let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
                         let _ = child.start_kill();
@@ -1992,7 +2005,8 @@ impl Server {
                     s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                     s.pty_kill_senders.insert(pane_id, kill_tx);
                     let m = s.metrics.clone();
-                    (revision, name, m)
+                    let r = Arc::clone(&s.ring);
+                    (revision, name, m, r)
                 };
                 spawn_pty_read_loop(
                     Arc::clone(server),
@@ -2003,6 +2017,7 @@ impl Server {
                     child,
                     kill_rx,
                     metrics,
+                    ring,
                 );
                 tracing::info!(
                     "Pane {} created in runtime \"{}\" ({})",
@@ -2269,6 +2284,7 @@ fn spawn_pty_read_loop(
     mut child: tokio::process::Child,
     mut kill_rx: oneshot::Receiver<()>,
     metrics: Arc<crate::metrics::DaemonMetrics>,
+    ring: Arc<crate::flight::RingWriter>,
 ) {
     let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
     let pane_short = short_id(pane_id);
@@ -2310,6 +2326,11 @@ fn spawn_pty_read_loop(
                             }
 
                             let data = batch.split().freeze();
+                            let batch_len = data.len() as u64;
+                            metrics.bytes_read_from_pty.fetch_add(batch_len, std::sync::atomic::Ordering::Relaxed);
+                            let pty_batch_start = std::time::Instant::now();
+                            let mut pane_context = [0u8; 16];
+                            pane_context[..16].copy_from_slice(pane_id.as_bytes());
 
                             // Phase 1: accept raw bytes under the per-runtime lock
                             // (fast memcpy, no VTE parsing).  The server mutex is
@@ -2350,6 +2371,13 @@ fn spawn_pty_read_loop(
 
                             // Phase 2: VTE parsing outside any lock.
                             if let Some(ref mut screen) = taken_screen {
+                                let _vte_span = tracing::info_span!(
+                                    target: "rttx_profile",
+                                    "vte.parse",
+                                    span_kind = "vte_parse",
+                                    pane_id = %pane_short,
+                                    bytes_parsed = batch_len,
+                                ).entered();
                                 screen.parse(&data);
                             }
 
@@ -2421,6 +2449,16 @@ fn spawn_pty_read_loop(
                                 let mut s = crate::instrument::lock_server(&server, &metrics).await;
                                 s.handle_push_overflows(&all_overflows, runtime_id);
                             }
+
+                            metrics.pty_read_latency_us.record(pty_batch_start.elapsed().as_micros() as u64);
+                            ring.record(&crate::flight::FlightEvent {
+                                timestamp_ns: metrics.epoch.elapsed().as_nanos() as u64,
+                                span_id: 0,
+                                event_type: crate::flight::EventType::Exit,
+                                span_kind: crate::flight::SpanKind::PtyRead,
+                                context: pane_context,
+                                value: pty_batch_start.elapsed().as_nanos() as u64,
+                            });
                         }
                         Err(e) => {
                             tracing::error!("PTY read error for pane {pane_short} in runtime {runtime_label}: {e}");
@@ -2527,6 +2565,7 @@ pub async fn serialization_loop(
     server: Arc<Mutex<Server>>,
     interval: Duration,
     shutdown_rx: &mut watch::Receiver<bool>,
+    ring: Arc<crate::flight::RingWriter>,
 ) {
     let metrics = { server.lock().await.metrics.clone() };
     let mut ticker = tokio::time::interval(interval);
@@ -2540,6 +2579,9 @@ pub async fn serialization_loop(
                 return;
             }
         }
+
+        metrics.serialization_ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tick_start = std::time::Instant::now();
 
         let s = crate::instrument::lock_server(&server, &metrics).await;
         let state_dir = s.os.state_dir();
@@ -2596,6 +2638,13 @@ pub async fn serialization_loop(
 
         // Phase 2: flush scrollback to disk outside the lock.
         for (path, data) in &flush_jobs {
+            let _flush_span = tracing::info_span!(
+                target: "rttx_profile",
+                "io.flush",
+                span_kind = "io_flush",
+                path = %path.display(),
+            )
+            .entered();
             if let Err(e) = crate::pane::write_scrollback_to_disk(path, data) {
                 tracing::error!("Failed to flush scrollback to {}: {e}", path.display());
             }
@@ -2603,6 +2652,13 @@ pub async fn serialization_loop(
 
         // Write v2 daemon index only when runtime IDs changed.
         if index_changed {
+            let _flush_span = tracing::info_span!(
+                target: "rttx_profile",
+                "io.flush",
+                span_kind = "io_flush",
+                path = %state_dir.join("index.json").display(),
+            )
+            .entered();
             if let Err(e) = crate::state::persistence::save_daemon_index(&state_dir, &current_ids) {
                 tracing::error!("Failed to write v2 daemon index: {e}");
             } else {
@@ -2613,6 +2669,13 @@ pub async fn serialization_loop(
         // Write only dirty runtimes.
         let written_ids: Vec<Uuid> = dirty_runtime_files.iter().map(|rf| rf.spec.id).collect();
         for rf in &dirty_runtime_files {
+            let _flush_span = tracing::info_span!(
+                target: "rttx_profile",
+                "io.flush",
+                span_kind = "io_flush",
+                path = %state_dir.join("runtimes").join(rf.spec.id.to_string()).display(),
+            )
+            .entered();
             if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
                 tracing::error!("Failed to write v2 runtime {}: {e}", short_id(rf.spec.id));
             }
@@ -2620,6 +2683,12 @@ pub async fn serialization_loop(
 
         // Write screen snapshots for dirty runtimes.
         for (runtime_id, snap) in &screen_snapshots {
+            let _flush_span = tracing::info_span!(
+                target: "rttx_profile",
+                "io.flush",
+                span_kind = "io_flush",
+                path = %state_dir.join("runtimes").join(runtime_id.to_string()).join("screen").display(),
+            ).entered();
             if let Err(e) =
                 crate::state::persistence::save_screen_snapshot(&state_dir, *runtime_id, snap)
             {
@@ -2641,6 +2710,16 @@ pub async fn serialization_loop(
                 }
             }
         }
+
+        metrics.serialization_tick_latency_us.record(tick_start.elapsed().as_micros() as u64);
+        ring.record(&crate::flight::FlightEvent {
+            timestamp_ns: metrics.epoch.elapsed().as_nanos() as u64,
+            span_id: 0,
+            event_type: crate::flight::EventType::Exit,
+            span_kind: crate::flight::SpanKind::SerializationTick,
+            context: [0; 16],
+            value: tick_start.elapsed().as_nanos() as u64,
+        });
     }
 }
 
@@ -2742,9 +2821,11 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
 
     // Start serialization loop.
     let ser_server = Arc::clone(&server);
+    let ser_ring = { server.lock().await.ring.clone() };
     let mut ser_shutdown_rx = shutdown_rx.clone();
     tokio::spawn(async move {
-        serialization_loop(ser_server, Duration::from_secs(1), &mut ser_shutdown_rx).await;
+        serialization_loop(ser_server, Duration::from_secs(1), &mut ser_shutdown_rx, ser_ring)
+            .await;
     });
 
     let connection_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CLIENTS));

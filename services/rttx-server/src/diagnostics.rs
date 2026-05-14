@@ -190,7 +190,14 @@ mod tests {
                 PathBuf::from("/tmp/test-state/rttx/daemon")
             }
         }
-        Server::new(Box::new(TestOs), std::sync::Arc::new(crate::metrics::DaemonMetrics::new()))
+        let dir = tempfile::TempDir::new().unwrap();
+        let ring = std::sync::Arc::new(crate::flight::RingWriter::open(dir.path()).unwrap());
+        std::mem::forget(dir);
+        Server::new(
+            Box::new(TestOs),
+            std::sync::Arc::new(crate::metrics::DaemonMetrics::new()),
+            ring,
+        )
     }
 
     #[test]
