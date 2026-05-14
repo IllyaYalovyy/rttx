@@ -1692,7 +1692,7 @@ async fn probe_connection_logs_at_debug_not_info() {
     let conn = crate::ipc::ClientConnection::new(server_half);
 
     // handle_client will see EOF immediately (no Hello sent).
-    let _ = super::handle_client(server, conn).await;
+    let _ = super::handle_client(server, conn, None).await;
 
     // Probe should be logged at debug level, not info.
     assert!(logs_contain("Client probe from"));
@@ -1709,7 +1709,7 @@ async fn real_client_logs_connected_and_disconnected_at_info() {
 
     // Spawn handle_client in background.
     let handle = tokio::spawn(async move {
-        let _ = super::handle_client(server, conn).await;
+        let _ = super::handle_client(server, conn, None).await;
     });
 
     // Send a Hello message from the client side.
@@ -2304,7 +2304,7 @@ async fn connection_limit_rejects_excess_clients() {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     });
 
-    let conn1 = listener.accept().await.unwrap();
+    let (conn1, _) = listener.accept().await.unwrap();
     let permit1 = connection_limit.clone().try_acquire_owned();
     assert!(permit1.is_ok(), "first connection should get a permit");
 
@@ -2314,7 +2314,7 @@ async fn connection_limit_rejects_excess_clients() {
         let _stream = UnixStream::connect(&path2).await.unwrap();
     });
 
-    let _conn2 = listener.accept().await.unwrap();
+    let (_conn2, _) = listener.accept().await.unwrap();
     assert!(
         connection_limit.try_acquire().is_err(),
         "second connection should be rejected at limit=1"
