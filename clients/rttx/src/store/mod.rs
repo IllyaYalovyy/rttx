@@ -580,6 +580,60 @@ mod tests {
         assert_eq!(commands[0].default_run_mode, crate::commands::CommandRunMode::Insert);
     }
 
+    #[test]
+    fn library_preserves_command_parameters() {
+        let (_tmp, store) = test_store();
+        let cmd = SavedCommand {
+            uuid: "param-test".into(),
+            title: "Deploy".into(),
+            body: "deploy --env $ENV".into(),
+            default_run_mode: crate::commands::CommandRunMode::Run,
+            host_tags: vec![],
+            parameters: vec![
+                crate::commands::CommandParameter {
+                    name: "ENV".into(),
+                    label: "Environment".into(),
+                    choices: vec!["staging".into(), "prod".into()],
+                    default: Some("staging".into()),
+                },
+                crate::commands::CommandParameter {
+                    name: "REGION".into(),
+                    label: "Region".into(),
+                    choices: vec!["us-east-1".into(), "eu-west-1".into()],
+                    default: None,
+                },
+            ],
+            description: String::new(),
+            labels: vec![],
+            shortcut_keys: vec![],
+        };
+        store.save_commands(&[cmd]).unwrap();
+        let loaded = store.load_commands();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].parameters.len(), 2);
+        assert_eq!(loaded[0].parameters[0].name, "ENV");
+        assert_eq!(loaded[0].parameters[0].choices, vec!["staging", "prod"]);
+        assert_eq!(loaded[0].parameters[0].default, Some("staging".into()));
+        assert_eq!(loaded[0].parameters[1].name, "REGION");
+        assert_eq!(loaded[0].parameters[1].default, None);
+    }
+
+    #[test]
+    fn duplicate_command_preserves_parameters() {
+        let mut cmd = SavedCommand::new("Deploy", "deploy --env $ENV");
+        cmd.parameters = vec![crate::commands::CommandParameter {
+            name: "ENV".into(),
+            label: "Environment".into(),
+            choices: vec!["staging".into(), "prod".into()],
+            default: Some("staging".into()),
+        }];
+        let copy = cmd.duplicate();
+        assert_eq!(copy.parameters.len(), 1);
+        assert_eq!(copy.parameters[0].name, "ENV");
+        assert_eq!(copy.parameters[0].choices, vec!["staging", "prod"]);
+        assert_ne!(copy.uuid, cmd.uuid, "duplicate must have a new UUID");
+    }
+
     // ── LoadOutcome::map ────────────────────────────────────
 
     #[test]
