@@ -311,18 +311,7 @@ fn extract_parameters(list: &gtk4::ListBox) -> Result<Vec<CommandParameter>, Str
 
 fn collect_entry_rows(group: &adw::PreferencesGroup) -> Vec<adw::EntryRow> {
     let mut entries = Vec::new();
-    let listbox = group.first_child().and_then(|c| {
-        // PreferencesGroup wraps content in a Box > ListBox
-        let mut child = Some(c);
-        while let Some(c) = child {
-            if let Ok(lb) = c.clone().downcast::<gtk4::ListBox>() {
-                return Some(lb);
-            }
-            child = c.next_sibling();
-        }
-        None
-    });
-    if let Some(lb) = listbox {
+    if let Some(lb) = find_listbox_recursive(group.first_child()) {
         let mut i = 0;
         while let Some(row) = lb.row_at_index(i) {
             if let Ok(entry) = row.downcast::<adw::EntryRow>() {
@@ -332,6 +321,26 @@ fn collect_entry_rows(group: &adw::PreferencesGroup) -> Vec<adw::EntryRow> {
         }
     }
     entries
+}
+
+/// Recursively search the widget tree for a `gtk4::ListBox`.
+///
+/// `adw::PreferencesGroup` nests its content `ListBox` inside an internal
+/// container (`Box` > `ListBox` in libadwaita 1.5). A flat sibling traversal
+/// misses it — we must descend into children.
+fn find_listbox_recursive(start: Option<gtk4::Widget>) -> Option<gtk4::ListBox> {
+    let mut stack: Vec<gtk4::Widget> = start.into_iter().collect();
+    while let Some(widget) = stack.pop() {
+        if let Ok(lb) = widget.clone().downcast::<gtk4::ListBox>() {
+            return Some(lb);
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            stack.push(c.clone());
+            child = c.next_sibling();
+        }
+    }
+    None
 }
 
 const fn run_mode_from_index(index: u32) -> CommandRunMode {
