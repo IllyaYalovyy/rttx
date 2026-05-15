@@ -590,13 +590,15 @@ mod tests {
             default_run_mode: crate::commands::CommandRunMode::Run,
             host_tags: vec![],
             parameters: vec![
-                crate::commands::CommandParameter { description: String::new(),
+                crate::commands::CommandParameter {
+                    description: String::new(),
                     name: "ENV".into(),
                     label: "Environment".into(),
                     choices: vec!["staging".into(), "prod".into()],
                     default: Some("staging".into()),
                 },
-                crate::commands::CommandParameter { description: String::new(),
+                crate::commands::CommandParameter {
+                    description: String::new(),
                     name: "REGION".into(),
                     label: "Region".into(),
                     choices: vec!["us-east-1".into(), "eu-west-1".into()],
@@ -621,7 +623,8 @@ mod tests {
     #[test]
     fn duplicate_command_preserves_parameters() {
         let mut cmd = SavedCommand::new("Deploy", "deploy --env $ENV");
-        cmd.parameters = vec![crate::commands::CommandParameter { description: String::new(),
+        cmd.parameters = vec![crate::commands::CommandParameter {
+            description: String::new(),
             name: "ENV".into(),
             label: "Environment".into(),
             choices: vec!["staging".into(), "prod".into()],
