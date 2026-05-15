@@ -805,6 +805,13 @@ impl Window {
             // already contains the rendered screen content, and switching
             // VTE into alt-screen mode would discard it.
             pane.restore_interaction_modes(modes);
+        } else {
+            // No mode state available — feed cleanup bytes to ensure any
+            // mouse tracking or other modes left by the scrollback data
+            // are disabled. Without this, stale DECSET sequences in the
+            // scrollback can leave VTE with mouse tracking on, causing
+            // mouse clicks to print escape sequences instead of working.
+            pane.vte().feed(crate::terminal::terminal_cleanup_bytes());
         }
         pane.set_current_directory(Some(&restore.cwd));
         if !restore.title.is_empty() && pane.custom_title().is_none() {
