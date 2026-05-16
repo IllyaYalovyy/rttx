@@ -2617,9 +2617,13 @@ pub async fn serialization_loop(
         }
 
         // Collect v2 runtime files only for dirty persistent runtimes.
+        // Screen snapshots are written for ALL persistent runtimes every 30
+        // ticks (~30s) to ensure terminal state survives hard kills even when
+        // no metadata changes (title/CWD/attach) bump the revision.
         let mut dirty_runtime_files = Vec::new();
         let mut screen_snapshots = Vec::new();
         let mut current_ids = Vec::new();
+        let snapshot_due = diagnostics_counter.is_multiple_of(30);
 
         for (runtime_id, rt_lock) in &runtime_entries {
             let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
@@ -2627,6 +2631,12 @@ pub async fn serialization_loop(
                 current_ids.push(*runtime_id);
                 if rt.is_dirty() {
                     dirty_runtime_files.push(rt.to_runtime_file());
+                    for pane in rt.panes.values() {
+                        screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
+                    }
+                } else if snapshot_due {
+                    // Periodic snapshot: capture screen state even when
+                    // runtime metadata hasn't changed.
                     for pane in rt.panes.values() {
                         screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
                     }
