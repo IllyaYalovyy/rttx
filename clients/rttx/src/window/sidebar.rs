@@ -297,7 +297,6 @@ impl Window {
 
         for label_text in &labels {
             let button = gtk4::ToggleButton::with_label(label_text);
-            button.add_css_class("pill");
             button.add_css_class("flat");
             button.add_css_class("caption");
             button.set_active(active.contains(label_text));
