@@ -475,8 +475,9 @@ pub const fn connection_icon(
             ("accent", tooltip)
         }
         ConnectionStatus::Disconnected => ("warning", "Disconnected from runtime"),
+        ConnectionStatus::Reconnecting { .. } => ("warning", "Reconnecting to runtime…"),
         ConnectionStatus::SessionMissing => ("warning", "Session no longer exists on daemon"),
-        ConnectionStatus::Blocked(_) => ("error", "Connection blocked"),
+        ConnectionStatus::Blocked(_) => ("error", "Connection blocked — retry manually"),
         _ => ("dim-label", "Connecting…"),
     };
     ConnectionIcon { icon_name, css_class, tooltip }
@@ -855,6 +856,43 @@ mod tests {
         assert_eq!(
             connection_icon(&ep, &ConnectionStatus::Connecting, true).css_class,
             "dim-label"
+        );
+    }
+
+    /// Regression for #935: Reconnecting must use warning color so the tab
+    /// is visually distinct from initial Connecting (dim-label/gray).
+    #[test]
+    fn connection_icon_reconnecting_uses_warning_not_dim_label() {
+        let local = RuntimeEndpoint::Local;
+        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let reconnecting = ConnectionStatus::Reconnecting { attempt: 3, retry_in_secs: 5 };
+
+        let local_icon = connection_icon(&local, &reconnecting, true);
+        assert_eq!(
+            local_icon.css_class, "warning",
+            "Reconnecting must use warning color, not dim-label"
+        );
+        assert_eq!(local_icon.tooltip, "Reconnecting to runtime…");
+
+        let remote_icon = connection_icon(&remote, &reconnecting, true);
+        assert_eq!(remote_icon.css_class, "warning");
+        assert_eq!(remote_icon.tooltip, "Reconnecting to runtime…");
+    }
+
+    /// Regression for #935: Blocked state tooltip must indicate manual retry.
+    #[test]
+    fn connection_icon_blocked_tooltip_mentions_retry() {
+        let ep = RuntimeEndpoint::Local;
+        let icon = connection_icon(
+            &ep,
+            &ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+            true,
+        );
+        assert_eq!(icon.css_class, "error");
+        assert!(
+            icon.tooltip.contains("retry"),
+            "Blocked tooltip should mention retry: got {:?}",
+            icon.tooltip
         );
     }
 
