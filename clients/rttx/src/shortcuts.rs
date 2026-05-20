@@ -105,6 +105,7 @@ pub static DEFAULT_SHORTCUTS: &[ShortcutDef] = &[
         label: "Commands leader key",
         default_accels: &["<Ctrl>semicolon"],
     },
+    ShortcutDef { action: "rename-workspace", label: "Rename workspace", default_accels: &["F2"] },
 ];
 
 /// Look up the effective accelerators for an action, checking user overrides
@@ -243,5 +244,11 @@ mod tests {
     fn repair_terminal_shortcut_registered() {
         let accels = default_accels("repair-terminal");
         assert_eq!(accels, vec!["<Ctrl><Shift>X"]);
+    }
+
+    #[test]
+    fn rename_workspace_shortcut_registered() {
+        let accels = default_accels("rename-workspace");
+        assert_eq!(accels, vec!["F2"]);
     }
 }

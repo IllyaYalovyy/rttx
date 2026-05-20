@@ -3023,3 +3023,23 @@ fn header_bar_workspace_buttons_are_icon_only() {
     remove_env("RTTX_DISABLE_SHELL_SPAWN");
     remove_env("XDG_CONFIG_HOME");
 }
+
+/// The window must expose a `rename-workspace` action bound to F2.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn window_has_rename_workspace_action() {
+    require_display!();
+
+    let app = adw::Application::builder()
+        .application_id("io.github.IllyaYalovyy.rttx.test.rename_workspace_action")
+        .build();
+    app.register(None::<&gtk4::gio::Cancellable>).unwrap();
+
+    let window = rttx::window::Window::new(&app);
+    let action_group: gtk4::gio::ActionGroup = window.clone().upcast();
+    assert!(
+        action_group.has_action("rename-workspace"),
+        "window must have rename-workspace action"
+    );
+    window.close();
+}
