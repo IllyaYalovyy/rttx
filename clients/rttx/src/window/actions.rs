@@ -42,6 +42,7 @@ impl Window {
             ("rotate-layout", Self::rotate_layout),
             ("repair-terminal", Self::repair_focused_terminal),
             ("rename-pane", Self::rename_focused_pane),
+            ("rename-workspace", Self::rename_active_workspace),
             ("new-session", Self::add_session),
             ("new-ephemeral-workspace", Self::add_ephemeral_session),
             ("new-remote-workspace", Self::show_new_remote_workspace_dialog),
@@ -299,6 +300,19 @@ impl Window {
             && let Some(terminal) = self.terminal_handle(&uuid)
         {
             self.show_rename_pane_dialog(&uuid, &terminal);
+        }
+    }
+
+    fn rename_active_workspace(&self) {
+        let imp = self.imp();
+        if let Some(row) = imp
+            .sidebar_list
+            .selected_row()
+            .and_then(|r| r.child())
+            .and_then(|c| c.downcast::<WorkspaceRow>().ok())
+        {
+            let uuid = row.uuid();
+            self.show_rename_runtime_popover(&row, &uuid);
         }
     }
 
