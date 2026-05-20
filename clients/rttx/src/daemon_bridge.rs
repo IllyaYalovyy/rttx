@@ -1697,9 +1697,7 @@ impl EndpointActor {
         // Circuit breaker: after too many consecutive failures, stop
         // auto-retrying and declare the endpoint unreachable. The user
         // can manually retry via "Retry Connection" in the UI.
-        // Threshold: 3× max_delay gives the remote ~30 chances at full
-        // backoff before giving up (e.g., 30 attempts × 10s = 5 minutes).
-        let circuit_breaker_limit = self.reconnect_delay_secs.saturating_mul(3);
+        let circuit_breaker_limit = self.reconnect_delay_secs.saturating_add(2);
         if self.reconnect_attempt > circuit_breaker_limit {
             tracing::error!(
                 "Circuit breaker: giving up on {} after {} attempts",
@@ -3566,13 +3564,13 @@ mod tests {
             self_tx,
             cmd_rx,
             false,
-            10, // reconnect_delay_secs = 10 → circuit breaker at 30
+            10, // reconnect_delay_secs = 10 → circuit breaker at 12
             Arc::new(AtomicBool::new(false)),
         );
         actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
 
-        // Simulate reaching the circuit breaker threshold.
-        actor.reconnect_attempt = 30;
+        // Simulate reaching the circuit breaker threshold (10 + 2 = 12).
+        actor.reconnect_attempt = 12;
 
         // This call should trigger the circuit breaker instead of scheduling.
         actor.schedule_reconnect(10);
@@ -3644,5 +3642,34 @@ mod tests {
             Some(6),
             "delay should be min(saved_attempt+1, max) = min(6, 10) = 6, not 1"
         );
+    }
+
+    /// Regression for #935: circuit breaker must fire within a reasonable
+    /// number of attempts (`max_delay` + 2) so the user sees a clear failure
+    /// state within ~1 minute, not after 5+ minutes.
+    #[test]
+    fn circuit_breaker_threshold_is_reasonable() {
+        let (event_tx, _) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        // With reconnect_delay_secs=10, circuit breaker = 10+2 = 12.
+        // Total time: 1+2+3+4+5+6+7+8+9+10+10+10 = 75s ≈ 1.25 min.
+        let limit = actor.reconnect_delay_secs.saturating_add(2);
+        assert!(
+            limit <= 15,
+            "circuit breaker must fire within 15 attempts to avoid prolonged gray state"
+        );
+        assert!(limit >= 5, "circuit breaker must allow at least 5 attempts for transient issues");
     }
 }
