@@ -445,6 +445,55 @@ meson setup --wipe build --prefix="$HOME/.local"
 meson compile -C build
 ```
 
+### Resetting to factory state
+
+To completely wipe all rttx data and simulate a first launch, stop the daemon and remove all
+configuration, state, and cache directories.
+
+**Production instance:**
+
+```bash
+# Stop the daemon (terminates all running sessions)
+rttx-server stop 2>/dev/null; pkill -f "rttx-server" 2>/dev/null
+
+# Remove configuration (preferences, hosts, bookmarks, color schemes)
+rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/rttx/"
+
+# Remove client state (workspace layouts, UI state, backups)
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/rttx/client/"
+
+# Remove daemon state (runtimes, scrollback, screen snapshots)
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/rttx/daemon/"
+
+# Remove cache and logs
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/rttx/"
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/rttx-server/"
+
+# Remove runtime files (socket, PID file)
+rm -rf "${XDG_RUNTIME_DIR}/rttx-server/"
+```
+
+**Development instance** (`RTTX_DEV_MODE=1`):
+
+```bash
+pkill -f "rttx-server" 2>/dev/null
+rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/rttx-devel/"
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/rttx-devel/"
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/rttx-devel/"
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/rttx-server-devel/"
+rm -rf "${XDG_RUNTIME_DIR}/rttx-server-devel/"
+```
+
+After removing these directories, the next launch of `rttx` will behave as a fresh install with
+default preferences and no saved workspaces.
+
+To reset only specific parts:
+- **Preferences only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/preferences.json`
+- **Workspace layouts only:** remove `${XDG_STATE_HOME:-$HOME/.local/state}/rttx/client/workspaces.json`
+- **Bookmarks only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/library.json`
+- **Saved commands only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/library.json` (commands and bookmarks share this file)
+- **Color schemes only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/schemes/`
+
 ## Flatpak Packaging
 
 The repository keeps a conservative default manifest at
