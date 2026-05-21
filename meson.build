@@ -1,5 +1,5 @@
 project('rttx',
-  version: '0.5.2',
+  version: '0.5.3',
   license: 'GPL-3.0-or-later',
   meson_version: '>= 0.59',
 )

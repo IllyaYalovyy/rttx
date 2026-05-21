@@ -7673,3 +7673,61 @@ fn reconnect_host_reconnects_all_disconnected_workspaces_from_same_endpoint() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// Regression test for #939: "Close All" should keep the window open with a
+/// fresh direct workspace instead of closing the application.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn close_all_keeps_window_open_with_fresh_workspace() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("XDG_STATE_HOME", tmp.path());
+    crate::test_helpers::set_env("XDG_CACHE_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.close-all-fresh-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1200, 800);
+    window.present();
+    pump_events(100);
+
+    // Ensure we start with exactly one workspace (from default state), then add a second.
+    let initial_count = window.imp().state.borrow().workspaces.len();
+    assert!(initial_count >= 1, "should have at least one workspace after init");
+
+    let second = WorkspaceState::new("Second".into());
+    window.imp().state.borrow_mut().workspaces.push(second.clone());
+    window.build_session(&second, false);
+    pump_events(50);
+
+    let pre_close_count = window.imp().state.borrow().workspaces.len();
+    assert!(pre_close_count >= 2, "should have at least two workspaces before close all");
+
+    // Invoke close_all_sessions (the logic behind "Close All" confirmation).
+    window.close_all_sessions();
+    pump_events(50);
+
+    // Window should still be visible.
+    assert!(window.is_visible(), "window should remain open after Close All");
+
+    // Exactly one fresh workspace should exist.
+    let state = window.imp().state.borrow();
+    assert_eq!(state.workspaces.len(), 1, "should have exactly one workspace after Close All");
+    assert!(
+        state.workspaces[0].name.starts_with("Direct"),
+        "the fresh workspace should be a Direct terminal, got: {}",
+        state.workspaces[0].name
+    );
+
+    drop(state);
+    window.close();
+    crate::test_helpers::remove_env("XDG_STATE_HOME");
+    crate::test_helpers::remove_env("XDG_CACHE_HOME");
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

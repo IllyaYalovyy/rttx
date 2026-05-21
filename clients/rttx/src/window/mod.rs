@@ -1099,6 +1099,79 @@ impl Window {
         self.renumber_session_rows();
     }
 
+    /// Close every workspace and replace them with a single fresh direct
+    /// terminal. Keeps the window open — used by "Close All".
+    pub(crate) fn close_all_sessions(&self) {
+        let imp = self.imp();
+
+        let all_uuids: Vec<String> = {
+            let state = imp.state.borrow();
+            state.workspaces.iter().map(|s| s.uuid.clone()).collect()
+        };
+
+        // Tear down each workspace without triggering window close.
+        for uuid in &all_uuids {
+            let (terminal_uuids, managed_runtime) = {
+                let mut state = imp.state.borrow_mut();
+                let Some(pos) = state.workspaces.iter().position(|s| s.uuid == *uuid) else {
+                    continue;
+                };
+                let session = state.workspaces.remove(pos);
+                let uuids = session.layout.terminal_uuids();
+                let managed = if session.uses_managed_runtime() {
+                    Some((session.runtime.endpoint.clone(), session.runtime.runtime_id))
+                } else {
+                    None
+                };
+                state.rebuild_pane_reverse_index();
+                (uuids, managed)
+            };
+
+            {
+                let terminals = imp.terminals.borrow();
+                for tuuid in &terminal_uuids {
+                    if let Some(term) = terminals.get(tuuid) {
+                        term.disconnect_child_exited();
+                    }
+                }
+            }
+            {
+                let mut terminals = imp.terminals.borrow_mut();
+                for tuuid in &terminal_uuids {
+                    terminals.remove(tuuid);
+                }
+            }
+            {
+                let mut panes = imp.persistent_terminals.borrow_mut();
+                for tuuid in &terminal_uuids {
+                    panes.remove(tuuid);
+                }
+            }
+
+            if let Some((endpoint, runtime_id)) = managed_runtime
+                && let Some(manager) = imp.connection_manager.borrow().as_ref()
+            {
+                if let Some(ref runtime_id) = runtime_id {
+                    manager.terminate_runtime(uuid, &endpoint, runtime_id);
+                }
+                manager.forget_workspace(&endpoint, uuid);
+                imp.workspace_connection_status.borrow_mut().remove(uuid.as_str());
+                if let Some(runtime_id) = runtime_id {
+                    imp.state.borrow_mut().dismissed_runtime_ids.insert(runtime_id);
+                }
+            }
+            self.clear_workspace_reconnect_countdown(uuid);
+
+            if let Some(child) = imp.session_stack.child_by_name(uuid) {
+                imp.session_stack.remove(&child);
+            }
+            self.remove_sidebar_row(uuid);
+        }
+
+        // Create a fresh direct terminal workspace.
+        self.add_direct_session();
+    }
+
     pub(crate) fn close_session(&self, session_uuid: &str) {
         let imp = self.imp();
 

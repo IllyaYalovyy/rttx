@@ -96,14 +96,10 @@ impl Window {
     }
 
     pub(super) fn confirm_close_all(&self) {
-        let all_uuids: Vec<String> = {
-            let state = self.imp().state.borrow();
-            state.workspaces.iter().map(|s| s.uuid.clone()).collect()
-        };
-        if all_uuids.is_empty() {
+        let count = self.imp().state.borrow().workspaces.len();
+        if count == 0 {
             return;
         }
-        let count = all_uuids.len();
         let body = format!(
             "Close {count} workspace{}? All panes and running processes will be stopped.",
             if count == 1 { "" } else { "s" }
@@ -117,9 +113,7 @@ impl Window {
         alert.set_close_response("cancel");
         alert.connect_response(None, move |_, response| {
             if response == "close" {
-                for uuid in &all_uuids {
-                    win.close_session(uuid);
-                }
+                win.close_all_sessions();
             }
         });
         alert.present(Some(self));
