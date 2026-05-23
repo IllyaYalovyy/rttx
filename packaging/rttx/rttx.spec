@@ -1,5 +1,5 @@
 Name:           rttx
-Version:        0.4.26
+Version:        0.6.1
 Release:        1%{?dist}
 Summary:        A tiling terminal emulator for GNOME
 
