@@ -6034,6 +6034,72 @@ fn restore_managed_snapshot_feeds_scrollback_and_cwd_to_pane() {
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
 
+/// Regression for #944: when the snapshot was captured at a different terminal
+/// size than the current pane, VTE must be told the current size before the
+/// snapshot bytes are fed. Otherwise VTE wraps lines at the old column count.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn restore_managed_snapshot_sets_vte_size_before_feed() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.restore-snapshot-resize-test")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "resize-snap-pane";
+    let session_state = crate::test_helpers::managed_session(
+        "ws-resize-snap",
+        "Resize Snap Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+    );
+    window.imp().state.borrow_mut().workspaces.push(session_state.clone());
+    window.build_session(&session_state, false);
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get(layout_uuid)
+        .cloned()
+        .expect("pane should exist");
+
+    // Record the pane's current VTE size (default before allocation).
+    let (current_cols, current_rows) = pane.terminal_size();
+
+    // Snapshot claims it was captured at a different size.
+    let restore = crate::workspace_state::WorkspacePaneRestore {
+        layout_terminal_uuid: layout_uuid.to_string(),
+        title: String::new(),
+        cwd: "/tmp".to_string(),
+        pane_output_seq: 0,
+        scrollback_tail: bytes::Bytes::from_static(b"wide output line\r\n"),
+        scrollback_complete: true,
+        cols: current_cols.saturating_add(40),
+        rows: current_rows.saturating_add(10),
+        terminal_modes: None,
+    };
+    window.restore_managed_snapshot(&restore);
+
+    // After restore, VTE's column count must match the current pane size,
+    // not the snapshot's stale dimensions.
+    let (after_cols, after_rows) = pane.terminal_size();
+    assert_eq!(
+        after_cols, current_cols,
+        "VTE column count should match current pane, not snapshot"
+    );
+    assert_eq!(after_rows, current_rows, "VTE row count should match current pane, not snapshot");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
 /// Reconnect restore applies `focus_reporting` and `cursor_hidden` from the
 /// snapshot even when the scrollback tail does not contain the original
 /// enabling escape sequences. #765.
