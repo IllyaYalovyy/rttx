@@ -1,5 +1,8 @@
 //! CLI entry point for rttx-server.
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use clap::{Parser, Subcommand};
 use rttx_proto::proto;
 use rttx_server::ipc;

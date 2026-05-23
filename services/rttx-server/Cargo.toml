@@ -32,6 +32,9 @@ dbg_macro = "warn"
 [dependencies]
 rttx-proto.workspace = true
 
+# Allocator
+mimalloc = "0.1"
+
 # Protocol serialization
 prost.workspace = true
 bytes.workspace = true
