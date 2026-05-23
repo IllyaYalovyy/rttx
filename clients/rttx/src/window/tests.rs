@@ -6094,10 +6094,7 @@ fn restore_managed_snapshot_sets_vte_size_before_feed() {
         after_cols, current_cols,
         "VTE column count should match current pane, not snapshot"
     );
-    assert_eq!(
-        after_rows, current_rows,
-        "VTE row count should match current pane, not snapshot"
-    );
+    assert_eq!(after_rows, current_rows, "VTE row count should match current pane, not snapshot");
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
