@@ -942,4 +942,14 @@ mod tests {
     fn read_pid_missing_file_returns_none() {
         assert_eq!(read_pid(std::path::Path::new("/nonexistent/pid")), None);
     }
+
+    #[test]
+    fn global_allocator_is_mimalloc() {
+        // Confirm the binary's global allocator is mimalloc. The type assertion
+        // is a compile-time guarantee; the allocation exercises it at runtime.
+        fn assert_mimalloc(_: &mimalloc::MiMalloc) {}
+        assert_mimalloc(&GLOBAL);
+        let v: Vec<u8> = vec![0u8; 4096];
+        assert_eq!(v.len(), 4096);
+    }
 }
