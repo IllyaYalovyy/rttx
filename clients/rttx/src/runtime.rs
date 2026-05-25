@@ -1478,7 +1478,11 @@ mod tests {
             true,
         );
         assert_eq!(icon.css_class, "error");
-        assert!(icon.tooltip.contains("restart"), "tooltip should mention restart: {}", icon.tooltip);
+        assert!(
+            icon.tooltip.contains("restart"),
+            "tooltip should mention restart: {}",
+            icon.tooltip
+        );
     }
 
     #[test]

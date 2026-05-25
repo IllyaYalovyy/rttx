@@ -3740,9 +3740,6 @@ mod tests {
                 saw_daemon_unavailable = true;
             }
         }
-        assert!(
-            saw_daemon_unavailable,
-            "remote circuit breaker should emit DaemonUnavailable"
-        );
+        assert!(saw_daemon_unavailable, "remote circuit breaker should emit DaemonUnavailable");
     }
 }

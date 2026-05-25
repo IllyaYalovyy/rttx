@@ -643,8 +643,7 @@ impl PersistentPaneView {
         presentation: &ConnectionPresentation,
     ) {
         self.imp().exited.set(false);
-        let connected =
-            matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered);
+        let connected = matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered);
         self.imp().connected.set(connected);
         self.imp().status_label.set_label(&presentation.header_label);
         self.imp().status_label.set_tooltip_text(Some(&status.label()));
