@@ -1696,7 +1696,7 @@ impl EndpointActor {
 
         // Circuit breaker: after too many consecutive failures, stop
         // auto-retrying and declare the endpoint unreachable. The user
-        // can manually retry via "Retry Connection" in the UI.
+        // can manually retry via "Retry Connection" or "Restart Daemon".
         let circuit_breaker_limit = self.reconnect_delay_secs.saturating_add(2);
         if self.reconnect_attempt > circuit_breaker_limit {
             tracing::error!(
@@ -1704,11 +1704,12 @@ impl EndpointActor {
                 self.endpoint.key(),
                 self.reconnect_attempt
             );
+            let problem = match self.endpoint {
+                RuntimeEndpoint::Local => ConnectionProblem::DaemonDied,
+                RuntimeEndpoint::Remote { .. } => ConnectionProblem::DaemonUnavailable,
+            };
             for workspace_id in self.tracked_workspaces.keys() {
-                self.emit_status(
-                    workspace_id,
-                    ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
-                );
+                self.emit_status(workspace_id, ConnectionStatus::Blocked(problem.clone()));
             }
             return;
         }
@@ -3671,5 +3672,74 @@ mod tests {
             "circuit breaker must fire within 15 attempts to avoid prolonged gray state"
         );
         assert!(limit >= 5, "circuit breaker must allow at least 5 attempts for transient issues");
+    }
+
+    /// Circuit breaker for a local endpoint emits `DaemonDied` instead of
+    /// `DaemonUnavailable` so the GUI can offer "Restart Daemon".
+    #[tokio::test]
+    async fn circuit_breaker_local_emits_daemon_died() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Local,
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+        actor.reconnect_attempt = 12;
+
+        actor.schedule_reconnect(10);
+
+        let mut saw_daemon_died = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Blocked(ConnectionProblem::DaemonDied),
+                ..
+            } = event
+            {
+                saw_daemon_died = true;
+            }
+        }
+        assert!(saw_daemon_died, "local circuit breaker should emit DaemonDied");
+    }
+
+    /// Circuit breaker for a remote endpoint emits `DaemonUnavailable`.
+    #[tokio::test]
+    async fn circuit_breaker_remote_emits_daemon_unavailable() {
+        let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
+        let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+        let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
+
+        let mut actor = EndpointActor::new(
+            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            event_tx,
+            self_tx,
+            cmd_rx,
+            false,
+            10,
+            Arc::new(AtomicBool::new(false)),
+        );
+        actor.tracked_workspaces.insert("ws-1".into(), Uuid::new_v4().to_string());
+        actor.reconnect_attempt = 12;
+
+        actor.schedule_reconnect(10);
+
+        let mut saw_daemon_unavailable = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let EndpointEvent::WorkspaceConnectionChanged {
+                status: ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+                ..
+            } = event
+            {
+                saw_daemon_unavailable = true;
+            }
+        }
+        assert!(saw_daemon_unavailable, "remote circuit breaker should emit DaemonUnavailable");
     }
 }

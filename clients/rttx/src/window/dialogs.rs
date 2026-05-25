@@ -432,13 +432,17 @@ impl Window {
                 return;
             };
             let statuses = self.imp().workspace_connection_status.borrow();
-            let disconnected = statuses.get(session_uuid).is_some_and(|s| {
+            let current_status = statuses.get(session_uuid);
+            let disconnected = current_status.is_some_and(|s| {
                 matches!(
                     s,
                     ConnectionStatus::Disconnected
                         | ConnectionStatus::Reconnecting { .. }
                         | ConnectionStatus::Blocked(_)
                 )
+            });
+            let is_daemon_died = current_status.is_some_and(|s| {
+                matches!(s, ConnectionStatus::Blocked(ConnectionProblem::DaemonDied))
             });
             let endpoint_key = session.runtime.endpoint.key();
             let has_other_disconnected = state.workspaces.iter().any(|s| {
@@ -462,6 +466,7 @@ impl Window {
                     && matches!(session.runtime.policy, WorkspacePolicy::Persistent),
                 is_attached: session.runtime.runtime_id.is_some(),
                 is_disconnected: disconnected,
+                is_daemon_died,
                 has_other_disconnected_from_same_host: has_other_disconnected,
             })
         };
@@ -470,6 +475,9 @@ impl Window {
         menu.append(Some("Rename…"), Some("win.ctx-rename"));
         if items.show_edit_connection {
             menu.append(Some("Edit Connection…"), Some("win.ctx-edit-connection"));
+        }
+        if items.show_restart_daemon {
+            menu.append(Some("Restart Daemon"), Some("win.ctx-restart-daemon"));
         }
         if items.show_reconnect {
             menu.append(Some("Reconnect"), Some("win.ctx-reconnect"));
@@ -506,6 +514,16 @@ impl Window {
                 w.show_edit_workspace_connection_dialog(&u);
             });
             self.add_action(&edit_action);
+        }
+
+        if items.show_restart_daemon {
+            let w = self.clone();
+            let u = session_uuid.to_string();
+            let restart_action = gtk4::gio::SimpleAction::new("ctx-restart-daemon", None);
+            restart_action.connect_activate(move |_, _| {
+                w.restart_daemon_and_reconnect(&u);
+            });
+            self.add_action(&restart_action);
         }
 
         if items.show_reconnect {

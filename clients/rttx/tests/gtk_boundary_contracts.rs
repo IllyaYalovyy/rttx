@@ -1026,6 +1026,7 @@ fn workspace_menu_items_contract() {
         is_persistent: true,
         is_attached: true,
         is_disconnected: true,
+        is_daemon_died: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(all.show_edit_connection);
@@ -1039,6 +1040,7 @@ fn workspace_menu_items_contract() {
         is_persistent: false,
         is_attached: true,
         is_disconnected: false,
+        is_daemon_died: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(!minimal.show_edit_connection);
@@ -1125,6 +1127,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_persistent: true,
         is_attached: false,
         is_disconnected: true,
+        is_daemon_died: false,
         has_other_disconnected_from_same_host: true,
     });
     assert!(with_siblings.show_reconnect_host);
@@ -1136,6 +1139,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_persistent: true,
         is_attached: false,
         is_disconnected: true,
+        is_daemon_died: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(!without_siblings.show_reconnect_host);
@@ -1147,7 +1151,37 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_persistent: true,
         is_attached: true,
         is_disconnected: false,
+        is_daemon_died: false,
         has_other_disconnected_from_same_host: true,
     });
     assert!(!connected.show_reconnect_host);
+}
+
+/// Daemon-died state surfaces "Restart Daemon" for local endpoints only (#954).
+#[test]
+fn workspace_menu_daemon_died_shows_restart_for_local_only() {
+    use rttx::runtime::{WorkspaceMenuContext, workspace_menu_items};
+
+    let local = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: false,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: false,
+        is_disconnected: true,
+        is_daemon_died: true,
+        has_other_disconnected_from_same_host: false,
+    });
+    assert!(local.show_restart_daemon);
+    assert!(local.show_reconnect);
+
+    let remote = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: false,
+        is_disconnected: true,
+        is_daemon_died: true,
+        has_other_disconnected_from_same_host: false,
+    });
+    assert!(!remote.show_restart_daemon);
 }
