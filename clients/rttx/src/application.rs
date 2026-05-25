@@ -16,6 +16,9 @@ pub const APP_CSS: &str = "\
         border-color: alpha(@accent_bg_color, 0.85);
         background: alpha(@view_bg_color, 0.92);
     }
+    .terminal-pane-frozen vte-terminal {
+        opacity: 0.4;
+    }
     .terminal-header {
         padding: 6px 8px;
         border-top-left-radius: 10px;

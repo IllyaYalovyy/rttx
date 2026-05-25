@@ -471,6 +471,12 @@ impl Window {
         self.connect_managed_workspace(&session_state);
     }
 
+    /// Restart the local daemon and reconnect all workspaces on the local endpoint.
+    pub(super) fn restart_daemon_and_reconnect(&self, workspace_id: &str) {
+        self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Starting);
+        self.retry_all_workspaces_for_endpoint(workspace_id);
+    }
+
     /// Reconnect all managed workspaces sharing the same endpoint as the given workspace.
     pub(super) fn retry_all_workspaces_for_endpoint(&self, workspace_id: &str) {
         let targets: Vec<WorkspaceState> = {

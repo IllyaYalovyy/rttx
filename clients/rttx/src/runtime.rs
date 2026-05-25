@@ -203,6 +203,7 @@ impl ConnectionStatus {
             Self::Reconnecting { attempt, retry_in_secs } => {
                 format!("Reconnecting in {retry_in_secs}s (attempt {attempt})")
             }
+            Self::Blocked(ConnectionProblem::DaemonDied) => "Daemon stopped".into(),
             Self::Blocked(problem) => format!("Action Required: {}", problem.label()),
             Self::Disconnected => "Disconnected".into(),
             Self::Recovered => "Recovered".into(),
@@ -224,6 +225,7 @@ impl ConnectionStatus {
             Self::Connecting => "Connecting".into(),
             Self::Connected | Self::Recovered => "Connected".into(),
             Self::Reconnecting { retry_in_secs, .. } => format!("Retry {retry_in_secs}s"),
+            Self::Blocked(ConnectionProblem::DaemonDied) => "Daemon Stopped".into(),
             Self::Blocked(_) => "Action Required".into(),
             Self::Disconnected => "Disconnected".into(),
             Self::SessionMissing => "Session Missing".into(),
@@ -235,6 +237,8 @@ impl ConnectionStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionProblem {
     DaemonUnavailable,
+    /// The daemon process died and repeated reconnect attempts failed.
+    DaemonDied,
     VersionMismatch,
     OwnershipConflict,
     PermissionDenied,
@@ -255,6 +259,7 @@ impl ConnectionProblem {
     pub fn label(&self) -> String {
         match self {
             Self::DaemonUnavailable => "Daemon unavailable".into(),
+            Self::DaemonDied => "Daemon stopped".into(),
             Self::VersionMismatch => "Version mismatch".into(),
             Self::OwnershipConflict => "Runtime already owned".into(),
             Self::PermissionDenied => "Permission denied".into(),
@@ -396,6 +401,7 @@ pub struct WorkspaceMenuItems {
     pub show_edit_connection: bool,
     pub show_reconnect: bool,
     pub show_reconnect_host: bool,
+    pub show_restart_daemon: bool,
     pub show_detach: bool,
 }
 
@@ -407,6 +413,7 @@ pub struct WorkspaceMenuContext {
     pub is_persistent: bool,
     pub is_attached: bool,
     pub is_disconnected: bool,
+    pub is_daemon_died: bool,
     pub has_other_disconnected_from_same_host: bool,
 }
 
@@ -419,6 +426,7 @@ pub const fn workspace_menu_items(ctx: &WorkspaceMenuContext) -> WorkspaceMenuIt
         show_reconnect_host: ctx.is_managed
             && ctx.is_disconnected
             && ctx.has_other_disconnected_from_same_host,
+        show_restart_daemon: ctx.is_managed && ctx.is_daemon_died && !ctx.is_remote,
         show_detach: ctx.is_persistent && ctx.is_attached,
     }
 }
@@ -477,6 +485,9 @@ pub const fn connection_icon(
         ConnectionStatus::Disconnected => ("warning", "Disconnected from runtime"),
         ConnectionStatus::Reconnecting { .. } => ("warning", "Reconnecting to runtime…"),
         ConnectionStatus::SessionMissing => ("warning", "Session no longer exists on daemon"),
+        ConnectionStatus::Blocked(ConnectionProblem::DaemonDied) => {
+            ("error", "Daemon stopped — restart to recover")
+        }
         ConnectionStatus::Blocked(_) => ("error", "Connection blocked — retry manually"),
         _ => ("dim-label", "Connecting…"),
     };
@@ -1236,6 +1247,7 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: false,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
@@ -1252,6 +1264,7 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: true,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_edit_connection);
@@ -1268,6 +1281,7 @@ mod tests {
             is_persistent: false,
             is_attached: true,
             is_disconnected: false,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
@@ -1284,6 +1298,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_reconnect);
@@ -1299,6 +1314,7 @@ mod tests {
             is_persistent: false,
             is_attached: false,
             is_disconnected: false,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
@@ -1315,6 +1331,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: true,
         });
         assert!(items.show_reconnect);
@@ -1329,6 +1346,7 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: false,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: true,
         });
         assert!(!items.show_reconnect_host);
@@ -1387,6 +1405,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: false,
+            is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_reconnect);
@@ -1425,5 +1444,75 @@ mod tests {
             gtk4::Align::Start,
             "context menu halign must be Start to position adjacent to the pointer"
         );
+    }
+
+    // ── DaemonDied state (#954) ─────────────────────────────────
+
+    #[test]
+    fn daemon_died_is_not_transient() {
+        assert!(!ConnectionProblem::DaemonDied.is_transient());
+    }
+
+    #[test]
+    fn daemon_died_label_says_daemon_stopped() {
+        assert_eq!(ConnectionProblem::DaemonDied.label(), "Daemon stopped");
+    }
+
+    #[test]
+    fn daemon_died_short_label_says_daemon_stopped() {
+        let status = ConnectionStatus::Blocked(ConnectionProblem::DaemonDied);
+        assert_eq!(status.short_label(), "Daemon Stopped");
+    }
+
+    #[test]
+    fn daemon_died_full_label_says_daemon_stopped() {
+        let status = ConnectionStatus::Blocked(ConnectionProblem::DaemonDied);
+        assert_eq!(status.label(), "Daemon stopped");
+    }
+
+    #[test]
+    fn daemon_died_icon_uses_error_class_with_restart_tooltip() {
+        let icon = connection_icon(
+            &RuntimeEndpoint::Local,
+            &ConnectionStatus::Blocked(ConnectionProblem::DaemonDied),
+            true,
+        );
+        assert_eq!(icon.css_class, "error");
+        assert!(icon.tooltip.contains("restart"), "tooltip should mention restart: {}", icon.tooltip);
+    }
+
+    #[test]
+    fn menu_items_daemon_died_shows_restart_daemon() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: true,
+            is_daemon_died: true,
+            has_other_disconnected_from_same_host: false,
+        });
+        assert!(items.show_restart_daemon);
+        assert!(items.show_reconnect);
+    }
+
+    #[test]
+    fn menu_items_daemon_died_remote_hides_restart_daemon() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: true,
+            is_daemon_died: true,
+            has_other_disconnected_from_same_host: false,
+        });
+        assert!(!items.show_restart_daemon);
+    }
+
+    #[test]
+    fn daemon_died_disables_input() {
+        let status = ConnectionStatus::Blocked(ConnectionProblem::DaemonDied);
+        assert!(!status.accepts_input());
     }
 }

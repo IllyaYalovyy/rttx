@@ -643,12 +643,17 @@ impl PersistentPaneView {
         presentation: &ConnectionPresentation,
     ) {
         self.imp().exited.set(false);
-        self.imp()
-            .connected
-            .set(matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered));
+        let connected =
+            matches!(status, ConnectionStatus::Connected | ConnectionStatus::Recovered);
+        self.imp().connected.set(connected);
         self.imp().status_label.set_label(&presentation.header_label);
         self.imp().status_label.set_tooltip_text(Some(&status.label()));
         self.imp().accepts_input.set(presentation.input_enabled);
+        if connected {
+            self.remove_css_class("terminal-pane-frozen");
+        } else {
+            self.add_css_class("terminal-pane-frozen");
+        }
     }
 
     /// Mark the remote process as exited and make the pane visibly non-interactive.

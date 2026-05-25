@@ -14,9 +14,9 @@ use crate::host;
 use crate::places;
 use crate::preferences::{self, Preferences};
 use crate::runtime::{
-    ConnectionPresentation, ConnectionStatus, RuntimeEndpoint, WorkspaceActionPresentation,
-    WorkspacePolicy, connection_icon, pane_description, present_connection_status,
-    present_workspace_actions, workspace_connection_summary,
+    ConnectionPresentation, ConnectionProblem, ConnectionStatus, RuntimeEndpoint,
+    WorkspaceActionPresentation, WorkspacePolicy, connection_icon, pane_description,
+    present_connection_status, present_workspace_actions, workspace_connection_summary,
 };
 use crate::sidebar::WorkspaceRow;
 use crate::terminal::handle::TerminalHandle;
