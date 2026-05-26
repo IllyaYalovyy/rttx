@@ -220,6 +220,12 @@ jobs:
       - name: Validate Flatpak manifest JSON
         run: python3 -m json.tool packaging/rttx/io.github.IllyaYalovyy.rttx.json > /dev/null
 
+      - name: Install validation tools
+        run: sudo apt-get update && sudo apt-get install -y appstream desktop-file-utils
+
+      - name: Validate packaging metadata
+        run: bash .github/scripts/validate-packaging-metadata.sh
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest

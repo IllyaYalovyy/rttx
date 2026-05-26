@@ -5,6 +5,9 @@
   <project_license>GPL-3.0-or-later</project_license>
   <name>rttx</name>
   <summary>A tiling terminal emulator for GNOME</summary>
+  <developer id="io.github.illyayalovyy">
+    <name>Illya Yalovyy</name>
+  </developer>
   <description>
     <p>
       rttx is a tiling terminal emulator built with GTK4 and Libadwaita,
@@ -17,7 +20,21 @@
   <launchable type="desktop-id">io.github.IllyaYalovyy.rttx.desktop</launchable>
   <url type="homepage">https://github.com/IllyaYalovyy/rttx</url>
   <url type="bugtracker">https://github.com/IllyaYalovyy/rttx/issues</url>
+  <url type="vcs-browser">https://github.com/IllyaYalovyy/rttx</url>
   <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <caption>rttx with split panes and workspace sidebar</caption>
+      <image>https://raw.githubusercontent.com/IllyaYalovyy/rttx/mainline/clients/rttx/data/screenshots/rttx-main.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.6.5" date="2026-05-26">
+      <description>
+        <p>This release adds disconnect visualization for persistent panes, remote daemon lifecycle management, and force retry for stuck connections.</p>
+      </description>
+    </release>
+  </releases>
   <provides>
     <binary>rttx</binary>
   </provides>
