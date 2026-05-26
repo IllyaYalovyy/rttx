@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-26
+
 ## [0.6.5] - 2026-05-26
 
 ### Added
@@ -248,7 +250,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.5...v0.9.0
 [0.6.5]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.1...v0.6.5
 [0.6.1]: https://github.com/IllyaYalovyy/rttx/compare/v0.5.1...v0.6.1
 [0.5.1]: https://github.com/IllyaYalovyy/rttx/compare/v0.4.0...v0.5.1
