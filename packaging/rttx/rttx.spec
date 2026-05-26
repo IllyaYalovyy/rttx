@@ -43,6 +43,7 @@ appstream-util validate-relax --nonet %{buildroot}%{_datadir}/metainfo/io.github
 %{_datadir}/applications/io.github.IllyaYalovyy.rttx.desktop
 %{_datadir}/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/io.github.IllyaYalovyy.rttx.svg
+%{_mandir}/man1/rttx-server.1*
 
 %changelog
 * Fri Mar 20 2026 Yaroslav Yalovyi <yalovoy@gmail.com> - 0.1.0-1
