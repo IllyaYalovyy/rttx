@@ -29,6 +29,13 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Maximum time for daemon handshake after transport connects.
+/// Prevents indefinite "Connecting..." when the daemon accepts but never responds.
+#[cfg(not(test))]
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Capacity for the event channel (`EndpointEvent` → GTK main loop).
 const EVENT_CHANNEL_BOUND: usize = 4096;
 
@@ -696,10 +703,46 @@ impl EndpointActor {
                     return;
                 }
 
-                let Ok((runtime_id, snapshot)) = self
-                    .resolve_and_attach_runtime(&workspace_id, &name, policy, runtime_id.as_deref())
-                    .await
-                else {
+                let attach_result = tokio::time::timeout(
+                    HANDSHAKE_TIMEOUT,
+                    self.resolve_and_attach_runtime(
+                        &workspace_id,
+                        &name,
+                        policy,
+                        runtime_id.as_deref(),
+                    ),
+                )
+                .await;
+
+                let Ok((runtime_id, snapshot)) = (match attach_result {
+                    Ok(inner) => inner,
+                    Err(_elapsed) => {
+                        tracing::warn!(
+                            "Handshake timeout for workspace {workspace_id} on {}",
+                            self.endpoint.key()
+                        );
+                        self.connection = None;
+                        self.reader = None;
+                        self.writer = None;
+                        self.ssh_handle = None;
+                        let problem = ConnectionProblem::DaemonUnavailable;
+                        self.emit_status(&workspace_id, ConnectionStatus::Disconnected);
+                        let attempt = self.next_reconnect_attempt();
+                        let delay_secs = self.next_reconnect_delay_secs();
+                        self.emit_status(
+                            &workspace_id,
+                            ConnectionStatus::Reconnecting { attempt, retry_in_secs: delay_secs },
+                        );
+                        self.schedule_reconnect(delay_secs);
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::OpenWorkspace,
+                            problem,
+                            "Daemon handshake timed out".into(),
+                        );
+                        return;
+                    }
+                }) else {
                     return;
                 };
 
@@ -1373,7 +1416,18 @@ impl EndpointActor {
                     self.daemon_start_attempted = true;
                     Self::start_local_daemon(&socket_path).await?;
                 }
-                self.connection = Some(DaemonConnection::connect(&socket_path).await?);
+                let connection = tokio::time::timeout(
+                    HANDSHAKE_TIMEOUT,
+                    DaemonConnection::connect(&socket_path),
+                )
+                .await
+                .map_err(|_| {
+                    DaemonError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Local daemon handshake timed out".to_string(),
+                    ))
+                })??;
+                self.connection = Some(connection);
                 self.daemon_start_attempted = false;
             }
             RuntimeEndpoint::Remote { host } => {
@@ -2519,6 +2573,19 @@ mod tests {
         assert!(
             SSH_CONNECT_TIMEOUT <= Duration::from_mins(1),
             "SSH timeout should not exceed 60s to avoid blocking the actor too long"
+        );
+    }
+
+    /// Handshake timeout must be bounded to prevent indefinite "Connecting..." state (#955).
+    #[test]
+    fn handshake_timeout_is_bounded() {
+        assert!(
+            HANDSHAKE_TIMEOUT >= Duration::from_secs(5),
+            "Handshake timeout should be at least 5s for slow daemons"
+        );
+        assert!(
+            HANDSHAKE_TIMEOUT <= Duration::from_mins(1),
+            "Handshake timeout must not exceed 60s to prevent stuck Connecting state"
         );
     }
 

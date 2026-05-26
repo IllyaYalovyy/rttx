@@ -413,6 +413,7 @@ pub struct WorkspaceMenuContext {
     pub is_persistent: bool,
     pub is_attached: bool,
     pub is_disconnected: bool,
+    pub is_connecting: bool,
     pub is_daemon_died: bool,
     pub has_other_disconnected_from_same_host: bool,
 }
@@ -422,7 +423,7 @@ pub struct WorkspaceMenuContext {
 pub const fn workspace_menu_items(ctx: &WorkspaceMenuContext) -> WorkspaceMenuItems {
     WorkspaceMenuItems {
         show_edit_connection: ctx.is_remote,
-        show_reconnect: ctx.is_managed && ctx.is_disconnected,
+        show_reconnect: ctx.is_managed && (ctx.is_disconnected || ctx.is_connecting),
         show_reconnect_host: ctx.is_managed
             && ctx.is_disconnected
             && ctx.has_other_disconnected_from_same_host,
@@ -1247,6 +1248,7 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: false,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
@@ -1264,6 +1266,7 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: true,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
@@ -1281,6 +1284,7 @@ mod tests {
             is_persistent: false,
             is_attached: true,
             is_disconnected: false,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
@@ -1298,6 +1302,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
@@ -1314,6 +1319,7 @@ mod tests {
             is_persistent: false,
             is_attached: false,
             is_disconnected: false,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
@@ -1331,6 +1337,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: true,
         });
@@ -1346,6 +1353,7 @@ mod tests {
             is_persistent: true,
             is_attached: true,
             is_disconnected: false,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: true,
         });
@@ -1405,6 +1413,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: false,
+            is_connecting: false,
             is_daemon_died: false,
             has_other_disconnected_from_same_host: false,
         });
@@ -1493,6 +1502,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            is_connecting: false,
             is_daemon_died: true,
             has_other_disconnected_from_same_host: false,
         });
@@ -1508,6 +1518,7 @@ mod tests {
             is_persistent: true,
             is_attached: false,
             is_disconnected: true,
+            is_connecting: false,
             is_daemon_died: true,
             has_other_disconnected_from_same_host: false,
         });
@@ -1518,5 +1529,52 @@ mod tests {
     fn daemon_died_disables_input() {
         let status = ConnectionStatus::Blocked(ConnectionProblem::DaemonDied);
         assert!(!status.accepts_input());
+    }
+
+    // ── Force reconnect during Connecting (#955) ────────────────
+
+    #[test]
+    fn menu_items_connecting_shows_force_reconnect() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: false,
+            is_connecting: true,
+            is_daemon_died: false,
+            has_other_disconnected_from_same_host: false,
+        });
+        assert!(items.show_reconnect, "Force Reconnect should be available during Connecting");
+    }
+
+    #[test]
+    fn menu_items_connecting_local_shows_force_reconnect() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: false,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: false,
+            is_disconnected: false,
+            is_connecting: true,
+            is_daemon_died: false,
+            has_other_disconnected_from_same_host: false,
+        });
+        assert!(items.show_reconnect, "Force Reconnect should be available for local connecting");
+    }
+
+    #[test]
+    fn menu_items_connected_hides_reconnect() {
+        let items = workspace_menu_items(&WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: true,
+            is_disconnected: false,
+            is_connecting: false,
+            is_daemon_died: false,
+            has_other_disconnected_from_same_host: false,
+        });
+        assert!(!items.show_reconnect, "Reconnect should be hidden when connected");
     }
 }
