@@ -323,11 +323,9 @@ pub fn classify_connection_problem(error: &DaemonError) -> ConnectionProblem {
             ConnectionProblem::UserActionRequired(message.clone())
         }
         DaemonError::Io(_) | DaemonError::Disconnected => ConnectionProblem::DaemonUnavailable,
-        DaemonError::DaemonNotInstalled { host, binary } => {
-            ConnectionProblem::DaemonNotInstalled(format!(
-                "rttx-server not installed on {host} (tried: {binary})"
-            ))
-        }
+        DaemonError::DaemonNotInstalled { host, binary } => ConnectionProblem::DaemonNotInstalled(
+            format!("rttx-server not installed on {host} (tried: {binary})"),
+        ),
         DaemonError::Frame(frame_error) => ConnectionProblem::Protocol(frame_error.to_string()),
         DaemonError::UnexpectedMessage => {
             ConnectionProblem::Protocol("Unexpected daemon message".into())
@@ -998,11 +996,8 @@ mod tests {
     fn connected_color_consistent_across_all_workspace_types() {
         let local_managed =
             connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
-        let remote_managed = connection_icon(
-            &RuntimeEndpoint::remote("h"),
-            &ConnectionStatus::Connected,
-            true,
-        );
+        let remote_managed =
+            connection_icon(&RuntimeEndpoint::remote("h"), &ConnectionStatus::Connected, true);
         let direct = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
         assert_eq!(local_managed.css_class, "accent");
         assert_eq!(remote_managed.css_class, "accent");
@@ -1299,8 +1294,7 @@ mod tests {
 
     #[test]
     fn remote_endpoint_serde_roundtrip_with_daemon_binary_path() {
-        let endpoint =
-            RuntimeEndpoint::remote_with_binary("host", Some("/opt/rttx-server".into()));
+        let endpoint = RuntimeEndpoint::remote_with_binary("host", Some("/opt/rttx-server".into()));
         let json = serde_json::to_string(&endpoint).unwrap();
         let deserialized: RuntimeEndpoint = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.daemon_binary_path(), Some("/opt/rttx-server"));

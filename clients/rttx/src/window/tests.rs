@@ -2937,10 +2937,7 @@ fn save_state_persists_detached_workspace_runtime_binding() {
         .expect("detached workspace should persist in saved state");
 
     assert!(saved_session.runtime.is_managed());
-    assert_eq!(
-        saved_session.runtime.endpoint,
-        RuntimeEndpoint::remote("builder.example")
-    );
+    assert_eq!(saved_session.runtime.endpoint, RuntimeEndpoint::remote("builder.example"));
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
     assert_eq!(
@@ -3046,10 +3043,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
         .expect("terminated workspace should persist in saved state");
 
     assert!(saved_session.runtime.is_managed());
-    assert_eq!(
-        saved_session.runtime.endpoint,
-        RuntimeEndpoint::remote("builder.example")
-    );
+    assert_eq!(saved_session.runtime.endpoint, RuntimeEndpoint::remote("builder.example"));
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id, None);
     assert_eq!(

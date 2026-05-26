@@ -1060,11 +1060,7 @@ fn connected_icon_color_consistent_across_endpoints() {
     use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
 
     let local = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
-    let remote = connection_icon(
-        &RuntimeEndpoint::remote("h"),
-        &ConnectionStatus::Connected,
-        true,
-    );
+    let remote = connection_icon(&RuntimeEndpoint::remote("h"), &ConnectionStatus::Connected, true);
     let direct = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
 
     assert_eq!(local.css_class, remote.css_class, "local and remote connected must match");

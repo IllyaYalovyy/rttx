@@ -1130,9 +1130,11 @@ mod tests {
 
     #[tokio::test]
     async fn connect_ssh_with_custom_binary_path() {
-        let result =
-            DaemonConnection::connect_ssh("rttx-nonexistent-host-test", Some("/opt/bin/rttx-server"))
-                .await;
+        let result = DaemonConnection::connect_ssh(
+            "rttx-nonexistent-host-test",
+            Some("/opt/bin/rttx-server"),
+        )
+        .await;
         assert!(result.is_err(), "SSH to bogus host should fail regardless of binary path");
     }
 

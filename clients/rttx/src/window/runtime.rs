@@ -181,7 +181,10 @@ impl Window {
         let endpoint = if host.is_local() {
             RuntimeEndpoint::Local
         } else {
-            RuntimeEndpoint::remote_with_binary(host.ssh_target.clone().unwrap_or_default(), host.daemon_binary_path.clone())
+            RuntimeEndpoint::remote_with_binary(
+                host.ssh_target.clone().unwrap_or_default(),
+                host.daemon_binary_path.clone(),
+            )
         };
         self.imp().pending_connect_existing.replace(Some(host.clone()));
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
@@ -194,7 +197,10 @@ impl Window {
         let endpoint = if host.is_local() {
             RuntimeEndpoint::Local
         } else {
-            RuntimeEndpoint::remote_with_binary(host.ssh_target.clone().unwrap_or_default(), host.daemon_binary_path.clone())
+            RuntimeEndpoint::remote_with_binary(
+                host.ssh_target.clone().unwrap_or_default(),
+                host.daemon_binary_path.clone(),
+            )
         };
         let state = self.imp().state.borrow();
         state
@@ -694,7 +700,10 @@ impl Window {
                 let expected_endpoint = if host.is_local() {
                     RuntimeEndpoint::Local
                 } else {
-                    RuntimeEndpoint::remote_with_binary(host.ssh_target.clone().unwrap_or_default(), host.daemon_binary_path.clone())
+                    RuntimeEndpoint::remote_with_binary(
+                        host.ssh_target.clone().unwrap_or_default(),
+                        host.daemon_binary_path.clone(),
+                    )
                 };
                 if endpoint == expected_endpoint {
                     crate::connect_existing_dialog::show(self, &host, &runtimes);

@@ -828,10 +828,7 @@ mod tests {
 
         let restored = record.to_workspace_state();
         assert!(restored.runtime.is_managed());
-        assert_eq!(
-            restored.runtime.endpoint,
-            RuntimeEndpoint::remote("example.com")
-        );
+        assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("example.com"));
     }
 
     #[test]

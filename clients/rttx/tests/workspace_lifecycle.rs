@@ -521,10 +521,7 @@ fn new_managed_remote_produces_remote_persistent_session() {
     );
 
     assert!(session.runtime.is_managed());
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::remote("dev-box.internal")
-    );
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("dev-box.internal"));
     assert!(!session.layout.terminal_uuids().is_empty());
     assert!(!session.runtime.pending_layout_panes.is_empty());
 }
@@ -546,10 +543,7 @@ fn remote_managed_session_persists_and_restores() {
     let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
 
     assert!(restored.runtime.is_managed());
-    assert_eq!(
-        restored.runtime.endpoint,
-        RuntimeEndpoint::remote("dev@build-host")
-    );
+    assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("dev@build-host"));
     assert_eq!(
         restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
         Some("/home/dev/project")
@@ -571,10 +565,7 @@ fn remote_host_creates_managed_remote_session() {
     );
 
     assert!(session.runtime.is_managed());
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::remote("deploy@example.com")
-    );
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("deploy@example.com"));
 }
 
 /// Updating a remote workspace endpoint must change the host and sync mode.
@@ -592,10 +583,7 @@ fn update_remote_endpoint_changes_host() {
 
     session.runtime.endpoint = RuntimeEndpoint::remote("new-host.example.com");
 
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::remote("new-host.example.com")
-    );
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("new-host.example.com"));
     assert!(session.runtime.is_managed());
 }
 

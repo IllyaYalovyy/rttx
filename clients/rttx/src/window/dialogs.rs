@@ -690,7 +690,9 @@ impl Window {
         let visible = self.imp().session_stack.visible_child_name()?;
         let session = state.workspaces.iter().find(|s| s.uuid == visible.as_str())?;
         match &session.runtime.endpoint {
-            RuntimeEndpoint::Remote { host, .. } if session.runtime.is_managed() => Some(host.clone()),
+            RuntimeEndpoint::Remote { host, .. } if session.runtime.is_managed() => {
+                Some(host.clone())
+            }
             _ => None,
         }
     }

@@ -651,10 +651,7 @@ mod module_boundary_tests {
             Some("/home/user".into()),
         );
         assert!(session.runtime.is_managed());
-        assert_eq!(
-            session.runtime.endpoint,
-            RuntimeEndpoint::remote("server.example.com")
-        );
+        assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("server.example.com"));
         assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
         assert_eq!(
             session.layout.terminal_cwd(&session.layout.terminal_uuids()[0]).as_deref(),

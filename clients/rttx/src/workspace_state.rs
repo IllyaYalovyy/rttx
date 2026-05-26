@@ -1114,9 +1114,7 @@ mod tests {
 
         assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::Local));
         assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::remote("builder.example")));
-        assert!(
-            state.needs_inventory_bootstrap(&RuntimeEndpoint::remote("other.example"))
-        );
+        assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::remote("other.example")));
     }
 
     #[test]
