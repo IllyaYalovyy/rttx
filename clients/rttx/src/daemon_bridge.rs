@@ -1430,18 +1430,51 @@ impl EndpointActor {
                 self.connection = Some(connection);
                 self.daemon_start_attempted = false;
             }
-            RuntimeEndpoint::Remote { host } => {
-                let (connection, ssh_handle) =
-                    tokio::time::timeout(SSH_CONNECT_TIMEOUT, DaemonConnection::connect_ssh(host))
+            RuntimeEndpoint::Remote { host, daemon_binary_path } => {
+                let binary_path = daemon_binary_path.as_deref();
+                let connect_result = tokio::time::timeout(
+                    SSH_CONNECT_TIMEOUT,
+                    DaemonConnection::connect_ssh(host, binary_path),
+                )
+                .await
+                .map_err(|_| {
+                    DaemonError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("SSH connection to {host} timed out"),
+                    ))
+                })?;
+
+                match connect_result {
+                    Ok((connection, ssh_handle)) => {
+                        self.connection = Some(connection);
+                        self.ssh_handle = Some(ssh_handle);
+                        self.daemon_start_attempted = false;
+                    }
+                    Err(DaemonError::Disconnected)
+                        if !self.daemon_start_attempted && self.auto_start_daemon =>
+                    {
+                        // Daemon not running — try to start it remotely.
+                        tracing::info!("Auto-starting remote daemon on {host}");
+                        self.daemon_start_attempted = true;
+                        DaemonConnection::start_remote_daemon(host, binary_path).await?;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        // Retry connection after start.
+                        let (connection, ssh_handle) = tokio::time::timeout(
+                            SSH_CONNECT_TIMEOUT,
+                            DaemonConnection::connect_ssh(host, binary_path),
+                        )
                         .await
                         .map_err(|_| {
                             DaemonError::Io(std::io::Error::new(
                                 std::io::ErrorKind::TimedOut,
-                                format!("SSH connection to {host} timed out"),
+                                format!("SSH connection to {host} timed out after daemon start"),
                             ))
                         })??;
-                self.connection = Some(connection);
-                self.ssh_handle = Some(ssh_handle);
+                        self.connection = Some(connection);
+                        self.ssh_handle = Some(ssh_handle);
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         Ok(())
@@ -1758,10 +1791,7 @@ impl EndpointActor {
                 self.endpoint.key(),
                 self.reconnect_attempt
             );
-            let problem = match self.endpoint {
-                RuntimeEndpoint::Local => ConnectionProblem::DaemonDied,
-                RuntimeEndpoint::Remote { .. } => ConnectionProblem::DaemonUnavailable,
-            };
+            let problem = ConnectionProblem::DaemonDied;
             for workspace_id in self.tracked_workspaces.keys() {
                 self.emit_status(workspace_id, ConnectionStatus::Blocked(problem.clone()));
             }
@@ -3096,7 +3126,7 @@ mod tests {
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Remote { host: "nonexistent.invalid".into() },
+            RuntimeEndpoint::remote("nonexistent.invalid"),
             event_tx,
             self_tx,
             cmd_rx,
@@ -3595,7 +3625,7 @@ mod tests {
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Remote { host: "nonexistent.invalid".into() },
+            RuntimeEndpoint::remote("nonexistent.invalid"),
             event_tx,
             self_tx,
             cmd_rx,
@@ -3627,7 +3657,7 @@ mod tests {
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
 
         let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            RuntimeEndpoint::remote("unreachable.invalid"),
             event_tx,
             self_tx,
             cmd_rx,
@@ -3672,7 +3702,7 @@ mod tests {
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
 
         let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            RuntimeEndpoint::remote("unreachable.invalid"),
             event_tx,
             self_tx,
             cmd_rx,
@@ -3776,15 +3806,15 @@ mod tests {
         assert!(saw_daemon_died, "local circuit breaker should emit DaemonDied");
     }
 
-    /// Circuit breaker for a remote endpoint emits `DaemonUnavailable`.
+    /// Circuit breaker for a remote endpoint emits `DaemonDied`.
     #[tokio::test]
-    async fn circuit_breaker_remote_emits_daemon_unavailable() {
+    async fn circuit_breaker_remote_emits_daemon_died() {
         let (event_tx, mut event_rx) = mpsc::channel(EVENT_CHANNEL_BOUND);
         let (self_tx, _self_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
         let (_, cmd_rx) = mpsc::channel(CMD_CHANNEL_BOUND);
 
         let mut actor = EndpointActor::new(
-            RuntimeEndpoint::Remote { host: "unreachable.invalid".into() },
+            RuntimeEndpoint::remote("unreachable.invalid"),
             event_tx,
             self_tx,
             cmd_rx,
@@ -3797,16 +3827,16 @@ mod tests {
 
         actor.schedule_reconnect(10);
 
-        let mut saw_daemon_unavailable = false;
+        let mut saw_daemon_died = false;
         while let Ok(event) = event_rx.try_recv() {
             if let EndpointEvent::WorkspaceConnectionChanged {
-                status: ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+                status: ConnectionStatus::Blocked(ConnectionProblem::DaemonDied),
                 ..
             } = event
             {
-                saw_daemon_unavailable = true;
+                saw_daemon_died = true;
             }
         }
-        assert!(saw_daemon_unavailable, "remote circuit breaker should emit DaemonUnavailable");
+        assert!(saw_daemon_died, "remote circuit breaker should emit DaemonDied");
     }
 }

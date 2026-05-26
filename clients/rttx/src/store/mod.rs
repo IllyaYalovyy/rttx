@@ -828,10 +828,7 @@ mod tests {
 
         let restored = record.to_workspace_state();
         assert!(restored.runtime.is_managed());
-        assert_eq!(
-            restored.runtime.endpoint,
-            RuntimeEndpoint::Remote { host: "example.com".into() }
-        );
+        assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("example.com"));
     }
 
     #[test]
@@ -945,6 +942,7 @@ mod tests {
                     name: "Server".into(),
                     kind: models::hosts::HostKind::Remote,
                     ssh_target: Some("user@srv".into()),
+                    daemon_binary_path: None,
                     labels: vec![],
                 }],
             }),

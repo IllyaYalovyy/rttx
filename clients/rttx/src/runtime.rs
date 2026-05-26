@@ -51,16 +51,32 @@ pub enum RuntimeEndpoint {
     #[default]
     Local,
     /// A remote daemon reached through SSH.
-    Remote { host: String },
+    Remote {
+        host: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        daemon_binary_path: Option<String>,
+    },
 }
 
 impl RuntimeEndpoint {
+    /// Create a remote endpoint with default binary path (`rttx-server` in PATH).
+    #[must_use]
+    pub fn remote(host: impl Into<String>) -> Self {
+        Self::Remote { host: host.into(), daemon_binary_path: None }
+    }
+
+    /// Create a remote endpoint with a custom daemon binary path.
+    #[must_use]
+    pub fn remote_with_binary(host: impl Into<String>, binary_path: Option<String>) -> Self {
+        Self::Remote { host: host.into(), daemon_binary_path: binary_path }
+    }
+
     /// Stable key string for maps and diagnostics.
     #[must_use]
     pub fn key(&self) -> String {
         match self {
             Self::Local => "local".into(),
-            Self::Remote { host } => format!("remote:{host}"),
+            Self::Remote { host, .. } => format!("remote:{host}"),
         }
     }
 
@@ -69,7 +85,16 @@ impl RuntimeEndpoint {
     pub fn host_key(&self) -> String {
         match self {
             Self::Local => crate::host::LOCAL_KEY.into(),
-            Self::Remote { host } => crate::host::normalize_ssh_key(host),
+            Self::Remote { host, .. } => crate::host::normalize_ssh_key(host),
+        }
+    }
+
+    /// The daemon binary path for a remote endpoint, or `None` for local.
+    #[must_use]
+    pub fn daemon_binary_path(&self) -> Option<&str> {
+        match self {
+            Self::Local => None,
+            Self::Remote { daemon_binary_path, .. } => daemon_binary_path.as_deref(),
         }
     }
 }
@@ -111,7 +136,7 @@ impl WorkspaceRuntime {
         policy: WorkspacePolicy,
         layout_terminal_uuids: &[String],
     ) -> Self {
-        Self::managed(RuntimeEndpoint::Remote { host: host.into() }, policy, layout_terminal_uuids)
+        Self::managed(RuntimeEndpoint::remote(host), policy, layout_terminal_uuids)
     }
 
     fn managed(
@@ -239,6 +264,8 @@ pub enum ConnectionProblem {
     DaemonUnavailable,
     /// The daemon process died and repeated reconnect attempts failed.
     DaemonDied,
+    /// The daemon binary is not installed on the remote host.
+    DaemonNotInstalled(String),
     VersionMismatch,
     OwnershipConflict,
     PermissionDenied,
@@ -264,7 +291,9 @@ impl ConnectionProblem {
             Self::OwnershipConflict => "Runtime already owned".into(),
             Self::PermissionDenied => "Permission denied".into(),
             Self::SessionMissing => "Session no longer exists".into(),
-            Self::Protocol(detail) | Self::UserActionRequired(detail) => detail.clone(),
+            Self::DaemonNotInstalled(detail)
+            | Self::Protocol(detail)
+            | Self::UserActionRequired(detail) => detail.clone(),
         }
     }
 }
@@ -294,6 +323,9 @@ pub fn classify_connection_problem(error: &DaemonError) -> ConnectionProblem {
             ConnectionProblem::UserActionRequired(message.clone())
         }
         DaemonError::Io(_) | DaemonError::Disconnected => ConnectionProblem::DaemonUnavailable,
+        DaemonError::DaemonNotInstalled { host, binary } => ConnectionProblem::DaemonNotInstalled(
+            format!("rttx-server not installed on {host} (tried: {binary})"),
+        ),
         DaemonError::Frame(frame_error) => ConnectionProblem::Protocol(frame_error.to_string()),
         DaemonError::UnexpectedMessage => {
             ConnectionProblem::Protocol("Unexpected daemon message".into())
@@ -427,7 +459,7 @@ pub const fn workspace_menu_items(ctx: &WorkspaceMenuContext) -> WorkspaceMenuIt
         show_reconnect_host: ctx.is_managed
             && ctx.is_disconnected
             && ctx.has_other_disconnected_from_same_host,
-        show_restart_daemon: ctx.is_managed && ctx.is_daemon_died && !ctx.is_remote,
+        show_restart_daemon: ctx.is_managed && ctx.is_daemon_died,
         show_detach: ctx.is_persistent && ctx.is_attached,
     }
 }
@@ -507,7 +539,7 @@ pub fn workspace_connection_summary(
     let pane_part = active_pane_info.filter(|s| !s.is_empty()).unwrap_or("");
     match endpoint {
         RuntimeEndpoint::Local => pane_part.to_string(),
-        RuntimeEndpoint::Remote { host } => {
+        RuntimeEndpoint::Remote { host, .. } => {
             if pane_part.is_empty() {
                 host.clone()
             } else {
@@ -752,7 +784,7 @@ mod tests {
         assert_eq!(workspace_connection_summary(&RuntimeEndpoint::Local, Some("")), "");
         assert_eq!(
             workspace_connection_summary(
-                &RuntimeEndpoint::Remote { host: "builder.example".into() },
+                &RuntimeEndpoint::remote("builder.example"),
                 Some("~/src"),
             ),
             "builder.example · ~/src"
@@ -761,7 +793,7 @@ mod tests {
 
     #[test]
     fn workspace_connection_summary_for_remote_endpoint() {
-        let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+        let endpoint = RuntimeEndpoint::remote("builder.example");
 
         assert_eq!(workspace_connection_summary(&endpoint, Some("bash")), "builder.example · bash");
         assert_eq!(workspace_connection_summary(&endpoint, None), "builder.example");
@@ -876,7 +908,7 @@ mod tests {
     #[test]
     fn connection_icon_reconnecting_uses_warning_not_dim_label() {
         let local = RuntimeEndpoint::Local;
-        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let remote = RuntimeEndpoint::remote("h");
         let reconnecting = ConnectionStatus::Reconnecting { attempt: 3, retry_in_secs: 5 };
 
         let local_icon = connection_icon(&local, &reconnecting, true);
@@ -910,7 +942,7 @@ mod tests {
 
     #[test]
     fn connection_icon_shape_constant_for_remote() {
-        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        let ep = RuntimeEndpoint::remote("h");
         for status in [
             ConnectionStatus::Connected,
             ConnectionStatus::Disconnected,
@@ -930,7 +962,7 @@ mod tests {
 
     #[test]
     fn connection_icon_color_for_remote() {
-        let ep = RuntimeEndpoint::Remote { host: "h".into() };
+        let ep = RuntimeEndpoint::remote("h");
         assert_eq!(connection_icon(&ep, &ConnectionStatus::Connected, true).css_class, "accent");
         assert_eq!(connection_icon(&ep, &ConnectionStatus::Recovered, true).css_class, "accent");
         assert_eq!(
@@ -964,11 +996,8 @@ mod tests {
     fn connected_color_consistent_across_all_workspace_types() {
         let local_managed =
             connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
-        let remote_managed = connection_icon(
-            &RuntimeEndpoint::Remote { host: "h".into() },
-            &ConnectionStatus::Connected,
-            true,
-        );
+        let remote_managed =
+            connection_icon(&RuntimeEndpoint::remote("h"), &ConnectionStatus::Connected, true);
         let direct = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
         assert_eq!(local_managed.css_class, "accent");
         assert_eq!(remote_managed.css_class, "accent");
@@ -977,7 +1006,7 @@ mod tests {
 
     #[test]
     fn connection_icon_tooltips_describe_state() {
-        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let remote = RuntimeEndpoint::remote("h");
         let local = RuntimeEndpoint::Local;
 
         let connected = connection_icon(&remote, &ConnectionStatus::Connected, true);
@@ -999,7 +1028,7 @@ mod tests {
     #[test]
     fn connection_icon_shape_never_changes_with_status_regression() {
         let local = RuntimeEndpoint::Local;
-        let remote = RuntimeEndpoint::Remote { host: "h".into() };
+        let remote = RuntimeEndpoint::remote("h");
         let statuses = [
             ConnectionStatus::Connected,
             ConnectionStatus::Disconnected,
@@ -1079,7 +1108,7 @@ mod tests {
             &uuids,
         );
         assert!(runtime.is_managed());
-        assert_eq!(runtime.endpoint, RuntimeEndpoint::Remote { host: "server.example.com".into() });
+        assert_eq!(runtime.endpoint, RuntimeEndpoint::remote("server.example.com"));
         assert_eq!(runtime.policy, WorkspacePolicy::Persistent);
         assert!(runtime.pending_layout_panes.contains("t1"));
     }
@@ -1093,7 +1122,7 @@ mod tests {
 
         assert!(runtime.pane_bindings.contains_key("t2"));
         assert!(runtime.pending_layout_panes.contains("t2"));
-        assert_eq!(runtime.endpoint, RuntimeEndpoint::Remote { host: "host".into() });
+        assert_eq!(runtime.endpoint, RuntimeEndpoint::remote("host"));
     }
 
     #[test]
@@ -1203,7 +1232,7 @@ mod tests {
     #[test]
     fn endpoint_key_distinguishes_local_and_remote() {
         let local = RuntimeEndpoint::Local;
-        let remote = RuntimeEndpoint::Remote { host: "host".into() };
+        let remote = RuntimeEndpoint::remote("host");
         assert_ne!(local.key(), remote.key());
         assert_eq!(local.key(), "local");
         assert!(remote.key().contains("host"));
@@ -1216,21 +1245,59 @@ mod tests {
 
     #[test]
     fn host_key_remote_normalizes_ssh_target() {
-        let endpoint = RuntimeEndpoint::Remote { host: "deploy@example.com".into() };
+        let endpoint = RuntimeEndpoint::remote("deploy@example.com");
         assert_eq!(endpoint.host_key(), "example.com");
     }
 
     #[test]
     fn host_key_remote_bare_hostname() {
-        let endpoint = RuntimeEndpoint::Remote { host: "dev-box".into() };
+        let endpoint = RuntimeEndpoint::remote("dev-box");
         assert_eq!(endpoint.host_key(), "dev-box");
     }
 
     #[test]
     fn remote_endpoint_host_key_matches_saved_host_key() {
-        let endpoint = RuntimeEndpoint::Remote { host: "deploy@builder.example.com".into() };
+        let endpoint = RuntimeEndpoint::remote("deploy@builder.example.com");
         let host = crate::host::Host::remote("deploy@builder.example.com");
         assert_eq!(endpoint.host_key(), host.key);
+    }
+
+    #[test]
+    fn remote_with_binary_stores_path() {
+        let endpoint =
+            RuntimeEndpoint::remote_with_binary("host", Some("~/.local/bin/rttx-server".into()));
+        assert_eq!(endpoint.daemon_binary_path(), Some("~/.local/bin/rttx-server"));
+    }
+
+    #[test]
+    fn remote_without_binary_returns_none() {
+        let endpoint = RuntimeEndpoint::remote("host");
+        assert_eq!(endpoint.daemon_binary_path(), None);
+    }
+
+    #[test]
+    fn local_endpoint_daemon_binary_path_is_none() {
+        assert_eq!(RuntimeEndpoint::Local.daemon_binary_path(), None);
+    }
+
+    #[test]
+    fn remote_endpoint_serde_backward_compat_without_daemon_binary_path() {
+        let json = r#"{"kind":"remote","host":"example.com"}"#;
+        let endpoint: RuntimeEndpoint = serde_json::from_str(json).unwrap();
+        assert_eq!(endpoint.daemon_binary_path(), None);
+        if let RuntimeEndpoint::Remote { host, .. } = &endpoint {
+            assert_eq!(host, "example.com");
+        } else {
+            panic!("expected Remote endpoint");
+        }
+    }
+
+    #[test]
+    fn remote_endpoint_serde_roundtrip_with_daemon_binary_path() {
+        let endpoint = RuntimeEndpoint::remote_with_binary("host", Some("/opt/rttx-server".into()));
+        let json = serde_json::to_string(&endpoint).unwrap();
+        let deserialized: RuntimeEndpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.daemon_binary_path(), Some("/opt/rttx-server"));
     }
 
     #[test]
@@ -1463,6 +1530,30 @@ mod tests {
     }
 
     #[test]
+    fn daemon_not_installed_is_not_transient() {
+        let problem = ConnectionProblem::DaemonNotInstalled("not found".into());
+        assert!(!problem.is_transient());
+    }
+
+    #[test]
+    fn classify_daemon_not_installed_error() {
+        let error = DaemonError::DaemonNotInstalled {
+            host: "example.com".into(),
+            binary: "rttx-server".into(),
+        };
+        let problem = classify_connection_problem(&error);
+        assert!(matches!(problem, ConnectionProblem::DaemonNotInstalled(_)));
+    }
+
+    #[test]
+    fn daemon_not_installed_label_includes_detail() {
+        let problem = ConnectionProblem::DaemonNotInstalled(
+            "rttx-server not installed on example.com (tried: rttx-server)".into(),
+        );
+        assert!(problem.label().contains("example.com"));
+    }
+
+    #[test]
     fn daemon_died_label_says_daemon_stopped() {
         assert_eq!(ConnectionProblem::DaemonDied.label(), "Daemon stopped");
     }
@@ -1511,7 +1602,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_items_daemon_died_remote_hides_restart_daemon() {
+    fn menu_items_daemon_died_remote_shows_restart_daemon() {
         let items = workspace_menu_items(&WorkspaceMenuContext {
             is_remote: true,
             is_managed: true,
@@ -1522,7 +1613,7 @@ mod tests {
             is_daemon_died: true,
             has_other_disconnected_from_same_host: false,
         });
-        assert!(!items.show_restart_daemon);
+        assert!(items.show_restart_daemon);
     }
 
     #[test]

@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn runtime_lookup_helpers_resolve_workspace_and_pane_targets() {
-        let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+        let endpoint = RuntimeEndpoint::remote("builder.example");
         let mut session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
@@ -1088,9 +1088,7 @@ mod tests {
         let state = window_state(vec![workspace("session-1", "Session 1", term("pane-1"))]);
 
         assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::Local));
-        assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
-            host: "builder.example".into(),
-        }));
+        assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::remote("builder.example")));
     }
 
     #[test]
@@ -1108,21 +1106,15 @@ mod tests {
                 "workspace-2",
                 "Remote Workspace",
                 term("remote-pane"),
-                RuntimeEndpoint::Remote { host: "builder.example".into() },
+                RuntimeEndpoint::remote("builder.example"),
                 WorkspacePolicy::Persistent,
                 Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
             ),
         ]);
 
         assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::Local));
-        assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
-            host: "builder.example".into(),
-        }));
-        assert!(
-            state.needs_inventory_bootstrap(&RuntimeEndpoint::Remote {
-                host: "other.example".into(),
-            })
-        );
+        assert!(!state.needs_inventory_bootstrap(&RuntimeEndpoint::remote("builder.example")));
+        assert!(state.needs_inventory_bootstrap(&RuntimeEndpoint::remote("other.example")));
     }
 
     #[test]
@@ -1309,7 +1301,7 @@ mod tests {
             "workspace-1",
             "Workspace",
             term("pane-1"),
-            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            RuntimeEndpoint::remote("builder.example"),
             WorkspacePolicy::Persistent,
             Some(&runtime_id),
         )]);
@@ -1335,7 +1327,7 @@ mod tests {
             "workspace-1",
             "Workspace",
             term("pane-1"),
-            RuntimeEndpoint::Remote { host: "builder.example".into() },
+            RuntimeEndpoint::remote("builder.example"),
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         )]);
@@ -1406,7 +1398,7 @@ mod tests {
     fn dismissed_remote_runtime_is_not_resurrected_by_inventory() {
         let runtime_id = uuid::Uuid::new_v4().to_string();
         let pane_id = uuid::Uuid::new_v4().to_string();
-        let endpoint = RuntimeEndpoint::Remote { host: "build-host".into() };
+        let endpoint = RuntimeEndpoint::remote("build-host");
         let mut state = WindowState::default_for_test();
 
         state.dismiss_runtime(&endpoint, &runtime_id);
@@ -1581,7 +1573,7 @@ mod tests {
             "workspace-1",
             "Workspace",
             hsplit(term("left"), term("right")),
-            RuntimeEndpoint::Remote { host: "cdt2".into() },
+            RuntimeEndpoint::remote("cdt2"),
             WorkspacePolicy::Persistent,
             Some(runtime_id),
         );
@@ -1644,7 +1636,7 @@ mod tests {
             "workspace-1",
             "Workspace",
             hsplit(term("left"), term("right")),
-            RuntimeEndpoint::Remote { host: "cdt2".into() },
+            RuntimeEndpoint::remote("cdt2"),
             WorkspacePolicy::Persistent,
             Some(runtime_id),
         );
@@ -2142,7 +2134,7 @@ mod tests {
 
     #[test]
     fn reverse_index_matches_linear_scan_for_bound_pane() {
-        let endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+        let endpoint = RuntimeEndpoint::remote("builder.example");
         let runtime_pane_id = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
         let mut session = managed_session_with_runtime(
             "workspace-1",
@@ -2315,7 +2307,7 @@ mod tests {
     fn reverse_index_multi_workspace_multi_endpoint() {
         let local_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
         let remote_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
-        let remote_endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+        let remote_endpoint = RuntimeEndpoint::remote("builder.example");
 
         let mut local_session = managed_session_with_runtime(
             "ws-local",

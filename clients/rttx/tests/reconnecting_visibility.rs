@@ -34,7 +34,7 @@ fn reconnecting_visually_distinct_from_connecting() {
 /// diagnostic information about the retry state.
 #[test]
 fn reconnecting_tooltip_differs_from_connecting() {
-    let ep = RuntimeEndpoint::Remote { host: "host".into() };
+    let ep = RuntimeEndpoint::remote("host");
     let connecting = connection_icon(&ep, &ConnectionStatus::Connecting, true);
     let reconnecting = connection_icon(
         &ep,

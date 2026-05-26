@@ -2366,7 +2366,7 @@ fn blocked_remote_workspace_shows_edit_retry_and_disables_input() {
         "workspace-remote",
         "Remote Workspace",
         LayoutNode::new_terminal_with_uuid("managed-pane"),
-        RuntimeEndpoint::Remote { host: "builder.example".into() },
+        RuntimeEndpoint::remote("builder.example"),
         WorkspacePolicy::Persistent,
         None,
     );
@@ -2866,7 +2866,7 @@ fn workspace_detached_event_preserves_runtime_id_for_manual_reattach() {
         "workspace-detached",
         "Detached Workspace",
         LayoutNode::new_terminal_with_uuid("managed-pane"),
-        RuntimeEndpoint::Remote { host: "builder.example".into() },
+        RuntimeEndpoint::remote("builder.example"),
         WorkspacePolicy::Persistent,
         Some(&runtime_id),
     );
@@ -2916,7 +2916,7 @@ fn save_state_persists_detached_workspace_runtime_binding() {
         "workspace-detached-save",
         "Detached Workspace",
         LayoutNode::new_terminal_with_uuid("managed-pane"),
-        RuntimeEndpoint::Remote { host: "builder.example".into() },
+        RuntimeEndpoint::remote("builder.example"),
         WorkspacePolicy::Persistent,
         Some(&runtime_id),
     );
@@ -2937,10 +2937,7 @@ fn save_state_persists_detached_workspace_runtime_binding() {
         .expect("detached workspace should persist in saved state");
 
     assert!(saved_session.runtime.is_managed());
-    assert_eq!(
-        saved_session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "builder.example".into() }
-    );
+    assert_eq!(saved_session.runtime.endpoint, RuntimeEndpoint::remote("builder.example"));
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
     assert_eq!(
@@ -2973,7 +2970,7 @@ fn runtime_terminated_event_clears_runtime_id_but_keeps_workspace() {
         "workspace-terminated",
         "Terminated Workspace",
         LayoutNode::new_terminal_with_uuid("managed-pane"),
-        RuntimeEndpoint::Remote { host: "builder.example".into() },
+        RuntimeEndpoint::remote("builder.example"),
         WorkspacePolicy::Persistent,
         Some(&runtime_id),
     );
@@ -3024,7 +3021,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
         "workspace-terminated-save",
         "Terminated Workspace",
         LayoutNode::new_terminal_with_uuid("managed-pane"),
-        RuntimeEndpoint::Remote { host: "builder.example".into() },
+        RuntimeEndpoint::remote("builder.example"),
         WorkspacePolicy::Persistent,
         Some(&runtime_id),
     );
@@ -3046,10 +3043,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
         .expect("terminated workspace should persist in saved state");
 
     assert!(saved_session.runtime.is_managed());
-    assert_eq!(
-        saved_session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "builder.example".into() }
-    );
+    assert_eq!(saved_session.runtime.endpoint, RuntimeEndpoint::remote("builder.example"));
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id, None);
     assert_eq!(
@@ -5944,7 +5938,7 @@ fn open_runtime_ids_for_endpoint_returns_bound_runtime_ids() {
         "ws-remote",
         "Remote",
         LayoutNode::new_terminal_with_uuid("pane-remote"),
-        RuntimeEndpoint::Remote { host: "deploy@prod".into() },
+        RuntimeEndpoint::remote("deploy@prod"),
         WorkspacePolicy::Persistent,
         Some("runtime-bbb"),
     );
@@ -7581,7 +7575,7 @@ fn reconnect_host_action_shown_when_multiple_disconnected_from_same_host() {
         "ws-remote-1",
         "Remote 1",
         LayoutNode::new_terminal_with_uuid("pane-r1"),
-        RuntimeEndpoint::Remote { host: "server.example.com".into() },
+        RuntimeEndpoint::remote("server.example.com"),
         WorkspacePolicy::Persistent,
         Some("rt-1"),
     );
@@ -7589,7 +7583,7 @@ fn reconnect_host_action_shown_when_multiple_disconnected_from_same_host() {
         "ws-remote-2",
         "Remote 2",
         LayoutNode::new_terminal_with_uuid("pane-r2"),
-        RuntimeEndpoint::Remote { host: "server.example.com".into() },
+        RuntimeEndpoint::remote("server.example.com"),
         WorkspacePolicy::Persistent,
         Some("rt-2"),
     );
@@ -7636,7 +7630,7 @@ fn reconnect_host_action_hidden_when_only_one_disconnected() {
         "ws-solo-1",
         "Solo Remote",
         LayoutNode::new_terminal_with_uuid("pane-solo"),
-        RuntimeEndpoint::Remote { host: "solo.example.com".into() },
+        RuntimeEndpoint::remote("solo.example.com"),
         WorkspacePolicy::Persistent,
         Some("rt-solo"),
     );
@@ -7679,7 +7673,7 @@ fn reconnect_host_reconnects_all_disconnected_workspaces_from_same_endpoint() {
         "ws-host-a1",
         "Host A - 1",
         LayoutNode::new_terminal_with_uuid("pane-a1"),
-        RuntimeEndpoint::Remote { host: "host-a.example.com".into() },
+        RuntimeEndpoint::remote("host-a.example.com"),
         WorkspacePolicy::Persistent,
         Some("rt-a1"),
     );
@@ -7687,7 +7681,7 @@ fn reconnect_host_reconnects_all_disconnected_workspaces_from_same_endpoint() {
         "ws-host-a2",
         "Host A - 2",
         LayoutNode::new_terminal_with_uuid("pane-a2"),
-        RuntimeEndpoint::Remote { host: "host-a.example.com".into() },
+        RuntimeEndpoint::remote("host-a.example.com"),
         WorkspacePolicy::Persistent,
         Some("rt-a2"),
     );
@@ -7695,7 +7689,7 @@ fn reconnect_host_reconnects_all_disconnected_workspaces_from_same_endpoint() {
         "ws-host-b1",
         "Host B - 1",
         LayoutNode::new_terminal_with_uuid("pane-b1"),
-        RuntimeEndpoint::Remote { host: "host-b.example.com".into() },
+        RuntimeEndpoint::remote("host-b.example.com"),
         WorkspacePolicy::Persistent,
         Some("rt-b1"),
     );

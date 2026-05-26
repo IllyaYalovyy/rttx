@@ -521,10 +521,7 @@ fn new_managed_remote_produces_remote_persistent_session() {
     );
 
     assert!(session.runtime.is_managed());
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "dev-box.internal".into() }
-    );
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("dev-box.internal"));
     assert!(!session.layout.terminal_uuids().is_empty());
     assert!(!session.runtime.pending_layout_panes.is_empty());
 }
@@ -546,10 +543,7 @@ fn remote_managed_session_persists_and_restores() {
     let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
 
     assert!(restored.runtime.is_managed());
-    assert_eq!(
-        restored.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "dev@build-host".into() }
-    );
+    assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("dev@build-host"));
     assert_eq!(
         restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
         Some("/home/dev/project")
@@ -571,10 +565,7 @@ fn remote_host_creates_managed_remote_session() {
     );
 
     assert!(session.runtime.is_managed());
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
-    );
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("deploy@example.com"));
 }
 
 /// Updating a remote workspace endpoint must change the host and sync mode.
@@ -590,12 +581,9 @@ fn update_remote_endpoint_changes_host() {
         None,
     );
 
-    session.runtime.endpoint = RuntimeEndpoint::Remote { host: "new-host.example.com".into() };
+    session.runtime.endpoint = RuntimeEndpoint::remote("new-host.example.com");
 
-    assert_eq!(
-        session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "new-host.example.com".into() }
-    );
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("new-host.example.com"));
     assert!(session.runtime.is_managed());
 }
 
@@ -629,7 +617,7 @@ fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
     // Endpoint must still be remote.
     assert_eq!(
         session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "build-host.internal".into() },
+        RuntimeEndpoint::remote("build-host.internal"),
         "split must not change the workspace endpoint"
     );
 
@@ -670,7 +658,7 @@ fn double_split_remote_session_keeps_all_panes_pending() {
     session.set_recovery(&t3, PaneRecovery::empty_shell());
     session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
 
-    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Remote { host: "gpu-box".into() });
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("gpu-box"));
     assert_eq!(session.layout.terminal_count(), 3);
     assert!(session.runtime.pending_layout_panes.contains(&t2));
     assert!(session.runtime.pending_layout_panes.contains(&t3));
@@ -685,7 +673,7 @@ fn close_remote_workspace_prevents_resurrection_on_reconnect() {
     use rttx::workspace::state::WindowState;
 
     let runtime_id = uuid::Uuid::new_v4().to_string();
-    let endpoint = RuntimeEndpoint::Remote { host: "prod-server".into() };
+    let endpoint = RuntimeEndpoint::remote("prod-server");
 
     let mut state = WindowState::default();
 
@@ -721,7 +709,7 @@ fn remote_managed_session_is_ready_for_inventory_binding() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
     use rttx::workspace::state::WindowState;
 
-    let endpoint = RuntimeEndpoint::Remote { host: "gpu-box".into() };
+    let endpoint = RuntimeEndpoint::remote("gpu-box");
 
     let mut state = WindowState::default();
     state.workspaces.clear();
@@ -1454,4 +1442,54 @@ fn serialized_managed_workspace_omits_legacy_mode_field() {
     let ws = &value["workspaces"][0];
     assert!(ws.get("mode").is_none(), "mode must not appear in serialized state");
     assert!(ws.get("runtime").is_some(), "runtime must be present in serialized state");
+}
+
+/// Remote endpoint with custom daemon binary path must persist through
+/// serialization and restore correctly. Regression test for #956.
+#[test]
+fn remote_endpoint_with_custom_binary_path_persists() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::workspace::WorkspaceState;
+
+    let mut session = WorkspaceState::new_managed_remote(
+        "Remote Custom".into(),
+        "build-host",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    // Override endpoint with custom binary path.
+    session.runtime.endpoint =
+        RuntimeEndpoint::remote_with_binary("build-host", Some("~/.local/bin/rttx-server".into()));
+
+    let json = serde_json::to_string(&session).unwrap();
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.runtime.endpoint.daemon_binary_path(), Some("~/.local/bin/rttx-server"),);
+    assert_eq!(restored.runtime.endpoint, session.runtime.endpoint);
+}
+
+/// Remote endpoint without custom binary path must deserialize from JSON
+/// that lacks the `daemon_binary_path` field. Regression test for #956.
+#[test]
+fn remote_endpoint_without_binary_path_backward_compat() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::workspace::WorkspaceState;
+
+    // Serialize a workspace with default remote endpoint (no binary path).
+    let session = WorkspaceState::new_managed_remote(
+        "Legacy Remote".into(),
+        "old-host",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let mut json_value: serde_json::Value = serde_json::to_value(&session).unwrap();
+
+    // Strip daemon_binary_path from the endpoint to simulate legacy data.
+    if let Some(endpoint) = json_value.get_mut("runtime").and_then(|r| r.get_mut("endpoint")) {
+        endpoint.as_object_mut().unwrap().remove("daemon_binary_path");
+    }
+
+    let restored: WorkspaceState = serde_json::from_value(json_value).unwrap();
+    assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("old-host"));
+    assert_eq!(restored.runtime.endpoint.daemon_binary_path(), None);
 }

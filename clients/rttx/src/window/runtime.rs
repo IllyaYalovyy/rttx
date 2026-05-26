@@ -181,7 +181,10 @@ impl Window {
         let endpoint = if host.is_local() {
             RuntimeEndpoint::Local
         } else {
-            RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
+            RuntimeEndpoint::remote_with_binary(
+                host.ssh_target.clone().unwrap_or_default(),
+                host.daemon_binary_path.clone(),
+            )
         };
         self.imp().pending_connect_existing.replace(Some(host.clone()));
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
@@ -194,7 +197,10 @@ impl Window {
         let endpoint = if host.is_local() {
             RuntimeEndpoint::Local
         } else {
-            RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
+            RuntimeEndpoint::remote_with_binary(
+                host.ssh_target.clone().unwrap_or_default(),
+                host.daemon_binary_path.clone(),
+            )
         };
         let state = self.imp().state.borrow();
         state
@@ -235,7 +241,7 @@ impl Window {
     pub(crate) fn add_remote_managed_session_at(&self, host: &str, initial_cwd: Option<String>) {
         let imp = self.imp();
         let count = imp.state.borrow().workspaces.len() + 1;
-        let endpoint = RuntimeEndpoint::Remote { host: host.to_string() };
+        let endpoint = RuntimeEndpoint::remote(host);
         let name = crate::workspace::state::workspace_display_name(
             &endpoint,
             initial_cwd.as_deref(),
@@ -694,7 +700,10 @@ impl Window {
                 let expected_endpoint = if host.is_local() {
                     RuntimeEndpoint::Local
                 } else {
-                    RuntimeEndpoint::Remote { host: host.ssh_target.clone().unwrap_or_default() }
+                    RuntimeEndpoint::remote_with_binary(
+                        host.ssh_target.clone().unwrap_or_default(),
+                        host.daemon_binary_path.clone(),
+                    )
                 };
                 if endpoint == expected_endpoint {
                     crate::connect_existing_dialog::show(self, &host, &runtimes);
@@ -1137,7 +1146,7 @@ impl Window {
             else {
                 return;
             };
-            let RuntimeEndpoint::Remote { host } = &session.runtime.endpoint else {
+            let RuntimeEndpoint::Remote { host, .. } = &session.runtime.endpoint else {
                 return;
             };
             host.clone()
@@ -1181,14 +1190,14 @@ impl Window {
                 status_label.set_text("SSH target / args is required");
                 return;
             }
-            win.update_workspace_endpoint(&workspace_id, host);
+            win.update_workspace_endpoint(&workspace_id, &host);
             dialog_for_save.close();
         });
 
         dialog.present(Some(self));
     }
 
-    pub(super) fn update_workspace_endpoint(&self, workspace_id: &str, host: String) {
+    pub(super) fn update_workspace_endpoint(&self, workspace_id: &str, host: &str) {
         let (session_state, previous_endpoint) = {
             let mut state = self.imp().state.borrow_mut();
             let Some(session) =
@@ -1197,7 +1206,7 @@ impl Window {
                 return;
             };
             let previous_endpoint = session.runtime.endpoint.clone();
-            session.runtime.endpoint = RuntimeEndpoint::Remote { host };
+            session.runtime.endpoint = RuntimeEndpoint::remote(host);
             (session.clone(), previous_endpoint)
         };
 
@@ -1381,7 +1390,7 @@ mod tests {
     fn coalesce_separates_endpoints() {
         let pane = Uuid::new_v4();
         let local = RuntimeEndpoint::Local;
-        let remote = RuntimeEndpoint::Remote { host: "host1".into() };
+        let remote = RuntimeEndpoint::remote("host1");
         let events = vec![
             delta_event(local.clone(), pane, b"local", 1),
             delta_event(remote.clone(), pane, b"remote", 1),

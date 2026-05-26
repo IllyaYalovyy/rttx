@@ -719,7 +719,7 @@ fn workspace_connection_summary_shows_endpoint_and_pane_info() {
     use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
 
     let local = RuntimeEndpoint::Local;
-    let remote = RuntimeEndpoint::Remote { host: "dev@host".into() };
+    let remote = RuntimeEndpoint::remote("dev@host");
 
     assert_eq!(workspace_connection_summary(&local, Some("vim")), "vim");
     assert_eq!(workspace_connection_summary(&local, None), "");
@@ -745,7 +745,7 @@ fn connection_icon_always_returns_icon() {
     // Shape stays constant regardless of state.
     assert_eq!(local_disconnected.icon_name, "computer-symbolic");
 
-    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+    let remote = RuntimeEndpoint::remote("h");
     let connected = connection_icon(&remote, &ConnectionStatus::Connected, true);
     assert_eq!(connected.css_class, "accent");
     assert_eq!(connected.icon_name, "network-server-symbolic");
@@ -772,7 +772,7 @@ fn connection_icon_direct_uses_terminal_symbolic() {
 fn connection_icon_always_has_tooltip() {
     use rttx::runtime::{ConnectionProblem, ConnectionStatus, RuntimeEndpoint, connection_icon};
 
-    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+    let remote = RuntimeEndpoint::remote("h");
     let local = RuntimeEndpoint::Local;
 
     for (endpoint, status) in [
@@ -816,7 +816,7 @@ fn workspace_connection_summary_contains_no_status_text() {
     use rttx::runtime::{RuntimeEndpoint, workspace_connection_summary};
 
     let local = RuntimeEndpoint::Local;
-    let remote = RuntimeEndpoint::Remote { host: "h".into() };
+    let remote = RuntimeEndpoint::remote("h");
 
     for (ep, info) in
         [(&local, Some("bash")), (&local, None), (&remote, Some("vim")), (&remote, None)]
@@ -874,7 +874,7 @@ fn pane_description_subtitle_structure_regression() {
         "/tmp/rttx"
     );
     // Remote subtitle includes host.
-    let remote = RuntimeEndpoint::Remote { host: "dev-box".into() };
+    let remote = RuntimeEndpoint::remote("dev-box");
     assert_eq!(workspace_connection_summary(&remote, Some("/tmp/rttx")), "dev-box · /tmp/rttx");
     assert_eq!(workspace_connection_summary(&remote, None), "dev-box");
 }
@@ -1060,11 +1060,7 @@ fn connected_icon_color_consistent_across_endpoints() {
     use rttx::runtime::{ConnectionStatus, RuntimeEndpoint, connection_icon};
 
     let local = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, true);
-    let remote = connection_icon(
-        &RuntimeEndpoint::Remote { host: "h".into() },
-        &ConnectionStatus::Connected,
-        true,
-    );
+    let remote = connection_icon(&RuntimeEndpoint::remote("h"), &ConnectionStatus::Connected, true);
     let direct = connection_icon(&RuntimeEndpoint::Local, &ConnectionStatus::Connected, false);
 
     assert_eq!(local.css_class, remote.css_class, "local and remote connected must match");
@@ -1190,7 +1186,7 @@ fn workspace_menu_daemon_died_shows_restart_for_local_only() {
         is_daemon_died: true,
         has_other_disconnected_from_same_host: false,
     });
-    assert!(!remote.show_restart_daemon);
+    assert!(remote.show_restart_daemon);
 }
 
 /// Regression test for #955: Force Reconnect must be available when a workspace

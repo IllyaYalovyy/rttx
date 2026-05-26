@@ -202,6 +202,7 @@ mod tests {
                     name: "Example".into(),
                     kind: HostKind::default(),
                     ssh_target: Some("user@example.com".into()),
+                    daemon_binary_path: None,
                     labels: vec![],
                 }],
             }),

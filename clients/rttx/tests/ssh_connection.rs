@@ -8,7 +8,7 @@ use rttx::daemon::{DaemonConnection, DaemonError};
 #[tokio::test]
 async fn ssh_connection_to_unreachable_host_fails_within_timeout() {
     let start = std::time::Instant::now();
-    let result = DaemonConnection::connect_ssh("rttx-nonexistent-host-test").await;
+    let result = DaemonConnection::connect_ssh("rttx-nonexistent-host-test", None).await;
 
     assert!(result.is_err(), "SSH to unreachable host should fail");
     assert!(

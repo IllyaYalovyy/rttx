@@ -366,7 +366,7 @@ impl From<&LayoutNode> for crate::workspace::layout::LayoutNode {
 fn endpoint_key_from_runtime(runtime: &WorkspaceRuntime) -> String {
     match &runtime.endpoint {
         RuntimeEndpoint::Local => "local".into(),
-        RuntimeEndpoint::Remote { host } => crate::host::normalize_ssh_key(host),
+        RuntimeEndpoint::Remote { host, .. } => crate::host::normalize_ssh_key(host),
     }
 }
 
@@ -411,7 +411,7 @@ impl WorkspaceRecord {
         let endpoint = if self.endpoint_key == "local" {
             RuntimeEndpoint::Local
         } else {
-            RuntimeEndpoint::Remote { host: self.endpoint_key.clone() }
+            RuntimeEndpoint::remote(&self.endpoint_key)
         };
 
         let layout: crate::workspace::layout::LayoutNode = (&self.layout).into();
