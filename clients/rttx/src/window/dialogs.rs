@@ -444,6 +444,9 @@ impl Window {
             let is_daemon_died = current_status.is_some_and(|s| {
                 matches!(s, ConnectionStatus::Blocked(ConnectionProblem::DaemonDied))
             });
+            let is_connecting = current_status.is_some_and(|s| {
+                matches!(s, ConnectionStatus::Connecting | ConnectionStatus::Starting)
+            });
             let endpoint_key = session.runtime.endpoint.key();
             let has_other_disconnected = state.workspaces.iter().any(|s| {
                 s.uuid != session_uuid
@@ -466,6 +469,7 @@ impl Window {
                     && matches!(session.runtime.policy, WorkspacePolicy::Persistent),
                 is_attached: session.runtime.runtime_id.is_some(),
                 is_disconnected: disconnected,
+                is_connecting,
                 is_daemon_died,
                 has_other_disconnected_from_same_host: has_other_disconnected,
             })

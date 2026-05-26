@@ -498,6 +498,8 @@ impl Window {
                                 ConnectionStatus::Disconnected
                                     | ConnectionStatus::Reconnecting { .. }
                                     | ConnectionStatus::Blocked(_)
+                                    | ConnectionStatus::Connecting
+                                    | ConnectionStatus::Starting
                             )
                         })
                 })

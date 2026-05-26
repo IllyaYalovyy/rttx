@@ -1026,6 +1026,7 @@ fn workspace_menu_items_contract() {
         is_persistent: true,
         is_attached: true,
         is_disconnected: true,
+        is_connecting: false,
         is_daemon_died: false,
         has_other_disconnected_from_same_host: false,
     });
@@ -1040,6 +1041,7 @@ fn workspace_menu_items_contract() {
         is_persistent: false,
         is_attached: true,
         is_disconnected: false,
+        is_connecting: false,
         is_daemon_died: false,
         has_other_disconnected_from_same_host: false,
     });
@@ -1127,6 +1129,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_persistent: true,
         is_attached: false,
         is_disconnected: true,
+        is_connecting: false,
         is_daemon_died: false,
         has_other_disconnected_from_same_host: true,
     });
@@ -1139,6 +1142,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_persistent: true,
         is_attached: false,
         is_disconnected: true,
+        is_connecting: false,
         is_daemon_died: false,
         has_other_disconnected_from_same_host: false,
     });
@@ -1151,6 +1155,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_persistent: true,
         is_attached: true,
         is_disconnected: false,
+        is_connecting: false,
         is_daemon_died: false,
         has_other_disconnected_from_same_host: true,
     });
@@ -1168,6 +1173,7 @@ fn workspace_menu_daemon_died_shows_restart_for_local_only() {
         is_persistent: true,
         is_attached: false,
         is_disconnected: true,
+        is_connecting: false,
         is_daemon_died: true,
         has_other_disconnected_from_same_host: false,
     });
@@ -1180,6 +1186,7 @@ fn workspace_menu_daemon_died_shows_restart_for_local_only() {
         is_persistent: true,
         is_attached: false,
         is_disconnected: true,
+        is_connecting: false,
         is_daemon_died: true,
         has_other_disconnected_from_same_host: false,
     });
