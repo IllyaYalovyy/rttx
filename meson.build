@@ -78,3 +78,10 @@ install_data(
   client_data_dir / 'icons' / 'hicolor' / 'scalable' / 'apps' / app_id + '.Devel.svg',
   install_dir: iconsdir / 'hicolor' / 'scalable' / 'apps',
 )
+
+# Man pages
+mandir = datadir / 'man'
+install_data(
+  meson.project_source_root() / 'services' / 'rttx-server' / 'man' / 'rttx-server.1',
+  install_dir: mandir / 'man1',
+)

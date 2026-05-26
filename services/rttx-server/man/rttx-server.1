@@ -1,0 +1,185 @@
+.TH RTTX-SERVER 1 "2026-05-26" "rttx 0.6.5" "rttx Manual"
+.SH NAME
+rttx-server \- daemon runtime service for the rttx terminal emulator
+.SH SYNOPSIS
+.B rttx-server
+.RI [ command ]
+.RI [ options ]
+.SH DESCRIPTION
+.B rttx-server
+is the daemon component of the rttx tiling terminal emulator. It owns all PTYs
+and runtime state, decoupling terminal lifetime from the GUI. Workspaces attach
+and detach freely while runtimes continue according to their policy and endpoint
+availability.
+.PP
+One daemon per host serves multiple runtimes and clients. The GUI auto-starts
+the daemon when needed; manual invocation is only required for troubleshooting
+or remote access via SSH.
+.PP
+If no command is given,
+.B start
+is assumed.
+.SH COMMANDS
+.TP
+.B start \fR[\fB\-\-foreground\fR]
+Start the daemon. By default it daemonizes into the background. Use
+.B \-\-foreground
+to run in the foreground with log output on stderr (useful for debugging).
+.TP
+.B stop
+Stop the running daemon gracefully. All active runtimes are terminated.
+.TP
+.B status
+Show whether the daemon is running and list active runtimes with their IDs,
+connected client count, and pane count.
+.TP
+.B clean
+Remove all runtimes that have no connected clients. Persistent runtimes with
+disconnected clients are terminated.
+.TP
+.B kill \fIruntime_id\fR
+Terminate a specific runtime by its UUID. The runtime and all its panes are
+destroyed immediately.
+.TP
+.B attach\-stdio
+Serve one client over stdin/stdout. This is the entry point used by the GUI
+when connecting to a remote daemon over SSH:
+.RS
+.PP
+.nf
+ssh <host> rttx-server attach-stdio
+.fi
+.RE
+.IP
+The same protobuf wire protocol is spoken over the SSH subprocess's
+stdin/stdout. No port forwarding is needed.
+.TP
+.B logs
+Print the path to the daemon log directory. Logs use daily rotation with 3-day
+retention.
+.TP
+.B diagnostics
+Show runtime memory diagnostics including per-runtime and per-pane memory usage
+for scrollback buffers and screen state.
+.TP
+.B config
+Show resolved paths and configuration including socket path, state directory,
+cache directory, and log directory.
+.TP
+.B profile \fR[\fB\-\-dump\fR] [\fB\-\-last\-crash\fR] [\fB\-\-json\fR] [\fB\-\-watch\fR]
+Show profiling report from flight recorder data.
+.RS
+.TP
+.B \-\-dump
+Dump all ring buffer events chronologically.
+.TP
+.B \-\-last\-crash
+Read flight.prev.bin from the previous daemon instance (useful for
+post-mortem analysis).
+.TP
+.B \-\-json
+Output the report as JSON.
+.TP
+.B \-\-watch
+Continuously refresh the report every 2 seconds.
+.RE
+.SH ENVIRONMENT
+.TP
+.B RTTX_DEV_MODE
+When set to
+.BR 1 ,
+the daemon uses separate paths for socket, state, cache, and logs so a
+development instance can run alongside a production instance. See the
+.I Development
+section below.
+.TP
+.B RUST_LOG
+Override the log level filter. Default is
+.BR info .
+Example:
+.BR "RUST_LOG=debug rttx-server start --foreground" .
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/rttx-server/v1/
+Unix domain socket for client connections.
+.TP
+.I $XDG_STATE_HOME/rttx/daemon/
+Daemon state directory containing runtime metadata, scrollback logs, and screen
+snapshots. Default:
+.IR ~/.local/state/rttx/daemon/ .
+.TP
+.I $XDG_STATE_HOME/rttx/daemon/runtimes/<id>/runtime.json
+Per-runtime metadata (pane CWD, title, dimensions). Written on dirty-flag.
+.TP
+.I $XDG_STATE_HOME/rttx/daemon/runtimes/<id>/scrollback/<pane>.log
+Append-only raw terminal byte log per pane, rotated periodically.
+.TP
+.I $XDG_STATE_HOME/rttx/daemon/runtimes/<id>/screen/<pane>.snap
+Deterministic screen snapshot for reconnect.
+.TP
+.I $XDG_CACHE_HOME/rttx-server/
+Log files with daily rotation (3-day retention).
+.SH DEVELOPMENT
+With
+.BR RTTX_DEV_MODE=1 ,
+all paths are suffixed with
+.B -devel
+to isolate the development instance:
+.PP
+.RS
+.nf
+Socket:  $XDG_RUNTIME_DIR/rttx-server-devel/v1/
+State:   $XDG_STATE_HOME/rttx-devel/daemon/
+Logs:    $XDG_CACHE_HOME/rttx-server-devel/
+.fi
+.RE
+.SH WIRE PROTOCOL
+Communication uses protobuf messages over 4-byte little-endian length-prefixed
+frames. The same protocol is used for both Unix socket and SSH stdio transports.
+Protocol version is checked during handshake; incompatible versions disconnect
+cleanly.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Error (daemon not running, runtime not found, etc.).
+.SH EXAMPLES
+Start the daemon in the foreground with debug logging:
+.PP
+.RS
+.nf
+RUST_LOG=debug rttx-server start --foreground
+.fi
+.RE
+.PP
+Check daemon status:
+.PP
+.RS
+.nf
+rttx-server status
+.fi
+.RE
+.PP
+Connect to a remote daemon over SSH (typically done by the GUI):
+.PP
+.RS
+.nf
+ssh myhost rttx-server attach-stdio
+.fi
+.RE
+.PP
+Clean up orphaned runtimes:
+.PP
+.RS
+.nf
+rttx-server clean
+.fi
+.RE
+.SH SEE ALSO
+.BR rttx (1)
+.SH AUTHORS
+Illya Yalovyy <yalovoy@gmail.com>
+.SH LICENSE
+GPL-3.0-or-later
