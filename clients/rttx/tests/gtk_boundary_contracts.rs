@@ -1192,3 +1192,49 @@ fn workspace_menu_daemon_died_shows_restart_for_local_only() {
     });
     assert!(!remote.show_restart_daemon);
 }
+
+/// Regression test for #955: Force Reconnect must be available when a workspace
+/// is stuck in Connecting or Starting state, not only when Disconnected.
+#[test]
+fn workspace_menu_force_reconnect_available_during_connecting() {
+    use rttx::runtime::{WorkspaceMenuContext, workspace_menu_items};
+
+    // Connecting state should show reconnect
+    let connecting = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: false,
+        is_disconnected: false,
+        is_connecting: true,
+        is_daemon_died: false,
+        has_other_disconnected_from_same_host: false,
+    });
+    assert!(connecting.show_reconnect, "Force Reconnect must be available during Connecting state");
+
+    // Disconnected state should still show reconnect (existing behavior)
+    let disconnected = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: false,
+        is_disconnected: true,
+        is_connecting: false,
+        is_daemon_died: false,
+        has_other_disconnected_from_same_host: false,
+    });
+    assert!(disconnected.show_reconnect, "Force Reconnect must remain available when Disconnected");
+
+    // Connected state should NOT show reconnect
+    let connected = workspace_menu_items(&WorkspaceMenuContext {
+        is_remote: true,
+        is_managed: true,
+        is_persistent: true,
+        is_attached: true,
+        is_disconnected: false,
+        is_connecting: false,
+        is_daemon_died: false,
+        has_other_disconnected_from_same_host: false,
+    });
+    assert!(!connected.show_reconnect, "Force Reconnect must be hidden when already connected");
+}

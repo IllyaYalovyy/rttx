@@ -731,10 +731,7 @@ impl EndpointActor {
                         let delay_secs = self.next_reconnect_delay_secs();
                         self.emit_status(
                             &workspace_id,
-                            ConnectionStatus::Reconnecting {
-                                attempt,
-                                retry_in_secs: delay_secs,
-                            },
+                            ConnectionStatus::Reconnecting { attempt, retry_in_secs: delay_secs },
                         );
                         self.schedule_reconnect(delay_secs);
                         self.emit_error(
@@ -1419,15 +1416,17 @@ impl EndpointActor {
                     self.daemon_start_attempted = true;
                     Self::start_local_daemon(&socket_path).await?;
                 }
-                let connection =
-                    tokio::time::timeout(HANDSHAKE_TIMEOUT, DaemonConnection::connect(&socket_path))
-                        .await
-                        .map_err(|_| {
-                            DaemonError::Io(std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "Local daemon handshake timed out".to_string(),
-                            ))
-                        })??;
+                let connection = tokio::time::timeout(
+                    HANDSHAKE_TIMEOUT,
+                    DaemonConnection::connect(&socket_path),
+                )
+                .await
+                .map_err(|_| {
+                    DaemonError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Local daemon handshake timed out".to_string(),
+                    ))
+                })??;
                 self.connection = Some(connection);
                 self.daemon_start_attempted = false;
             }
