@@ -28,13 +28,13 @@ fn host_key_local_endpoint_returns_local_key() {
 
 #[test]
 fn host_key_remote_endpoint_normalizes_ssh_target() {
-    let endpoint = RuntimeEndpoint::Remote { host: "deploy@example.com".into() };
+    let endpoint = RuntimeEndpoint::remote("deploy@example.com");
     assert_eq!(endpoint.host_key(), "example.com");
 }
 
 #[test]
 fn host_key_remote_endpoint_bare_hostname() {
-    let endpoint = RuntimeEndpoint::Remote { host: "dev-box".into() };
+    let endpoint = RuntimeEndpoint::remote("dev-box");
     assert_eq!(endpoint.host_key(), "dev-box");
 }
 
@@ -77,7 +77,7 @@ fn places_visible_for_host_includes_builtins_and_tagged() {
 
 #[test]
 fn endpoint_host_key_matches_place_and_command_tags() {
-    let endpoint = RuntimeEndpoint::Remote { host: "deploy@example.com".into() };
+    let endpoint = RuntimeEndpoint::remote("deploy@example.com");
     let host_key = endpoint.host_key();
 
     let mut place = Place::new("app", "/srv/app");

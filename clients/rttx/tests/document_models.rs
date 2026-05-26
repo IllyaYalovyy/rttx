@@ -191,6 +191,7 @@ fn hosts_atomic_round_trip() {
             name: "Test".into(),
             kind: HostKind::Remote,
             ssh_target: Some("user@test.host".into()),
+            daemon_binary_path: None,
             labels: vec!["test".into()],
         }],
     };

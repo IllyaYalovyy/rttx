@@ -523,7 +523,7 @@ fn new_managed_remote_produces_remote_persistent_session() {
     assert!(session.runtime.is_managed());
     assert_eq!(
         session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "dev-box.internal".into() }
+        RuntimeEndpoint::remote("dev-box.internal")
     );
     assert!(!session.layout.terminal_uuids().is_empty());
     assert!(!session.runtime.pending_layout_panes.is_empty());
@@ -548,7 +548,7 @@ fn remote_managed_session_persists_and_restores() {
     assert!(restored.runtime.is_managed());
     assert_eq!(
         restored.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "dev@build-host".into() }
+        RuntimeEndpoint::remote("dev@build-host")
     );
     assert_eq!(
         restored.layout.terminal_cwd(&restored.layout.terminal_uuids()[0]).as_deref(),
@@ -573,7 +573,7 @@ fn remote_host_creates_managed_remote_session() {
     assert!(session.runtime.is_managed());
     assert_eq!(
         session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "deploy@example.com".into() }
+        RuntimeEndpoint::remote("deploy@example.com")
     );
 }
 
@@ -590,11 +590,11 @@ fn update_remote_endpoint_changes_host() {
         None,
     );
 
-    session.runtime.endpoint = RuntimeEndpoint::Remote { host: "new-host.example.com".into() };
+    session.runtime.endpoint = RuntimeEndpoint::remote("new-host.example.com");
 
     assert_eq!(
         session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "new-host.example.com".into() }
+        RuntimeEndpoint::remote("new-host.example.com")
     );
     assert!(session.runtime.is_managed());
 }
@@ -629,7 +629,7 @@ fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
     // Endpoint must still be remote.
     assert_eq!(
         session.runtime.endpoint,
-        RuntimeEndpoint::Remote { host: "build-host.internal".into() },
+        RuntimeEndpoint::remote("build-host.internal"),
         "split must not change the workspace endpoint"
     );
 
@@ -670,7 +670,7 @@ fn double_split_remote_session_keeps_all_panes_pending() {
     session.set_recovery(&t3, PaneRecovery::empty_shell());
     session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
 
-    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Remote { host: "gpu-box".into() });
+    assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("gpu-box"));
     assert_eq!(session.layout.terminal_count(), 3);
     assert!(session.runtime.pending_layout_panes.contains(&t2));
     assert!(session.runtime.pending_layout_panes.contains(&t3));
@@ -685,7 +685,7 @@ fn close_remote_workspace_prevents_resurrection_on_reconnect() {
     use rttx::workspace::state::WindowState;
 
     let runtime_id = uuid::Uuid::new_v4().to_string();
-    let endpoint = RuntimeEndpoint::Remote { host: "prod-server".into() };
+    let endpoint = RuntimeEndpoint::remote("prod-server");
 
     let mut state = WindowState::default();
 
@@ -721,7 +721,7 @@ fn remote_managed_session_is_ready_for_inventory_binding() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
     use rttx::workspace::state::WindowState;
 
-    let endpoint = RuntimeEndpoint::Remote { host: "gpu-box".into() };
+    let endpoint = RuntimeEndpoint::remote("gpu-box");
 
     let mut state = WindowState::default();
     state.workspaces.clear();

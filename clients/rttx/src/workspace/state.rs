@@ -215,7 +215,7 @@ impl WorkspaceState {
 /// Returns `None` when no meaningful name can be derived.
 #[must_use]
 pub fn auto_name_for_workspace(endpoint: &RuntimeEndpoint, cwd: Option<&str>) -> Option<String> {
-    if let RuntimeEndpoint::Remote { host } = endpoint {
+    if let RuntimeEndpoint::Remote { host, .. } = endpoint {
         let short = host.split('@').next_back().unwrap_or(host);
         let short = short.split('.').next().unwrap_or(short);
         if !short.is_empty() {
@@ -653,7 +653,7 @@ mod module_boundary_tests {
         assert!(session.runtime.is_managed());
         assert_eq!(
             session.runtime.endpoint,
-            RuntimeEndpoint::Remote { host: "server.example.com".into() }
+            RuntimeEndpoint::remote("server.example.com")
         );
         assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
         assert_eq!(
@@ -732,19 +732,19 @@ mod module_boundary_tests {
 
     #[test]
     fn auto_name_from_remote_uses_short_hostname() {
-        let ep = RuntimeEndpoint::Remote { host: "etf@nucbox.local".into() };
+        let ep = RuntimeEndpoint::remote("etf@nucbox.local");
         assert_eq!(auto_name_for_workspace(&ep, None), Some("nucbox".into()));
     }
 
     #[test]
     fn auto_name_remote_without_user_prefix() {
-        let ep = RuntimeEndpoint::Remote { host: "builder.example.com".into() };
+        let ep = RuntimeEndpoint::remote("builder.example.com");
         assert_eq!(auto_name_for_workspace(&ep, None), Some("builder".into()));
     }
 
     #[test]
     fn auto_name_remote_ignores_cwd() {
-        let ep = RuntimeEndpoint::Remote { host: "etf@nucbox".into() };
+        let ep = RuntimeEndpoint::remote("etf@nucbox");
         assert_eq!(auto_name_for_workspace(&ep, Some("/home/etf/work")), Some("nucbox".into()));
     }
 
@@ -779,7 +779,7 @@ mod module_boundary_tests {
 
     #[test]
     fn workspace_display_name_uses_hostname_for_remote() {
-        let ep = RuntimeEndpoint::Remote { host: "user@builder.example.com".into() };
+        let ep = RuntimeEndpoint::remote("user@builder.example.com");
         assert_eq!(workspace_display_name(&ep, None, 1), "builder");
     }
 

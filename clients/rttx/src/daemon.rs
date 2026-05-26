@@ -90,6 +90,15 @@ pub enum DaemonError {
     /// Connection was closed by the server.
     #[error("connection closed")]
     Disconnected,
+
+    /// The daemon binary was not found on the remote host.
+    #[error("rttx-server not installed on {host} (tried: {binary})")]
+    DaemonNotInstalled {
+        /// Remote host where the binary was not found.
+        host: String,
+        /// Binary path that was attempted.
+        binary: String,
+    },
 }
 
 /// Successful detach outcome from the daemon.
@@ -172,16 +181,22 @@ impl DaemonConnection {
     }
 
     /// Connect to `rttx-server` on a remote host via SSH.
-    pub async fn connect_ssh(host: &str) -> Result<(Self, SshHandle), DaemonError> {
+    ///
+    /// When `binary_path` is `None`, uses `rttx-server` (resolved via PATH on the remote).
+    pub async fn connect_ssh(
+        host: &str,
+        binary_path: Option<&str>,
+    ) -> Result<(Self, SshHandle), DaemonError> {
+        let binary = binary_path.unwrap_or("rttx-server");
         let mut child = tokio::process::Command::new("ssh")
             .args(["-o", "BatchMode=yes"])
             .args(["-o", "ConnectTimeout=10"])
             .arg(host)
-            .arg("rttx-server")
+            .arg(binary)
             .arg("attach-stdio")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()?;
 
         let child_stdin =
@@ -199,8 +214,57 @@ impl DaemonConnection {
             effective_caps: Vec::new(),
             id_gen: RequestIdGenerator::new(),
         };
-        conn.handshake().await?;
-        Ok((conn, SshHandle { child }))
+        match conn.handshake().await {
+            Ok(()) => Ok((conn, SshHandle { child })),
+            Err(DaemonError::Disconnected | DaemonError::Frame(_)) => {
+                // Connection closed before handshake — check stderr for clues.
+                let stderr = child.stderr.take();
+                let stderr_text = if let Some(mut stderr) = stderr {
+                    let mut buf = Vec::new();
+                    let _ = tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut buf).await;
+                    String::from_utf8_lossy(&buf).to_string()
+                } else {
+                    String::new()
+                };
+                if stderr_text.contains("not found")
+                    || stderr_text.contains("No such file")
+                    || stderr_text.contains("command not found")
+                {
+                    Err(DaemonError::DaemonNotInstalled {
+                        host: host.to_string(),
+                        binary: binary.to_string(),
+                    })
+                } else {
+                    Err(DaemonError::Disconnected)
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Start the remote daemon via SSH (runs `rttx-server start` in background).
+    pub async fn start_remote_daemon(
+        host: &str,
+        binary_path: Option<&str>,
+    ) -> Result<(), DaemonError> {
+        let binary = binary_path.unwrap_or("rttx-server");
+        let status = tokio::process::Command::new("ssh")
+            .args(["-o", "BatchMode=yes"])
+            .args(["-o", "ConnectTimeout=10"])
+            .arg(host)
+            .arg(binary)
+            .arg("start")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+            .await?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(DaemonError::Io(std::io::Error::other(format!(
+                "remote daemon start exited with {status}"
+            ))))
+        }
     }
 
     /// Split into independent reader and writer halves.
@@ -998,7 +1062,7 @@ mod tests {
     #[tokio::test]
     async fn connect_ssh_to_bogus_host_fails_fast() {
         let start = std::time::Instant::now();
-        let result = DaemonConnection::connect_ssh("rttx-nonexistent-host-test").await;
+        let result = DaemonConnection::connect_ssh("rttx-nonexistent-host-test", None).await;
         assert!(result.is_err(), "SSH to bogus host should fail");
         // BatchMode=yes makes SSH fail immediately instead of hanging for auth.
         assert!(start.elapsed().as_secs() < 15, "SSH should fail fast, not hang");
@@ -1062,5 +1126,24 @@ mod tests {
             )),
         };
         assert_eq!(extract_pane_id(&env), Some(pane_id));
+    }
+
+    #[tokio::test]
+    async fn connect_ssh_with_custom_binary_path() {
+        let result =
+            DaemonConnection::connect_ssh("rttx-nonexistent-host-test", Some("/opt/bin/rttx-server"))
+                .await;
+        assert!(result.is_err(), "SSH to bogus host should fail regardless of binary path");
+    }
+
+    #[test]
+    fn daemon_not_installed_error_displays_host_and_binary() {
+        let err = DaemonError::DaemonNotInstalled {
+            host: "example.com".into(),
+            binary: "~/.local/bin/rttx-server".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("example.com"), "error should mention the host");
+        assert!(msg.contains("~/.local/bin/rttx-server"), "error should mention the binary path");
     }
 }

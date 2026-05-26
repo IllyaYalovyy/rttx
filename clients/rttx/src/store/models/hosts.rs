@@ -25,6 +25,8 @@ pub struct HostRecord {
     #[serde(default)]
     pub ssh_target: Option<String>,
     #[serde(default)]
+    pub daemon_binary_path: Option<String>,
+    #[serde(default)]
     pub labels: Vec<String>,
 }
 
@@ -47,6 +49,7 @@ impl From<HostRecord> for crate::host::Host {
                 HostKind::Remote => crate::host::HostKind::Remote,
             },
             ssh_target: rec.ssh_target,
+            daemon_binary_path: rec.daemon_binary_path,
         }
     }
 }
@@ -61,6 +64,7 @@ impl From<&crate::host::Host> for HostRecord {
                 crate::host::HostKind::Remote => HostKind::Remote,
             },
             ssh_target: host.ssh_target.clone(),
+            daemon_binary_path: host.daemon_binary_path.clone(),
             labels: Vec::new(),
         }
     }

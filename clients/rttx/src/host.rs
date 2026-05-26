@@ -23,6 +23,8 @@ pub struct Host {
     pub kind: HostKind,
     #[serde(default)]
     pub ssh_target: Option<String>,
+    #[serde(default)]
+    pub daemon_binary_path: Option<String>,
 }
 
 impl Host {
@@ -34,6 +36,7 @@ impl Host {
             name: "Local".into(),
             kind: HostKind::Local,
             ssh_target: None,
+            daemon_binary_path: None,
         }
     }
 
@@ -45,7 +48,13 @@ impl Host {
     pub fn remote(ssh_target: &str) -> Self {
         let key = normalize_ssh_key(ssh_target);
         let name = display_name_from_ssh(ssh_target);
-        Self { key, name, kind: HostKind::Remote, ssh_target: Some(ssh_target.into()) }
+        Self {
+            key,
+            name,
+            kind: HostKind::Remote,
+            ssh_target: Some(ssh_target.into()),
+            daemon_binary_path: None,
+        }
     }
 
     #[must_use]
@@ -162,6 +171,7 @@ pub fn resolve(key: &str, saved: &[Host]) -> Host {
         name: key.split('.').next().unwrap_or(key).to_string(),
         kind: HostKind::Remote,
         ssh_target: Some(key.into()),
+        daemon_binary_path: None,
     }
 }
 
@@ -292,7 +302,23 @@ mod tests {
         let json = r#"{"key":"local","name":"Local","kind":"local"}"#;
         let host: Host = serde_json::from_str(json).unwrap();
         assert_eq!(host.ssh_target, None);
+        assert_eq!(host.daemon_binary_path, None);
         assert!(host.is_local());
+    }
+
+    #[test]
+    fn deserialize_without_daemon_binary_path_defaults_to_none() {
+        let json = r#"{"key":"example.com","name":"example","kind":"remote","ssh_target":"deploy@example.com"}"#;
+        let host: Host = serde_json::from_str(json).unwrap();
+        assert_eq!(host.daemon_binary_path, None);
+        assert!(host.is_remote());
+    }
+
+    #[test]
+    fn deserialize_with_daemon_binary_path() {
+        let json = r#"{"key":"example.com","name":"example","kind":"remote","ssh_target":"deploy@example.com","daemon_binary_path":"~/.local/bin/rttx-server"}"#;
+        let host: Host = serde_json::from_str(json).unwrap();
+        assert_eq!(host.daemon_binary_path.as_deref(), Some("~/.local/bin/rttx-server"));
     }
 
     #[test]

@@ -92,6 +92,7 @@ fn export_full_bundle_round_trips_through_file() {
                 name: "Dev Server".into(),
                 kind: HostKind::default(),
                 ssh_target: Some("user@dev.example.com".into()),
+                daemon_binary_path: None,
                 labels: vec![],
             }],
         }),

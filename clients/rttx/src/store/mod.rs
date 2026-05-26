@@ -830,7 +830,7 @@ mod tests {
         assert!(restored.runtime.is_managed());
         assert_eq!(
             restored.runtime.endpoint,
-            RuntimeEndpoint::Remote { host: "example.com".into() }
+            RuntimeEndpoint::remote("example.com")
         );
     }
 
@@ -945,6 +945,7 @@ mod tests {
                     name: "Server".into(),
                     kind: models::hosts::HostKind::Remote,
                     ssh_target: Some("user@srv".into()),
+                    daemon_binary_path: None,
                     labels: vec![],
                 }],
             }),

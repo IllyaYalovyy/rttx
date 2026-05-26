@@ -182,7 +182,7 @@ fn multi_endpoint_isolation_through_full_lifecycle() {
     let remote_runtime = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
     let local_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
     let remote_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
-    let remote_endpoint = RuntimeEndpoint::Remote { host: "builder.example".into() };
+    let remote_endpoint = RuntimeEndpoint::remote("builder.example");
 
     let mut state = window_state(vec![
         managed_session(
