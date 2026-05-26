@@ -29,6 +29,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.9.0" date="2026-05-26">
+      <description>
+        <p>Version bump release.</p>
+      </description>
+    </release>
     <release version="0.6.5" date="2026-05-26">
       <description>
         <p>This release adds disconnect visualization for persistent panes, remote daemon lifecycle management, and force retry for stuck connections.</p>
