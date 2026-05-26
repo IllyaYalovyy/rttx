@@ -14,22 +14,10 @@ fn man_page_exists_and_is_valid_roff() {
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read man page at {}: {e}", path.display()));
 
-    assert!(
-        content.starts_with(".TH RTTX-SERVER"),
-        "Man page must start with .TH header"
-    );
-    assert!(
-        content.contains(".SH NAME"),
-        "Man page must have NAME section"
-    );
-    assert!(
-        content.contains(".SH SYNOPSIS"),
-        "Man page must have SYNOPSIS section"
-    );
-    assert!(
-        content.contains(".SH COMMANDS"),
-        "Man page must have COMMANDS section"
-    );
+    assert!(content.starts_with(".TH RTTX-SERVER"), "Man page must start with .TH header");
+    assert!(content.contains(".SH NAME"), "Man page must have NAME section");
+    assert!(content.contains(".SH SYNOPSIS"), "Man page must have SYNOPSIS section");
+    assert!(content.contains(".SH COMMANDS"), "Man page must have COMMANDS section");
 }
 
 #[test]
@@ -50,10 +38,7 @@ fn man_page_documents_all_subcommands() {
     ];
 
     for cmd in expected_commands {
-        assert!(
-            content.contains(cmd),
-            "Man page must document the '{cmd}' subcommand"
-        );
+        assert!(content.contains(cmd), "Man page must document the '{cmd}' subcommand");
     }
 }
 
@@ -61,12 +46,6 @@ fn man_page_documents_all_subcommands() {
 fn man_page_documents_environment_variables() {
     let content = fs::read_to_string(man_page_path()).unwrap();
 
-    assert!(
-        content.contains("RTTX_DEV_MODE"),
-        "Man page must document RTTX_DEV_MODE"
-    );
-    assert!(
-        content.contains("RUST_LOG"),
-        "Man page must document RUST_LOG"
-    );
+    assert!(content.contains("RTTX_DEV_MODE"), "Man page must document RTTX_DEV_MODE");
+    assert!(content.contains("RUST_LOG"), "Man page must document RUST_LOG");
 }
