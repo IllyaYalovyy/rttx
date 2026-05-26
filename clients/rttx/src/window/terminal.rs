@@ -217,9 +217,10 @@ impl Window {
         });
 
         let win = self.downgrade();
+        let uuid = term.uuid();
         term.zoom_button().connect_clicked(move |_| {
             if let Some(win) = win.upgrade() {
-                win.toggle_pane_zoom();
+                win.toggle_pane_zoom_for(Some(&uuid));
             }
         });
 

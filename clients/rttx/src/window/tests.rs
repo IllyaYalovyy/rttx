@@ -7790,3 +7790,65 @@ fn close_all_keeps_window_open_with_fresh_workspace() {
     crate::test_helpers::remove_env("XDG_CACHE_HOME");
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn zoom_button_zooms_its_own_pane_not_focused_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.zoom-button-target-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1000, 700);
+    window.present();
+    pump_events(100);
+
+    let first_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.split_terminal(&first_uuid, SplitOrientation::Horizontal);
+    pump_events(100);
+
+    let second_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0]
+            .layout
+            .terminal_uuids()
+            .into_iter()
+            .find(|uuid| uuid != &first_uuid)
+            .unwrap()
+    };
+
+    // Focus the first pane.
+    {
+        let terminals = window.imp().terminals.borrow();
+        let first_term = terminals.get(&first_uuid).unwrap();
+        first_term.vte().grab_focus();
+    }
+    pump_events(50);
+
+    // Zoom the second pane via its UUID (simulates clicking its zoom button).
+    window.toggle_pane_zoom_for(Some(&second_uuid));
+    pump_events(50);
+
+    let zoomed = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].zoomed_terminal_uuid.clone()
+    };
+    assert_eq!(
+        zoomed.as_deref(),
+        Some(second_uuid.as_str()),
+        "zoom button should zoom the pane it belongs to, not the focused pane"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

@@ -442,6 +442,7 @@ impl Window {
         });
 
         let win = self.downgrade();
+        let zoom_uuid = terminal_uuid.clone();
         let close_uuid = terminal_uuid;
         pane_view.close_button().connect_clicked(move |_| {
             if let Some(win) = win.upgrade() {
@@ -452,7 +453,7 @@ impl Window {
         let win = self.downgrade();
         pane_view.zoom_button().connect_clicked(move |_| {
             if let Some(win) = win.upgrade() {
-                win.toggle_pane_zoom();
+                win.toggle_pane_zoom_for(Some(&zoom_uuid));
             }
         });
 
