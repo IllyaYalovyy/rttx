@@ -1443,3 +1443,53 @@ fn serialized_managed_workspace_omits_legacy_mode_field() {
     assert!(ws.get("mode").is_none(), "mode must not appear in serialized state");
     assert!(ws.get("runtime").is_some(), "runtime must be present in serialized state");
 }
+
+/// Remote endpoint with custom daemon binary path must persist through
+/// serialization and restore correctly. Regression test for #956.
+#[test]
+fn remote_endpoint_with_custom_binary_path_persists() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::workspace::WorkspaceState;
+
+    let mut session = WorkspaceState::new_managed_remote(
+        "Remote Custom".into(),
+        "build-host",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    // Override endpoint with custom binary path.
+    session.runtime.endpoint =
+        RuntimeEndpoint::remote_with_binary("build-host", Some("~/.local/bin/rttx-server".into()));
+
+    let json = serde_json::to_string(&session).unwrap();
+    let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.runtime.endpoint.daemon_binary_path(), Some("~/.local/bin/rttx-server"),);
+    assert_eq!(restored.runtime.endpoint, session.runtime.endpoint);
+}
+
+/// Remote endpoint without custom binary path must deserialize from JSON
+/// that lacks the `daemon_binary_path` field. Regression test for #956.
+#[test]
+fn remote_endpoint_without_binary_path_backward_compat() {
+    use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
+    use rttx::workspace::WorkspaceState;
+
+    // Serialize a workspace with default remote endpoint (no binary path).
+    let session = WorkspaceState::new_managed_remote(
+        "Legacy Remote".into(),
+        "old-host",
+        WorkspacePolicy::Persistent,
+        None,
+    );
+    let mut json_value: serde_json::Value = serde_json::to_value(&session).unwrap();
+
+    // Strip daemon_binary_path from the endpoint to simulate legacy data.
+    if let Some(endpoint) = json_value.get_mut("runtime").and_then(|r| r.get_mut("endpoint")) {
+        endpoint.as_object_mut().unwrap().remove("daemon_binary_path");
+    }
+
+    let restored: WorkspaceState = serde_json::from_value(json_value).unwrap();
+    assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("old-host"));
+    assert_eq!(restored.runtime.endpoint.daemon_binary_path(), None);
+}
