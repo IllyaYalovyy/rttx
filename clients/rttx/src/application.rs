@@ -19,6 +19,14 @@ pub const APP_CSS: &str = "\
     .terminal-pane-frozen vte-terminal {
         opacity: 0.4;
     }
+    .disconnect-banner {
+        padding: 8px 16px;
+        border-radius: 6px;
+        background: alpha(@warning_bg_color, 0.85);
+        color: @warning_fg_color;
+        font-weight: bold;
+        font-size: 0.9em;
+    }
     .terminal-header {
         padding: 6px 8px;
         border-top-left-radius: 10px;

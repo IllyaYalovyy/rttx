@@ -1668,4 +1668,26 @@ mod tests {
         });
         assert!(!items.show_reconnect, "Reconnect should be hidden when connected");
     }
+
+    /// Disconnect states must disable input and provide a non-empty short label
+    /// for the pane header. Regression for #957.
+    #[test]
+    fn disconnect_states_disable_input_and_have_short_labels() {
+        let states = [
+            ConnectionStatus::Disconnected,
+            ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 5 },
+            ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+            ConnectionStatus::SessionMissing,
+            ConnectionStatus::Connecting,
+            ConnectionStatus::Starting,
+        ];
+        for status in &states {
+            let presentation = present_connection_status(status);
+            assert!(!presentation.input_enabled, "input must be disabled for {status:?}");
+            assert!(
+                !presentation.header_label.is_empty(),
+                "header_label must be non-empty for {status:?}"
+            );
+        }
+    }
 }

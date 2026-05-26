@@ -39,10 +39,13 @@ mod imp {
         pub application_keypad: Cell<bool>,
         pub input_connected: Cell<bool>,
         pub resize_connected: Cell<bool>,
+        pub disconnect_message_fed: Cell<bool>,
         pub input_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
         pub resize_tick_id: RefCell<Option<gtk4::TickCallbackId>>,
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
+        pub overlay: gtk4::Overlay,
+        pub disconnect_banner: gtk4::Label,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
         pub close_button: gtk4::Button,
@@ -75,10 +78,13 @@ mod imp {
                 application_keypad: Cell::default(),
                 input_connected: Cell::default(),
                 resize_connected: Cell::default(),
+                disconnect_message_fed: Cell::default(),
                 input_key_controller: RefCell::default(),
                 resize_tick_id: RefCell::default(),
                 vte: vte4::Terminal::new(),
                 terminal_scroller: gtk4::ScrolledWindow::new(),
+                overlay: gtk4::Overlay::new(),
+                disconnect_banner: gtk4::Label::default(),
                 header: gtk4::Box::default(),
                 title_label: gtk4::Label::default(),
                 close_button: gtk4::Button::default(),
@@ -301,9 +307,20 @@ mod imp {
             self.terminal_scroller.add_css_class("terminal-scroller");
             self.terminal_scroller.set_child(Some(&self.vte));
 
+            // Disconnect banner — centered overlay on the terminal area.
+            self.disconnect_banner.set_halign(gtk4::Align::Center);
+            self.disconnect_banner.set_valign(gtk4::Align::Center);
+            self.disconnect_banner.add_css_class("disconnect-banner");
+            self.disconnect_banner.set_visible(false);
+
+            self.overlay.set_hexpand(true);
+            self.overlay.set_vexpand(true);
+            self.overlay.set_child(Some(&self.terminal_scroller));
+            self.overlay.add_overlay(&self.disconnect_banner);
+
             obj.append(&self.header);
             obj.append(&self.search_bar);
-            obj.append(&self.terminal_scroller);
+            obj.append(&self.overlay);
 
             // Focus VTE on header click.
             let gesture = gtk4::GestureClick::new();
@@ -658,8 +675,15 @@ impl PersistentPaneView {
         self.imp().accepts_input.set(presentation.input_enabled);
         if connected {
             self.remove_css_class("terminal-pane-frozen");
+            self.imp().disconnect_banner.set_visible(false);
+            self.imp().disconnect_message_fed.set(false);
         } else {
             self.add_css_class("terminal-pane-frozen");
+            if !self.imp().disconnect_message_fed.replace(true) {
+                self.imp().vte.feed(format_disconnect_vte_message(status).as_bytes());
+            }
+            self.imp().disconnect_banner.set_label(&format_disconnect_banner(status));
+            self.imp().disconnect_banner.set_visible(true);
         }
     }
 
@@ -1004,6 +1028,21 @@ impl PersistentPaneView {
         self.imp().exited.get()
     }
 
+    #[cfg(test)]
+    pub(crate) fn disconnect_banner_visible_for_test(&self) -> bool {
+        self.imp().disconnect_banner.is_visible()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disconnect_banner_text_for_test(&self) -> String {
+        self.imp().disconnect_banner.label().to_string()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disconnect_message_fed_for_test(&self) -> bool {
+        self.imp().disconnect_message_fed.get()
+    }
+
     #[doc(hidden)]
     #[must_use]
     pub fn emit_input_key_for_test(
@@ -1034,6 +1073,36 @@ impl PersistentPaneView {
 
 const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
 const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
+
+/// Format the one-time message fed into VTE when a pane disconnects.
+fn format_disconnect_vte_message(status: &ConnectionStatus) -> String {
+    match status {
+        ConnectionStatus::Reconnecting { attempt, retry_in_secs } => {
+            format!(
+                "\r\n[rttx: connection lost — reconnecting (attempt {attempt}, retry in {retry_in_secs}s)...]\r\n"
+            )
+        }
+        ConnectionStatus::Blocked(problem) => {
+            format!("\r\n[rttx: connection lost — {}]\r\n", problem.label())
+        }
+        _ => "\r\n[rttx: connection lost — reconnecting...]\r\n".into(),
+    }
+}
+
+/// Format the overlay banner text shown while disconnected.
+fn format_disconnect_banner(status: &ConnectionStatus) -> String {
+    match status {
+        ConnectionStatus::Reconnecting { attempt, retry_in_secs } => {
+            format!("⚠ Disconnected — Reconnecting (attempt {attempt}, retry in {retry_in_secs}s)")
+        }
+        ConnectionStatus::Blocked(problem) => {
+            format!("⚠ Disconnected — {}", problem.label())
+        }
+        ConnectionStatus::Disconnected => "⚠ Disconnected".into(),
+        ConnectionStatus::SessionMissing => "⚠ Session no longer exists on daemon".into(),
+        _ => "⚠ Disconnected — Reconnecting...".into(),
+    }
+}
 
 /// Maximum bytes to feed to VTE in a single call. Prevents overwhelming
 /// the C library with a massive blob that could trigger parser bugs.
@@ -1258,7 +1327,7 @@ mod tests {
         TerminalModes { application_cursor_keys: false, application_keypad: false };
 
     use super::*;
-    use crate::runtime::present_connection_status;
+    use crate::runtime::{ConnectionProblem, present_connection_status};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::time::{Duration, Instant};
@@ -2562,5 +2631,159 @@ mod tests {
         );
 
         window.close();
+    }
+
+    // ── Disconnect visualization (#957) ─────────────────────────
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn disconnect_shows_banner_and_feeds_vte_message() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+        assert!(!pane.disconnect_banner_visible_for_test());
+        assert!(!pane.disconnect_message_fed_for_test());
+
+        let status = ConnectionStatus::Disconnected;
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+
+        assert!(pane.disconnect_banner_visible_for_test());
+        assert!(pane.disconnect_message_fed_for_test());
+        assert!(pane.disconnect_banner_text_for_test().contains("Disconnected"));
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn disconnect_banner_shows_reconnection_progress() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let status = ConnectionStatus::Reconnecting { attempt: 3, retry_in_secs: 5 };
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+
+        assert!(pane.disconnect_banner_visible_for_test());
+        let text = pane.disconnect_banner_text_for_test();
+        assert!(text.contains("attempt 3"), "banner should show attempt: {text}");
+        assert!(text.contains("5s"), "banner should show retry delay: {text}");
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn disconnect_banner_updates_on_countdown_tick() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        let status = ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 10 };
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+
+        assert!(pane.disconnect_banner_text_for_test().contains("10s"));
+
+        // Simulate countdown tick — banner updates but VTE message is not re-fed.
+        let status = ConnectionStatus::Reconnecting { attempt: 2, retry_in_secs: 7 };
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+
+        assert!(pane.disconnect_banner_text_for_test().contains("7s"));
+        assert!(pane.disconnect_message_fed_for_test());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn reconnect_hides_banner_and_resets_flag() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+
+        // Disconnect first.
+        let status = ConnectionStatus::Disconnected;
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+        assert!(pane.disconnect_banner_visible_for_test());
+        assert!(pane.disconnect_message_fed_for_test());
+
+        // Reconnect.
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        assert!(!pane.disconnect_banner_visible_for_test());
+        assert!(!pane.disconnect_message_fed_for_test());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn disconnect_vte_message_fed_only_once() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+
+        // First disconnect — message is fed.
+        let status = ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 5 };
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+        assert!(pane.disconnect_message_fed_for_test());
+
+        // Subsequent countdown ticks do not re-feed the VTE message.
+        // (We can't easily assert VTE content, but the flag stays true
+        // and the replace() returns true — meaning no second feed.)
+        let status = ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 };
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+        assert!(pane.disconnect_message_fed_for_test());
+    }
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn disconnect_banner_hidden_on_recovered_status() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+
+        let status = ConnectionStatus::Disconnected;
+        let presentation = present_connection_status(&status);
+        pane.set_connection_presentation(&status, &presentation);
+        assert!(pane.disconnect_banner_visible_for_test());
+
+        let recovered = present_connection_status(&ConnectionStatus::Recovered);
+        pane.set_connection_presentation(&ConnectionStatus::Recovered, &recovered);
+        assert!(!pane.disconnect_banner_visible_for_test());
+        assert!(!pane.disconnect_message_fed_for_test());
+    }
+
+    #[test]
+    fn format_disconnect_vte_message_includes_attempt_info() {
+        let msg = format_disconnect_vte_message(&ConnectionStatus::Reconnecting {
+            attempt: 3,
+            retry_in_secs: 5,
+        });
+        assert!(msg.contains("connection lost"));
+        assert!(msg.contains("attempt 3"));
+        assert!(msg.contains("5s"));
+    }
+
+    #[test]
+    fn format_disconnect_vte_message_for_plain_disconnect() {
+        let msg = format_disconnect_vte_message(&ConnectionStatus::Disconnected);
+        assert!(msg.contains("connection lost"));
+        assert!(msg.contains("reconnecting"));
+    }
+
+    #[test]
+    fn format_disconnect_banner_for_blocked_state() {
+        let banner = format_disconnect_banner(&ConnectionStatus::Blocked(
+            ConnectionProblem::PermissionDenied,
+        ));
+        assert!(banner.contains("Disconnected"));
+        assert!(banner.contains("Permission denied"));
+    }
+
+    #[test]
+    fn format_disconnect_banner_for_session_missing() {
+        let banner = format_disconnect_banner(&ConnectionStatus::SessionMissing);
+        assert!(banner.contains("no longer exists"));
     }
 }
