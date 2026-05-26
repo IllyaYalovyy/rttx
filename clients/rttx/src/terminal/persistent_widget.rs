@@ -517,7 +517,15 @@ impl PersistentPaneView {
     /// Called when a `Delta` message arrives from the daemon.
     pub fn feed_output(&self, data: &[u8]) {
         update_bracketed_paste_mode(&self.imp().bracketed_paste_mode, data);
-        self.imp().vte.feed(data);
+        // Feed in chunks to avoid overwhelming VTE with a single massive
+        // blob that could trigger bugs in the C library.
+        if data.len() <= VTE_FEED_CHUNK {
+            self.imp().vte.feed(data);
+        } else {
+            for chunk in data.chunks(VTE_FEED_CHUNK) {
+                self.imp().vte.feed(chunk);
+            }
+        }
     }
 
     /// Feed a snapshot's scrollback bytes into VTE to restore state on attach.
@@ -1026,6 +1034,10 @@ impl PersistentPaneView {
 
 const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
 const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
+
+/// Maximum bytes to feed to VTE in a single call. Prevents overwhelming
+/// the C library with a massive blob that could trigger parser bugs.
+const VTE_FEED_CHUNK: usize = 16 * 1024;
 
 /// Convert clipboard text to terminal input bytes.
 ///
