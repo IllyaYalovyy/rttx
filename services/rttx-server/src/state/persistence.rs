@@ -149,7 +149,11 @@ pub fn save_screen_snapshot(
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string(snapshot).map_err(std::io::Error::other)?;
-    std::fs::write(&path, json)?;
+    // Atomic write: temp file + rename prevents corrupt snapshots if
+    // the daemon is killed mid-write.
+    let tmp_path = path.with_extension("snap.tmp");
+    std::fs::write(&tmp_path, &json)?;
+    std::fs::rename(&tmp_path, &path)?;
     Ok(())
 }
 
