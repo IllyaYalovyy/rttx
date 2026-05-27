@@ -1708,9 +1708,10 @@ fn terminal_widget_zoom_button_hidden_by_default() {
 fn terminal_widget_zoom_button_visible_for_multi_pane() {
     require_display!();
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
-    term.set_zoom_state(false, true);
+    term.set_zoom_state(false, true, 0, 3);
     assert!(term.zoom_button().is_visible());
     assert_eq!(term.zoom_button().icon_name().unwrap(), "view-fullscreen-symbolic");
+    assert!(!term.pane_count_label().is_visible());
 }
 
 #[test]
@@ -1718,9 +1719,11 @@ fn terminal_widget_zoom_button_visible_for_multi_pane() {
 fn terminal_widget_zoom_button_shows_restore_when_zoomed() {
     require_display!();
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
-    term.set_zoom_state(true, true);
+    term.set_zoom_state(true, true, 1, 3);
     assert!(term.zoom_button().is_visible());
     assert_eq!(term.zoom_button().icon_name().unwrap(), "view-restore-symbolic");
+    assert!(term.pane_count_label().is_visible());
+    assert_eq!(term.pane_count_label().label(), "2/3");
 }
 
 #[test]
@@ -1728,8 +1731,9 @@ fn terminal_widget_zoom_button_shows_restore_when_zoomed() {
 fn terminal_widget_zoom_button_hidden_for_single_pane_unzoomed() {
     require_display!();
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
-    term.set_zoom_state(false, false);
+    term.set_zoom_state(false, false, 0, 1);
     assert!(!term.zoom_button().is_visible());
+    assert!(!term.pane_count_label().is_visible());
 }
 
 #[test]
@@ -1737,9 +1741,10 @@ fn terminal_widget_zoom_button_hidden_for_single_pane_unzoomed() {
 fn persistent_pane_zoom_button_visible_for_multi_pane() {
     require_display!();
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p1", "s1");
-    pane.set_zoom_state(false, true);
+    pane.set_zoom_state(false, true, 0, 2);
     assert!(pane.zoom_button().is_visible());
     assert_eq!(pane.zoom_button().icon_name().unwrap(), "view-fullscreen-symbolic");
+    assert!(!pane.pane_count_label().is_visible());
 }
 
 #[test]
@@ -1747,9 +1752,23 @@ fn persistent_pane_zoom_button_visible_for_multi_pane() {
 fn persistent_pane_zoom_button_shows_restore_when_zoomed() {
     require_display!();
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p1", "s1");
-    pane.set_zoom_state(true, false);
+    pane.set_zoom_state(true, false, 0, 2);
     assert!(pane.zoom_button().is_visible());
     assert_eq!(pane.zoom_button().icon_name().unwrap(), "view-restore-symbolic");
+    assert!(pane.pane_count_label().is_visible());
+    assert_eq!(pane.pane_count_label().label(), "1/2");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn pane_count_label_hides_when_unzoomed() {
+    require_display!();
+    let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
+    term.set_zoom_state(true, true, 2, 4);
+    assert!(term.pane_count_label().is_visible());
+    assert_eq!(term.pane_count_label().label(), "3/4");
+    term.set_zoom_state(false, true, 2, 4);
+    assert!(!term.pane_count_label().is_visible());
 }
 
 #[test]
