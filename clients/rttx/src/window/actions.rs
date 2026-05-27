@@ -261,10 +261,8 @@ impl Window {
 
         let (adjacent_uuid, is_zoomed, session_uuid) = {
             let state = self.imp().state.borrow();
-            let session = state
-                .workspaces
-                .iter()
-                .find(|s| s.layout.contains_terminal(&current_uuid));
+            let session =
+                state.workspaces.iter().find(|s| s.layout.contains_terminal(&current_uuid));
             let adjacent = session.and_then(|s| s.layout.find_adjacent(&current_uuid, direction));
             let zoomed = session.is_some_and(WorkspaceState::is_zoomed);
             let sess_uuid = session.map(|s| s.uuid.clone());
@@ -277,8 +275,7 @@ impl Window {
         if is_zoomed {
             let session_state = {
                 let mut state = self.imp().state.borrow_mut();
-                let Some(session) =
-                    state.workspaces.iter_mut().find(|s| s.uuid == session_uuid)
+                let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == session_uuid)
                 else {
                     return;
                 };
