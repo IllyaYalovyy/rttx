@@ -1391,6 +1391,17 @@ mod search_tests {
         assert!(visible(true, true), "zoomed + multi → visible");
     }
 
+    /// Pane count label visibility rule: visible only when zoomed AND multi-pane.
+    #[test]
+    fn pane_count_label_visibility_rule() {
+        let visible = |zoomed: bool, pane_total: usize| zoomed && pane_total > 1;
+        assert!(!visible(false, 1), "single pane, not zoomed → hidden");
+        assert!(!visible(false, 3), "multi pane, not zoomed → hidden");
+        assert!(!visible(true, 1), "zoomed single pane → hidden");
+        assert!(visible(true, 2), "zoomed multi pane → visible");
+        assert!(visible(true, 5), "zoomed many panes → visible");
+    }
+
     /// Copy Link should show the filesystem path for file URIs, not the URI.
     #[test]
     fn display_text_for_file_uri_shows_path() {

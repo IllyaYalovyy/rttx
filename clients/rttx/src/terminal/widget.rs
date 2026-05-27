@@ -38,6 +38,7 @@ mod imp {
         pub split_h_button: gtk4::Button,
         pub split_v_button: gtk4::Button,
         pub zoom_button: gtk4::Button,
+        pub pane_count_label: gtk4::Label,
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
         pub child_exited_handler: RefCell<Option<glib::SignalHandlerId>>,
@@ -98,9 +99,13 @@ mod imp {
             self.zoom_button.set_tooltip_text(Some("Zoom pane"));
             self.zoom_button.set_visible(false);
 
+            self.pane_count_label.add_css_class("dim-label");
+            self.pane_count_label.set_visible(false);
+
             self.header.append(&self.title_label);
             self.header.append(&self.split_h_button);
             self.header.append(&self.split_v_button);
+            self.header.append(&self.pane_count_label);
             self.header.append(&self.zoom_button);
             self.header.append(&self.close_button);
 
@@ -365,7 +370,12 @@ impl TerminalWidget {
         &self.imp().zoom_button
     }
 
-    pub fn set_zoom_state(&self, zoomed: bool, multi_pane: bool) {
+    #[must_use]
+    pub fn pane_count_label(&self) -> &gtk4::Label {
+        &self.imp().pane_count_label
+    }
+
+    pub fn set_zoom_state(&self, zoomed: bool, multi_pane: bool, pane_index: usize, pane_total: usize) {
         let btn = &self.imp().zoom_button;
         btn.set_visible(zoomed || multi_pane);
         if zoomed {
@@ -374,6 +384,13 @@ impl TerminalWidget {
         } else {
             btn.set_icon_name("view-fullscreen-symbolic");
             btn.set_tooltip_text(Some("Zoom pane"));
+        }
+        let count_label = &self.imp().pane_count_label;
+        if zoomed && pane_total > 1 {
+            count_label.set_label(&format!("{}/{pane_total}", pane_index + 1));
+            count_label.set_visible(true);
+        } else {
+            count_label.set_visible(false);
         }
     }
 

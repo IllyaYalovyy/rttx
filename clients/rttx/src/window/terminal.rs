@@ -14,6 +14,7 @@ impl Window {
 
         let zoomed = session_state.is_zoomed();
         let multi_pane = session_state.layout.terminal_count() > 1;
+        let (pane_index, pane_total) = pane_position(&session_state.layout, uuid);
 
         let existing = {
             let terminals = self.imp().terminals.borrow();
@@ -23,7 +24,7 @@ impl Window {
             if existing.parent().is_some() {
                 existing.unparent();
             }
-            existing.set_zoom_state(zoomed, multi_pane);
+            existing.set_zoom_state(zoomed, multi_pane, pane_index, pane_total);
             return existing.upcast();
         }
 
@@ -31,7 +32,7 @@ impl Window {
         if let Some(title) = custom_title {
             term.set_custom_title(Some(title));
         }
-        term.set_zoom_state(zoomed, multi_pane);
+        term.set_zoom_state(zoomed, multi_pane, pane_index, pane_total);
         self.connect_terminal_signals(&term);
         self.imp().terminals.borrow_mut().insert(uuid.to_string(), term.clone());
         self.initialize_terminal_recovery(&term, session_state, uuid);
@@ -47,6 +48,7 @@ impl Window {
     ) -> gtk4::Widget {
         let zoomed = session_state.is_zoomed();
         let multi_pane = session_state.layout.terminal_count() > 1;
+        let (pane_index, pane_total) = pane_position(&session_state.layout, uuid);
 
         let existing = {
             let panes = self.imp().persistent_terminals.borrow();
@@ -56,7 +58,7 @@ impl Window {
             if existing.parent().is_some() {
                 existing.unparent();
             }
-            existing.set_zoom_state(zoomed, multi_pane);
+            existing.set_zoom_state(zoomed, multi_pane, pane_index, pane_total);
             return existing.upcast();
         }
 
@@ -65,7 +67,7 @@ impl Window {
         if let Some(title) = custom_title {
             pane_view.set_custom_title(Some(title));
         }
-        pane_view.set_zoom_state(zoomed, multi_pane);
+        pane_view.set_zoom_state(zoomed, multi_pane, pane_index, pane_total);
         self.apply_preferences_to_persistent_pane(&pane_view);
         self.connect_managed_pane(session_state, &pane_view);
         self.imp().persistent_terminals.borrow_mut().insert(uuid.to_string(), pane_view.clone());
@@ -877,4 +879,10 @@ impl Window {
         term.show_recovery_message(&target.failure_message(status));
         true
     }
+}
+
+fn pane_position(layout: &LayoutNode, uuid: &str) -> (usize, usize) {
+    let uuids = layout.terminal_uuids();
+    let index = uuids.iter().position(|u| u == uuid).unwrap_or(0);
+    (index, uuids.len())
 }
