@@ -256,19 +256,38 @@ impl Window {
         }
     }
 
-    fn navigate_focused(&self, direction: Direction) {
+    pub(super) fn navigate_focused(&self, direction: Direction) {
         let Some(current_uuid) = self.focused_terminal_uuid() else { return };
-        let adjacent_uuid = {
+
+        let (adjacent_uuid, is_zoomed, session_uuid) = {
             let state = self.imp().state.borrow();
-            state
-                .workspaces
-                .iter()
-                .find(|s| s.layout.contains_terminal(&current_uuid))
-                .and_then(|s| s.layout.find_adjacent(&current_uuid, direction))
+            let session =
+                state.workspaces.iter().find(|s| s.layout.contains_terminal(&current_uuid));
+            let adjacent = session.and_then(|s| s.layout.find_adjacent(&current_uuid, direction));
+            let zoomed = session.is_some_and(WorkspaceState::is_zoomed);
+            let sess_uuid = session.map(|s| s.uuid.clone());
+            (adjacent, zoomed, sess_uuid)
         };
-        if let Some(target_uuid) = adjacent_uuid
-            && let Some(terminal) = self.terminal_handle(&target_uuid)
-        {
+
+        let Some(target_uuid) = adjacent_uuid else { return };
+        let Some(session_uuid) = session_uuid else { return };
+
+        if is_zoomed {
+            let session_state = {
+                let mut state = self.imp().state.borrow_mut();
+                let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == session_uuid)
+                else {
+                    return;
+                };
+                session.zoomed_terminal_uuid = Some(target_uuid);
+                session.clone()
+            };
+            self.rebuild_session_content(&session_uuid, &session_state);
+            self.focus_session_terminal(&session_uuid);
+            return;
+        }
+
+        if let Some(terminal) = self.terminal_handle(&target_uuid) {
             let win = self.clone();
             glib::idle_add_local_once(move || {
                 if terminal.grab_focus() {
