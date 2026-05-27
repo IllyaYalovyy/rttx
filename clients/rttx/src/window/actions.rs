@@ -382,6 +382,11 @@ impl Window {
     }
 
     pub(super) fn toggle_pane_zoom(&self) {
+        let target = self.focused_terminal_uuid();
+        self.toggle_pane_zoom_for(target.as_deref());
+    }
+
+    pub(super) fn toggle_pane_zoom_for(&self, target_uuid: Option<&str>) {
         let Some(session_uuid) =
             self.imp().session_stack.visible_child_name().map(|n| n.to_string())
         else {
@@ -395,13 +400,13 @@ impl Window {
             if session.is_zoomed() {
                 session.zoomed_terminal_uuid = None;
             } else {
-                let Some(focused) = self.focused_terminal_uuid() else {
+                let Some(target) = target_uuid else {
                     return;
                 };
                 if session.layout.terminal_count() < 2 {
                     return;
                 }
-                session.zoomed_terminal_uuid = Some(focused);
+                session.zoomed_terminal_uuid = Some(target.to_owned());
             }
             session.clone()
         };
