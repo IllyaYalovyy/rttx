@@ -7852,3 +7852,129 @@ fn zoom_button_zooms_its_own_pane_not_focused_pane() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires GTK display"]
+fn navigate_while_zoomed_switches_zoomed_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.navigate-while-zoomed-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1000, 700);
+    window.present();
+    pump_events(100);
+
+    let first_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.split_terminal(&first_uuid, SplitOrientation::Horizontal);
+    pump_events(100);
+
+    let second_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0]
+            .layout
+            .terminal_uuids()
+            .into_iter()
+            .find(|uuid| uuid != &first_uuid)
+            .unwrap()
+    };
+
+    // Zoom the first pane.
+    window.toggle_pane_zoom_for(Some(&first_uuid));
+    pump_events(50);
+
+    {
+        let state = window.imp().state.borrow();
+        assert_eq!(
+            state.workspaces[0].zoomed_terminal_uuid.as_deref(),
+            Some(first_uuid.as_str()),
+            "first pane should be zoomed"
+        );
+    }
+
+    // Navigate right while zoomed — should switch zoom to the second pane.
+    window.navigate_focused(Direction::Right);
+    pump_events(50);
+
+    {
+        let state = window.imp().state.borrow();
+        assert_eq!(
+            state.workspaces[0].zoomed_terminal_uuid.as_deref(),
+            Some(second_uuid.as_str()),
+            "navigation while zoomed should switch the zoomed pane"
+        );
+    }
+
+    // Navigate left — should switch back to the first pane.
+    window.navigate_focused(Direction::Left);
+    pump_events(50);
+
+    {
+        let state = window.imp().state.borrow();
+        assert_eq!(
+            state.workspaces[0].zoomed_terminal_uuid.as_deref(),
+            Some(first_uuid.as_str()),
+            "navigating back should restore zoom to the first pane"
+        );
+    }
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires GTK display"]
+fn navigate_while_zoomed_no_op_at_edge() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.navigate-zoomed-edge-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_default_size(1000, 700);
+    window.present();
+    pump_events(100);
+
+    let first_uuid = {
+        let state = window.imp().state.borrow();
+        state.workspaces[0].layout.terminal_uuids().into_iter().next().unwrap()
+    };
+    window.split_terminal(&first_uuid, SplitOrientation::Horizontal);
+    pump_events(100);
+
+    // Zoom the first pane.
+    window.toggle_pane_zoom_for(Some(&first_uuid));
+    pump_events(50);
+
+    // Navigate left (no adjacent pane in that direction) — should remain on first pane.
+    window.navigate_focused(Direction::Left);
+    pump_events(50);
+
+    {
+        let state = window.imp().state.borrow();
+        assert_eq!(
+            state.workspaces[0].zoomed_terminal_uuid.as_deref(),
+            Some(first_uuid.as_str()),
+            "navigating at edge while zoomed should not change the zoomed pane"
+        );
+    }
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
