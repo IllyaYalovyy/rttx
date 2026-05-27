@@ -431,7 +431,13 @@ impl PersistentPaneView {
         &self.imp().pane_count_label
     }
 
-    pub fn set_zoom_state(&self, zoomed: bool, multi_pane: bool, pane_index: usize, pane_total: usize) {
+    pub fn set_zoom_state(
+        &self,
+        zoomed: bool,
+        multi_pane: bool,
+        pane_index: usize,
+        pane_total: usize,
+    ) {
         let btn = &self.imp().zoom_button;
         btn.set_visible(zoomed || multi_pane);
         if zoomed {
