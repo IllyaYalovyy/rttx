@@ -171,6 +171,60 @@ where
         Ok(())
     }
 
+    /// Send a v3 client hello message (used by CLI commands).
+    pub async fn send_v3_client_hello(&mut self, msg: &v3::ClientHello) -> Result<(), IpcError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+
+    /// Read a v3 server hello response.
+    pub async fn recv_v3_server_hello(&mut self) -> Result<v3::ServerHello, IpcError> {
+        loop {
+            match decode_frame::<v3::ServerHello>(&mut self.read_buf) {
+                Ok(msg) => return Ok(msg),
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => return Err(IpcError::Frame(e)),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Err(IpcError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection closed during v3 handshake",
+                )));
+            }
+        }
+    }
+
+    /// Send a v3 client envelope.
+    pub async fn send_v3_envelope(&mut self, msg: &v3::ClientEnvelope) -> Result<(), IpcError> {
+        let mut buf = BytesMut::new();
+        encode_frame(msg, &mut buf)?;
+        self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+
+    /// Read a v3 server envelope.
+    pub async fn recv_v3_envelope(&mut self) -> Result<v3::ServerEnvelope, IpcError> {
+        loop {
+            match decode_frame::<v3::ServerEnvelope>(&mut self.read_buf) {
+                Ok(msg) => return Ok(msg),
+                Err(rttx_proto::FrameError::Incomplete) => {}
+                Err(e) => return Err(IpcError::Frame(e)),
+            }
+            let n = self.stream.read_buf(&mut self.read_buf).await?;
+            if n == 0 {
+                return Err(IpcError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection closed",
+                )));
+            }
+        }
+    }
+
     /// Split into independent reader and writer halves.
     pub fn into_split(self) -> (ClientConnectionReader, ClientConnectionWriter)
     where
