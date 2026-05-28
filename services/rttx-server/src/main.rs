@@ -4,7 +4,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use clap::{Parser, Subcommand};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use rttx_server::ipc;
 use rttx_server::os::OsInterface;
 use rttx_server::os::unix::UnixOs;
@@ -266,7 +266,40 @@ fn config() {
     println!("State: {}", state.display());
     println!("Scrollback: {}", scrollback.display());
     println!("Logs: {}", log_dir.display());
-    println!("Protocol version: {}", rttx_proto::PROTOCOL_VERSION);
+    println!("Protocol version: {}", rttx_proto::v3_handshake::V3_PROTOCOL_VERSION);
+}
+
+/// Connect to the daemon socket and perform a v3 handshake.
+async fn v3_connect(
+    socket_path: &std::path::Path,
+) -> anyhow::Result<ipc::ClientConnection<tokio::net::UnixStream>> {
+    let stream = tokio::net::UnixStream::connect(socket_path).await?;
+    let mut conn = ipc::ClientConnection::from_stream(stream);
+
+    let hello = rttx_proto::v3_handshake::build_client_hello(
+        uuid::Uuid::new_v4(),
+        "rttx-server-cli",
+        env!("CARGO_PKG_VERSION"),
+        &[
+            v3::Capability::CoreRuntimeLifecycle,
+            v3::Capability::CorePaneLifecycle,
+            v3::Capability::CoreTerminalIo,
+            v3::Capability::CoreTerminalModes,
+            v3::Capability::CorePasteIntent,
+            v3::Capability::CoreFocusEvents,
+            v3::Capability::OptDiagnostics,
+        ],
+    );
+    conn.send_v3_client_hello(&hello).await?;
+    let _server_hello = conn.recv_v3_server_hello().await?;
+    Ok(conn)
+}
+
+/// Receive the next v3 server envelope from the connection.
+async fn recv_v3_response(
+    conn: &mut ipc::ClientConnection<tokio::net::UnixStream>,
+) -> anyhow::Result<v3::ServerEnvelope> {
+    Ok(conn.recv_v3_envelope().await?)
 }
 
 fn profile(opts: &ProfileOpts) -> anyhow::Result<()> {
@@ -345,10 +378,6 @@ fn read_pid(pid_path: &std::path::Path) -> Option<u32> {
 }
 
 fn diagnostics() -> anyhow::Result<()> {
-    use bytes::BytesMut;
-    use rttx_proto::{decode_frame, encode_frame};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let os = UnixOs;
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 
@@ -359,51 +388,18 @@ fn diagnostics() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
-        let mut buf = BytesMut::new();
-        let mut read_buf = BytesMut::with_capacity(8192);
-
-        // Hello.
-        let hello = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                protocol_version: rttx_proto::PROTOCOL_VERSION,
-                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
-            })),
-        };
-        encode_frame(&hello, &mut buf)?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
-
-        // Read HelloAck.
-        loop {
-            stream.read_buf(&mut read_buf).await?;
-            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
-                break;
-            }
-        }
+        let mut conn = v3_connect(&socket_path).await?;
+        let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
         // GetDiagnostics.
-        buf.clear();
-        encode_frame(
-            &proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
-            },
-            &mut buf,
-        )?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
+        let env = rttx_proto::v3_envelope::build_client_envelope(
+            &id_gen,
+            v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {}),
+        );
+        conn.send_v3_envelope(&env).await?;
 
-        // Read DiagnosticsReport.
-        let resp: proto::ServerMessage = loop {
-            stream.read_buf(&mut read_buf).await?;
-            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-                Ok(msg) => break msg,
-                Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(e) => anyhow::bail!("decode error: {e}"),
-            }
-        };
-
-        if let Some(proto::server_message::Msg::DiagnosticsReport(report)) = resp.msg {
+        let resp = recv_v3_response(&mut conn).await?;
+        if let Some(v3::server_envelope::Payload::DiagnosticsReport(report)) = resp.payload {
             println!("Runtimes: {}", report.runtime_count);
             println!(
                 "Panes: {} ({} active, {} exited)",
@@ -490,23 +486,19 @@ fn stop() -> anyhow::Result<()> {
             std::process::exit(1);
         }
 
-        let stream = tokio::net::UnixStream::connect(&socket_path).await?;
-        let mut conn = ipc::ClientConnection::from_stream(stream);
+        let mut conn = v3_connect(&socket_path).await?;
 
-        let shutdown = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
-        };
-        conn.send_client_message(&shutdown).await?;
+        let shutdown = rttx_proto::v3_envelope::build_client_envelope(
+            &rttx_proto::v3_envelope::RequestIdGenerator::new(),
+            v3::client_envelope::Command::Shutdown(v3::Shutdown {}),
+        );
+        conn.send_v3_envelope(&shutdown).await?;
         println!("Shutdown signal sent");
         Ok(())
     })
 }
 
 fn status() -> anyhow::Result<()> {
-    use bytes::BytesMut;
-    use rttx_proto::{decode_frame, encode_frame};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let os = UnixOs;
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 
@@ -520,54 +512,27 @@ fn status() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
-        let mut buf = BytesMut::new();
-        let mut read_buf = BytesMut::with_capacity(8192);
-
-        // Hello.
-        let hello = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                protocol_version: rttx_proto::PROTOCOL_VERSION,
-                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
-            })),
-        };
-        encode_frame(&hello, &mut buf)?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
-
-        // Read HelloAck.
-        loop {
-            stream.read_buf(&mut read_buf).await?;
-            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
-                break;
-            }
-        }
+        let mut conn = v3_connect(&socket_path).await?;
+        let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
         // ListRuntimes.
-        buf.clear();
-        let list = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        };
-        encode_frame(&list, &mut buf)?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
+        let env = rttx_proto::v3_envelope::build_client_envelope(
+            &id_gen,
+            v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+        );
+        conn.send_v3_envelope(&env).await?;
 
-        // Read RuntimeList.
-        let resp: proto::ServerMessage = loop {
-            stream.read_buf(&mut read_buf).await?;
-            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-                Ok(msg) => break msg,
-                Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(e) => anyhow::bail!("decode error: {e}"),
-            }
-        };
-
-        if let Some(proto::server_message::Msg::RuntimeList(sl)) = resp.msg {
+        let resp = recv_v3_response(&mut conn).await?;
+        if let Some(v3::server_envelope::Payload::RuntimeList(sl)) = resp.payload {
             println!("Status: running");
             println!("Runtimes: {}", sl.runtimes.len());
 
-            let total_panes: usize = sl.runtimes.iter().map(|s| s.panes.len()).sum();
-            let total_clients: u32 = sl.runtimes.iter().map(|s| s.attached_client_count).sum();
+            let total_panes: u32 = sl.runtimes.iter().map(|s| s.pane_count).sum();
+            let total_clients: u32 = sl
+                .runtimes
+                .iter()
+                .map(|s| u32::from(s.has_write_owner) + s.read_only_client_count)
+                .sum();
             println!("Panes: {total_panes}");
             println!("Connected clients: {total_clients}");
 
@@ -580,18 +545,20 @@ fn status() -> anyhow::Result<()> {
                 for rt_info in &sl.runtimes {
                     let id = rttx_proto::bytes_to_uuid(&rt_info.id)
                         .map_or_else(|_| "?".into(), |u| u.to_string());
-                    let policy = match proto::RuntimePolicy::try_from(rt_info.policy) {
-                        Ok(proto::RuntimePolicy::Persistent) => "persistent",
-                        Ok(proto::RuntimePolicy::Ephemeral) => "ephemeral",
+                    let policy = match v3::RuntimePolicy::try_from(rt_info.policy) {
+                        Ok(v3::RuntimePolicy::Persistent) => "persistent",
+                        Ok(v3::RuntimePolicy::Ephemeral) => "ephemeral",
                         _ => "unknown",
                     };
+                    let clients =
+                        u32::from(rt_info.has_write_owner) + rt_info.read_only_client_count;
                     println!(
                         "{:<38} {:<20} {:<12} {:<6} {:<8}",
                         id,
                         truncate(&rt_info.name, 20),
                         policy,
-                        rt_info.panes.len(),
-                        rt_info.attached_client_count,
+                        rt_info.pane_count,
+                        clients,
                     );
                 }
             }
@@ -602,10 +569,6 @@ fn status() -> anyhow::Result<()> {
 }
 
 fn clean() -> anyhow::Result<()> {
-    use bytes::BytesMut;
-    use rttx_proto::{decode_frame, encode_frame};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let os = UnixOs;
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 
@@ -616,54 +579,26 @@ fn clean() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
-        let mut buf = BytesMut::new();
-        let mut read_buf = BytesMut::with_capacity(8192);
-
-        // Hello.
-        let hello = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                protocol_version: rttx_proto::PROTOCOL_VERSION,
-                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
-            })),
-        };
-        encode_frame(&hello, &mut buf)?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
-
-        loop {
-            stream.read_buf(&mut read_buf).await?;
-            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
-                break;
-            }
-        }
+        let mut conn = v3_connect(&socket_path).await?;
+        let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
         // ListRuntimes.
-        buf.clear();
-        encode_frame(
-            &proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-            },
-            &mut buf,
-        )?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
+        let env = rttx_proto::v3_envelope::build_client_envelope(
+            &id_gen,
+            v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+        );
+        conn.send_v3_envelope(&env).await?;
 
-        let resp: proto::ServerMessage = loop {
-            stream.read_buf(&mut read_buf).await?;
-            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-                Ok(msg) => break msg,
-                Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(e) => anyhow::bail!("decode error: {e}"),
-            }
-        };
-
-        let runtimes = match resp.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+        let resp = recv_v3_response(&mut conn).await?;
+        let runtimes = match resp.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
             _ => anyhow::bail!("unexpected response"),
         };
 
-        let unused: Vec<_> = runtimes.iter().filter(|s| s.attached_client_count == 0).collect();
+        let unused: Vec<_> = runtimes
+            .iter()
+            .filter(|s| !s.has_write_owner && s.read_only_client_count == 0)
+            .collect();
 
         if unused.is_empty() {
             println!("No unused runtimes");
@@ -672,33 +607,26 @@ fn clean() -> anyhow::Result<()> {
 
         let mut cleaned = 0u32;
         for rt_info in &unused {
-            buf.clear();
-            encode_frame(
-                &proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::TerminateRuntime(
-                        proto::TerminateRuntime { runtime_id: rt_info.id.clone() },
-                    )),
-                },
-                &mut buf,
-            )?;
-            stream.write_all(&buf).await?;
-            stream.flush().await?;
+            let env = rttx_proto::v3_envelope::build_client_envelope(
+                &id_gen,
+                v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+                    runtime_id: rt_info.id.clone(),
+                }),
+            );
+            conn.send_v3_envelope(&env).await?;
 
             // Wait for RuntimeTerminated.
             loop {
-                stream.read_buf(&mut read_buf).await?;
-                match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-                    Ok(msg) => {
-                        if matches!(msg.msg, Some(proto::server_message::Msg::RuntimeTerminated(_)))
-                        {
-                            let name = truncate(&rt_info.name, 40);
-                            println!("Removed: {name}");
-                            cleaned += 1;
-                            break;
-                        }
+                let resp = recv_v3_response(&mut conn).await?;
+                match resp.payload {
+                    Some(v3::server_envelope::Payload::RuntimeTerminated(_)) => {
+                        let name = truncate(&rt_info.name, 40);
+                        println!("Removed: {name}");
+                        cleaned += 1;
+                        break;
                     }
-                    Err(rttx_proto::FrameError::Incomplete) => {}
-                    Err(e) => anyhow::bail!("decode error: {e}"),
+                    Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                    other => anyhow::bail!("unexpected response: {other:?}"),
                 }
             }
         }
@@ -709,10 +637,6 @@ fn clean() -> anyhow::Result<()> {
 }
 
 fn kill(runtime_id_str: &str) -> anyhow::Result<()> {
-    use bytes::BytesMut;
-    use rttx_proto::{decode_frame, encode_frame};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let runtime_id: uuid::Uuid = runtime_id_str
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid runtime ID: not a valid UUID"))?;
@@ -727,56 +651,25 @@ fn kill(runtime_id_str: &str) -> anyhow::Result<()> {
             std::process::exit(1);
         }
 
-        let mut stream = tokio::net::UnixStream::connect(&socket_path).await?;
-        let mut buf = BytesMut::new();
-        let mut read_buf = BytesMut::with_capacity(8192);
-
-        // Hello handshake.
-        let hello = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                protocol_version: rttx_proto::PROTOCOL_VERSION,
-                client_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
-            })),
-        };
-        encode_frame(&hello, &mut buf)?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
-
-        loop {
-            stream.read_buf(&mut read_buf).await?;
-            if decode_frame::<proto::ServerMessage>(&mut read_buf).is_ok() {
-                break;
-            }
-        }
+        let mut conn = v3_connect(&socket_path).await?;
+        let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
         // TerminateRuntime.
-        buf.clear();
-        encode_frame(
-            &proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
-                    runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-                })),
-            },
-            &mut buf,
-        )?;
-        stream.write_all(&buf).await?;
-        stream.flush().await?;
+        let env = rttx_proto::v3_envelope::build_client_envelope(
+            &id_gen,
+            v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+                runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+            }),
+        );
+        conn.send_v3_envelope(&env).await?;
 
         // Wait for RuntimeTerminated or Error.
-        let resp: proto::ServerMessage = loop {
-            stream.read_buf(&mut read_buf).await?;
-            match decode_frame::<proto::ServerMessage>(&mut read_buf) {
-                Ok(msg) => break msg,
-                Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(e) => anyhow::bail!("decode error: {e}"),
-            }
-        };
-
-        match resp.msg {
-            Some(proto::server_message::Msg::RuntimeTerminated(_)) => {
+        let resp = recv_v3_response(&mut conn).await?;
+        match resp.payload {
+            Some(v3::server_envelope::Payload::RuntimeTerminated(_)) => {
                 println!("Runtime terminated.");
             }
-            Some(proto::server_message::Msg::Error(e)) => {
+            Some(v3::server_envelope::Payload::Error(e)) => {
                 eprintln!("Error: {}", e.message);
                 std::process::exit(1);
             }
@@ -951,5 +844,29 @@ mod tests {
         assert_mimalloc(&GLOBAL);
         let v: Vec<u8> = vec![0u8; 4096];
         assert_eq!(v.len(), 4096);
+    }
+
+    #[test]
+    fn cli_v3_handshake_includes_diagnostics_capability() {
+        use rttx_proto::v3_handshake;
+
+        let hello = v3_handshake::build_client_hello(
+            uuid::Uuid::new_v4(),
+            "rttx-server-cli",
+            env!("CARGO_PKG_VERSION"),
+            &[
+                v3::Capability::CoreRuntimeLifecycle,
+                v3::Capability::CorePaneLifecycle,
+                v3::Capability::CoreTerminalIo,
+                v3::Capability::CoreTerminalModes,
+                v3::Capability::CorePasteIntent,
+                v3::Capability::CoreFocusEvents,
+                v3::Capability::OptDiagnostics,
+            ],
+        );
+        assert!(hello.capabilities.contains(&(v3::Capability::OptDiagnostics as i32)));
+        assert_eq!(hello.min_protocol_version, v3_handshake::V3_PROTOCOL_VERSION);
+        assert_eq!(hello.max_protocol_version, v3_handshake::V3_PROTOCOL_VERSION);
+        assert_eq!(hello.client_name, "rttx-server-cli");
     }
 }
