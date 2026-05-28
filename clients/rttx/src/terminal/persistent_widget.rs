@@ -34,6 +34,7 @@ mod imp {
         pub connected: Cell<bool>,
         pub accepts_input: Cell<bool>,
         pub exited: Cell<bool>,
+        pub crashed: Cell<bool>,
         pub bracketed_paste_mode: Cell<bool>,
         pub application_cursor_keys: Cell<bool>,
         pub application_keypad: Cell<bool>,
@@ -45,6 +46,7 @@ mod imp {
         pub vte: vte4::Terminal,
         pub terminal_scroller: gtk4::ScrolledWindow,
         pub overlay: gtk4::Overlay,
+        pub crash_banner: gtk4::Label,
         pub disconnect_banner: gtk4::Label,
         pub header: gtk4::Box,
         pub title_label: gtk4::Label,
@@ -74,6 +76,7 @@ mod imp {
                 connected: Cell::default(),
                 accepts_input: Cell::default(),
                 exited: Cell::default(),
+                crashed: Cell::default(),
                 bracketed_paste_mode: Cell::default(),
                 application_cursor_keys: Cell::default(),
                 application_keypad: Cell::default(),
@@ -85,6 +88,7 @@ mod imp {
                 vte: vte4::Terminal::new(),
                 terminal_scroller: gtk4::ScrolledWindow::new(),
                 overlay: gtk4::Overlay::new(),
+                crash_banner: gtk4::Label::default(),
                 disconnect_banner: gtk4::Label::default(),
                 header: gtk4::Box::default(),
                 title_label: gtk4::Label::default(),
@@ -319,10 +323,17 @@ mod imp {
             self.disconnect_banner.add_css_class("disconnect-banner");
             self.disconnect_banner.set_visible(false);
 
+            // Crash banner — shown when VTE panics on bad input.
+            self.crash_banner.set_halign(gtk4::Align::Center);
+            self.crash_banner.set_valign(gtk4::Align::Center);
+            self.crash_banner.add_css_class("disconnect-banner");
+            self.crash_banner.set_visible(false);
+
             self.overlay.set_hexpand(true);
             self.overlay.set_vexpand(true);
             self.overlay.set_child(Some(&self.terminal_scroller));
             self.overlay.add_overlay(&self.disconnect_banner);
+            self.overlay.add_overlay(&self.crash_banner);
 
             obj.append(&self.header);
             obj.append(&self.search_bar);
@@ -557,14 +568,22 @@ impl PersistentPaneView {
     ///
     /// Called when a `Delta` message arrives from the daemon.
     pub fn feed_output(&self, data: &[u8]) {
+        if self.imp().crashed.get() {
+            return;
+        }
         update_bracketed_paste_mode(&self.imp().bracketed_paste_mode, data);
         // Feed in chunks to avoid overwhelming VTE with a single massive
         // blob that could trigger bugs in the C library.
         if data.len() <= VTE_FEED_CHUNK {
-            self.imp().vte.feed(data);
+            if !safe_feed(&self.imp().vte, data) {
+                self.mark_crashed();
+            }
         } else {
             for chunk in data.chunks(VTE_FEED_CHUNK) {
-                self.imp().vte.feed(chunk);
+                if !safe_feed(&self.imp().vte, chunk) {
+                    self.mark_crashed();
+                    return;
+                }
             }
         }
     }
@@ -577,14 +596,18 @@ impl PersistentPaneView {
     /// updates its layout asynchronously after `feed()` — the adjustment's
     /// `upper` value is not yet correct at the point `feed()` returns.
     pub fn feed_snapshot(&self, scrollback: &[u8]) {
-        if scrollback.is_empty() {
+        if scrollback.is_empty() || self.imp().crashed.get() {
             return;
         }
-        if scrollback.contains(&0x07) {
+        let ok = if scrollback.contains(&0x07) {
             let filtered: Vec<u8> = scrollback.iter().copied().filter(|&b| b != 0x07).collect();
-            self.imp().vte.feed(&filtered);
+            safe_feed(&self.imp().vte, &filtered)
         } else {
-            self.imp().vte.feed(scrollback);
+            safe_feed(&self.imp().vte, scrollback)
+        };
+        if !ok {
+            self.mark_crashed();
+            return;
         }
         let vte_weak = self.imp().vte.downgrade();
         glib::idle_add_local_once(move || {
@@ -728,6 +751,44 @@ impl PersistentPaneView {
             };
             self.imp().vte.feed(message.as_bytes());
         }
+    }
+
+    /// Mark this pane as crashed due to a VTE panic. Disables further feed
+    /// operations and shows an error overlay. Other panes remain functional.
+    pub fn mark_crashed(&self) {
+        if self.imp().crashed.replace(true) {
+            return;
+        }
+        self.imp().accepts_input.set(false);
+        self.imp().status_label.set_label("Crashed");
+        self.imp()
+            .status_label
+            .set_tooltip_text(Some("VTE crashed — use Repair Terminal to recover"));
+        self.add_css_class("terminal-pane-frozen");
+        self.imp()
+            .crash_banner
+            .set_label("Terminal crashed — press Ctrl+Shift+X to repair");
+        self.imp().crash_banner.set_visible(true);
+        tracing::error!(pane_uuid = %self.uuid(), "VTE crash detected, pane isolated");
+    }
+
+    /// Clear the crashed state after a successful repair.
+    pub fn clear_crashed(&self) {
+        if !self.imp().crashed.replace(false) {
+            return;
+        }
+        self.imp().crash_banner.set_visible(false);
+        self.remove_css_class("terminal-pane-frozen");
+        self.imp().status_label.set_label("⏻");
+        self.imp()
+            .status_label
+            .set_tooltip_text(Some("Persistent workspace — daemon-backed runtime"));
+    }
+
+    /// Whether this pane is in a crashed state.
+    #[must_use]
+    pub fn is_crashed(&self) -> bool {
+        self.imp().crashed.get()
     }
 
     /// Mark this pane as active (focused).
@@ -1067,6 +1128,16 @@ impl PersistentPaneView {
         self.imp().disconnect_message_fed.get()
     }
 
+    #[cfg(test)]
+    pub(crate) fn crash_banner_visible_for_test(&self) -> bool {
+        self.imp().crash_banner.is_visible()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn crash_banner_text_for_test(&self) -> String {
+        self.imp().crash_banner.label().to_string()
+    }
+
     #[doc(hidden)]
     #[must_use]
     pub fn emit_input_key_for_test(
@@ -1131,6 +1202,21 @@ fn format_disconnect_banner(status: &ConnectionStatus) -> String {
 /// Maximum bytes to feed to VTE in a single call. Prevents overwhelming
 /// the C library with a massive blob that could trigger parser bugs.
 const VTE_FEED_CHUNK: usize = 16 * 1024;
+
+/// Feed data to VTE, catching any panic from the C library.
+///
+/// Returns `true` if the feed succeeded, `false` if VTE panicked.
+/// On panic the VTE widget is left in an indeterminate state — the caller
+/// should mark the pane as crashed and stop feeding further data.
+pub(crate) fn safe_feed(vte: &vte4::Terminal, data: &[u8]) -> bool {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let vte = AssertUnwindSafe(vte);
+    catch_unwind(|| {
+        vte.feed(data);
+    })
+    .is_ok()
+}
 
 /// Convert clipboard text to terminal input bytes.
 ///
@@ -2809,5 +2895,99 @@ mod tests {
     fn format_disconnect_banner_for_session_missing() {
         let banner = format_disconnect_banner(&ConnectionStatus::SessionMissing);
         assert!(banner.contains("no longer exists"));
+    }
+
+    /// `safe_feed` returns true for normal data.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn safe_feed_returns_true_for_normal_data() {
+        require_display!();
+        let pane = PersistentPaneView::new("sf-ok", "rt-1");
+        assert!(safe_feed(pane.vte(), b"hello world"));
+    }
+
+    /// `mark_crashed` sets the crashed flag and shows the crash banner.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn mark_crashed_shows_banner_and_freezes_pane() {
+        require_display!();
+        let pane = PersistentPaneView::new("crash-1", "rt-1");
+        assert!(!pane.is_crashed());
+        assert!(!pane.crash_banner_visible_for_test());
+
+        pane.mark_crashed();
+
+        assert!(pane.is_crashed());
+        assert!(pane.crash_banner_visible_for_test());
+        assert!(pane.crash_banner_text_for_test().contains("crashed"));
+        assert_eq!(pane.status_label_text_for_test(), "Crashed");
+        assert!(!pane.input_enabled_for_test());
+    }
+
+    /// `clear_crashed` resets the crashed state and hides the banner.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn clear_crashed_restores_normal_state() {
+        require_display!();
+        let pane = PersistentPaneView::new("crash-2", "rt-1");
+        pane.mark_crashed();
+        assert!(pane.is_crashed());
+
+        pane.clear_crashed();
+
+        assert!(!pane.is_crashed());
+        assert!(!pane.crash_banner_visible_for_test());
+    }
+
+    /// `feed_output` is a no-op after the pane is marked crashed.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn feed_output_noop_after_crash() {
+        require_display!();
+        let pane = PersistentPaneView::new("crash-3", "rt-1");
+        pane.mark_crashed();
+
+        // Should not panic or feed anything.
+        pane.feed_output(b"data after crash");
+        assert!(pane.is_crashed());
+    }
+
+    /// `feed_snapshot` is a no-op after the pane is marked crashed.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn feed_snapshot_noop_after_crash() {
+        require_display!();
+        let pane = PersistentPaneView::new("crash-4", "rt-1");
+        pane.mark_crashed();
+
+        pane.feed_snapshot(b"snapshot after crash");
+        assert!(pane.is_crashed());
+    }
+
+    /// `mark_crashed` is idempotent — calling it twice does not panic.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn mark_crashed_is_idempotent() {
+        require_display!();
+        let pane = PersistentPaneView::new("crash-5", "rt-1");
+        pane.mark_crashed();
+        pane.mark_crashed();
+        assert!(pane.is_crashed());
+    }
+
+    /// Repair terminal clears the crashed state on managed panes.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn repair_terminal_clears_crashed_state() {
+        require_display!();
+        let pane = PersistentPaneView::new("crash-6", "rt-1");
+        pane.mark_crashed();
+        assert!(pane.is_crashed());
+
+        let handle = crate::terminal::handle::TerminalHandle::Managed(pane.clone());
+        handle.repair_terminal();
+
+        assert!(!pane.is_crashed());
+        assert!(!pane.crash_banner_visible_for_test());
     }
 }
