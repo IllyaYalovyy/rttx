@@ -1346,6 +1346,36 @@ mod pane_passive_tests {
         );
         window.close();
     }
+
+    /// `safe_feed` catches panics from VTE and returns false, preventing
+    /// a single bad pane from crashing the entire GUI. Regression for #958.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn safe_feed_isolates_vte_panic_from_process() {
+        if !crate::test_helpers::ensure_gtk() {
+            eprintln!("SKIPPED: no display available");
+            return;
+        }
+
+        let pane = super::persistent_widget::PersistentPaneView::new("sf-iso", "rt-1");
+        // Normal feed succeeds.
+        assert!(super::persistent_widget::safe_feed(pane.vte(), b"normal output"));
+        assert!(!pane.is_crashed());
+
+        // After marking crashed, feed_output is a no-op.
+        pane.mark_crashed();
+        pane.feed_output(b"should be ignored");
+        assert!(pane.is_crashed());
+
+        // Repair clears the crashed state.
+        let handle = super::handle::TerminalHandle::Managed(pane.clone());
+        handle.repair_terminal();
+        assert!(!pane.is_crashed());
+
+        // Feed works again after repair.
+        pane.feed_output(b"recovered output");
+        assert!(!pane.is_crashed());
+    }
 }
 
 #[cfg(test)]

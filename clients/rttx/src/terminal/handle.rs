@@ -125,10 +125,17 @@ impl TerminalHandle {
     /// Feed the terminal cleanup byte sequence into VTE to restore sane
     /// state after a remote TUI dies without cleaning up. Resets tracked
     /// mode state for managed panes so key encoding stays correct.
+    /// Also clears the crashed state if the pane was previously isolated.
     pub fn repair_terminal(&self) {
-        self.vte().feed(crate::terminal::terminal_cleanup_bytes());
         if let Self::Managed(pane) = self {
+            pane.clear_crashed();
             pane.reset_tracked_modes();
         }
+        // Use safe_feed for the cleanup sequence since the VTE may be in a
+        // broken state from a prior crash.
+        let _ = crate::terminal::persistent_widget::safe_feed(
+            self.vte(),
+            crate::terminal::terminal_cleanup_bytes(),
+        );
     }
 }
