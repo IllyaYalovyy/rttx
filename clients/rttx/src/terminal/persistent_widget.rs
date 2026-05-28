@@ -765,9 +765,7 @@ impl PersistentPaneView {
             .status_label
             .set_tooltip_text(Some("VTE crashed — use Repair Terminal to recover"));
         self.add_css_class("terminal-pane-frozen");
-        self.imp()
-            .crash_banner
-            .set_label("Terminal crashed — press Ctrl+Shift+X to repair");
+        self.imp().crash_banner.set_label("Terminal crashed — press Ctrl+Shift+X to repair");
         self.imp().crash_banner.set_visible(true);
         tracing::error!(pane_uuid = %self.uuid(), "VTE crash detected, pane isolated");
     }
