@@ -1185,10 +1185,7 @@ mod trim_tests {
     /// Non-ASCII (Cyrillic) text must pass through without byte escaping. #982.
     #[test]
     fn cyrillic_text_preserved() {
-        assert_eq!(
-            trim_trailing_whitespace("Маро, Маро,   \nПривет  "),
-            "Маро, Маро,\nПривет"
-        );
+        assert_eq!(trim_trailing_whitespace("Маро, Маро,   \nПривет  "), "Маро, Маро,\nПривет");
     }
 }
 
