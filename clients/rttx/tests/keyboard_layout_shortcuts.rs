@@ -100,8 +100,7 @@ fn non_latin_managed_ctrl_shift_v_pastes() {
 /// All window accelerator shortcuts pass through with Latin hint. #983.
 #[test]
 fn all_ctrl_shift_window_shortcuts_pass_through_with_latin_hint() {
-    let ctrl_shift =
-        gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
+    let ctrl_shift = gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK;
 
     let mappings: &[(gtk4::gdk::Key, gtk4::gdk::Key)] = &[
         (gtk4::gdk::Key::Cyrillic_IE, gtk4::gdk::Key::T),
