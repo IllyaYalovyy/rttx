@@ -15,18 +15,24 @@ fn trim_trailing_whitespace(text: &str) -> String {
 
 /// Copy the terminal selection to the system clipboard, trimming trailing
 /// whitespace per line when the preference is enabled.
+///
+/// Always retrieves text via `text_selected` and sets it through
+/// `gdk_clipboard_set_text` to guarantee correct UTF-8 encoding on the
+/// clipboard. VTE's native `copy_clipboard_format` can produce escaped
+/// byte sequences for non-ASCII characters (e.g. Cyrillic) on some VTE
+/// versions. See #982.
 pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
-    let prefs = crate::store::default_store().load_preferences().into_value().unwrap_or_default();
-    if !prefs.trim_trailing_whitespace_on_copy {
-        vte.copy_clipboard_format(vte4::Format::Text);
-        return;
-    }
     let Some(selected) = vte.text_selected(vte4::Format::Text) else {
         return;
     };
-    let trimmed = trim_trailing_whitespace(&selected);
+    let prefs = crate::store::default_store().load_preferences().into_value().unwrap_or_default();
+    let text = if prefs.trim_trailing_whitespace_on_copy {
+        trim_trailing_whitespace(&selected)
+    } else {
+        selected.to_string()
+    };
     if let Some(display) = gtk4::gdk::Display::default() {
-        display.clipboard().set_text(&trimmed);
+        display.clipboard().set_text(&text);
     }
 }
 
@@ -1174,6 +1180,12 @@ mod trim_tests {
     #[test]
     fn preserves_internal_spaces() {
         assert_eq!(trim_trailing_whitespace("hello  world   "), "hello  world");
+    }
+
+    /// Non-ASCII (Cyrillic) text must pass through without byte escaping. #982.
+    #[test]
+    fn cyrillic_text_preserved() {
+        assert_eq!(trim_trailing_whitespace("Маро, Маро,   \nПривет  "), "Маро, Маро,\nПривет");
     }
 }
 
