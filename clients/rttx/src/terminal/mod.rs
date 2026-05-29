@@ -84,6 +84,29 @@ pub fn encode_terminal_key_input_with_modes_for_test(
     encode_terminal_key_input(key, state, modes)
 }
 
+/// Test-only re-export of `terminal_key_action` with `latin_key` support.
+#[doc(hidden)]
+#[must_use]
+pub fn terminal_key_action_for_test(
+    backend: TerminalInputBackend,
+    key: gtk4::gdk::Key,
+    modifiers: gtk4::gdk::ModifierType,
+    has_selection: bool,
+    smart_clipboard_enabled: bool,
+    modes: TerminalModes,
+    latin_key: Option<gtk4::gdk::Key>,
+) -> TerminalKeyAction {
+    terminal_key_action(
+        backend,
+        key,
+        modifiers,
+        has_selection,
+        smart_clipboard_enabled,
+        modes,
+        latin_key,
+    )
+}
+
 /// Translate a hardware keycode to its Latin-layout keyval using group 0.
 ///
 /// When the active keyboard layout is non-Latin (e.g. Russian), pressing
@@ -124,14 +147,16 @@ pub const fn terminal_cleanup_bytes() -> &'static [u8] {
     b"\x18\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l\x1b>\x1b[?25h\x1b[m"
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TerminalInputBackend {
+pub enum TerminalInputBackend {
     Direct,
     Managed,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TerminalKeyAction {
+pub enum TerminalKeyAction {
     CopySelection,
     PasteClipboard,
     PassThrough,
