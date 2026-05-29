@@ -3062,3 +3062,31 @@ fn window_has_rename_workspace_action() {
     );
     window.close();
 }
+
+/// Copying Cyrillic (non-ASCII) text from a terminal must preserve Unicode
+/// characters on the clipboard, not produce escaped UTF-8 byte sequences. #982.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn copy_cyrillic_text_preserves_unicode_on_clipboard() {
+    require_display!();
+
+    let display = gtk4::gdk::Display::default().expect("display should be available for GTK tests");
+    display.clipboard().set_text("");
+
+    let direct = rttx::terminal::widget::TerminalWidget::new("cyrillic-1", None);
+    let window = present_widget(&direct);
+    direct.vte().feed("Привет мир\r\n".as_bytes());
+    pump_events(50);
+    direct.vte().select_all();
+
+    let handle = rttx::terminal::handle::TerminalHandle::Direct(direct);
+    handle.copy_clipboard();
+    assert!(
+        wait_until(1000, || {
+            clipboard_text().is_some_and(|text| text.contains("Привет мир"))
+        }),
+        "clipboard must contain original Cyrillic text, got: {:?}",
+        clipboard_text()
+    );
+    window.close();
+}
