@@ -165,10 +165,11 @@ mod imp {
             let term_weak = obj.downgrade();
             let smart_clipboard_key_controller = gtk4::EventControllerKey::new();
             smart_clipboard_key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
-            smart_clipboard_key_controller.connect_key_pressed(move |_, key, _keycode, state| {
+            smart_clipboard_key_controller.connect_key_pressed(move |_, key, keycode, state| {
                 let Some(term) = term_weak.upgrade() else {
                     return glib::Propagation::Proceed;
                 };
+                let latin_key = crate::terminal::latin_keyval_from_keycode(keycode);
                 let vte = term.imp().vte.clone();
                 match terminal_key_action(
                     TerminalInputBackend::Direct,
@@ -177,6 +178,7 @@ mod imp {
                     vte.has_selection(),
                     term.imp().smart_clipboard.get(),
                     crate::terminal::TerminalModes::default(),
+                    latin_key,
                 ) {
                     TerminalKeyAction::CopySelection => {
                         crate::terminal::copy_to_clipboard(&vte);
@@ -807,6 +809,7 @@ mod tests {
                 true,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -818,6 +821,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -833,6 +837,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -844,6 +849,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -855,6 +861,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -872,6 +879,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -885,6 +893,7 @@ mod tests {
                 true,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::CopySelection
         );
