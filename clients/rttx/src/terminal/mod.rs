@@ -84,6 +84,21 @@ pub fn encode_terminal_key_input_with_modes_for_test(
     encode_terminal_key_input(key, state, modes)
 }
 
+/// Translate a hardware keycode to its Latin-layout keyval using group 0.
+///
+/// When the active keyboard layout is non-Latin (e.g. Russian), pressing
+/// the physical `C` key produces a Cyrillic keyval. This function returns
+/// the Latin keyval that the same physical key would produce on the first
+/// (Latin) layout group, enabling shortcut matching regardless of the
+/// active layout.
+///
+/// Returns `None` if no display is available or translation fails.
+pub(crate) fn latin_keyval_from_keycode(keycode: u32) -> Option<gtk4::gdk::Key> {
+    let display = gtk4::gdk::Display::default()?;
+    let (key, _, _, _) = display.translate_key(keycode, gtk4::gdk::ModifierType::empty(), 0)?;
+    Some(key)
+}
+
 /// Terminal interaction modes that affect key encoding.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalModes {
@@ -152,26 +167,36 @@ fn should_pass_through_window_accelerator(
     (normalized == (ctrl | shift)
         && matches!(
             key,
-            gtk4::gdk::Key::c
+            gtk4::gdk::Key::a
+                | gtk4::gdk::Key::A
+                | gtk4::gdk::Key::b
+                | gtk4::gdk::Key::B
+                | gtk4::gdk::Key::c
                 | gtk4::gdk::Key::C
+                | gtk4::gdk::Key::d
+                | gtk4::gdk::Key::D
+                | gtk4::gdk::Key::e
+                | gtk4::gdk::Key::E
+                | gtk4::gdk::Key::f
+                | gtk4::gdk::Key::F
+                | gtk4::gdk::Key::i
+                | gtk4::gdk::Key::I
+                | gtk4::gdk::Key::n
+                | gtk4::gdk::Key::N
+                | gtk4::gdk::Key::o
+                | gtk4::gdk::Key::O
+                | gtk4::gdk::Key::r
+                | gtk4::gdk::Key::R
+                | gtk4::gdk::Key::t
+                | gtk4::gdk::Key::T
                 | gtk4::gdk::Key::v
                 | gtk4::gdk::Key::V
                 | gtk4::gdk::Key::w
                 | gtk4::gdk::Key::W
-                | gtk4::gdk::Key::e
-                | gtk4::gdk::Key::E
-                | gtk4::gdk::Key::o
-                | gtk4::gdk::Key::O
-                | gtk4::gdk::Key::f
-                | gtk4::gdk::Key::F
-                | gtk4::gdk::Key::n
-                | gtk4::gdk::Key::N
-                | gtk4::gdk::Key::b
-                | gtk4::gdk::Key::B
-                | gtk4::gdk::Key::i
-                | gtk4::gdk::Key::I
-                | gtk4::gdk::Key::t
-                | gtk4::gdk::Key::T
+                | gtk4::gdk::Key::x
+                | gtk4::gdk::Key::X
+                | gtk4::gdk::Key::z
+                | gtk4::gdk::Key::Z
                 | gtk4::gdk::Key::Tab
                 | gtk4::gdk::Key::ISO_Left_Tab
         ))
@@ -374,6 +399,16 @@ fn smart_clipboard_action(
     None
 }
 
+/// Determine the shortcut-matching key: use the Latin-layout keyval when
+/// the event key is non-Latin (e.g. Cyrillic) so shortcuts work regardless
+/// of the active keyboard layout.
+fn shortcut_key(key: gtk4::gdk::Key, latin_key: Option<gtk4::gdk::Key>) -> gtk4::gdk::Key {
+    if key.to_unicode().is_some_and(|ch| ch.is_ascii_alphabetic()) {
+        return key;
+    }
+    latin_key.unwrap_or(key)
+}
+
 fn terminal_key_action(
     backend: TerminalInputBackend,
     key: gtk4::gdk::Key,
@@ -381,11 +416,13 @@ fn terminal_key_action(
     has_selection: bool,
     smart_clipboard_enabled: bool,
     modes: TerminalModes,
+    latin_key: Option<gtk4::gdk::Key>,
 ) -> TerminalKeyAction {
     let normalized = normalized_shortcut_modifiers(modifiers);
+    let skey = shortcut_key(key, latin_key);
 
     if let Some(action) =
-        smart_clipboard_action(key, normalized, has_selection, smart_clipboard_enabled)
+        smart_clipboard_action(skey, normalized, has_selection, smart_clipboard_enabled)
     {
         return action;
     }
@@ -397,7 +434,7 @@ fn terminal_key_action(
         && normalized
             == (gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK)
     {
-        match key {
+        match skey {
             gtk4::gdk::Key::c | gtk4::gdk::Key::C if has_selection => {
                 return TerminalKeyAction::CopySelection;
             }
@@ -408,7 +445,7 @@ fn terminal_key_action(
         }
     }
 
-    if should_pass_through_window_accelerator(key, normalized) {
+    if should_pass_through_window_accelerator(skey, normalized) {
         return TerminalKeyAction::PassThrough;
     }
 
@@ -443,6 +480,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -454,6 +492,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -471,6 +510,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -482,6 +522,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -497,6 +538,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -508,6 +550,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -523,6 +566,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x03])
         );
@@ -534,6 +578,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::ForwardToPty(b"\x1bx".to_vec())
         );
@@ -557,6 +602,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x04])
         );
@@ -576,6 +622,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -654,6 +701,7 @@ mod tests {
                 false,
                 false, // smart clipboard OFF
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -672,6 +720,7 @@ mod tests {
                 true,  // has selection
                 false, // smart clipboard OFF
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -715,6 +764,7 @@ mod tests {
             false,
             false,
             DEFAULT_MODES,
+            None,
         );
         assert!(
             matches!(action, TerminalKeyAction::ForwardToPty(_)),
@@ -878,6 +928,7 @@ mod tests {
             false,
             false,
             DEFAULT_MODES,
+            None,
         );
         assert_eq!(action, TerminalKeyAction::ForwardToPty(vec![0x1b, 0x01]));
     }
@@ -984,6 +1035,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             );
             assert!(
                 matches!(action, TerminalKeyAction::ForwardToPty(_)),
@@ -1025,6 +1077,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough,
         );
@@ -1064,6 +1117,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             );
             assert!(
                 matches!(action, TerminalKeyAction::ForwardToPty(_)),
@@ -1128,8 +1182,138 @@ mod tests {
             false,
             false,
             modes,
+            None,
         );
         assert_eq!(action, TerminalKeyAction::ForwardToPty(b"\x1bOA".to_vec()));
+    }
+
+    /// Cyrillic keyvals must trigger smart clipboard copy when the Latin
+    /// equivalent is `c` and Ctrl is held. Regression for #983.
+    #[test]
+    fn cyrillic_ctrl_c_copies_with_latin_key_hint() {
+        // Russian layout: physical C produces Cyrillic_es (с)
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
+                gtk4::gdk::Key::Cyrillic_es,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                true,
+                true,
+                DEFAULT_MODES,
+                Some(gtk4::gdk::Key::c),
+            ),
+            TerminalKeyAction::CopySelection
+        );
+    }
+
+    /// Cyrillic keyvals must trigger smart clipboard paste when the Latin
+    /// equivalent is `v` and Ctrl is held. Regression for #983.
+    #[test]
+    fn cyrillic_ctrl_v_pastes_with_latin_key_hint() {
+        // Russian layout: physical V produces Cyrillic_em (м)
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
+                gtk4::gdk::Key::Cyrillic_em,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                false,
+                true,
+                DEFAULT_MODES,
+                Some(gtk4::gdk::Key::v),
+            ),
+            TerminalKeyAction::PasteClipboard
+        );
+    }
+
+    /// Ctrl+Shift+Cyrillic must pass through as a window accelerator when
+    /// the Latin equivalent matches a registered shortcut. Regression for #983.
+    #[test]
+    fn cyrillic_ctrl_shift_t_passes_through_with_latin_key_hint() {
+        // Russian layout: physical T produces Cyrillic_ie (е)
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::Cyrillic_ie,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                false,
+                false,
+                DEFAULT_MODES,
+                Some(gtk4::gdk::Key::t),
+            ),
+            TerminalKeyAction::PassThrough
+        );
+    }
+
+    /// Without a `latin_key` hint, Cyrillic keyvals should still forward to
+    /// PTY in managed mode (no shortcut match). Regression for #983.
+    #[test]
+    fn cyrillic_without_latin_hint_forwards_to_pty() {
+        let action = terminal_key_action(
+            TerminalInputBackend::Managed,
+            gtk4::gdk::Key::Cyrillic_es,
+            gtk4::gdk::ModifierType::CONTROL_MASK,
+            false,
+            true,
+            DEFAULT_MODES,
+            None,
+        );
+        // Without latin hint, Ctrl+с doesn't match 'c' for smart clipboard,
+        // and encode_control_character won't match Cyrillic, so it passes through.
+        assert_eq!(action, TerminalKeyAction::PassThrough);
+    }
+
+    /// Latin keys must still work normally when `latin_key` matches the event key.
+    /// Regression for #983.
+    #[test]
+    fn latin_key_with_matching_hint_unchanged() {
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Direct,
+                gtk4::gdk::Key::c,
+                gtk4::gdk::ModifierType::CONTROL_MASK,
+                true,
+                true,
+                DEFAULT_MODES,
+                Some(gtk4::gdk::Key::c),
+            ),
+            TerminalKeyAction::CopySelection
+        );
+    }
+
+    /// Managed Ctrl+Shift+C with Cyrillic keyval must copy when `latin_key`
+    /// resolves to `c`. Regression for #983.
+    #[test]
+    fn managed_cyrillic_ctrl_shift_c_copies_with_latin_hint() {
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::Cyrillic_ES,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                true,
+                false,
+                DEFAULT_MODES,
+                Some(gtk4::gdk::Key::C),
+            ),
+            TerminalKeyAction::CopySelection
+        );
+    }
+
+    /// Managed Ctrl+Shift+V with Cyrillic keyval must paste when `latin_key`
+    /// resolves to `v`. Regression for #983.
+    #[test]
+    fn managed_cyrillic_ctrl_shift_v_pastes_with_latin_hint() {
+        assert_eq!(
+            terminal_key_action(
+                TerminalInputBackend::Managed,
+                gtk4::gdk::Key::Cyrillic_EM,
+                gtk4::gdk::ModifierType::CONTROL_MASK | gtk4::gdk::ModifierType::SHIFT_MASK,
+                false,
+                false,
+                DEFAULT_MODES,
+                Some(gtk4::gdk::Key::V),
+            ),
+            TerminalKeyAction::PasteClipboard
+        );
     }
 }
 

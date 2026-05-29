@@ -981,10 +981,11 @@ impl PersistentPaneView {
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
         key_controller.set_im_context(Some(&im_context));
-        key_controller.connect_key_pressed(move |_, key, _keycode, state| {
+        key_controller.connect_key_pressed(move |_, key, keycode, state| {
             let Some(pane) = pane_weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            let latin_key = crate::terminal::latin_keyval_from_keycode(keycode);
             match terminal_key_action(
                 TerminalInputBackend::Managed,
                 key,
@@ -992,6 +993,7 @@ impl PersistentPaneView {
                 pane.vte().has_selection(),
                 pane.imp().smart_clipboard.get(),
                 pane.terminal_modes(),
+                latin_key,
             ) {
                 TerminalKeyAction::CopySelection => {
                     crate::terminal::copy_to_clipboard(pane.vte());
@@ -1532,6 +1534,7 @@ mod tests {
                 true,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -1543,6 +1546,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -1555,6 +1559,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1567,6 +1572,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -1584,6 +1590,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PasteClipboard
         );
@@ -1597,6 +1604,7 @@ mod tests {
                 true,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::CopySelection
         );
@@ -1612,6 +1620,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1625,6 +1634,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1636,6 +1646,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1647,6 +1658,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::PassThrough
         );
@@ -1662,6 +1674,7 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x03])
         );
@@ -1673,6 +1686,7 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x16])
         );
@@ -1684,9 +1698,11 @@ mod tests {
                 false,
                 true,
                 DEFAULT_MODES,
+                None,
             ),
             TerminalKeyAction::ForwardToPty(vec![0x04])
         );
+        // Ctrl+Shift+X is the "Repair Terminal" window accelerator.
         assert_eq!(
             terminal_key_action(
                 TerminalInputBackend::Managed,
@@ -1695,8 +1711,9 @@ mod tests {
                 false,
                 false,
                 DEFAULT_MODES,
+                None,
             ),
-            TerminalKeyAction::ForwardToPty(vec![0x18])
+            TerminalKeyAction::PassThrough
         );
     }
 
