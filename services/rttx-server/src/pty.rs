@@ -198,6 +198,27 @@ mod tests {
     }
 
     #[test]
+    fn spawned_pty_child_inherits_custom_env_vars() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let config = PtyConfig {
+                command: vec!["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+                env: vec![("PROMPT_COMMAND".into(), "history -a".into())],
+                ..PtyConfig::default()
+            };
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let pid = pty.pid().expect("child must be running");
+            let environ = std::fs::read_to_string(format!("/proc/{pid}/environ"))
+                .expect("read /proc environ");
+            assert!(
+                environ.contains("PROMPT_COMMAND=history -a"),
+                "PTY child must have PROMPT_COMMAND=history -a in its environment"
+            );
+            pty.kill().expect("kill must succeed");
+        });
+    }
+
+    #[test]
     fn none_cwd_resolves_to_home_directory() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
