@@ -2266,6 +2266,9 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(1);
 /// Warn when the server mutex is held longer than this in the PTY read loop.
 pub const MUTEX_HOLD_WARN_THRESHOLD: Duration = Duration::from_millis(10);
 
+/// How often (in serialization ticks) to poll /proc/<pid>/cwd for CWD changes.
+const CWD_POLL_INTERVAL_TICKS: u64 = 5;
+
 /// How long a PTY read loop yields after detecting mutex contention.
 ///
 /// When the Phase 1 lock hold exceeds [`MUTEX_HOLD_WARN_THRESHOLD`], the
@@ -2614,6 +2617,55 @@ pub async fn serialization_loop(
         if diagnostics_counter.is_multiple_of(30) {
             let s = crate::instrument::lock_server(&server, &metrics).await;
             s.log_diagnostics();
+        }
+
+        // CWD polling via /proc/<pid>/cwd every 5 ticks (~5s).
+        // Detects CWD changes when OSC 7 is not emitted by the shell.
+        if diagnostics_counter.is_multiple_of(CWD_POLL_INTERVAL_TICKS) {
+            let mut cwd_changes: Vec<(Uuid, Uuid, String, u64, Vec<Uuid>)> = Vec::new();
+            for (runtime_id, rt_lock) in &runtime_entries {
+                let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+                let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
+                if client_ids.is_empty() {
+                    continue;
+                }
+                let pane_ids: Vec<Uuid> = rt.panes.keys().copied().collect();
+                for pane_id in pane_ids {
+                    let Some(pane) = rt.panes.get(&pane_id) else { continue };
+                    if pane.is_exited() || pane.child_pid.is_none() {
+                        continue;
+                    }
+                    let proc_cwd = pane.read_proc_cwd();
+                    if let Some(ref new_cwd) = proc_cwd
+                        && pane.cwd.as_deref() != Some(new_cwd.as_str())
+                    {
+                        let cwd_val = new_cwd.clone();
+                        let Some(pane) = rt.panes.get_mut(&pane_id) else { continue };
+                        pane.cwd = Some(cwd_val.clone());
+                        if let Some(rev) = rt.set_pane_cwd(pane_id, &cwd_val) {
+                            cwd_changes.push((
+                                *runtime_id,
+                                pane_id,
+                                cwd_val,
+                                rev,
+                                client_ids.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+            if !cwd_changes.is_empty() {
+                let mut s = crate::instrument::lock_server(&server, &metrics).await;
+                for (runtime_id, pane_id, cwd, revision, client_ids) in &cwd_changes {
+                    let msg = ClientMsg::V2(protocol::cwd_changed(
+                        *runtime_id,
+                        *pane_id,
+                        cwd.clone(),
+                        *revision,
+                    ));
+                    s.broadcast_to_clients(client_ids.iter().copied(), None, &msg);
+                }
+            }
         }
 
         // Collect v2 runtime files only for dirty persistent runtimes.
