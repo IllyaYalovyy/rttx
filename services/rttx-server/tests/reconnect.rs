@@ -235,12 +235,14 @@ async fn operations_after_detach_blocked_by_other_writer() {
     let resp = c1.recv().await;
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
-            assert_eq!(e.kind, 9, "should be ERR_OWNERSHIP_CONFLICT");
+            assert_eq!(e.kind, v3::ErrorKind::OwnershipConflict as i32, "should be ERR_OWNERSHIP_CONFLICT");
         }
         other => panic!("expected Error for close-pane while another writer owns, got {other:?}"),
     }
 
-    // Original client tries to resize — should also fail.
+    // Original client tries to resize — ResizePane is fire-and-forget, so an
+    // unauthorized attempt is silently dropped (no error, no effect) rather
+    // than rejected. Verify no error comes back after a Ping/Pong barrier.
     c1.send(&v3::ClientEnvelope {
         request_id: 0,
         command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
@@ -251,13 +253,12 @@ async fn operations_after_detach_blocked_by_other_writer() {
         })),
     })
     .await;
-    let resp = c1.recv().await;
-    match resp.payload {
-        Some(v3::server_envelope::Payload::Error(e)) => {
-            assert_eq!(e.kind, 9, "should be ERR_OWNERSHIP_CONFLICT");
-        }
-        other => panic!("expected Error for resize while another writer owns, got {other:?}"),
-    }
+    c1.ping().await;
+    let events = c1.drain(std::time::Duration::from_millis(200)).await;
+    assert!(
+        events.iter().all(|e| !matches!(e.payload, Some(v3::server_envelope::Payload::Error(_)))),
+        "unauthorized resize must be silently dropped, not errored"
+    );
 }
 
 /// After reattach, new deltas from PTY output are delivered to the

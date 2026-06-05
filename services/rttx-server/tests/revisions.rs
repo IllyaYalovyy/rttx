@@ -67,6 +67,9 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
+    // ResizePane is fire-and-forget in v3 (no ack), but it still bumps the
+    // runtime revision to 4. Flush it with a Ping/Pong barrier; the bump is
+    // observed later via the ClosePane ack.
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
@@ -78,15 +81,9 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
             })),
         })
         .await;
-    match client.recv().await.payload {
-        Some(v3::server_envelope::Payload::PaneResized(resized)) => {
-            assert_eq!(resized.runtime_revision, 4);
-            assert_eq!(resized.cols, 100);
-            assert_eq!(resized.rows, 30);
-        }
-        other => panic!("expected PaneResized, got {other:?}"),
-    }
+    client.ping().await;
 
+    // SetPaneTitle is also fire-and-forget; it bumps the revision to 5.
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
@@ -97,13 +94,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
             })),
         })
         .await;
-    match client.recv().await.payload {
-        Some(v3::server_envelope::Payload::TitleChanged(changed)) => {
-            assert_eq!(changed.runtime_revision, 5);
-            assert_eq!(changed.title, "acked-title");
-        }
-        other => panic!("expected TitleChanged, got {other:?}"),
-    }
+    client.ping().await;
 
     client
         .send(&v3::ClientEnvelope {
@@ -215,12 +206,10 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
                 })),
             })
             .await;
-        match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::PaneResized(resized)) => {
-                assert_eq!(resized.runtime_revision, 3);
-            }
-            other => panic!("expected PaneResized, got {other:?}"),
-        }
+        // ResizePane is fire-and-forget in v3 (no ack); it bumps the revision
+        // to 3. Flush it with a Ping/Pong barrier so it is persisted before the
+        // server is aborted below.
+        client.ping().await;
 
         wait_for_state_containing(tmp.path(), "restart-revision", Duration::from_secs(10)).await;
         handle.abort();
@@ -314,7 +303,7 @@ async fn failed_close_pane_returns_error_without_revision_change() {
         .await;
     match client.recv().await.payload {
         Some(v3::server_envelope::Payload::Error(error)) => {
-            assert_eq!(error.kind, 6);
+            assert_eq!(error.kind, v3::ErrorKind::PaneNotFound as i32);
             assert!(error.message.contains("pane not found"));
         }
         other => panic!("expected Error, got {other:?}"),

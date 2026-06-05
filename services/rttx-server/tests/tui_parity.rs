@@ -300,13 +300,15 @@ struct ModeState {
 }
 
 impl ModeState {
-    const fn from_screen(screen: &PaneScreen) -> Self {
+    fn from_screen(screen: &PaneScreen) -> Self {
         Self {
             application_cursor_keys: screen.application_cursor_keys(),
             application_keypad: screen.application_keypad(),
             bracketed_paste: screen.bracketed_paste_mode(),
             focus_reporting: screen.focus_event_mode(),
-            mouse_tracking_mode: screen.mouse_tracking_mode(),
+            mouse_tracking_mode: rttx_proto::v3_terminal_modes::mouse_mode_from_tracking_value(
+                screen.mouse_tracking_mode(),
+            ) as u16,
             sgr_mouse: screen.sgr_mouse_mode(),
         }
     }
@@ -426,8 +428,8 @@ async fn parity_mouse_1000_set() {
     let commands = &["SET mouse_1000"];
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
-    assert_eq!(direct.mouse_tracking_mode, 1000, "direct: mouse 1000");
-    assert_eq!(managed.mouse_tracking_mode, 1000, "managed: mouse 1000");
+    assert_eq!(direct.mouse_tracking_mode, v3::MouseMode::Normal as u16, "direct: mouse 1000");
+    assert_eq!(managed.mouse_tracking_mode, v3::MouseMode::Normal as u16, "managed: mouse 1000");
 }
 
 #[tokio::test]
@@ -435,9 +437,9 @@ async fn parity_mouse_1003_with_sgr() {
     let commands = &["SET mouse_1003", "SET sgr_mouse"];
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
-    assert_eq!(direct.mouse_tracking_mode, 1003, "direct: mouse 1003");
+    assert_eq!(direct.mouse_tracking_mode, v3::MouseMode::Any as u16, "direct: mouse 1003");
     assert!(direct.sgr_mouse, "direct: sgr mouse must be on");
-    assert_eq!(managed.mouse_tracking_mode, 1003, "managed: mouse 1003");
+    assert_eq!(managed.mouse_tracking_mode, v3::MouseMode::Any as u16, "managed: mouse 1003");
     assert!(managed.sgr_mouse, "managed: sgr mouse must be on");
     assert_eq!(
         direct.mouse_tracking_mode, managed.mouse_tracking_mode,
@@ -463,7 +465,7 @@ async fn parity_all_modes_combined() {
     assert!(direct.application_keypad);
     assert!(direct.bracketed_paste);
     assert!(direct.focus_reporting);
-    assert_eq!(direct.mouse_tracking_mode, 1003);
+    assert_eq!(direct.mouse_tracking_mode, v3::MouseMode::Any as u16);
     assert!(direct.sgr_mouse);
 
     // Managed parity (excluding focus_reporting which v2 proto lacks).
