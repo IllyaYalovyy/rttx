@@ -478,6 +478,50 @@ mod tests {
     }
 
     #[test]
+    fn read_proc_cwd_returns_none_without_pid() {
+        let pane = Pane::new(Uuid::new_v4(), 80, 24);
+        assert!(pane.read_proc_cwd().is_none());
+    }
+
+    #[test]
+    fn read_proc_cwd_reads_current_process_cwd() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.child_pid = Some(std::process::id());
+        let cwd = pane.read_proc_cwd();
+        assert!(cwd.is_some(), "/proc/self/cwd should be readable");
+    }
+
+    #[test]
+    fn proc_cwd_poll_updates_pane_cwd_when_different() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.child_pid = Some(std::process::id());
+        assert!(pane.cwd.is_none());
+
+        // Simulate the poll: read_proc_cwd detects a new value.
+        let proc_cwd = pane.read_proc_cwd();
+        assert!(proc_cwd.is_some());
+        if let Some(ref new_cwd) = proc_cwd
+            && pane.cwd.as_deref() != Some(new_cwd.as_str())
+        {
+            pane.cwd = Some(new_cwd.clone());
+        }
+        assert!(pane.cwd.is_some());
+    }
+
+    #[test]
+    fn proc_cwd_poll_no_update_when_same() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.child_pid = Some(std::process::id());
+        let current = pane.read_proc_cwd().unwrap();
+        pane.cwd = Some(current.clone());
+
+        // When proc CWD matches stored CWD, no update needed.
+        let proc_cwd = pane.read_proc_cwd();
+        assert_eq!(proc_cwd.as_deref(), Some(current.as_str()));
+        assert_eq!(pane.cwd.as_deref(), proc_cwd.as_deref());
+    }
+
+    #[test]
     fn effective_cwd_returns_none_without_pid_or_osc7() {
         let pane = Pane::new(Uuid::new_v4(), 80, 24);
         assert!(pane.effective_cwd().is_none());
