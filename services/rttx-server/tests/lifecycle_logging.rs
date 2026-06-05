@@ -7,7 +7,7 @@ use common::{
     attach_rw, close_pane, create_pane, create_runtime, detach_runtime, start_test_server,
     terminate_runtime,
 };
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 #[tokio::test]
 async fn full_lifecycle_produces_expected_responses() {
@@ -19,7 +19,7 @@ async fn full_lifecycle_produces_expected_responses() {
 
     // Create → attach → create pane → close pane → detach → terminate.
     let sid =
-        create_runtime(&mut client, "lifecycle-log-test", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut client, "lifecycle-log-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
     close_pane(&mut client, &sid, &pane_id).await;
@@ -42,12 +42,13 @@ async fn rename_runtime_through_server() {
     let mut client = common::TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "before-rename", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "before-rename", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
                 runtime_id: sid.clone(),
                 name: "after-rename".into(),
             })),
@@ -55,12 +56,12 @@ async fn rename_runtime_through_server() {
         .await;
 
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::RuntimeRenamed(sr)) => {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeRenamed(sr)) => {
                 assert_eq!(sr.name, "after-rename");
                 break;
             }
-            Some(proto::server_message::Msg::Delta(_)) => {}
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected RuntimeRenamed, got {other:?}"),
         }
     }

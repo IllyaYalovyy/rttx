@@ -16,7 +16,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ async fn persistent_transport_drop_session_survives_and_reattaches() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "p-drop", proto::RuntimePolicy::Persistent).await;
+        let sid = create_runtime(&mut c, "p-drop", v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
         sid
@@ -46,11 +46,11 @@ async fn persistent_transport_drop_session_survives_and_reattaches() {
     assert_eq!(runtimes.len(), 1);
     assert_eq!(runtimes[0].id, runtime_id);
     assert_eq!(runtimes[0].pane_count, 1);
-    assert_eq!(runtimes[0].attached_client_count, 0);
+    assert_eq!(runtimes[0].read_only_client_count, 0);
     assert!(!runtimes[0].has_write_owner);
 
     let snap = attach_rw(&mut c2, &runtime_id).await;
-    assert_eq!(snap.current_client_role, proto::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
     assert!(!snap.panes.is_empty());
 }
 
@@ -65,7 +65,7 @@ async fn persistent_daemon_restart_reconstructs_session_and_panes() {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        runtime_id = create_runtime(&mut c, "p-restart", proto::RuntimePolicy::Persistent).await;
+        runtime_id = create_runtime(&mut c, "p-restart", v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut c, &runtime_id).await;
         create_pane(&mut c, &runtime_id).await;
 
@@ -85,12 +85,12 @@ async fn persistent_daemon_restart_reconstructs_session_and_panes() {
     assert_eq!(runtimes[0].id, runtime_id);
     assert!(runtimes[0].reconstructed);
     assert_eq!(runtimes[0].pane_count, 1);
-    assert_eq!(runtimes[0].attached_client_count, 0);
+    assert_eq!(runtimes[0].read_only_client_count, 0);
 
     let snap = attach_rw(&mut c, &runtime_id).await;
     assert_eq!(snap.panes.len(), 1);
     // reconstructed flag is on PaneInfo (inventory), not PaneSnapshot.
-    assert!(snap.revision > 0);
+    assert!(snap.runtime_revision > 0);
 }
 
 // ── Persistent × Explicit detach ────────────────────────────────
@@ -102,12 +102,13 @@ async fn persistent_explicit_detach_runtime_survives_unattached() {
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let runtime_id = create_runtime(&mut c, "p-detach", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut c, "p-detach", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut c, &runtime_id).await;
     create_pane(&mut c, &runtime_id).await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
             runtime_id: runtime_id.clone(),
         })),
     })
@@ -115,13 +116,14 @@ async fn persistent_explicit_detach_runtime_survives_unattached() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
-        match c.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::RuntimeDetached(d)) => {
+        match c.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeDetached(d)) => {
                 assert_eq!(d.runtime_id, runtime_id);
                 break;
             }
             Some(
-                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+                v3::server_envelope::Payload::OutputDelta(_)
+                | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
             other => panic!("expected RuntimeDetached, got {other:?}"),
         }
@@ -129,7 +131,7 @@ async fn persistent_explicit_detach_runtime_survives_unattached() {
 
     let runtimes = list_runtimes(&mut c).await;
     assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].attached_client_count, 0);
+    assert_eq!(runtimes[0].read_only_client_count, 0);
     assert!(!runtimes[0].has_write_owner);
     assert_eq!(runtimes[0].pane_count, 1);
 }
@@ -143,19 +145,20 @@ async fn persistent_explicit_terminate_removes_session() {
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let runtime_id = create_runtime(&mut c, "p-term", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut c, "p-term", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut c, &runtime_id).await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
             runtime_id: runtime_id.clone(),
         })),
     })
     .await;
-    match c.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeTerminated(t)) => {
+    match c.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeTerminated(t)) => {
             assert_eq!(t.runtime_id, runtime_id);
-            assert_eq!(t.reason, proto::RuntimeTerminationReason::Explicit as i32);
+            assert_eq!(t.reason, v3::RuntimeTerminationReason::Explicit as i32);
         }
         other => panic!("expected RuntimeTerminated, got {other:?}"),
     }
@@ -174,7 +177,7 @@ async fn ephemeral_transport_drop_session_survives_until_restart() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "e-drop", proto::RuntimePolicy::Ephemeral).await;
+        let sid = create_runtime(&mut c, "e-drop", v3::RuntimePolicy::Ephemeral).await;
         attach_rw(&mut c, &sid).await;
         sid
     };
@@ -188,8 +191,8 @@ async fn ephemeral_transport_drop_session_survives_until_restart() {
     assert_eq!(runtimes.len(), 1);
     assert_eq!(runtimes[0].id, runtime_id);
     assert_eq!(
-        proto::RuntimePolicy::try_from(runtimes[0].policy).unwrap(),
-        proto::RuntimePolicy::Ephemeral
+        v3::RuntimePolicy::try_from(runtimes[0].policy).unwrap(),
+        v3::RuntimePolicy::Ephemeral
     );
 }
 
@@ -203,13 +206,13 @@ async fn ephemeral_daemon_restart_does_not_restore_session() {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "e-restart", proto::RuntimePolicy::Ephemeral).await;
+        let sid = create_runtime(&mut c, "e-restart", v3::RuntimePolicy::Ephemeral).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
 
         // Create a persistent runtime so we can wait for the serialization
         // loop to have run at least once (ephemeral runtimes are not persisted).
-        let _ = create_runtime(&mut c, "e-restart-anchor", proto::RuntimePolicy::Persistent).await;
+        let _ = create_runtime(&mut c, "e-restart-anchor", v3::RuntimePolicy::Persistent).await;
         wait_for_state_containing(tmp.path(), "e-restart-anchor", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -237,19 +240,20 @@ async fn ephemeral_explicit_detach_terminates_immediately() {
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let runtime_id = create_runtime(&mut c, "e-detach", proto::RuntimePolicy::Ephemeral).await;
+    let runtime_id = create_runtime(&mut c, "e-detach", v3::RuntimePolicy::Ephemeral).await;
     attach_rw(&mut c, &runtime_id).await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
             runtime_id: runtime_id.clone(),
         })),
     })
     .await;
-    match c.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeTerminated(t)) => {
+    match c.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeTerminated(t)) => {
             assert_eq!(t.runtime_id, runtime_id);
-            assert_eq!(t.reason, proto::RuntimeTerminationReason::EphemeralLastDetach as i32);
+            assert_eq!(t.reason, v3::RuntimeTerminationReason::EphemeralDetach as i32);
         }
         other => panic!("expected RuntimeTerminated, got {other:?}"),
     }
@@ -270,7 +274,7 @@ async fn persistent_restart_reader_reattaches_after_reconstruction() {
         let mut writer = TestClient::connect(&sock).await;
         writer.handshake().await;
         runtime_id =
-            create_runtime(&mut writer, "p-reader-restart", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut writer, "p-reader-restart", v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut writer, &runtime_id).await;
         create_pane(&mut writer, &runtime_id).await;
 
@@ -285,16 +289,17 @@ async fn persistent_restart_reader_reattaches_after_reconstruction() {
 
     // Attach as read-only after reconstruction.
     reader
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
             })),
         })
         .await;
-    match reader.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(snap)) => {
-            assert_eq!(snap.current_client_role, proto::RuntimeClientRole::Reader as i32);
+    match reader.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
+            assert_eq!(snap.client_role, v3::RuntimeClientRole::Reader as i32);
             assert!(!snap.panes.is_empty());
             // reconstructed flag is on PaneInfo (inventory), not PaneSnapshot.
         }

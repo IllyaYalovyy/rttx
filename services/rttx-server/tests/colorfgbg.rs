@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Helper: create a pane with explicit `dark_background`, return `pane_id`.
@@ -11,8 +11,9 @@ async fn create_pane_with_appearance(
     dark_background: Option<bool>,
 ) -> Vec<u8> {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.to_vec(),
                 cwd: None,
                 dark_background,
@@ -23,9 +24,9 @@ async fn create_pane_with_appearance(
         })
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => return pc.pane_id,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => return pc.pane_id,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected PaneCreated, got {other:?}"),
         }
     }
@@ -37,7 +38,7 @@ async fn read_until(client: &mut TestClient, needle: &str, timeout: Duration) ->
     let mut output = String::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(needle) {
@@ -51,26 +52,30 @@ async fn read_until(client: &mut TestClient, needle: &str, timeout: Duration) ->
 /// Send input and drain snapshot first.
 async fn attach_and_send(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], input: &[u8]) {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
-                data: bytes::Bytes::copy_from_slice(input),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::copy_from_slice(input),
+                })),
             })),
         })
         .await;
@@ -85,7 +90,7 @@ async fn create_pane_dark_sets_colorfgbg() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "dark-test", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "dark-test", v3::RuntimePolicy::Persistent).await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, Some(true)).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
@@ -103,7 +108,7 @@ async fn create_pane_light_sets_colorfgbg() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "light-test", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "light-test", v3::RuntimePolicy::Persistent).await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, Some(false)).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
@@ -121,7 +126,7 @@ async fn create_pane_default_assumes_dark() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "default-test", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "default-test", v3::RuntimePolicy::Persistent).await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, None).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;

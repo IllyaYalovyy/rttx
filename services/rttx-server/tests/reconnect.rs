@@ -11,7 +11,7 @@ use common::{
     TestClient, attach_ro, attach_rw, create_pane, create_runtime, detach_runtime, list_runtimes,
     send_input, start_test_server, terminate_runtime,
 };
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -22,7 +22,7 @@ async fn reconnect_after_disconnect() {
     let runtime_id = {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
-        create_runtime(&mut client, "reconnect-test", proto::RuntimePolicy::Persistent).await
+        create_runtime(&mut client, "reconnect-test", v3::RuntimePolicy::Persistent).await
     };
 
     let mut client2 = TestClient::connect(&sock).await;
@@ -43,7 +43,7 @@ async fn rapid_reconnect_storm() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "storm", proto::RuntimePolicy::Persistent).await;
+        let sid = create_runtime(&mut c, "storm", v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
         detach_runtime(&mut c, &sid).await;
@@ -75,7 +75,7 @@ async fn reconnect_during_active_pty_output() {
     let (runtime_id, pane_id) = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "active-output", proto::RuntimePolicy::Persistent).await;
+        let sid = create_runtime(&mut c, "active-output", v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut c, &sid).await;
         let pid = create_pane(&mut c, &sid).await;
         // Send a command that produces output.
@@ -92,7 +92,7 @@ async fn reconnect_during_active_pty_output() {
     let snap = attach_rw(&mut c2, &runtime_id).await;
     let pane_snap = snap.panes.iter().find(|p| p.pane_id == pane_id);
     assert!(pane_snap.is_some(), "pane should be in snapshot");
-    let scrollback = String::from_utf8_lossy(&pane_snap.unwrap().scrollback);
+    let scrollback = String::from_utf8_lossy(&pane_snap.unwrap().scrollback_tail);
     assert!(
         scrollback.contains("MARKER_RECONNECT_TEST"),
         "scrollback should contain output produced while disconnected, got: {scrollback}"
@@ -109,7 +109,7 @@ async fn reconnect_to_terminated_session_returns_error() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        create_runtime(&mut c, "doomed", proto::RuntimePolicy::Persistent).await
+        create_runtime(&mut c, "doomed", v3::RuntimePolicy::Persistent).await
     };
 
     // Another client terminates the session.
@@ -122,17 +122,18 @@ async fn reconnect_to_terminated_session_returns_error() {
     // Original client reconnects and tries to attach.
     let mut c3 = TestClient::connect(&sock).await;
     c3.handshake().await;
-    c3.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    c3.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     })
     .await;
     let resp = c3.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 4, "should be ERR_SESSION_NOT_FOUND");
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, 4, "should be ERR_SESSION_NOT_FOUND");
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -146,7 +147,7 @@ async fn reconnect_sees_panes_added_by_other_client() {
 
     let mut client_a = TestClient::connect(&sock).await;
     client_a.handshake().await;
-    let sid = create_runtime(&mut client_a, "multi-pane", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client_a, "multi-pane", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client_a, &sid).await;
     let pane1 = create_pane(&mut client_a, &sid).await;
     let pane2 = create_pane(&mut client_a, &sid).await;
@@ -172,9 +173,9 @@ async fn revision_increases_across_reconnect_cycles() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let sid = create_runtime(&mut c, "rev-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut c, "rev-test", v3::RuntimePolicy::Persistent).await;
     let snap1 = attach_rw(&mut c, &sid).await;
-    let rev_after_attach = snap1.revision;
+    let rev_after_attach = snap1.runtime_revision;
 
     create_pane(&mut c, &sid).await;
     detach_runtime(&mut c, &sid).await;
@@ -183,7 +184,7 @@ async fn revision_increases_across_reconnect_cycles() {
     let mut c2 = TestClient::connect(&sock).await;
     c2.handshake().await;
     let snap2 = attach_rw(&mut c2, &sid).await;
-    let rev_after_reattach = snap2.revision;
+    let rev_after_reattach = snap2.runtime_revision;
 
     assert!(
         rev_after_reattach > rev_after_attach,
@@ -197,9 +198,9 @@ async fn revision_increases_across_reconnect_cycles() {
     c3.handshake().await;
     let snap3 = attach_rw(&mut c3, &sid).await;
     assert!(
-        snap3.revision > rev_after_reattach,
+        snap3.runtime_revision > rev_after_reattach,
         "revision should keep increasing: {rev_after_reattach} -> {}",
-        snap3.revision
+        snap3.runtime_revision
     );
 }
 
@@ -212,7 +213,7 @@ async fn operations_after_detach_blocked_by_other_writer() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let sid = create_runtime(&mut c1, "detach-ops", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut c1, "detach-ops", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut c1, &sid).await;
     let pane_id = create_pane(&mut c1, &sid).await;
     detach_runtime(&mut c1, &sid).await;
@@ -223,24 +224,26 @@ async fn operations_after_detach_blocked_by_other_writer() {
     attach_rw(&mut c2, &sid).await;
 
     // Original client tries to close pane — should fail with ownership error.
-    c1.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+    c1.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
             runtime_id: sid.clone(),
             pane_id: pane_id.clone(),
         })),
     })
     .await;
     let resp = c1.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 9, "should be ERR_OWNERSHIP_CONFLICT");
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, 9, "should be ERR_OWNERSHIP_CONFLICT");
         }
         other => panic!("expected Error for close-pane while another writer owns, got {other:?}"),
     }
 
     // Original client tries to resize — should also fail.
-    c1.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+    c1.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
             runtime_id: sid.clone(),
             pane_id,
             cols: 120,
@@ -249,9 +252,9 @@ async fn operations_after_detach_blocked_by_other_writer() {
     })
     .await;
     let resp = c1.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 9, "should be ERR_OWNERSHIP_CONFLICT");
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, 9, "should be ERR_OWNERSHIP_CONFLICT");
         }
         other => panic!("expected Error for resize while another writer owns, got {other:?}"),
     }
@@ -266,7 +269,7 @@ async fn reconnect_receives_delta_stream_from_active_panes() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let sid = create_runtime(&mut c1, "delta-stream", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut c1, "delta-stream", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut c1, &sid).await;
     let pane_id = create_pane(&mut c1, &sid).await;
     detach_runtime(&mut c1, &sid).await;
@@ -284,8 +287,8 @@ async fn reconnect_receives_delta_stream_from_active_panes() {
     let msgs = c2.drain(Duration::from_secs(2)).await;
     let delta_data: Vec<u8> = msgs
         .iter()
-        .filter_map(|m| match &m.msg {
-            Some(proto::server_message::Msg::Delta(d)) if d.pane_id == pane_id => {
+        .filter_map(|m| match &m.payload {
+            Some(v3::server_envelope::Payload::OutputDelta(d)) if d.pane_id == pane_id => {
                 Some(d.data.clone())
             }
             _ => None,
@@ -308,22 +311,23 @@ async fn concurrent_reconnect_two_clients_same_session() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let sid = create_runtime(&mut c1, "concurrent", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut c1, "concurrent", v3::RuntimePolicy::Persistent).await;
     let _snap = attach_rw(&mut c1, &sid).await;
 
     // Second client tries to attach as writer — should be blocked.
     let mut c2 = TestClient::connect(&sock).await;
     c2.handshake().await;
-    c2.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    c2.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: sid.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     })
     .await;
     let resp = c2.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::AttachBlocked(ab)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::AttachBlocked(ab)) => {
             assert_eq!(ab.runtime_id, sid);
             assert!(ab.attached_client_count >= 1);
         }

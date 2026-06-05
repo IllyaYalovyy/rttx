@@ -4,7 +4,7 @@
 mod common;
 
 use common::{attach_rw, create_pane, create_runtime, start_test_server};
-use rttx_proto::{bytes_to_uuid, proto};
+use rttx_proto::{bytes_to_uuid, v3};
 
 #[tokio::test]
 async fn session_label_resolves_name_through_lifecycle() {
@@ -15,7 +15,7 @@ async fn session_label_resolves_name_through_lifecycle() {
     client.handshake().await;
 
     // Create a named session.
-    let sid = create_runtime(&mut client, "dev-workspace", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "dev-workspace", v3::RuntimePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&sid).unwrap();
 
     // Attach and create a pane so the session is fully active.

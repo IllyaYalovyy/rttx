@@ -7,7 +7,7 @@
 mod common;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Full lifecycle: create session + pane, produce output, disconnect,
@@ -26,51 +26,43 @@ async fn reconnect_restores_scrollback() {
         c.handshake().await;
 
         // Create session.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "lifecycle-test".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
-            })),
-        })
+                policy: v3::RuntimePolicy::Persistent as i32}))})
         .await;
-        runtime_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
-        };
+        runtime_id = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
+            other => panic!("expected RuntimeCreated, got {other:?}")};
 
         // Create pane (spawns PTY).
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None,
-            })),
-        })
+                no_persist: None}))})
         .await;
-        pane_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
-            other => panic!("expected PaneCreated, got {other:?}"),
-        };
+        pane_id = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
+            other => panic!("expected PaneCreated, got {other:?}")};
 
         // Attach to receive deltas.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
         let _snapshot = c.recv().await; // initial snapshot
 
         // Send a command that produces recognizable output.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                data: bytes::Bytes::from_static(b"echo LIFECYCLE_MARKER_12345\n"),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo LIFECYCLE_MARKER_12345\n")})),
             })),
         })
         .await;
@@ -90,41 +82,36 @@ async fn reconnect_restores_scrollback() {
         c.handshake().await;
 
         // List sessions — should find our session.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}")};
         assert_eq!(runtimes.len(), 1, "should have exactly 1 session");
         assert_eq!(runtimes[0].name, "lifecycle-test");
         assert_eq!(runtimes[0].id, runtime_id, "session ID should match");
 
         // Attach — should get snapshot with scrollback.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
-        let snapshot = match c.recv().await.msg {
-            Some(proto::server_message::Msg::Snapshot(s)) => s,
-            other => panic!("expected Snapshot, got {other:?}"),
-        };
+        let snapshot = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
+            other => panic!("expected Snapshot, got {other:?}")};
 
         assert!(!snapshot.panes.is_empty(), "snapshot should have panes");
         let pane_snap = &snapshot.panes[0];
         assert_eq!(pane_snap.pane_id, pane_id, "pane ID should match");
 
-        let scrollback = String::from_utf8_lossy(&pane_snap.scrollback);
+        let scrollback = String::from_utf8_lossy(&pane_snap.scrollback_tail);
         assert!(
             scrollback.contains("LIFECYCLE_MARKER_12345"),
             "snapshot scrollback should contain our marker.\nGot {} bytes: {:?}",
-            pane_snap.scrollback.len(),
-            &scrollback[..scrollback.len().min(200)]
+            pane_snap.scrollback_tail.len(),
+            &scrollback[..scrollback_tail.len().min(200)]
         );
 
         // Pane should be alive (not exited).
@@ -143,12 +130,10 @@ async fn runtime_count_stable_across_reconnects() {
     {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "stable-test".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
-            })),
-        })
+                policy: v3::RuntimePolicy::Persistent as i32}))})
         .await;
         let _ = c.recv().await; // RuntimeCreated
     }
@@ -157,14 +142,12 @@ async fn runtime_count_stable_across_reconnects() {
     {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}")};
         assert_eq!(runtimes.len(), 1, "should still have exactly 1 session");
         assert_eq!(runtimes[0].name, "stable-test");
     }
@@ -173,14 +156,12 @@ async fn runtime_count_stable_across_reconnects() {
     {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}")};
         assert_eq!(runtimes.len(), 1, "reconnecting should not create new sessions");
     }
 }
@@ -199,48 +180,40 @@ async fn restart_preserves_runtime_count_and_scrollback() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "restart-stable".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
-            })),
-        })
+                policy: v3::RuntimePolicy::Persistent as i32}))})
         .await;
-        runtime_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
-        };
+        runtime_id = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
+            other => panic!("expected RuntimeCreated, got {other:?}")};
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None,
-            })),
-        })
+                no_persist: None}))})
         .await;
-        let pane_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
-            other => panic!("expected PaneCreated, got {other:?}"),
-        };
+        let pane_id = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
+            other => panic!("expected PaneCreated, got {other:?}")};
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
         let _ = c.recv().await; // Snapshot
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                data: bytes::Bytes::from_static(b"echo RESTART_STABLE_MARKER\n"),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo RESTART_STABLE_MARKER\n")})),
             })),
         })
         .await;
@@ -258,36 +231,31 @@ async fn restart_preserves_runtime_count_and_scrollback() {
         c.handshake().await;
 
         // List — should have exactly 1 session.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}")};
         assert_eq!(runtimes.len(), 1, "restart should preserve exactly 1 session");
         assert_eq!(runtimes[0].id, runtime_id, "session ID should survive restart");
 
         // Attach and check scrollback.
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
-        let snapshot = match c.recv().await.msg {
-            Some(proto::server_message::Msg::Snapshot(s)) => s,
-            other => panic!("expected Snapshot, got {other:?}"),
-        };
+        let snapshot = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
+            other => panic!("expected Snapshot, got {other:?}")};
         assert!(!snapshot.panes.is_empty(), "should have panes after restart");
 
-        let scrollback = String::from_utf8_lossy(&snapshot.panes[0].scrollback);
+        let scrollback = String::from_utf8_lossy(&snapshot.panes[0].scrollback_tail);
         assert!(
             scrollback.contains("RESTART_STABLE_MARKER"),
             "scrollback should survive restart. Got: {:?}",
-            &scrollback[..scrollback.len().min(200)]
+            &scrollback[..scrollback_tail.len().min(200)]
         );
     }
 

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use rttx_server::server::MAX_CONCURRENT_CLIENTS;
 
 /// Normal client usage (well under the limit) works without interference.
@@ -24,7 +24,7 @@ async fn normal_clients_unaffected_by_connection_limit() {
     // Each client can create a runtime.
     for (i, client) in clients.iter_mut().enumerate() {
         let name = format!("ws-{i}");
-        common::create_runtime(client, &name, proto::RuntimePolicy::Ephemeral).await;
+        common::create_runtime(client, &name, v3::RuntimePolicy::Ephemeral).await;
     }
 
     // Verify all runtimes are visible.

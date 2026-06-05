@@ -116,7 +116,13 @@ async fn cli_kill_via_v3_terminate_runtime() {
 
     // Create a runtime via v3 first.
     let mut v3_client = common::TestV3Client::connect(&sock).await;
-    let runtime_id = v3_client.create_runtime("kill-target").await;
+    v3_client.handshake().await;
+    let runtime_id = common::create_runtime(
+        &mut v3_client,
+        "kill-target",
+        rttx_proto::v3::RuntimePolicy::Persistent,
+    )
+    .await;
 
     // Now simulate the CLI kill command via a fresh v3 connection.
     let mut stream = UnixStream::connect(&sock).await.unwrap();
@@ -170,7 +176,13 @@ async fn cli_clean_via_v3_list_and_terminate() {
 
     // Create a runtime (no clients attached after creation without attach).
     let mut v3_client = common::TestV3Client::connect(&sock).await;
-    let runtime_id = v3_client.create_runtime("clean-target").await;
+    v3_client.handshake().await;
+    let runtime_id = common::create_runtime(
+        &mut v3_client,
+        "clean-target",
+        rttx_proto::v3::RuntimePolicy::Persistent,
+    )
+    .await;
     drop(v3_client);
 
     // Small delay for disconnect to propagate.

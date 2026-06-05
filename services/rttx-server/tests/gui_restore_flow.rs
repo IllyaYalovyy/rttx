@@ -9,7 +9,7 @@
 mod common;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Simulate the GUI restore flow: connect, list, attach each session,
@@ -27,61 +27,52 @@ async fn gui_restore_flow_no_duplicates() {
         c.handshake().await;
 
         for i in 1..=2 {
-            c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            c.send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                     name: format!("Session {i}"),
-                    policy: proto::RuntimePolicy::Persistent as i32,
-                })),
-            })
+                    policy: v3::RuntimePolicy::Persistent as i32}))})
             .await;
-            let sid = match c.recv().await.msg {
-                Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
-                other => panic!("expected RuntimeCreated, got {other:?}"),
-            };
+            let sid = match c.recv().await.payload {
+                Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
+                other => panic!("expected RuntimeCreated, got {other:?}")};
 
-            c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            c.send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                     runtime_id: sid.clone(),
                     cwd: None,
                     dark_background: None,
                     cols: 0,
                     rows: 0,
-                    no_persist: None,
-                })),
-            })
+                    no_persist: None}))})
             .await;
             // Drain any interleaved deltas to find PaneCreated.
             let pid = loop {
-                match c.recv().await.msg {
-                    Some(proto::server_message::Msg::PaneCreated(pc)) => break pc.pane_id,
-                    Some(proto::server_message::Msg::Delta(_)) => {}
-                    other => panic!("expected PaneCreated or Delta, got {other:?}"),
-                }
+                match c.recv().await.payload {
+                    Some(v3::server_envelope::Payload::PaneCreated(pc)) => break pc.pane_id,
+                    Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                    other => panic!("expected PaneCreated or Delta, got {other:?}")}
             };
 
-            c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            c.send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                     runtime_id: sid.clone(),
-                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-                })),
-            })
+                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
             .await;
             // Drain deltas to find Snapshot.
             loop {
-                match c.recv().await.msg {
-                    Some(proto::server_message::Msg::Snapshot(_)) => break,
-                    Some(proto::server_message::Msg::Delta(_)) => {}
-                    other => panic!("expected Snapshot or Delta, got {other:?}"),
-                }
+                match c.recv().await.payload {
+                    Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+                    Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                    other => panic!("expected Snapshot or Delta, got {other:?}")}
             }
 
-            c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Input(proto::Input {
+            c.send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: sid.clone(),
                     pane_id: pid,
-                    data: bytes::Bytes::from(format!("echo MARKER_{i}\n").into_bytes()),
-                })),
-            })
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from(format!("echo MARKER_{i}\n").into_bytes())})),
+            })),
+        })
             .await;
 
             session_ids.push(sid);
@@ -97,14 +88,12 @@ async fn gui_restore_flow_no_duplicates() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}")};
         assert_eq!(runtimes.len(), 2, "should have exactly 2 sessions");
 
         // Sort by name for deterministic comparison.
@@ -116,23 +105,20 @@ async fn gui_restore_flow_no_duplicates() {
         for (i, info) in sorted_runtimes.iter().enumerate() {
             assert_eq!(info.id, sorted_ids[i]);
 
-            c.send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            c.send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                     runtime_id: info.id.clone(),
-                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-                })),
-            })
+                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
             .await;
             let snapshot = loop {
-                match c.recv().await.msg {
-                    Some(proto::server_message::Msg::Snapshot(s)) => break s,
-                    Some(proto::server_message::Msg::Delta(_)) => {}
-                    other => panic!("expected Snapshot or Delta, got {other:?}"),
-                }
+                match c.recv().await.payload {
+                    Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => break s,
+                    Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+                    other => panic!("expected Snapshot or Delta, got {other:?}")}
             };
             assert!(!snapshot.panes.is_empty(), "session {i} should have panes");
 
-            let scrollback = String::from_utf8_lossy(&snapshot.panes[0].scrollback);
+            let scrollback = String::from_utf8_lossy(&snapshot.panes[0].scrollback_tail);
             let marker = format!("MARKER_{}", i + 1);
             assert!(scrollback.contains(&marker), "session {i} scrollback should contain {marker}");
         }
@@ -143,14 +129,12 @@ async fn gui_restore_flow_no_duplicates() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-        })
+        c.send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
-        };
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+            other => panic!("expected RuntimeList, got {other:?}")};
         assert_eq!(
             runtimes.len(),
             2,

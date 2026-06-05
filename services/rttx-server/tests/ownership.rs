@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TestClient, list_runtimes, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 #[tokio::test]
 async fn second_writer_attach_returns_attach_blocked() {
@@ -14,29 +14,31 @@ async fn second_writer_attach_returns_attach_blocked() {
     writer.handshake().await;
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "writer-conflict".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let runtime_id = match writer.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+    let runtime_id = match writer.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-    match writer.recv().await.msg {
-        Some(proto::server_message::Msg::Snapshot(snapshot)) => {
-            assert_eq!(snapshot.current_client_role, proto::RuntimeClientRole::Writer as i32);
+    match writer.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => {
+            assert_eq!(snapshot.client_role, v3::RuntimeClientRole::Writer as i32);
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
@@ -44,18 +46,19 @@ async fn second_writer_attach_returns_attach_blocked() {
     let mut second = TestClient::connect(&sock).await;
     second.handshake().await;
     second
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-    match second.recv().await.msg {
-        Some(proto::server_message::Msg::AttachBlocked(blocked)) => {
+    match second.recv().await.payload {
+        Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
             assert_eq!(blocked.runtime_id, runtime_id);
-            assert_eq!(blocked.current_client_role, proto::RuntimeClientRole::Unattached as i32);
-            assert_eq!(blocked.attached_client_count, 1);
+            assert_eq!(blocked.current_client_role, v3::RuntimeClientRole::Unattached as i32);
+            assert_eq!(blocked.read_only_client_count, 1);
             assert_eq!(blocked.read_only_client_count, 0);
         }
         other => panic!("expected AttachBlocked, got {other:?}"),
@@ -63,9 +66,9 @@ async fn second_writer_attach_returns_attach_blocked() {
 
     let runtimes = list_runtimes(&mut second).await;
     assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].current_client_role, proto::RuntimeClientRole::Unattached as i32);
+    assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Unattached as i32);
     assert!(runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].attached_client_count, 1);
+    assert_eq!(runtimes[0].read_only_client_count, 1);
     assert_eq!(runtimes[0].read_only_client_count, 0);
 }
 
@@ -78,29 +81,31 @@ async fn read_only_attach_cannot_mutate_runtime() {
     writer.handshake().await;
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "reader-denied".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let runtime_id = match writer.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+    let runtime_id = match writer.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-    match writer.recv().await.msg {
-        Some(proto::server_message::Msg::Snapshot(snapshot)) => {
-            assert_eq!(snapshot.revision, 2);
+    match writer.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => {
+            assert_eq!(snapshot.runtime_revision, 2);
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
@@ -108,24 +113,26 @@ async fn read_only_attach_cannot_mutate_runtime() {
     let mut reader = TestClient::connect(&sock).await;
     reader.handshake().await;
     reader
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
             })),
         })
         .await;
-    match reader.recv().await.msg {
-        Some(proto::server_message::Msg::Snapshot(snapshot)) => {
-            assert_eq!(snapshot.revision, 3);
-            assert_eq!(snapshot.current_client_role, proto::RuntimeClientRole::Reader as i32);
+    match reader.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => {
+            assert_eq!(snapshot.runtime_revision, 3);
+            assert_eq!(snapshot.client_role, v3::RuntimeClientRole::Reader as i32);
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
     reader
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
@@ -135,9 +142,9 @@ async fn read_only_attach_cannot_mutate_runtime() {
             })),
         })
         .await;
-    match reader.recv().await.msg {
-        Some(proto::server_message::Msg::Error(error)) => {
-            assert_eq!(error.code, 9);
+    match reader.recv().await.payload {
+        Some(v3::server_envelope::Payload::Error(error)) => {
+            assert_eq!(error.kind, 9);
             assert!(error.message.contains("owned by another client"));
         }
         other => panic!("expected Error, got {other:?}"),
@@ -145,8 +152,8 @@ async fn read_only_attach_cannot_mutate_runtime() {
 
     let runtimes = list_runtimes(&mut reader).await;
     assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].revision, 3);
-    assert_eq!(runtimes[0].current_client_role, proto::RuntimeClientRole::Reader as i32);
+    assert_eq!(runtimes[0].runtime_revision, 3);
+    assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Reader as i32);
     assert!(runtimes[0].has_write_owner);
     assert_eq!(runtimes[0].read_only_client_count, 1);
 }
@@ -160,61 +167,71 @@ async fn terminate_runtime_notifies_other_attached_clients_and_removes_state() {
     writer.handshake().await;
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "terminate-runtime".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let runtime_id = match writer.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+    let runtime_id = match writer.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-    assert!(matches!(writer.recv().await.msg, Some(proto::server_message::Msg::Snapshot(_))));
+    assert!(matches!(
+        writer.recv().await.payload,
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_))
+    ));
 
     let mut reader = TestClient::connect(&sock).await;
     reader.handshake().await;
     reader
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
             })),
         })
         .await;
-    assert!(matches!(reader.recv().await.msg, Some(proto::server_message::Msg::Snapshot(_))));
+    assert!(matches!(
+        reader.recv().await.payload,
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_))
+    ));
 
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
                 runtime_id: runtime_id.clone(),
             })),
         })
         .await;
-    match writer.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
+    match writer.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
             assert_eq!(terminated.runtime_id, runtime_id);
             assert_eq!(terminated.final_revision, 4);
-            assert_eq!(terminated.reason, proto::RuntimeTerminationReason::Explicit as i32);
+            assert_eq!(terminated.reason, v3::RuntimeTerminationReason::Explicit as i32);
         }
         other => panic!("expected RuntimeTerminated, got {other:?}"),
     }
 
-    match reader.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeTerminated(terminated)) => {
+    match reader.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
             assert_eq!(terminated.runtime_id, runtime_id);
             assert_eq!(terminated.final_revision, 4);
-            assert_eq!(terminated.reason, proto::RuntimeTerminationReason::Explicit as i32);
+            assert_eq!(terminated.reason, v3::RuntimeTerminationReason::Explicit as i32);
         }
         other => panic!("expected pushed RuntimeTerminated, got {other:?}"),
     }
@@ -234,8 +251,7 @@ async fn read_only_client_cannot_rename_runtime() {
     writer.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut writer, "rename-denied", proto::RuntimePolicy::Persistent)
-            .await;
+        common::create_runtime(&mut writer, "rename-denied", v3::RuntimePolicy::Persistent).await;
     common::attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -243,16 +259,17 @@ async fn read_only_client_cannot_rename_runtime() {
     common::attach_ro(&mut reader, &runtime_id).await;
 
     reader
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
                 runtime_id: runtime_id.clone(),
                 name: "hijacked".into(),
             })),
         })
         .await;
-    match reader.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 9); // ERR_OWNERSHIP_CONFLICT
+    match reader.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, 9); // ERR_OWNERSHIP_CONFLICT
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -271,7 +288,7 @@ async fn read_only_client_cannot_set_pane_title() {
     writer.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut writer, "title-denied", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut writer, "title-denied", v3::RuntimePolicy::Persistent).await;
     common::attach_rw(&mut writer, &runtime_id).await;
     let pane_id = common::create_pane(&mut writer, &runtime_id).await;
 
@@ -280,17 +297,18 @@ async fn read_only_client_cannot_set_pane_title() {
     common::attach_ro(&mut reader, &runtime_id).await;
 
     reader
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::SetPaneTitle(v3::SetPaneTitle {
                 runtime_id: runtime_id.clone(),
                 pane_id,
                 title: "hijacked".into(),
             })),
         })
         .await;
-    match reader.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 9); // ERR_OWNERSHIP_CONFLICT
+    match reader.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert_eq!(e.kind, 9); // ERR_OWNERSHIP_CONFLICT
         }
         other => panic!("expected Error, got {other:?}"),
     }

@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -20,8 +20,7 @@ async fn both_clients_receive_deltas_after_lock_free_broadcast() {
     // Client A creates and attaches to a session.
     let mut client_a = TestClient::connect(&sock).await;
     client_a.handshake().await;
-    let sid =
-        create_runtime(&mut client_a, "broadcast-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client_a, "broadcast-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client_a, &sid).await;
     let pane_id = create_pane(&mut client_a, &sid).await;
 
@@ -34,8 +33,9 @@ async fn both_clients_receive_deltas_after_lock_free_broadcast() {
     send_input(&mut client_a, &sid, &pane_id, b"echo LOCKFREE\n").await;
 
     // Both clients should receive at least one Delta containing the output.
-    let has_delta = |msgs: &[proto::ServerMessage]| {
-        msgs.iter().any(|m| matches!(&m.msg, Some(proto::server_message::Msg::Delta(_))))
+    let has_delta = |msgs: &[v3::ServerEnvelope]| {
+        msgs.iter()
+            .any(|m| matches!(&m.payload, Some(v3::server_envelope::Payload::OutputDelta(_))))
     };
 
     let msgs_a = client_a.drain(Duration::from_secs(3)).await;

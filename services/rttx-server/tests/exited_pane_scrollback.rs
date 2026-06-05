@@ -8,7 +8,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -19,7 +19,7 @@ async fn exited_pane_snapshot_has_empty_scrollback() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "exit-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "exit-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -32,7 +32,7 @@ async fn exited_pane_snapshot_has_empty_scrollback() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(!remaining.is_zero(), "timed out waiting for PaneExited");
         if let Some(msg) = client.try_recv(remaining).await
-            && matches!(msg.msg, Some(proto::server_message::Msg::PaneExited(_)))
+            && matches!(msg.payload, Some(v3::server_envelope::Payload::PaneExited(_)))
         {
             break;
         }
@@ -49,9 +49,9 @@ async fn exited_pane_snapshot_has_empty_scrollback() {
         .find(|p| p.pane_id == pane_id)
         .expect("exited pane should still be in snapshot");
     assert!(
-        exited_pane.scrollback.is_empty(),
+        exited_pane.scrollback_tail.is_empty(),
         "exited pane scrollback should be empty, got {} bytes",
-        exited_pane.scrollback.len()
+        exited_pane.scrollback_tail.len()
     );
     assert!(exited_pane.exit_status.is_some(), "pane should have an exit status");
 }

@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -18,7 +18,7 @@ async fn ping_succeeds_during_pty_output_burst() {
     // Client A: create session, attach, create pane, start output burst.
     let mut client_a = TestClient::connect(&sock).await;
     client_a.handshake().await;
-    let sid = create_runtime(&mut client_a, "mutex-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client_a, "mutex-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client_a, &sid).await;
     let pane_id = create_pane(&mut client_a, &sid).await;
 
@@ -32,8 +32,9 @@ async fn ping_succeeds_during_pty_output_burst() {
     let mut client_b = TestClient::connect(&sock).await;
     client_b.handshake().await;
 
-    let ping = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 546 })),
+    let ping = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 546 })),
     };
     client_b.send(&ping).await;
 
@@ -44,8 +45,8 @@ async fn ping_succeeds_during_pty_output_burst() {
         .await
         .expect("Ping timed out — server mutex may be blocking PTY read loop");
 
-    match resp.msg {
-        Some(proto::server_message::Msg::Pong(p)) => assert_eq!(p.nonce, 546),
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Pong(p)) => assert_eq!(p.nonce, 546),
         other => panic!("expected Pong, got {other:?}"),
     }
 }

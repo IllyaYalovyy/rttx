@@ -8,7 +8,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -19,7 +19,7 @@ async fn snapshot_bounded_after_high_output_burst() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "burst-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "burst-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -40,8 +40,8 @@ async fn snapshot_bounded_after_high_output_burst() {
     // Snapshot is capped at MAX_SNAPSHOT_BYTES (256 KB).
     let max_snapshot = 256 * 1024;
     assert!(
-        pane.scrollback.len() <= max_snapshot,
+        pane.scrollback_tail.len() <= max_snapshot,
         "snapshot {} bytes exceeds {max_snapshot} byte cap",
-        pane.scrollback.len()
+        pane.scrollback_tail.len()
     );
 }

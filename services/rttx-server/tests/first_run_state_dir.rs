@@ -7,7 +7,7 @@
 mod common;
 
 use common::{create_runtime, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use rttx_server::state::layout;
 use std::time::Duration;
 
@@ -19,8 +19,7 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
     let mut c = common::TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes =
-        create_runtime(&mut c, "first-run-test", proto::RuntimePolicy::Persistent).await;
+    let rt_id_bytes = create_runtime(&mut c, "first-run-test", v3::RuntimePolicy::Persistent).await;
     let runtime_id = rttx_proto::bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for serialization to write state.

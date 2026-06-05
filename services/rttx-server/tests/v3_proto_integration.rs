@@ -22,8 +22,7 @@ fn v3_client_hello_frames_through_shared_codec() {
             v3::Capability::CoreTerminalModes as i32,
             v3::Capability::CorePasteIntent as i32,
             v3::Capability::CoreFocusEvents as i32,
-        ],
-    };
+        ]};
     let mut buf = BytesMut::new();
     encode_frame(&msg, &mut buf).unwrap();
     let decoded: v3::ClientHello = decode_frame(&mut buf).unwrap();
@@ -41,9 +40,7 @@ fn v3_envelope_roundtrip_create_runtime_and_response() {
         request_id,
         command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: runtime_name.into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
-        })),
-    };
+            policy: v3::RuntimePolicy::Persistent as i32}))};
     let mut buf = BytesMut::new();
     encode_frame(&cmd, &mut buf).unwrap();
     let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
@@ -58,9 +55,7 @@ fn v3_envelope_roundtrip_create_runtime_and_response() {
         request_id,
         payload: Some(v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 1,
-        })),
-    };
+            runtime_revision: 1}))};
     let mut buf = BytesMut::new();
     encode_frame(&resp, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
@@ -80,8 +75,7 @@ fn v3_protocol_error_frames_as_bare_and_in_envelope() {
         operation: String::new(),
         retryable: false,
         user_action_required: true,
-        retry_after_seconds: 0,
-    };
+        retry_after_seconds: 0};
 
     // Bare (handshake phase)
     let mut buf = BytesMut::new();
@@ -93,8 +87,7 @@ fn v3_protocol_error_frames_as_bare_and_in_envelope() {
     // Inside envelope (post-handshake)
     let env = v3::ServerEnvelope {
         request_id: 42,
-        payload: Some(v3::server_envelope::Payload::Error(err)),
-    };
+        payload: Some(v3::server_envelope::Payload::Error(err))};
     let mut buf = BytesMut::new();
     encode_frame(&env, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
@@ -116,8 +109,7 @@ fn v3_envelope_request_response_correlation_roundtrip() {
     // Client sends CreateRuntime (request/response command)
     let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
         name: "correlation-test".into(),
-        policy: v3::RuntimePolicy::Persistent as i32,
-    });
+        policy: v3::RuntimePolicy::Persistent as i32});
     let client_env = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_ne!(client_env.request_id, 0);
     let saved_request_id = client_env.request_id;
@@ -133,8 +125,7 @@ fn v3_envelope_request_response_correlation_roundtrip() {
         decoded_client.request_id,
         v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 1,
-        }),
+            runtime_revision: 1}),
     );
     assert_eq!(response.request_id, saved_request_id);
     assert!(!v3_envelope::is_push_event(&response));
@@ -151,8 +142,7 @@ fn v3_envelope_request_response_correlation_roundtrip() {
             runtime_id,
             pane_id: uuid_to_bytes(uuid::Uuid::new_v4()),
             data: bytes::Bytes::from_static(b"hello"),
-            pane_output_seq: 1,
-        },
+            pane_output_seq: 1},
     ));
     assert!(v3_envelope::is_push_event(&push));
 
@@ -172,9 +162,9 @@ fn v3_envelope_fire_and_forget_skips_id_allocation() {
         runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
         pane_id: uuid_to_bytes(uuid::Uuid::new_v4()),
         kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
-            data: bytes::Bytes::from_static(b"ls\n"),
-        })),
-    });
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"ls\n")})),
+    })),
+    };
     let env = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_eq!(env.request_id, 0);
 
@@ -200,22 +190,20 @@ fn v3_envelope_mixed_command_sequence() {
     let commands: Vec<v3::client_envelope::Command> = vec![
         v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "seq".into(),
-            policy: v3::RuntimePolicy::Ephemeral as i32,
-        }),
+            policy: v3::RuntimePolicy::Ephemeral as i32}),
         v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: rt.clone(),
             pane_id: pn.clone(),
             kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
-                data: bytes::Bytes::from_static(b"x"),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"x")})),
             })),
-        }),
+        })
         v3::client_envelope::Command::Ping(v3::Ping { nonce: 1 }),
         v3::client_envelope::Command::ResizePane(v3::ResizePane {
             runtime_id: rt.clone(),
             pane_id: pn.clone(),
             cols: 80,
-            rows: 24,
-        }),
+            rows: 24}),
         v3::client_envelope::Command::ClosePane(v3::ClosePane { runtime_id: rt, pane_id: pn }),
     ];
     let expected_ids: Vec<u64> = vec![1, 0, 2, 0, 3];
@@ -248,9 +236,7 @@ fn v3_handshake_happy_path() {
     let negotiated = v3_handshake::negotiate_version(
         decoded_hello.min_protocol_version,
         decoded_hello.max_protocol_version,
-        v3_handshake::V3_PROTOCOL_VERSION,
-        v3_handshake::V3_PROTOCOL_VERSION,
-    )
+        v3_handshake::V3_v3_handshake::V3_PROTOCOL_VERSION)
     .unwrap();
     assert_eq!(negotiated, 3);
 
@@ -378,8 +364,7 @@ fn v3_terminal_mode_changed_push_event_roundtrip() {
         alternate_screen: true,
         cursor_hidden: true,
         mouse_mode: v3::MouseMode::Any as i32,
-        sgr_mouse: true,
-    };
+        sgr_mouse: true};
 
     let env = v3_terminal_modes::build_mode_changed_envelope(runtime_id, pane_id, 42, modes);
     assert!(v3_envelope::is_push_event(&env));
@@ -552,8 +537,7 @@ fn v3_error_response_roundtrip_through_envelope() {
             assert_eq!(e.operation, "AttachRuntime");
             assert!(!e.retryable);
         }
-        _ => panic!("expected Error payload"),
-    }
+        _ => panic!("expected Error payload")}
 }
 
 #[test]
@@ -623,8 +607,7 @@ fn v3_error_unknown_kind_from_newer_server() {
         operation: "FutureCommand".into(),
         retryable: true,
         user_action_required: false,
-        retry_after_seconds: 10,
-    };
+        retry_after_seconds: 10};
 
     // Wire roundtrip preserves the raw i32 value
     let mut buf = BytesMut::new();
@@ -659,9 +642,8 @@ fn v3_snapshot_attach_response_roundtrip() {
         exit_status: None,
         terminal_modes: v3::TerminalModeState { bracketed_paste: true, ..Default::default() },
         scrollback_tail: bytes::Bytes::from_static(b"$ ls\nfile.txt\n"),
-        total_scrollback_bytes: 4096,
-    });
-    assert!(!pane.scrollback_complete);
+        total_scrollback_bytes: 4096});
+    assert!(!pane.scrollback_tail_complete);
 
     let snapshot = v3_snapshot::build_runtime_snapshot(
         runtime_id,
@@ -688,7 +670,7 @@ fn v3_snapshot_attach_response_roundtrip() {
     assert_eq!(snap.panes.len(), 1);
     assert_eq!(snap.panes[0].pane_output_seq, 42);
     assert_eq!(snap.panes[0].scrollback_tail.as_ref(), b"$ ls\nfile.txt\n");
-    assert!(!snap.panes[0].scrollback_complete);
+    assert!(!snap.panes[0].scrollback_tail_complete);
     assert!(snap.panes[0].terminal_modes.as_ref().unwrap().bracketed_paste);
 }
 
@@ -708,8 +690,7 @@ fn v3_output_delta_sequence_continuity() {
         exit_status: None,
         terminal_modes: v3::TerminalModeState::default(),
         scrollback_tail: bytes::Bytes::new(),
-        total_scrollback_bytes: 0,
-    });
+        total_scrollback_bytes: 0});
     let mut expected_next = pane.pane_output_seq + 1;
 
     // Receive contiguous deltas 11, 12, 13
@@ -758,9 +739,8 @@ fn v3_scrollback_truncation_and_snapshot() {
         exit_status: None,
         terminal_modes: v3::TerminalModeState::default(),
         scrollback_tail: tail,
-        total_scrollback_bytes: full_scrollback.len() as u64,
-    });
-    assert!(!pane.scrollback_complete);
+        total_scrollback_bytes: full_scrollback.len() as u64});
+    assert!(!pane.scrollback_tail_complete);
     assert_eq!(pane.total_scrollback_bytes, 500_000);
 
     // Wire roundtrip preserves all fields
@@ -768,7 +748,7 @@ fn v3_scrollback_truncation_and_snapshot() {
     encode_frame(&pane, &mut buf).unwrap();
     let decoded: v3::PaneSnapshot = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.scrollback_tail.len(), v3_snapshot::DEFAULT_SCROLLBACK_TAIL_LIMIT);
-    assert!(!decoded.scrollback_complete);
+    assert!(!decoded.scrollback_tail_complete);
     assert_eq!(decoded.total_scrollback_bytes, 500_000);
 }
 
@@ -935,8 +915,7 @@ fn v3_resync_overflow_and_resync_roundtrip() {
         exit_status: None,
         terminal_modes: v3::TerminalModeState::default(),
         scrollback_tail: bytes::Bytes::from_static(b"$ ls\n"),
-        total_scrollback_bytes: 5,
-    });
+        total_scrollback_bytes: 5});
     let snapshot = v3_snapshot::build_runtime_snapshot(
         runtime_id,
         50,
@@ -1138,8 +1117,7 @@ fn v3_profile_core_plus_individual_optional() {
                 assert!(!v3_inventory::is_supported(&effective));
                 assert!(v3_takeover::is_supported(&effective));
             }
-            _ => panic!("unexpected optional capability"),
-        }
+            _ => panic!("unexpected optional capability")}
     }
 }
 
@@ -1265,8 +1243,7 @@ fn v3_send_discipline_server_rejects_unnegotiated_command_with_error() {
         runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
         pane_id: uuid_to_bytes(uuid::Uuid::new_v4()),
         offset: 0,
-        limit: 65536,
-    });
+        limit: 65536});
     let client_env = v3_envelope::build_client_envelope(&id_gen, cmd);
 
     // Server checks capability and builds error
@@ -1307,20 +1284,16 @@ fn v3_send_discipline_core_commands_always_allowed() {
         v3::client_envelope::Command::Shutdown(v3::Shutdown {}),
         v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
-        }),
+            policy: v3::RuntimePolicy::Persistent as i32}),
         v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: rt.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
-        }),
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}),
         v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime { runtime_id: rt.clone() }),
         v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
-            runtime_id: rt.clone(),
-        }),
+            runtime_id: rt.clone()}),
         v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
             runtime_id: rt.clone(),
-            name: "renamed".into(),
-        }),
+            name: "renamed".into()}),
         v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
         v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: rt.clone(),
@@ -1328,30 +1301,26 @@ fn v3_send_discipline_core_commands_always_allowed() {
             dark_background: Some(true),
             cols: 80,
             rows: 24,
-            no_persist: None,
-        }),
+            no_persist: None}),
         v3::client_envelope::Command::ClosePane(v3::ClosePane {
             runtime_id: rt.clone(),
-            pane_id: pn.clone(),
-        }),
+            pane_id: pn.clone()}),
         v3::client_envelope::Command::ResizePane(v3::ResizePane {
             runtime_id: rt.clone(),
             pane_id: pn.clone(),
             cols: 120,
-            rows: 40,
-        }),
+            rows: 40}),
         v3::client_envelope::Command::SetPaneTitle(v3::SetPaneTitle {
             runtime_id: rt.clone(),
             pane_id: pn.clone(),
-            title: "title".into(),
-        }),
+            title: "title".into()}),
         v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: rt,
             pane_id: pn,
             kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
-                data: bytes::Bytes::from_static(b"x"),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"x")})),
             })),
-        }),
+        })
     ];
 
     for cmd in core_commands {
@@ -1375,8 +1344,7 @@ fn v3_wire_compat_unknown_enum_value_preserved_through_roundtrip() {
         operation: "FutureOp".into(),
         retryable: true,
         user_action_required: false,
-        retry_after_seconds: 30,
-    };
+        retry_after_seconds: 30};
     let mut buf = BytesMut::new();
     encode_frame(&err, &mut buf).unwrap();
     let decoded: v3::ProtocolError = decode_frame(&mut buf).unwrap();
@@ -1396,8 +1364,7 @@ fn v3_wire_compat_unknown_capability_value_preserved() {
         capabilities: vec![
             v3::Capability::CoreRuntimeLifecycle as i32,
             200, // future optional capability
-        ],
-    };
+        ]};
     let mut buf = BytesMut::new();
     encode_frame(&hello, &mut buf).unwrap();
     let decoded: v3::ClientHello = decode_frame(&mut buf).unwrap();
@@ -1442,8 +1409,7 @@ fn v3_wire_compat_missing_optional_fields_default_to_zero_values() {
         terminal_modes: None,
         scrollback_tail: bytes::Bytes::new(),
         total_scrollback_bytes: 0,
-        scrollback_complete: false,
-    };
+        scrollback_complete: false};
     let mut buf = BytesMut::new();
     encode_frame(&minimal, &mut buf).unwrap();
     let decoded: v3::PaneSnapshot = decode_frame(&mut buf).unwrap();
@@ -1560,8 +1526,7 @@ fn v3_wire_compat_runtime_info_without_v2_fields() {
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
-        panes: vec![],
-    };
+        panes: vec![]};
     let mut buf = BytesMut::new();
     encode_frame(&info, &mut buf).unwrap();
     let decoded: v3::RuntimeInfo = decode_frame(&mut buf).unwrap();
@@ -1580,23 +1545,20 @@ fn v3_core_runtime_lifecycle_end_to_end() {
     // CreateRuntime → RuntimeCreated
     let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
         name: "lifecycle-test".into(),
-        policy: v3::RuntimePolicy::Persistent as i32,
-    });
+        policy: v3::RuntimePolicy::Persistent as i32});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
         v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 1,
-        }),
+            runtime_revision: 1}),
     );
     assert_eq!(resp.request_id, req.request_id);
 
     // AttachRuntime → RuntimeSnapshot
     let cmd = v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
         runtime_id: runtime_id.clone(),
-        attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
-    });
+        attach_mode: v3::RuntimeAttachMode::ReadWrite as i32});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
@@ -1604,53 +1566,46 @@ fn v3_core_runtime_lifecycle_end_to_end() {
             runtime_id: runtime_id.clone(),
             runtime_revision: 2,
             client_role: v3::RuntimeClientRole::Writer as i32,
-            panes: vec![],
-        }),
+            panes: vec![]}),
     );
     assert_eq!(resp.request_id, req.request_id);
 
     // RenameRuntime → RuntimeRenamed
     let cmd = v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
         runtime_id: runtime_id.clone(),
-        name: "renamed".into(),
-    });
+        name: "renamed".into()});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
         v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
             runtime_id: runtime_id.clone(),
             name: "renamed".into(),
-            runtime_revision: 3,
-        }),
+            runtime_revision: 3}),
     );
     assert_eq!(resp.request_id, req.request_id);
 
     // DetachRuntime → RuntimeDetached
     let cmd = v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-        runtime_id: runtime_id.clone(),
-    });
+        runtime_id: runtime_id.clone()});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
         v3::server_envelope::Payload::RuntimeDetached(v3::RuntimeDetached {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 4,
-        }),
+            runtime_revision: 4}),
     );
     assert_eq!(resp.request_id, req.request_id);
 
     // TerminateRuntime → RuntimeTerminated
     let cmd = v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
-        runtime_id: runtime_id.clone(),
-    });
+        runtime_id: runtime_id.clone()});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
         v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
             runtime_id,
             final_revision: 5,
-            reason: v3::RuntimeTerminationReason::Explicit as i32,
-        }),
+            reason: v3::RuntimeTerminationReason::Explicit as i32}),
     );
     assert_eq!(resp.request_id, req.request_id);
 
@@ -1674,8 +1629,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         dark_background: Some(true),
         cols: 80,
         rows: 24,
-        no_persist: None,
-    });
+        no_persist: None});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_ne!(req.request_id, 0);
     let resp = v3_envelope::build_response_envelope(
@@ -1683,8 +1637,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         v3::server_envelope::Payload::PaneCreated(v3::PaneCreated {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            runtime_revision: 1,
-        }),
+            runtime_revision: 1}),
     );
     assert_eq!(resp.request_id, req.request_id);
 
@@ -1693,8 +1646,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         runtime_id: runtime_id.clone(),
         pane_id: pane_id.clone(),
         cols: 120,
-        rows: 40,
-    });
+        rows: 40});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_eq!(req.request_id, 0);
     let push = v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneResized(
@@ -1703,8 +1655,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
             pane_id: pane_id.clone(),
             cols: 120,
             rows: 40,
-            runtime_revision: 2,
-        },
+            runtime_revision: 2},
     ));
     assert!(v3_envelope::is_push_event(&push));
 
@@ -1712,16 +1663,14 @@ fn v3_core_pane_lifecycle_end_to_end() {
     let cmd = v3::client_envelope::Command::SetPaneTitle(v3::SetPaneTitle {
         runtime_id: runtime_id.clone(),
         pane_id: pane_id.clone(),
-        title: "vim".into(),
-    });
+        title: "vim".into()});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_eq!(req.request_id, 0);
 
     // ClosePane → PaneClosed
     let cmd = v3::client_envelope::Command::ClosePane(v3::ClosePane {
         runtime_id: runtime_id.clone(),
-        pane_id: pane_id.clone(),
-    });
+        pane_id: pane_id.clone()});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_ne!(req.request_id, 0);
     let resp = v3_envelope::build_response_envelope(
@@ -1729,8 +1678,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
             runtime_id,
             pane_id,
-            runtime_revision: 3,
-        }),
+            runtime_revision: 3}),
     );
     let mut buf = BytesMut::new();
     encode_frame(&resp, &mut buf).unwrap();
@@ -1758,8 +1706,7 @@ fn v3_core_terminal_io_end_to_end() {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             data: bytes::Bytes::from_static(b"total 42\n"),
-            pane_output_seq: 1,
-        },
+            pane_output_seq: 1},
     ));
     assert!(v3_envelope::is_push_event(&delta));
 
@@ -1769,16 +1716,14 @@ fn v3_core_terminal_io_end_to_end() {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cwd: "/home/user/project".into(),
-            runtime_revision: 2,
-        },
+            runtime_revision: 2},
     ));
     assert!(v3_envelope::is_push_event(&cwd));
 
     // Server sends Bell (push)
     let bell = v3_envelope::build_push_envelope(v3::server_envelope::Payload::Bell(v3::Bell {
         runtime_id: uuid_to_bytes(runtime_id),
-        pane_id: uuid_to_bytes(pane_id),
-    }));
+        pane_id: uuid_to_bytes(pane_id)}));
     assert!(v3_envelope::is_push_event(&bell));
 
     // Server sends PaneExited (push)
@@ -1787,8 +1732,7 @@ fn v3_core_terminal_io_end_to_end() {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             status: 0,
-            runtime_revision: 3,
-        },
+            runtime_revision: 3},
     ));
     assert!(v3_envelope::is_push_event(&exited));
 
@@ -1815,8 +1759,7 @@ fn v3_core_terminal_modes_end_to_end() {
         alternate_screen: true,
         cursor_hidden: true,
         mouse_mode: v3::MouseMode::Any as i32,
-        sgr_mouse: true,
-    };
+        sgr_mouse: true};
     let env = v3_terminal_modes::build_mode_changed_envelope(runtime_id, pane_id, 10, modes);
     assert!(v3_envelope::is_push_event(&env));
 
@@ -1900,8 +1843,7 @@ fn v3_opt_inventory_v2_absent_strips_extended_fields() {
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
-        panes: vec![],
-    };
+        panes: vec![]};
     let mut buf = BytesMut::new();
     encode_frame(&info, &mut buf).unwrap();
     let decoded: v3::RuntimeInfo = decode_frame(&mut buf).unwrap();
@@ -1920,8 +1862,7 @@ fn v3_opt_takeover_absent_attach_blocked_without_takeover() {
             runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
             current_client_role: v3::RuntimeClientRole::Unattached as i32,
             attached_client_count: 1,
-            read_only_client_count: 0,
-        },
+            read_only_client_count: 0},
     ));
     let mut buf = BytesMut::new();
     encode_frame(&blocked, &mut buf).unwrap();
@@ -2070,9 +2011,7 @@ fn v3_list_runtimes_end_to_end() {
                 active_pane_summary: String::new(),
                 takeover_eligible: false,
                 disabled_reason: String::new(),
-                panes: vec![],
-            }],
-        }),
+                panes: vec![]}]}),
     );
 
     let mut buf = BytesMut::new();

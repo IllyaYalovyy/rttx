@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 /// After creating and terminating multiple sessions, the server's internal
 /// hash maps (sessions, `pty_writers`, `client_senders`) must return to zero.
@@ -22,8 +22,7 @@ async fn hashmap_cleanup_after_session_terminate() {
     // Create several sessions with panes, then terminate them all.
     for i in 0..5 {
         let sid =
-            create_runtime(&mut client, &format!("map-{i}"), proto::RuntimePolicy::Persistent)
-                .await;
+            create_runtime(&mut client, &format!("map-{i}"), v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut client, &sid).await;
         let _pane = create_pane(&mut client, &sid).await;
         terminate_runtime(&mut client, &sid).await;
@@ -31,14 +30,15 @@ async fn hashmap_cleanup_after_session_terminate() {
 
     // Diagnostics should show zero sessions and zero panes.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
     let report = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -58,7 +58,7 @@ async fn hashmap_cleanup_after_pane_close() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "pane-cleanup", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "pane-cleanup", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     // Create and close several panes.
@@ -68,14 +68,15 @@ async fn hashmap_cleanup_after_pane_close() {
     }
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
     let report = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -96,20 +97,21 @@ async fn hashmap_cleanup_ephemeral_detach() {
 
     for i in 0..3 {
         let sid =
-            create_runtime(&mut client, &format!("eph-{i}"), proto::RuntimePolicy::Ephemeral).await;
+            create_runtime(&mut client, &format!("eph-{i}"), v3::RuntimePolicy::Ephemeral).await;
         attach_rw(&mut client, &sid).await;
         detach_runtime(&mut client, &sid).await;
     }
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
     let report = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -139,14 +141,15 @@ async fn client_sender_cleanup_on_disconnect() {
     client.handshake().await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
     let report = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };

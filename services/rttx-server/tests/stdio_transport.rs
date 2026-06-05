@@ -6,8 +6,7 @@
 
 use bytes::BytesMut;
 use rttx_proto::{
-    PROTOCOL_VERSION, bytes_to_uuid, decode_frame, encode_frame, proto, uuid_to_bytes,
-};
+    bytes_to_uuid, decode_frame, encode_frame, v3, uuid_to_bytes};
 use std::process::Stdio;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -46,15 +45,14 @@ async fn start_daemon(
 async fn read_response(
     stdout: &mut tokio::process::ChildStdout,
     read_buf: &mut BytesMut,
-) -> proto::ServerMessage {
+) -> v3::ServerEnvelope {
     loop {
         let n = stdout.read_buf(read_buf).await.unwrap();
         assert!(n > 0, "unexpected EOF");
-        match decode_frame::<proto::ServerMessage>(read_buf) {
+        match decode_frame::<v3::ServerEnvelope>(read_buf) {
             Ok(msg) => return msg,
             Err(rttx_proto::FrameError::Incomplete) => {}
-            Err(e) => panic!("decode error: {e}"),
-        }
+            Err(e) => panic!("decode error: {e}")}
     }
 }
 
@@ -88,58 +86,50 @@ async fn attach_stdio_hello_and_create_runtime() {
     let mut read_buf = BytesMut::with_capacity(4096);
 
     // Hello.
-    let hello = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-            protocol_version: PROTOCOL_VERSION,
-            client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-        })),
-    };
+    let hello = v3::ClientEnvelope {
+        request_id: 0, command: Some(/* TODO: v2 Hello removed in v3 migration */(v3::ClientHello {
+            protocol_version: client_id: uuid_to_bytes(uuid::Uuid::new_v4())}))};
     let mut buf = BytesMut::new();
     encode_frame(&hello, &mut buf).unwrap();
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
     let ack = read_response(&mut stdout, &mut read_buf).await;
-    assert!(matches!(ack.msg, Some(proto::server_message::Msg::HelloAck(_))));
+    assert!(matches!(ack.payload, Some(/* TODO: v2 HelloAck removed in v3 migration */(_))));
 
     // Create session.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "stdio-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
-        })),
-    };
+            policy: v3::RuntimePolicy::Persistent as i32}))};
     buf.clear();
     encode_frame(&create, &mut buf).unwrap();
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
     let resp = read_response(&mut stdout, &mut read_buf).await;
-    let runtime_id = match resp.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => {
+    let runtime_id = match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => {
             bytes_to_uuid(&sc.runtime_id).unwrap()
         }
-        other => panic!("expected RuntimeCreated, got {other:?}"),
-    };
+        other => panic!("expected RuntimeCreated, got {other:?}")};
     assert!(!runtime_id.is_nil());
 
     // List runtimes.
-    let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
-    };
+    let list = v3::ClientEnvelope {
+        request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))};
     buf.clear();
     encode_frame(&list, &mut buf).unwrap();
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
     let resp = read_response(&mut stdout, &mut read_buf).await;
-    match resp.msg {
-        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeList(sl)) => {
             assert_eq!(sl.runtimes.len(), 1);
             assert_eq!(sl.runtimes[0].name, "stdio-test");
         }
-        other => panic!("expected RuntimeList, got {other:?}"),
-    }
+        other => panic!("expected RuntimeList, got {other:?}")}
 
     // Disconnect — process should exit.
     drop(stdin);

@@ -7,7 +7,7 @@ use common::{
     attach_rw, create_pane, create_runtime, send_input, start_test_server,
     wait_for_state_containing,
 };
-use rttx_proto::{bytes_to_uuid, proto};
+use rttx_proto::{bytes_to_uuid, v3};
 use rttx_server::state::persistence;
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ async fn restart_restores_terminal_modes_from_snapshot_metadata() {
         c.handshake().await;
 
         runtime_id_bytes =
-            create_runtime(&mut c, "mode-restore", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut c, "mode-restore", v3::RuntimePolicy::Persistent).await;
         let pane_id_bytes = create_pane(&mut c, &runtime_id_bytes).await;
         pane_id = bytes_to_uuid(&pane_id_bytes).unwrap();
         attach_rw(&mut c, &runtime_id_bytes).await;
@@ -80,6 +80,6 @@ async fn restart_restores_terminal_modes_from_snapshot_metadata() {
         assert!(pane.exit_status.is_none(), "reconstructed pane should have a live shell");
 
         // Scrollback should not be empty (screen_bytes were fed).
-        assert!(!pane.scrollback.is_empty(), "scrollback should be restored");
+        assert!(!pane.scrollback_tail.is_empty(), "scrollback should be restored");
     }
 }

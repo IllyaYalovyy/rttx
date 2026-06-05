@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -15,28 +15,30 @@ async fn create_runtime_and_list() {
     client.handshake().await;
 
     // Create a session.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "test-session".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
-    let runtime_id = match resp.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
     assert_eq!(runtime_id.len(), 16);
 
     // List runtimes.
-    let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+    let list = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeList(sl)) => {
             assert_eq!(sl.runtimes.len(), 1);
             assert_eq!(sl.runtimes[0].name, "test-session");
         }
@@ -53,38 +55,41 @@ async fn attach_and_detach_runtime() {
     client.handshake().await;
 
     // Create session.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "attach-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
-    let runtime_id = match resp.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Attach.
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     let resp = client.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Snapshot(snap)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
             assert_eq!(snap.runtime_id, runtime_id);
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
     // Detach.
-    let detach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+    let detach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
             runtime_id: runtime_id.clone(),
         })),
     };
@@ -92,23 +97,25 @@ async fn attach_and_detach_runtime() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(
-                proto::server_message::Msg::Delta(_) | proto::server_message::Msg::PaneExited(_),
+                v3::server_envelope::Payload::OutputDelta(_)
+                | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
             other => panic!("expected RuntimeDetached, got {other:?}"),
         }
     }
 
     // Verify session still exists after detach.
-    let list = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+    let list = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
     };
     client.send(&list).await;
     let resp = client.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::RuntimeList(sl)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeList(sl)) => {
             assert_eq!(sl.runtimes.len(), 1);
         }
         other => panic!("expected RuntimeList, got {other:?}"),
@@ -124,22 +131,24 @@ async fn create_and_close_pane() {
     client.handshake().await;
 
     // Create session.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "pane-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
-    let runtime_id = match resp.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Create pane.
-    let create_pane = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    let create_pane = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
@@ -150,21 +159,22 @@ async fn create_and_close_pane() {
     };
     client.send(&create_pane).await;
     let resp = client.recv().await;
-    let pane_id = match resp.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+    let pane_id = match resp.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
     // Close pane.
-    let close_pane = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+    let close_pane = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
             runtime_id: runtime_id.clone(),
             pane_id,
         })),
     };
     client.send(&close_pane).await;
     let resp = client.recv().await;
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::PaneClosed(_))));
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::PaneClosed(_))));
 }
 
 #[tokio::test]
@@ -175,13 +185,14 @@ async fn rename_runtime_updates_name_and_inventory() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "original", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "original", v3::RuntimePolicy::Persistent).await;
     common::attach_rw(&mut client, &runtime_id).await;
 
     // Rename the session.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
                 runtime_id: runtime_id.clone(),
                 name: "renamed".into(),
             })),
@@ -190,13 +201,13 @@ async fn rename_runtime_updates_name_and_inventory() {
 
     // Expect RuntimeRenamed response.
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::RuntimeRenamed(renamed)) => {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeRenamed(renamed)) => {
                 assert_eq!(renamed.runtime_id, runtime_id);
                 assert_eq!(renamed.name, "renamed");
                 break;
             }
-            Some(proto::server_message::Msg::Delta(_)) => {}
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected RuntimeRenamed, got {other:?}"),
         }
     }
@@ -215,22 +226,23 @@ async fn rename_runtime_persists_across_restart() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "before", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "before", v3::RuntimePolicy::Persistent).await;
     common::attach_rw(&mut client, &runtime_id).await;
 
     // Rename.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
                 runtime_id: runtime_id.clone(),
                 name: "after".into(),
             })),
         })
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::RuntimeRenamed(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeRenamed(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected RuntimeRenamed, got {other:?}"),
         }
     }
@@ -240,8 +252,9 @@ async fn rename_runtime_persists_across_restart() {
 
     // Shutdown and restart.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
         })
         .await;
     let _ = handle.await;

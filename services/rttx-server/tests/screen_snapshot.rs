@@ -6,7 +6,7 @@
 mod common;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
-use rttx_proto::{bytes_to_uuid, proto};
+use rttx_proto::{bytes_to_uuid, v3};
 use rttx_server::state::{layout, persistence};
 use std::time::Duration;
 
@@ -21,24 +21,26 @@ async fn serialization_writes_screen_snapshots() {
     c.handshake().await;
 
     // Create a persistent runtime.
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "snap-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
-    let runtime_id_bytes = match c.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id_bytes = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
     let runtime_id = bytes_to_uuid(&runtime_id_bytes).unwrap();
 
     // Attach to the runtime (ReadWrite).
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id_bytes.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     })
     .await;
@@ -46,8 +48,9 @@ async fn serialization_writes_screen_snapshots() {
     let _ = c.recv().await;
 
     // Create a pane.
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id_bytes.clone(),
             cols: 80,
             rows: 24,
@@ -56,8 +59,8 @@ async fn serialization_writes_screen_snapshots() {
         })),
     })
     .await;
-    let pane_id = match c.recv().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => bytes_to_uuid(&pc.pane_id).unwrap(),
+    let pane_id = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(pc)) => bytes_to_uuid(&pc.pane_id).unwrap(),
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 

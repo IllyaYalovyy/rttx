@@ -7,13 +7,13 @@
 mod common;
 
 use common::{TestClient, send_input, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
     let runtime_id =
-        common::create_runtime(client, "vte-test", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(client, "vte-test", v3::RuntimePolicy::Persistent).await;
     let pane_id = common::create_pane(client, &runtime_id).await;
     common::attach_rw(client, &runtime_id).await;
     (runtime_id, pane_id)
@@ -33,14 +33,14 @@ async fn title_and_cwd_propagated_after_two_phase_parsing() {
 
     let msgs = client.drain(Duration::from_secs(5)).await;
 
-    let title_msg = msgs.iter().find_map(|m| match &m.msg {
-        Some(proto::server_message::Msg::TitleChanged(t)) if t.title == "my-project" => {
+    let title_msg = msgs.iter().find_map(|m| match &m.payload {
+        Some(v3::server_envelope::Payload::TitleChanged(t)) if t.title == "my-project" => {
             Some(t.title.clone())
         }
         _ => None,
     });
-    let cwd_msg = msgs.iter().find_map(|m| match &m.msg {
-        Some(proto::server_message::Msg::CwdChanged(c)) if c.cwd == "/tmp/project" => {
+    let cwd_msg = msgs.iter().find_map(|m| match &m.payload {
+        Some(v3::server_envelope::Payload::CwdChanged(c)) if c.cwd == "/tmp/project" => {
             Some(c.cwd.clone())
         }
         _ => None,

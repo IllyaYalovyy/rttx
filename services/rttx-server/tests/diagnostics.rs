@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 #[tokio::test]
 async fn diagnostics_empty_server() {
@@ -14,14 +14,15 @@ async fn diagnostics_empty_server() {
     client.handshake().await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
 
     let resp = client.recv_or_timeout().await;
-    let report = match resp.msg {
-        Some(proto::server_message::Msg::DiagnosticsReport(r)) => r,
+    let report = match resp.payload {
+        Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => r,
         other => panic!("expected DiagnosticsReport, got {other:?}"),
     };
 
@@ -42,7 +43,7 @@ async fn diagnostics_with_session_and_pane() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "diag-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "diag-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let _pane_id = create_pane(&mut client, &sid).await;
 
@@ -51,15 +52,16 @@ async fn diagnostics_with_session_and_pane() {
     client.drain(std::time::Duration::from_millis(200)).await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
 
     let resp = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -80,20 +82,21 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "cleanup", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "cleanup", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let _pane_id = create_pane(&mut client, &sid).await;
 
     // Verify non-zero state.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
     let before = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -103,14 +106,15 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
     terminate_runtime(&mut client, &sid).await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::GetDiagnostics(proto::GetDiagnostics {})),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
         })
         .await;
     let after = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::DiagnosticsReport(r)) => break r,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };

@@ -5,6 +5,7 @@
 mod common;
 
 use common::start_test_server;
+use rttx_proto::v3;
 use tokio::net::UnixStream;
 
 /// A bare connect-and-drop (the pattern used by `is_server_running`)
@@ -51,7 +52,7 @@ async fn repeated_probes_do_not_leak_resources() {
     let sid = common::create_runtime(
         &mut client,
         "after-probes",
-        rttx_proto::proto::RuntimePolicy::Persistent,
+        rttx_proto::v3::RuntimePolicy::Persistent,
     )
     .await;
     assert!(!sid.is_empty());

@@ -7,7 +7,7 @@
 mod common;
 
 use common::TestClient;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -72,47 +72,38 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "shell-editing".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
-            })),
-        })
+                policy: v3::RuntimePolicy::Persistent as i32}))})
         .await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
-    };
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
+        other => panic!("expected RuntimeCreated, got {other:?}")};
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None,
-            })),
-        })
+                no_persist: None}))})
         .await;
-    let pane_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(created)) => created.pane_id,
-        other => panic!("expected PaneCreated, got {other:?}"),
-    };
+    let pane_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(created)) => created.pane_id,
+        other => panic!("expected PaneCreated, got {other:?}")};
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(_)) => {}
-        other => panic!("expected Snapshot, got {other:?}"),
-    }
+    match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        other => panic!("expected Snapshot, got {other:?}")}
 
     (runtime_id, pane_id)
 }
@@ -122,7 +113,7 @@ async fn wait_for_prompt(client: &mut TestClient) {
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(message) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = message.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = message.payload
         {
             output.extend(delta.data);
             if String::from_utf8_lossy(&output).contains(PROMPT) {
@@ -141,31 +132,28 @@ async fn resize_pane(
     rows: u32,
 ) {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
                 runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
                 cols,
-                rows,
-            })),
-        })
+                rows}))})
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneResized(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected PaneResized, got {other:?}"),
-        }
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::PaneResized(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("expected PaneResized, got {other:?}")}
     }
 }
 
-fn pane_scrollback(snapshot: &proto::Snapshot, pane_id: &[u8]) -> bytes::Bytes {
+fn pane_scrollback(snapshot: &v3::RuntimeSnapshot, pane_id: &[u8]) -> bytes::Bytes {
     snapshot
         .panes
         .iter()
         .find(|pane| pane.pane_id == pane_id)
         .expect("pane missing from snapshot")
-        .scrollback
+        .scrollback_tail
         .clone()
 }
 
@@ -175,34 +163,28 @@ async fn reattach_snapshot_bytes(
     pane_id: &[u8],
 ) -> bytes::Bytes {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
-                runtime_id: runtime_id.to_vec(),
-            })),
-        })
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                runtime_id: runtime_id.to_vec()}))})
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::RuntimeDetached(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}"),
-        }
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("expected RuntimeDetached, got {other:?}")}
     }
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
     let snapshot = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(snapshot)) => break snapshot,
-            Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}"),
-        }
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => break snapshot,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}")}
     };
     pane_scrollback(&snapshot, pane_id)
 }
@@ -217,19 +199,16 @@ async fn attach_snapshot_bytes(
     pane_id: &[u8],
 ) -> bytes::Bytes {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
-            })),
-        })
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
         .await;
     let snapshot = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(snapshot)) => break snapshot,
-            Some(proto::server_message::Msg::Delta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}"),
-        }
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => break snapshot,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("expected Snapshot, got {other:?}")}
     };
     pane_scrollback(&snapshot, pane_id)
 }
@@ -247,7 +226,7 @@ async fn attach_and_collect_prompt(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while tokio::time::Instant::now() < deadline {
         if let Some(message) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = message.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = message.payload
         {
             output.extend(&delta.data);
             if normalize_scrollback(&output).ends_with(PROMPT) {
@@ -261,11 +240,11 @@ async fn attach_and_collect_prompt(
 
 async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
-                data: bytes::Bytes::copy_from_slice(data),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::copy_from_slice(data)})),
             })),
         })
         .await;
@@ -277,9 +256,8 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 
 async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
-        })
+        .send(&v3::ClientEnvelope {
+            request_id: 0, command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {}))})
         .await;
     let status = tokio::time::timeout(Duration::from_secs(5), server_child.wait())
         .await

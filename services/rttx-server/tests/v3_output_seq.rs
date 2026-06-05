@@ -6,6 +6,8 @@
 
 mod common;
 
+use rttx_proto::v3;
+
 /// Attach snapshot includes the current `pane_output_seq` for each pane.
 #[tokio::test]
 async fn snapshot_carries_pane_output_seq() {
@@ -13,9 +15,11 @@ async fn snapshot_carries_pane_output_seq() {
     let (socket_path, _handle) = common::start_test_server(tmp.path()).await;
 
     let mut client = common::TestV3Client::connect(&socket_path).await;
-    let runtime_id = client.create_runtime("seq-snap").await;
-    let _snap = client.attach_rw(&runtime_id).await;
-    let pane_id = client.create_pane(&runtime_id).await;
+    client.handshake().await;
+    let runtime_id =
+        common::create_runtime(&mut client, "seq-snap", v3::RuntimePolicy::Persistent).await;
+    let _snap = common::attach_rw(&mut client, &runtime_id).await;
+    let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
     // Drain initial shell output so the pane's output_seq advances.
     let _ = client.collect_output_seqs(std::time::Duration::from_secs(2)).await;
@@ -42,7 +46,7 @@ async fn snapshot_carries_pane_output_seq() {
         }
     }
 
-    let snap = client.attach_rw(&runtime_id).await;
+    let snap = common::attach_rw(&mut client, &runtime_id).await;
     assert!(!snap.panes.is_empty(), "snapshot should contain the pane");
     let pane_snap = snap.panes.iter().find(|p| p.pane_id == pane_id).expect("pane not in snapshot");
     // The pane had output, so seq must be > 0.
@@ -61,9 +65,11 @@ async fn live_deltas_carry_contiguous_pane_output_seq() {
     let (socket_path, _handle) = common::start_test_server(tmp.path()).await;
 
     let mut client = common::TestV3Client::connect(&socket_path).await;
-    let runtime_id = client.create_runtime("seq-delta").await;
-    let _snap = client.attach_rw(&runtime_id).await;
-    let _pane_id = client.create_pane(&runtime_id).await;
+    client.handshake().await;
+    let runtime_id =
+        common::create_runtime(&mut client, "seq-delta", v3::RuntimePolicy::Persistent).await;
+    let _snap = common::attach_rw(&mut client, &runtime_id).await;
+    let _pane_id = common::create_pane(&mut client, &runtime_id).await;
 
     // Collect output deltas from shell startup.
     let seqs = client.collect_output_seqs(std::time::Duration::from_secs(2)).await;
@@ -95,9 +101,11 @@ async fn delta_seq_continues_from_snapshot_seq() {
     let (socket_path, _handle) = common::start_test_server(tmp.path()).await;
 
     let mut client = common::TestV3Client::connect(&socket_path).await;
-    let runtime_id = client.create_runtime("seq-cont").await;
-    let _snap = client.attach_rw(&runtime_id).await;
-    let pane_id = client.create_pane(&runtime_id).await;
+    client.handshake().await;
+    let runtime_id =
+        common::create_runtime(&mut client, "seq-cont", v3::RuntimePolicy::Persistent).await;
+    let _snap = common::attach_rw(&mut client, &runtime_id).await;
+    let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
     // Drain initial output.
     let _ = client.collect_output_seqs(std::time::Duration::from_secs(2)).await;
@@ -124,12 +132,12 @@ async fn delta_seq_continues_from_snapshot_seq() {
     }
 
     // Reattach and record snapshot seq.
-    let snap = client.attach_rw(&runtime_id).await;
+    let snap = common::attach_rw(&mut client, &runtime_id).await;
     let pane_snap = snap.panes.iter().find(|p| p.pane_id == pane_id).expect("pane not in snapshot");
     let snapshot_seq = pane_snap.pane_output_seq;
 
     // Send input to trigger output.
-    client.send_input(&runtime_id, &pane_id, b"echo hello\n").await;
+    common::send_input(&mut client, &runtime_id, &pane_id, b"echo hello\n").await;
 
     // Collect deltas.
     let seqs = client.collect_output_seqs(std::time::Duration::from_secs(3)).await;

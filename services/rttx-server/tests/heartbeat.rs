@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TestClient, attach_rw, create_runtime, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 #[test]
 fn ping_receives_matching_pong() {
@@ -14,15 +14,13 @@ fn ping_receives_matching_pong() {
         client.handshake().await;
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 42 })),
-            })
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 42 }))})
             .await;
 
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Pong(pong)) => assert_eq!(pong.nonce, 42),
-            other => panic!("expected Pong, got {other:?}"),
-        }
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::Pong(pong)) => assert_eq!(pong.nonce, 42),
+            other => panic!("expected Pong, got {other:?}")}
     });
 }
 
@@ -35,19 +33,17 @@ fn ping_roundtrip_still_works_for_attached_clients() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "heartbeat-attach", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut client, "heartbeat-attach", v3::RuntimePolicy::Persistent).await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 7 })),
-            })
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 7 }))})
             .await;
 
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Pong(pong)) => assert_eq!(pong.nonce, 7),
-            other => panic!("expected Pong, got {other:?}"),
-        }
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::Pong(pong)) => assert_eq!(pong.nonce, 7),
+            other => panic!("expected Pong, got {other:?}")}
     });
 }
 
@@ -64,7 +60,7 @@ fn ping_answered_while_mutex_held() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "mutex-held", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut client, "mutex-held", v3::RuntimePolicy::Persistent).await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane and trigger continuous output to keep the mutex busy.
@@ -72,24 +68,21 @@ fn ping_answered_while_mutex_held() {
 
         // Generate a burst of PTY output that keeps the server busy.
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Input(proto::Input {
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    data: bytes::Bytes::from_static(
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static( })),
                         b"for i in $(seq 1 500); do echo line$i; done\n",
-                    ),
-                })),
-            })
+                    )}))})
             .await;
 
         // Immediately send multiple pings — they must all be answered
         // promptly even while PTY output is being processed.
         for nonce in [100, 200, 300] {
             client
-                .send(&proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce })),
-                })
+                .send(&v3::ClientEnvelope {
+                    request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce }))})
                 .await;
         }
 
@@ -99,12 +92,11 @@ fn ping_answered_while_mutex_held() {
         while pong_nonces.len() < 3 && tokio::time::Instant::now() < deadline {
             match client.try_recv(std::time::Duration::from_secs(2)).await {
                 Some(msg) => {
-                    if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                    if let Some(v3::server_envelope::Payload::Pong(pong)) = msg.payload {
                         pong_nonces.push(pong.nonce);
                     }
                 }
-                None => break,
-            }
+                None => break}
         }
         assert_eq!(pong_nonces, vec![100, 200, 300], "all pongs should arrive promptly");
     });
@@ -123,41 +115,39 @@ fn ping_answered_during_pty_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "ping-during-output", proto::RuntimePolicy::Persistent)
+            create_runtime(&mut client, "ping-during-output", v3::RuntimePolicy::Persistent)
                 .await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane that will produce output.
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                     runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: Some(true),
                     cols: 0,
                     rows: 0,
-                    no_persist: None,
-                })),
-            })
+                    no_persist: None}))})
             .await;
 
         // Read PaneCreated response.
         let pane_id = loop {
             let msg = client.recv_or_timeout().await;
-            if let Some(proto::server_message::Msg::PaneCreated(created)) = msg.msg {
+            if let Some(v3::server_envelope::Payload::PaneCreated(created)) = msg.payload {
                 break created.pane_id;
             }
         };
 
         // Send some input to generate PTY output.
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Input(proto::Input {
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    data: bytes::Bytes::from_static(b"echo hello\n"),
-                })),
-            })
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo hello\n")})),
+            })),
+        })
             .await;
 
         // Wait briefly for output to start flowing.
@@ -165,9 +155,8 @@ fn ping_answered_during_pty_output() {
 
         // Send a ping while output may be in flight.
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 99 })),
-            })
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 99 }))})
             .await;
 
         // Drain messages until we see the pong. With the concurrent
@@ -178,14 +167,13 @@ fn ping_answered_during_pty_output() {
         while tokio::time::Instant::now() < deadline {
             match client.try_recv(std::time::Duration::from_secs(2)).await {
                 Some(msg) => {
-                    if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                    if let Some(v3::server_envelope::Payload::Pong(pong)) = msg.payload {
                         assert_eq!(pong.nonce, 99);
                         got_pong = true;
                         break;
                     }
                 }
-                None => break,
-            }
+                None => break}
         }
         assert!(got_pong, "pong should arrive even during PTY output");
     });
@@ -205,22 +193,20 @@ fn sustained_pings_answered_during_continuous_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "sustained-heartbeat", proto::RuntimePolicy::Persistent)
+            create_runtime(&mut client, "sustained-heartbeat", v3::RuntimePolicy::Persistent)
                 .await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
         let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
         // Generate continuous output to create backpressure.
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Input(proto::Input {
+            .send(&v3::ClientEnvelope {
+                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    data: bytes::Bytes::from_static(
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static( })),
                         b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n",
-                    ),
-                })),
-            })
+                    )}))})
             .await;
 
         // Simulate the client heartbeat pattern: send 8 pings at short
@@ -229,9 +215,8 @@ fn sustained_pings_answered_during_continuous_output() {
         for nonce in 0..ping_count {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             client
-                .send(&proto::ClientMessage {
-                    msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce })),
-                })
+                .send(&v3::ClientEnvelope {
+                    request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce }))})
                 .await;
         }
 
@@ -241,12 +226,11 @@ fn sustained_pings_answered_during_continuous_output() {
         while (pong_nonces.len() as u64) < ping_count && tokio::time::Instant::now() < deadline {
             match client.try_recv(std::time::Duration::from_secs(3)).await {
                 Some(msg) => {
-                    if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                    if let Some(v3::server_envelope::Payload::Pong(pong)) = msg.payload {
                         pong_nonces.push(pong.nonce);
                     }
                 }
-                None => break,
-            }
+                None => break}
         }
         let expected: Vec<u64> = (0..ping_count).collect();
         assert_eq!(

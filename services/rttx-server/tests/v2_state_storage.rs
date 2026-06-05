@@ -13,7 +13,7 @@ use common::{
     TestClient, attach_rw, create_pane, create_runtime, list_runtimes, send_input,
     start_test_server, terminate_runtime, wait_for_state_containing,
 };
-use rttx_proto::{bytes_to_uuid, proto};
+use rttx_proto::{bytes_to_uuid, v3};
 use rttx_server::state::{layout, persistence, types::SCREEN_SNAPSHOT_SCHEMA_VERSION};
 use std::time::Duration;
 
@@ -30,15 +30,14 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let _rt_id =
-            create_runtime(&mut c, "index-fallback", proto::RuntimePolicy::Persistent).await;
+        let _rt_id = create_runtime(&mut c, "index-fallback", v3::RuntimePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "index-fallback", Duration::from_secs(10)).await;
 
         // Create a second runtime to trigger a second daemon index write,
         // which produces the .prev backup.
         let _rt2_id =
-            create_runtime(&mut c, "index-fallback-2", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut c, "index-fallback-2", v3::RuntimePolicy::Persistent).await;
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         handle.abort();
@@ -79,8 +78,7 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let _rt_id =
-            create_runtime(&mut c, "doomed-runtime", proto::RuntimePolicy::Persistent).await;
+        let _rt_id = create_runtime(&mut c, "doomed-runtime", v3::RuntimePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "doomed-runtime", Duration::from_secs(10)).await;
         handle.abort();
@@ -121,7 +119,7 @@ async fn corrupt_runtime_file_recovers_from_backup() {
         c.handshake().await;
 
         let rt_id_bytes =
-            create_runtime(&mut c, "backup-recovery", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut c, "backup-recovery", v3::RuntimePolicy::Persistent).await;
         runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
         // Wait for first write.
@@ -170,7 +168,7 @@ async fn loaded_runtime_is_clean_after_restart() {
         c.handshake().await;
 
         let _rt_id =
-            create_runtime(&mut c, "clean-after-restart", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut c, "clean-after-restart", v3::RuntimePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "clean-after-restart", Duration::from_secs(10)).await;
         handle.abort();
@@ -213,8 +211,7 @@ async fn multiple_mutations_coalesce_into_single_write() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes =
-        create_runtime(&mut c, "coalesce-test", proto::RuntimePolicy::Persistent).await;
+    let rt_id_bytes = create_runtime(&mut c, "coalesce-test", v3::RuntimePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for initial write.
@@ -229,8 +226,9 @@ async fn multiple_mutations_coalesce_into_single_write() {
 
     // Fire multiple renames rapidly (all within one tick interval).
     for i in 0..5 {
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
                 runtime_id: rt_id_bytes.clone(),
                 name: format!("renamed-{i}"),
             })),
@@ -269,8 +267,7 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes =
-        create_runtime(&mut c, "rotation-test", proto::RuntimePolicy::Persistent).await;
+    let rt_id_bytes = create_runtime(&mut c, "rotation-test", v3::RuntimePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     attach_rw(&mut c, &rt_id_bytes).await;
@@ -377,7 +374,7 @@ async fn terminated_runtime_does_not_become_orphan_on_restart() {
         c.handshake().await;
 
         let rt_id_bytes =
-            create_runtime(&mut c, "terminated-rt", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut c, "terminated-rt", v3::RuntimePolicy::Persistent).await;
 
         // Wait for serialization.
         wait_for_state_containing(tmp.path(), "terminated-rt", Duration::from_secs(10)).await;
@@ -428,7 +425,7 @@ async fn screen_snapshot_survives_restart() {
         c.handshake().await;
 
         let rt_id_bytes =
-            create_runtime(&mut c, "snap-restart", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut c, "snap-restart", v3::RuntimePolicy::Persistent).await;
         runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
         attach_rw(&mut c, &rt_id_bytes).await;
@@ -475,14 +472,15 @@ async fn no_persist_pane_snapshot_is_confidential_via_server() {
     c.handshake().await;
 
     let rt_id_bytes =
-        create_runtime(&mut c, "confidential-snap", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut c, "confidential-snap", v3::RuntimePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     attach_rw(&mut c, &rt_id_bytes).await;
 
     // Create a no_persist pane.
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: rt_id_bytes.clone(),
             cols: 80,
             rows: 24,
@@ -492,11 +490,11 @@ async fn no_persist_pane_snapshot_is_confidential_via_server() {
     })
     .await;
     let pane_id = loop {
-        match c.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => {
+        match c.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => {
                 break bytes_to_uuid(&pc.pane_id).unwrap();
             }
-            Some(proto::server_message::Msg::Delta(_)) => {}
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected PaneCreated, got {other:?}"),
         }
     };

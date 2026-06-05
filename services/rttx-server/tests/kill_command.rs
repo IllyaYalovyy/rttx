@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 #[tokio::test]
 async fn kill_terminates_existing_runtime() {
@@ -14,7 +14,7 @@ async fn kill_terminates_existing_runtime() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "target", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "target", v3::RuntimePolicy::Persistent).await;
 
     // Verify it exists.
     let runtimes = common::list_runtimes(&mut client).await;
@@ -38,16 +38,17 @@ async fn kill_nonexistent_runtime_returns_error() {
 
     let fake_id = rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4());
 
-    let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+    let msg = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
             runtime_id: fake_id,
         })),
     };
     client.send(&msg).await;
 
     let resp = client.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
             assert!(e.message.contains("not found"), "expected 'not found', got: {}", e.message);
         }
         other => panic!("expected Error, got: {other:?}"),

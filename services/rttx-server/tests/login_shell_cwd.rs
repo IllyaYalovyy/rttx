@@ -4,7 +4,7 @@
 mod common;
 
 use common::{TestClient, send_input, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -15,11 +15,12 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "login-shell-test", proto::RuntimePolicy::Persistent)
+        common::create_runtime(&mut client, "login-shell-test", v3::RuntimePolicy::Persistent)
             .await;
 
-    let create_pane = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    let create_pane = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
@@ -29,20 +30,21 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
         })),
     };
     client.send(&create_pane).await;
-    let pane_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+    let pane_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(_)) => {}
+    match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
@@ -59,8 +61,8 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
     let msgs = client.drain(Duration::from_secs(5)).await;
     let saw_tmp_cwd = msgs.iter().any(|m| {
         matches!(
-            &m.msg,
-            Some(proto::server_message::Msg::CwdChanged(c)) if c.cwd == "/tmp"
+            &m.payload,
+            Some(v3::server_envelope::Payload::CwdChanged(c)) if c.cwd == "/tmp"
         )
     });
 
