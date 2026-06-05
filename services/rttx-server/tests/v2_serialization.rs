@@ -6,7 +6,7 @@
 mod common;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use rttx_server::state::{layout, persistence, types::RUNTIME_FILE_SCHEMA_VERSION};
 use std::time::Duration;
 
@@ -19,15 +19,16 @@ async fn serialization_writes_v2_runtime_files() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "v2-write-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
-    let _runtime_id = match c.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let _runtime_id = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
@@ -58,15 +59,16 @@ async fn serialization_creates_backup_symlink() {
     c.handshake().await;
 
     // First runtime — triggers first daemon index write.
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "bak-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
-    let _runtime_id = match c.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let _runtime_id = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
@@ -74,10 +76,11 @@ async fn serialization_creates_backup_symlink() {
     wait_for_state_containing(tmp.path(), "bak-test", Duration::from_secs(10)).await;
 
     // Second runtime — changes runtime IDs, triggers second daemon index write.
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "bak-test-2".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
@@ -107,15 +110,16 @@ async fn restart_prefers_v2_over_v1() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "v2-preferred".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-        runtime_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        runtime_id = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
@@ -130,12 +134,13 @@ async fn restart_prefers_v2_over_v1() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
         })
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
             other => panic!("expected RuntimeList, got {other:?}"),
         };
         assert_eq!(runtimes.len(), 1);
@@ -153,12 +158,13 @@ async fn fresh_start_when_no_state() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
     })
     .await;
-    let runtimes = match c.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+    let runtimes = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
         other => panic!("expected RuntimeList, got {other:?}"),
     };
     assert!(runtimes.is_empty(), "fresh start should have no runtimes");
@@ -176,22 +182,24 @@ async fn corrupt_v2_runtime_skipped_not_fatal() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "good-runtime".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-        rt1_id = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        rt1_id = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "bad-runtime".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
@@ -217,12 +225,13 @@ async fn corrupt_v2_runtime_skipped_not_fatal() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
         })
         .await;
-        let runtimes = match c.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+        let runtimes = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
             other => panic!("expected RuntimeList, got {other:?}"),
         };
         assert_eq!(runtimes.len(), 1, "only the good runtime should survive");

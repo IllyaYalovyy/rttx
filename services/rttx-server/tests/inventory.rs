@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -15,21 +15,23 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
     client.handshake().await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "inventory-test".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let runtime_id = match client.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+    let runtime_id = match client.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
@@ -39,28 +41,38 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
             })),
         })
         .await;
-    let pane_id = match client.recv().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(created)) => created.pane_id,
+    let pane_id = match client.recv().await.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(created)) => created.pane_id,
         other => panic!("expected PaneCreated, got {other:?}"),
     };
+
+    // Attach read-write so the client can set the pane title (SetPaneTitle is
+    // silently dropped for clients without write access in v3), then detach
+    // afterwards so the inventory reports the runtime as unattached.
+    common::attach_rw(&mut client, &runtime_id).await;
 
     // Let the interactive shell emit its initial prompt/title traffic before
     // asserting a later manual SetPaneTitle update.
     let _ = client.drain(Duration::from_millis(500)).await;
 
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::SetPaneTitle(v3::SetPaneTitle {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
                 title: "inventory-shell".into(),
             })),
         })
         .await;
-    assert!(matches!(client.recv().await.msg, Some(proto::server_message::Msg::TitleChanged(_))));
+    // SetPaneTitle is fire-and-forget; flush it with a Ping/Pong barrier.
+    client.ping().await;
 
     // Drain any PTY output that may overwrite the title via OSC sequences.
     let _ = client.drain(Duration::from_millis(300)).await;
+
+    // Detach so the runtime is reported as unattached in the inventory.
+    common::detach_runtime(&mut client, &runtime_id).await;
 
     let runtimes = list_runtimes(&mut client).await;
     assert_eq!(runtimes.len(), 1);
@@ -69,16 +81,10 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
     assert_eq!(session.id, runtime_id);
     assert_eq!(session.name, "inventory-test");
     assert_eq!(session.pane_count, 1);
-    assert!(!session.has_attached_client);
-    assert_eq!(session.attached_client_count, 0);
-    assert_eq!(session.current_client_role, proto::RuntimeClientRole::Unattached as i32);
     assert!(!session.has_write_owner);
     assert_eq!(session.read_only_client_count, 0);
-    assert_eq!(session.active_pane_id.as_ref(), Some(&pane_id));
-    assert_eq!(
-        proto::RuntimePolicy::try_from(session.policy).unwrap(),
-        proto::RuntimePolicy::Persistent
-    );
+    assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
+    assert_eq!(v3::RuntimePolicy::try_from(session.policy).unwrap(), v3::RuntimePolicy::Persistent);
     assert!(!session.reconstructed);
     assert_eq!(session.panes.len(), 1);
 
@@ -102,54 +108,59 @@ async fn list_runtimes_tracks_attached_client_count() {
     first.handshake().await;
 
     first
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "attach-count".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let runtime_id = match first.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+    let runtime_id = match first.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     first
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-    assert!(matches!(first.recv().await.msg, Some(proto::server_message::Msg::Snapshot(_))));
+    assert!(matches!(
+        first.recv().await.payload,
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_))
+    ));
 
     let mut second = TestClient::connect(&sock).await;
     second.handshake().await;
     second
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
             })),
         })
         .await;
-    assert!(matches!(second.recv().await.msg, Some(proto::server_message::Msg::Snapshot(_))));
+    assert!(matches!(
+        second.recv().await.payload,
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_))
+    ));
 
     let runtimes = list_runtimes(&mut second).await;
     assert_eq!(runtimes.len(), 1);
-    assert!(runtimes[0].has_attached_client);
-    assert_eq!(runtimes[0].attached_client_count, 2);
-    assert_eq!(runtimes[0].current_client_role, proto::RuntimeClientRole::Reader as i32);
     assert!(runtimes[0].has_write_owner);
+    assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Reader as i32);
     assert_eq!(runtimes[0].read_only_client_count, 1);
 
     drop(first);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let runtimes = list_runtimes(&mut second).await;
-    assert_eq!(runtimes[0].attached_client_count, 1);
-    assert!(runtimes[0].has_attached_client);
     assert!(!runtimes[0].has_write_owner);
     assert_eq!(runtimes[0].read_only_client_count, 1);
 
@@ -159,8 +170,8 @@ async fn list_runtimes_tracks_attached_client_count() {
     let mut third = TestClient::connect(&sock).await;
     third.handshake().await;
     let runtimes = list_runtimes(&mut third).await;
-    assert_eq!(runtimes[0].attached_client_count, 0);
-    assert!(!runtimes[0].has_attached_client);
+    assert_eq!(runtimes[0].read_only_client_count, 0);
+    assert!(!runtimes[0].has_write_owner);
 }
 
 #[tokio::test]
@@ -175,21 +186,23 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
         client.handshake().await;
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                     name: "reconstructed-inventory".into(),
-                    policy: proto::RuntimePolicy::Persistent as i32,
+                    policy: v3::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
-        runtime_id = match client.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+        runtime_id = match client.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                     runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: None,
@@ -199,14 +212,19 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
                 })),
             })
             .await;
-        pane_id = match client.recv().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(created)) => created.pane_id,
+        pane_id = match client.recv().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(created)) => created.pane_id,
             other => panic!("expected PaneCreated, got {other:?}"),
         };
 
+        // Attach read-write so resize and set-title are applied (both are
+        // fire-and-forget and require write access in v3).
+        common::attach_rw(&mut client, &runtime_id).await;
+
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
                     runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     cols: 100,
@@ -214,24 +232,20 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
                 })),
             })
             .await;
-        assert!(matches!(
-            client.recv().await.msg,
-            Some(proto::server_message::Msg::PaneResized(_))
-        ));
+        // Fire-and-forget: flush with a Ping/Pong barrier.
+        client.ping().await;
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::SetPaneTitle(proto::SetPaneTitle {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::SetPaneTitle(v3::SetPaneTitle {
                     runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
                     title: "restored-shell".into(),
                 })),
             })
             .await;
-        assert!(matches!(
-            client.recv().await.msg,
-            Some(proto::server_message::Msg::TitleChanged(_))
-        ));
+        client.ping().await;
 
         wait_for_state_containing(tmp.path(), "reconstructed-inventory", Duration::from_secs(10))
             .await;
@@ -252,15 +266,12 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
         assert_eq!(session.id, runtime_id);
         assert_eq!(session.name, "reconstructed-inventory");
         assert_eq!(session.pane_count, 1);
-        assert_eq!(session.active_pane_id.as_ref(), Some(&pane_id));
-        assert_eq!(session.attached_client_count, 0);
-        assert!(!session.has_attached_client);
-        assert_eq!(session.current_client_role, proto::RuntimeClientRole::Unattached as i32);
-        assert!(!session.has_write_owner);
         assert_eq!(session.read_only_client_count, 0);
+        assert!(!session.has_write_owner);
+        assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
         assert_eq!(
-            proto::RuntimePolicy::try_from(session.policy).unwrap(),
-            proto::RuntimePolicy::Persistent
+            v3::RuntimePolicy::try_from(session.policy).unwrap(),
+            v3::RuntimePolicy::Persistent
         );
         assert!(session.reconstructed);
         assert_eq!(session.panes.len(), 1);
@@ -281,8 +292,7 @@ async fn inventory_pane_cwd_populated_from_proc_fallback() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id =
-        create_runtime(&mut client, "cwd-check", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut client, "cwd-check", v3::RuntimePolicy::Persistent).await;
     let _pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Give the shell a moment to start so /proc/<pid>/cwd is readable.

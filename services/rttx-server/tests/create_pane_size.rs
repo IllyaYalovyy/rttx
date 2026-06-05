@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 /// Helper: create a pane with explicit cols/rows and return its `pane_id`.
 async fn create_pane_with_size(
@@ -11,8 +11,9 @@ async fn create_pane_with_size(
     rows: u32,
 ) -> Vec<u8> {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.to_vec(),
                 cwd: None,
                 dark_background: None,
@@ -23,9 +24,9 @@ async fn create_pane_with_size(
         })
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => return pc.pane_id,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => return pc.pane_id,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected PaneCreated, got {other:?}"),
         }
     }
@@ -34,33 +35,35 @@ async fn create_pane_with_size(
 /// Helper: create a session and return its id.
 async fn create_runtime(client: &mut TestClient, name: &str) -> Vec<u8> {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: name.into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     }
 }
 
 /// Helper: attach and return the snapshot.
-async fn attach_and_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> proto::Snapshot {
+async fn attach_and_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(s)) => return s,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => return s,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }

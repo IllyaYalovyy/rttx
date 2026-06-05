@@ -6,51 +6,51 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
 async fn create_and_attach(client: &mut TestClient, name: &str) -> Vec<u8> {
+    client.handshake().await;
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: name.into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         })
         .await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-    match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::Snapshot(_)) => {}
+    match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
     runtime_id
 }
 
 /// Drain messages until we find exactly one `PaneExited` for the given pane.
-async fn wait_for_pane_exited(
-    client: &mut TestClient,
-    expected_pane_id: &[u8],
-) -> proto::PaneExited {
+async fn wait_for_pane_exited(client: &mut TestClient, expected_pane_id: &[u8]) -> v3::PaneExited {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(!remaining.is_zero(), "timed out waiting for PaneExited");
         match client.try_recv(remaining).await {
             Some(msg) => {
-                if let Some(proto::server_message::Msg::PaneExited(pe)) = msg.msg
+                if let Some(v3::server_envelope::Payload::PaneExited(pe)) = msg.payload
                     && pe.pane_id == expected_pane_id
                 {
                     return pe;
@@ -96,8 +96,9 @@ async fn close_pane_during_output_burst() {
 
     // Immediately close the pane while output is flowing.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
             })),
@@ -108,7 +109,7 @@ async fn close_pane_during_output_burst() {
     let mut saw_closed = false;
     let msgs = client.drain(Duration::from_secs(5)).await;
     for msg in &msgs {
-        if let Some(proto::server_message::Msg::PaneClosed(pc)) = &msg.msg
+        if let Some(v3::server_envelope::Payload::PaneClosed(pc)) = &msg.payload
             && pc.pane_id == pane_id
         {
             saw_closed = true;
@@ -139,8 +140,9 @@ async fn resize_after_pane_exit_is_silently_dropped() {
 
     // Resize the dead pane — must be silently dropped, not panic or error.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Resize(proto::Resize {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
                 runtime_id: runtime_id.clone(),
                 pane_id,
                 cols: 120,
@@ -151,7 +153,7 @@ async fn resize_after_pane_exit_is_silently_dropped() {
 
     let msgs = client.drain(Duration::from_millis(200)).await;
     assert!(
-        msgs.iter().all(|m| !matches!(m.msg, Some(proto::server_message::Msg::Error(_)))),
+        msgs.iter().all(|m| !matches!(m.payload, Some(v3::server_envelope::Payload::Error(_)))),
         "resize of exited pane must not produce an error response"
     );
 
@@ -184,7 +186,7 @@ async fn title_change_during_output_does_not_corrupt_state() {
         assert!(!remaining.is_zero(), "timed out waiting for title-interleaved output");
         match client.try_recv(remaining).await {
             Some(msg) => {
-                if let Some(proto::server_message::Msg::Delta(d)) = &msg.msg
+                if let Some(v3::server_envelope::Payload::OutputDelta(d)) = &msg.payload
                     && d.data.windows(target.len()).any(|w| w == target)
                 {
                     break;
@@ -214,8 +216,9 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     // Send exit, then detach before the shell finishes.
     send_input(&mut client, &runtime_id, &pane_id, b"exit\n").await;
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
                 runtime_id: runtime_id.clone(),
             })),
         })
@@ -266,8 +269,9 @@ async fn no_duplicate_pane_exited_after_close_of_exited_pane() {
 
     // Close the already-exited pane.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ClosePane(proto::ClosePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
             })),
@@ -278,7 +282,7 @@ async fn no_duplicate_pane_exited_after_close_of_exited_pane() {
     let msgs = client.drain(Duration::from_secs(2)).await;
     let exit_count = msgs
         .iter()
-        .filter(|m| matches!(&m.msg, Some(proto::server_message::Msg::PaneExited(pe)) if pe.pane_id == pane_id))
+        .filter(|m| matches!(&m.payload, Some(v3::server_envelope::Payload::PaneExited(pe)) if pe.pane_id == pane_id))
         .count();
     assert_eq!(exit_count, 0, "must not get duplicate PaneExited after closing exited pane");
 }

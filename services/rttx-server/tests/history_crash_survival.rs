@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Persistent panes must have `history -a` in the `PROMPT_COMMAND` env var
@@ -19,7 +19,7 @@ async fn persistent_pane_spawns_with_history_flush_env() {
     client.handshake().await;
 
     let runtime_id =
-        create_runtime(&mut client, "history-flush", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut client, "history-flush", v3::RuntimePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
     attach_rw(&mut client, &runtime_id).await;
 
@@ -38,7 +38,7 @@ async fn persistent_pane_spawns_with_history_flush_env() {
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(d)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
         {
             output.extend_from_slice(&d.data);
             let text = String::from_utf8_lossy(&output);
@@ -65,12 +65,13 @@ async fn ephemeral_pane_skips_history_flush_env() {
     client.handshake().await;
 
     let runtime_id =
-        create_runtime(&mut client, "ephemeral-hist", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut client, "ephemeral-hist", v3::RuntimePolicy::Persistent).await;
 
     // Create pane with no_persist=true.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
@@ -81,9 +82,9 @@ async fn ephemeral_pane_skips_history_flush_env() {
         })
         .await;
     let pane_id = loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => break pc.pane_id,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => break pc.pane_id,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected PaneCreated, got {other:?}"),
         }
     };
@@ -102,7 +103,7 @@ async fn ephemeral_pane_skips_history_flush_env() {
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(d)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
         {
             output.extend_from_slice(&d.data);
             let text = String::from_utf8_lossy(&output);
@@ -132,8 +133,7 @@ async fn history_survives_hard_restart() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        runtime_id =
-            create_runtime(&mut client, "crash-hist", proto::RuntimePolicy::Persistent).await;
+        runtime_id = create_runtime(&mut client, "crash-hist", v3::RuntimePolicy::Persistent).await;
         pane_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
 
@@ -150,7 +150,7 @@ async fn history_survives_hard_restart() {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
             if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-                && let Some(proto::server_message::Msg::Delta(d)) = msg.msg
+                && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
             {
                 let text = String::from_utf8_lossy(&d.data);
                 if text.contains("UNIQUE_MARKER_12345") {

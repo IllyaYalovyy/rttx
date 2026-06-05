@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -15,21 +15,23 @@ async fn no_persist_pane_does_not_write_scrollback_to_disk() {
     client.handshake().await;
 
     // Create a persistent runtime.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "no-persist-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     // Create a pane with no_persist = true.
-    let create_pane = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    let create_pane = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
@@ -39,8 +41,8 @@ async fn no_persist_pane_does_not_write_scrollback_to_disk() {
         })),
     };
     client.send(&create_pane).await;
-    let _pane_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+    let _pane_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 

@@ -8,7 +8,7 @@ mod common;
 
 use common::TestClient;
 use common::{attach_rw, create_runtime, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// A v2 slow client that overflows its push channel gets disconnected
@@ -22,11 +22,12 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
     fast.handshake().await;
 
     let runtime_id =
-        create_runtime(&mut fast, "overflow-test", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut fast, "overflow-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut fast, &runtime_id).await;
 
-    fast.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    fast.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
@@ -37,9 +38,9 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
     })
     .await;
     let pane_id = loop {
-        match fast.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => break pc.pane_id,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match fast.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => break pc.pane_id,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected PaneCreated, got {other:?}"),
         }
     };
@@ -47,10 +48,11 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
     // Slow client: attaches read-only but never reads after snapshot.
     let mut slow = TestClient::connect(&sock).await;
     slow.handshake().await;
-    slow.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    slow.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
         })),
     })
     .await;
@@ -58,11 +60,14 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
 
     // Generate a burst of output to overflow the slow client's push channel.
     // Use a single large command that produces many lines of output quickly.
-    fast.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    fast.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"seq 1 100000\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"seq 1 100000\n"),
+            })),
         })),
     })
     .await;
@@ -77,7 +82,7 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
         }
         match fast.try_recv(remaining.min(Duration::from_millis(200))).await {
             Some(msg) => {
-                if matches!(msg.msg, Some(proto::server_message::Msg::Delta(_))) {
+                if matches!(msg.payload, Some(v3::server_envelope::Payload::OutputDelta(_))) {
                     total_deltas += 1;
                 }
             }
@@ -91,16 +96,20 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
     assert!(total_deltas > 0, "fast client should have received Deltas");
 
     // Fast client should still be able to interact with the server.
-    fast.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    fast.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"echo still-alive\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"echo still-alive\n"),
+            })),
         })),
     })
     .await;
     let msgs = fast.drain(Duration::from_secs(3)).await;
-    let has_delta =
-        msgs.iter().any(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_))));
+    let has_delta = msgs
+        .iter()
+        .any(|m| matches!(m.payload, Some(v3::server_envelope::Payload::OutputDelta(_))));
     assert!(has_delta, "fast client should still receive Deltas after slow client overflow");
 }

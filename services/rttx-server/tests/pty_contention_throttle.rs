@@ -8,7 +8,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -18,7 +18,7 @@ async fn ping_latency_stays_low_under_multi_pane_output() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let sid = create_runtime(&mut client, "throttle-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "throttle-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     // Create 4 panes producing heavy output simultaneously.
@@ -50,8 +50,9 @@ async fn ping_latency_stays_low_under_multi_pane_output() {
     // validates that the overall system remains responsive — the
     // client_writer can drain its resp_rx because the push channel
     // is not monopolized by a single read loop.
-    let ping = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 827 })),
+    let ping = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 827 })),
     };
     client.send(&ping).await;
 
@@ -60,7 +61,7 @@ async fn ping_latency_stays_low_under_multi_pane_output() {
     while tokio::time::Instant::now() < deadline {
         match client.try_recv(Duration::from_secs(2)).await {
             Some(msg) => {
-                if let Some(proto::server_message::Msg::Pong(pong)) = msg.msg {
+                if let Some(v3::server_envelope::Payload::Pong(pong)) = msg.payload {
                     assert_eq!(pong.nonce, 827);
                     got_pong = true;
                     break;

@@ -51,7 +51,7 @@ async fn repeated_probes_do_not_leak_resources() {
     let sid = common::create_runtime(
         &mut client,
         "after-probes",
-        rttx_proto::proto::RuntimePolicy::Persistent,
+        rttx_proto::v3::RuntimePolicy::Persistent,
     )
     .await;
     assert!(!sid.is_empty());

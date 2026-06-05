@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -20,15 +20,16 @@ async fn client_dispatch_increments_messages_dispatched_on_ping() {
 
     // Send a Ping — the reader loop increments messages_dispatched.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 42 })),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 42 })),
         })
         .await;
 
     // Expect a Pong response (proves dispatch worked).
     let resp = client.recv_or_timeout().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Pong(pong)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Pong(pong)) => {
             assert_eq!(pong.nonce, 42);
         }
         other => panic!("expected Pong, got {other:?}"),
@@ -55,14 +56,15 @@ async fn client_disconnect_records_eof_on_clean_close() {
 
     // Send a Ping to confirm the server is responsive.
     client2
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Ping(proto::Ping { nonce: 99 })),
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 99 })),
         })
         .await;
 
     let resp = client2.recv_or_timeout().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Pong(pong)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Pong(pong)) => {
             assert_eq!(pong.nonce, 99);
         }
         other => panic!("expected Pong, got {other:?}"),
@@ -76,7 +78,7 @@ async fn client_writer_delivers_output_after_instrumentation() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let sid = create_runtime(&mut client, "writer-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "writer-test", v3::RuntimePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &sid).await;
     attach_rw(&mut client, &sid).await;
 
@@ -89,8 +91,8 @@ async fn client_writer_delivers_output_after_instrumentation() {
 
     let output: String = msgs
         .iter()
-        .filter_map(|m| match &m.msg {
-            Some(proto::server_message::Msg::Delta(d)) => {
+        .filter_map(|m| match &m.payload {
+            Some(v3::server_envelope::Payload::OutputDelta(d)) => {
                 Some(String::from_utf8_lossy(&d.data).to_string())
             }
             _ => None,

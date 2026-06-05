@@ -5,7 +5,7 @@ mod common;
 
 use common::TestClient;
 use common::{attach_rw, create_runtime, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// A slow client that never reads from its connection should not prevent
@@ -21,14 +21,14 @@ async fn slow_client_does_not_block_server() {
     let mut fast = TestClient::connect(&sock).await;
     fast.handshake().await;
 
-    let runtime_id =
-        create_runtime(&mut fast, "bounded-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut fast, "bounded-test", v3::RuntimePolicy::Persistent).await;
     let snapshot = attach_rw(&mut fast, &runtime_id).await;
     assert!(snapshot.panes.is_empty());
 
     // Create a pane that will produce output.
-    fast.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    fast.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
@@ -38,18 +38,19 @@ async fn slow_client_does_not_block_server() {
         })),
     })
     .await;
-    let pane_id = match fast.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+    let pane_id = match fast.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
     // Slow client: attaches read-only but never reads after handshake.
     let mut slow = TestClient::connect(&sock).await;
     slow.handshake().await;
-    slow.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    slow.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadOnly as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
         })),
     })
     .await;
@@ -58,18 +59,22 @@ async fn slow_client_does_not_block_server() {
 
     // Send input to generate output — the fast client should still
     // receive Deltas even if the slow client's channel fills up.
-    fast.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    fast.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"echo bounded-channel-test\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"echo bounded-channel-test\n"),
+            })),
         })),
     })
     .await;
 
     // Fast client should receive Delta output within a reasonable time.
     let msgs = fast.drain(Duration::from_secs(5)).await;
-    let has_delta =
-        msgs.iter().any(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_))));
+    let has_delta = msgs
+        .iter()
+        .any(|m| matches!(m.payload, Some(v3::server_envelope::Payload::OutputDelta(_))));
     assert!(has_delta, "fast client should receive Deltas even with a slow client attached");
 }

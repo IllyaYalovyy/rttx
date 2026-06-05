@@ -6,7 +6,7 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
+use rttx_proto::{bytes_to_uuid, uuid_to_bytes, v3};
 
 /// Create two runtimes and verify they can be operated independently.
 ///
@@ -37,16 +37,17 @@ async fn independent_runtimes_do_not_block_each_other() {
 }
 
 async fn create_runtime(client: &mut TestClient, name: &str) -> uuid::Uuid {
-    let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let msg = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: name.into(),
-            policy: proto::RuntimePolicy::Ephemeral as i32,
+            policy: v3::RuntimePolicy::Ephemeral as i32,
         })),
     };
     client.send(&msg).await;
     let resp = client.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(rc)) => {
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => {
             bytes_to_uuid(&rc.runtime_id).unwrap()
         }
         other => panic!("expected RuntimeCreated, got {other:?}"),
@@ -54,23 +55,25 @@ async fn create_runtime(client: &mut TestClient, name: &str) -> uuid::Uuid {
 }
 
 async fn attach_runtime(client: &mut TestClient, runtime_id: uuid::Uuid) {
-    let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let msg = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: uuid_to_bytes(runtime_id),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&msg).await;
     let resp = client.recv().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Snapshot(_)) => {}
+    match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 }
 
 async fn create_pane(client: &mut TestClient, runtime_id: uuid::Uuid) -> uuid::Uuid {
-    let msg = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+    let msg = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: uuid_to_bytes(runtime_id),
             cwd: None,
             dark_background: None,
@@ -81,8 +84,8 @@ async fn create_pane(client: &mut TestClient, runtime_id: uuid::Uuid) -> uuid::U
     };
     client.send(&msg).await;
     let resp = client.recv_or_timeout().await;
-    match resp.msg {
-        Some(proto::server_message::Msg::PaneCreated(pc)) => bytes_to_uuid(&pc.pane_id).unwrap(),
+    match resp.payload {
+        Some(v3::server_envelope::Payload::PaneCreated(pc)) => bytes_to_uuid(&pc.pane_id).unwrap(),
         other => panic!("expected PaneCreated, got {other:?}"),
     }
 }

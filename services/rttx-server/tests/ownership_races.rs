@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -21,22 +21,23 @@ async fn three_competing_writers_only_first_succeeds() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let runtime_id = create_runtime(&mut c1, "race", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut c1, "race", v3::RuntimePolicy::Persistent).await;
     let snap = attach_rw(&mut c1, &runtime_id).await;
-    assert_eq!(snap.current_client_role, proto::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
 
     for i in 0..2 {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        c.send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         })
         .await;
-        match c.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::AttachBlocked(b)) => {
+        match c.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::AttachBlocked(b)) => {
                 assert_eq!(b.attached_client_count, 1, "client {i}: wrong attach count");
             }
             other => panic!("client {i}: expected AttachBlocked, got {other:?}"),
@@ -53,8 +54,7 @@ async fn readers_observe_pane_created_push() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id =
-        create_runtime(&mut writer, "push-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut writer, "push-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -63,8 +63,9 @@ async fn readers_observe_pane_created_push() {
 
     // Writer creates a pane.
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
@@ -78,14 +79,16 @@ async fn readers_observe_pane_created_push() {
     // Writer gets PaneCreated response.
     let writer_resp = writer.recv_or_timeout().await;
     assert!(
-        matches!(writer_resp.msg, Some(proto::server_message::Msg::PaneCreated(_))),
+        matches!(writer_resp.payload, Some(v3::server_envelope::Payload::PaneCreated(_))),
         "writer should get PaneCreated"
     );
 
     // Reader receives Delta pushes from the new pane's PTY output.
     let reader_msgs = reader.drain(Duration::from_secs(2)).await;
     assert!(
-        reader_msgs.iter().any(|m| matches!(m.msg, Some(proto::server_message::Msg::Delta(_)))),
+        reader_msgs
+            .iter()
+            .any(|m| matches!(m.payload, Some(v3::server_envelope::Payload::OutputDelta(_)))),
         "reader should receive Delta pushes from the new pane"
     );
 }
@@ -97,10 +100,9 @@ async fn multiple_readers_see_consistent_revision() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id =
-        create_runtime(&mut writer, "rev-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut writer, "rev-test", v3::RuntimePolicy::Persistent).await;
     let snap = attach_rw(&mut writer, &runtime_id).await;
-    let base_rev = snap.revision;
+    let base_rev = snap.runtime_revision;
 
     let mut r1 = TestClient::connect(&sock).await;
     r1.handshake().await;
@@ -111,12 +113,11 @@ async fn multiple_readers_see_consistent_revision() {
     let s2 = attach_ro(&mut r2, &runtime_id).await;
 
     // Each reader attach bumps revision.
-    assert!(s1.revision > base_rev);
-    assert!(s2.revision > s1.revision);
+    assert!(s1.runtime_revision > base_rev);
+    assert!(s2.runtime_revision > s1.runtime_revision);
 
     // Inventory should show consistent counts.
     let runtimes = list_runtimes(&mut r2).await;
-    assert_eq!(runtimes[0].attached_client_count, 3);
     assert_eq!(runtimes[0].read_only_client_count, 2);
     assert!(runtimes[0].has_write_owner);
 }
@@ -131,7 +132,7 @@ async fn writer_detach_then_reader_detach_leaves_clean_state() {
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
     let runtime_id =
-        create_runtime(&mut writer, "detach-race", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut writer, "detach-race", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -152,7 +153,7 @@ async fn writer_detach_then_reader_detach_leaves_clean_state() {
     let runtimes = list_runtimes(&mut checker).await;
     assert_eq!(runtimes.len(), 1);
     assert!(!runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].attached_client_count, 0);
+    assert_eq!(runtimes[0].read_only_client_count, 0);
 }
 
 #[tokio::test]
@@ -162,8 +163,7 @@ async fn terminate_while_reader_attached_notifies_reader() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id =
-        create_runtime(&mut writer, "term-race", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut writer, "term-race", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -172,8 +172,9 @@ async fn terminate_while_reader_attached_notifies_reader() {
 
     // Writer terminates.
     writer
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
                 runtime_id: runtime_id.clone(),
             })),
         })
@@ -181,10 +182,10 @@ async fn terminate_while_reader_attached_notifies_reader() {
 
     // Both should get RuntimeTerminated.
     let w_resp = writer.recv_or_timeout().await;
-    assert!(matches!(w_resp.msg, Some(proto::server_message::Msg::RuntimeTerminated(_))));
+    assert!(matches!(w_resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))));
 
     let r_resp = reader.recv_or_timeout().await;
-    assert!(matches!(r_resp.msg, Some(proto::server_message::Msg::RuntimeTerminated(_))));
+    assert!(matches!(r_resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))));
 
     // Session gone.
     let mut checker = TestClient::connect(&sock).await;
@@ -202,8 +203,7 @@ async fn writer_disconnect_frees_ownership_for_new_writer() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id =
-        create_runtime(&mut writer, "disconnect", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut writer, "disconnect", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     // Drop the writer (simulates disconnect).
@@ -214,7 +214,7 @@ async fn writer_disconnect_frees_ownership_for_new_writer() {
     let mut new_writer = TestClient::connect(&sock).await;
     new_writer.handshake().await;
     let snap = attach_rw(&mut new_writer, &runtime_id).await;
-    assert_eq!(snap.current_client_role, proto::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
 }
 
 #[tokio::test]
@@ -225,7 +225,7 @@ async fn reader_survives_writer_disconnect() {
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
     let runtime_id =
-        create_runtime(&mut writer, "reader-survives", proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut writer, "reader-survives", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -252,15 +252,15 @@ async fn revisions_monotonic_across_attach_detach_cycle() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let runtime_id = create_runtime(&mut c1, "mono-rev", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut c1, "mono-rev", v3::RuntimePolicy::Persistent).await;
 
     let mut last_rev = 0u64;
 
     // Attach-detach cycle with multiple clients.
     for _ in 0..3 {
         let snap = attach_rw(&mut c1, &runtime_id).await;
-        assert!(snap.revision > last_rev, "revision must increase on attach");
-        last_rev = snap.revision;
+        assert!(snap.runtime_revision > last_rev, "revision must increase on attach");
+        last_rev = snap.runtime_revision;
 
         detach_runtime(&mut c1, &runtime_id).await;
     }
@@ -268,5 +268,5 @@ async fn revisions_monotonic_across_attach_detach_cycle() {
     // Final inventory check.
     let runtimes = list_runtimes(&mut c1).await;
     assert_eq!(runtimes.len(), 1);
-    assert!(runtimes[0].revision >= last_rev);
+    assert!(runtimes[0].runtime_revision >= last_rev);
 }

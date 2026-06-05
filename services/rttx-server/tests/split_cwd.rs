@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TestClient, create_pane_with_cwd, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Pane created with a CWD should spawn its shell in that directory. #297.
@@ -12,15 +12,16 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "cwd-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
@@ -32,29 +33,33 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some(target_str.clone())).await;
 
     // Attach to receive output.
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
 
     // Drain the snapshot.
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }
 
     // Send `pwd` and read output.
-    let input = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    let input = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"pwd\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"pwd\n"),
+            })),
         })),
     };
     client.send(&input).await;
@@ -64,7 +69,7 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     let mut output = String::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(&target_str) {
@@ -85,15 +90,16 @@ async fn create_pane_without_cwd_uses_default() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "no-cwd-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
@@ -110,40 +116,45 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "home-cwd-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, None).await;
 
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }
 
-    let input = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    let input = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"pwd\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"pwd\n"),
+            })),
         })),
     };
     client.send(&input).await;
@@ -153,7 +164,7 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
     let mut output = String::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(&home) {
@@ -174,15 +185,16 @@ async fn create_pane_without_cwd_inherits_sibling_cwd() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "sibling-cwd-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
@@ -198,26 +210,30 @@ async fn create_pane_without_cwd_inherits_sibling_cwd() {
     // Second pane: no CWD — should inherit from the first pane.
     let second_pane = create_pane_with_cwd(&mut client, &runtime_id, None).await;
 
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }
 
-    let input = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    let input = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: second_pane.clone(),
-            data: bytes::Bytes::from_static(b"pwd\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"pwd\n"),
+            })),
         })),
     };
     client.send(&input).await;
@@ -226,7 +242,7 @@ async fn create_pane_without_cwd_inherits_sibling_cwd() {
     let mut output = String::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(&target_str) {
@@ -248,40 +264,45 @@ async fn create_pane_with_tilde_cwd_expands_to_home() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "tilde-cwd-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some("~".into())).await;
 
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }
 
-    let input = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    let input = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"pwd\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"pwd\n"),
+            })),
         })),
     };
     client.send(&input).await;
@@ -291,7 +312,7 @@ async fn create_pane_with_tilde_cwd_expands_to_home() {
     let mut output = String::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(&home) {
@@ -320,40 +341,45 @@ async fn create_pane_with_tilde_prefix_cwd_expands_correctly() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "tilde-prefix-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
-    let runtime_id = match client.recv_or_timeout().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
 
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some(tilde_path)).await;
 
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
-        match client.recv_or_timeout().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => break,
-            Some(proto::server_message::Msg::Delta(_)) => {}
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
     }
 
-    let input = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Input(proto::Input {
+    let input = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            data: bytes::Bytes::from_static(b"pwd\n"),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"pwd\n"),
+            })),
         })),
     };
     client.send(&input).await;
@@ -362,7 +388,7 @@ async fn create_pane_with_tilde_prefix_cwd_expands_correctly() {
     let mut output = String::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(delta)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.push_str(&String::from_utf8_lossy(&delta.data));
             if output.contains(&expected_abs) {

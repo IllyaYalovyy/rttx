@@ -6,7 +6,7 @@
 mod common;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use rttx_server::state::{layout, persistence};
 use std::time::Duration;
 
@@ -21,15 +21,16 @@ async fn clean_runtime_not_rewritten_on_subsequent_ticks() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "idle-runtime".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
-    let runtime_id_bytes = match c.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id_bytes = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
     let runtime_id = rttx_proto::bytes_to_uuid(&runtime_id_bytes).unwrap();
@@ -63,15 +64,16 @@ async fn mutation_triggers_rewrite() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "mutable-rt".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;
-    let runtime_id_bytes = match c.recv().await.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+    let runtime_id_bytes = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
         other => panic!("expected RuntimeCreated, got {other:?}"),
     };
     let runtime_id = rttx_proto::bytes_to_uuid(&runtime_id_bytes).unwrap();
@@ -87,8 +89,9 @@ async fn mutation_triggers_rewrite() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Rename the runtime — this bumps revision and makes it dirty.
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::RenameRuntime(proto::RenameRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
             runtime_id: runtime_id_bytes,
             name: "renamed-rt".into(),
         })),
@@ -120,10 +123,11 @@ async fn daemon_index_not_rewritten_when_ids_unchanged() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    c.send(&proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "index-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     })
     .await;

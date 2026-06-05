@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -23,8 +23,7 @@ async fn ten_runtimes_listed_in_stable_order() {
     client.handshake().await;
 
     for i in 0..10 {
-        create_runtime(&mut client, &format!("session-{i}"), proto::RuntimePolicy::Persistent)
-            .await;
+        create_runtime(&mut client, &format!("session-{i}"), v3::RuntimePolicy::Persistent).await;
     }
 
     let runtimes = list_runtimes(&mut client).await;
@@ -52,8 +51,7 @@ async fn five_panes_in_one_runtime() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id =
-        create_runtime(&mut client, "multi-pane", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut client, "multi-pane", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
 
     let mut pane_ids = Vec::new();
@@ -81,8 +79,7 @@ async fn large_scrollback_survives_detach_and_reattach() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id =
-        create_runtime(&mut client, "scrollback", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut client, "scrollback", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
 
@@ -99,7 +96,7 @@ async fn large_scrollback_survives_detach_and_reattach() {
         assert!(!remaining.is_zero(), "timed out waiting for PTY output");
         match client.try_recv(remaining).await {
             Some(msg) => {
-                if let Some(proto::server_message::Msg::Delta(d)) = &msg.msg
+                if let Some(v3::server_envelope::Payload::OutputDelta(d)) = &msg.payload
                     && d.data.windows(target.len()).any(|w| w == target)
                 {
                     break;
@@ -111,8 +108,9 @@ async fn large_scrollback_survives_detach_and_reattach() {
 
     // Detach.
     client
-        .send(&proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::DetachRuntime(proto::DetachRuntime {
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
                 runtime_id: runtime_id.clone(),
             })),
         })
@@ -123,7 +121,7 @@ async fn large_scrollback_survives_detach_and_reattach() {
     let snap = attach_rw(&mut client, &runtime_id).await;
     assert!(!snap.panes.is_empty());
 
-    let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback.len()).sum();
+    let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback_tail.len()).sum();
     assert!(total_bytes > 0, "reattach snapshot must contain scrollback data");
 }
 
@@ -141,7 +139,7 @@ async fn scrollback_survives_restart() {
         client.handshake().await;
 
         runtime_id =
-            create_runtime(&mut client, "restart-scroll", proto::RuntimePolicy::Persistent).await;
+            create_runtime(&mut client, "restart-scroll", v3::RuntimePolicy::Persistent).await;
         attach_rw(&mut client, &runtime_id).await;
         pane_id = create_pane(&mut client, &runtime_id).await;
 
@@ -174,7 +172,7 @@ async fn scrollback_survives_restart() {
     assert!(runtimes[0].reconstructed);
 
     let snap = attach_rw(&mut client, &runtime_id).await;
-    let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback.len()).sum();
+    let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback_tail.len()).sum();
     assert!(total_bytes > 0, "scrollback must survive restart");
 }
 
@@ -189,7 +187,7 @@ async fn repeated_list_under_load_is_consistent() {
     client.handshake().await;
 
     for i in 0..5 {
-        create_runtime(&mut client, &format!("load-{i}"), proto::RuntimePolicy::Persistent).await;
+        create_runtime(&mut client, &format!("load-{i}"), v3::RuntimePolicy::Persistent).await;
     }
 
     // List 10 times — count and order must be stable.

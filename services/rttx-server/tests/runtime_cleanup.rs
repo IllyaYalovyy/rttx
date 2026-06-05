@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TestClient, start_test_server, wait_for_state_file};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes};
+use rttx_proto::{bytes_to_uuid, uuid_to_bytes, v3};
 use std::time::Duration;
 
 /// After terminating a runtime, its v2 state directory should be removed.
@@ -17,16 +17,17 @@ async fn terminate_runtime_cleans_up_v2_directory() {
     client.handshake().await;
 
     // Create a persistent runtime.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "cleanup-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv_or_timeout().await;
-    let runtime_id = match resp.msg {
-        Some(proto::server_message::Msg::RuntimeCreated(rc)) => {
+    let runtime_id = match resp.payload {
+        Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => {
             bytes_to_uuid(&rc.runtime_id).unwrap()
         }
         other => panic!("expected RuntimeCreated, got {other:?}"),
@@ -41,25 +42,27 @@ async fn terminate_runtime_cleans_up_v2_directory() {
     assert!(runtime_dir.exists(), "runtime directory should exist after creation");
 
     // Attach so we can terminate.
-    let attach = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+    let attach = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: uuid_to_bytes(runtime_id),
-            attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     let _snap = client.recv_or_timeout().await;
 
     // Terminate the runtime.
-    let terminate = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::TerminateRuntime(proto::TerminateRuntime {
+    let terminate = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
     client.send(&terminate).await;
     let resp = client.recv_or_timeout().await;
     assert!(
-        matches!(resp.msg, Some(proto::server_message::Msg::RuntimeTerminated(_))),
+        matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))),
         "expected RuntimeTerminated"
     );
 

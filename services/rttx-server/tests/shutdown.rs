@@ -6,7 +6,7 @@
 
 mod common;
 
-use rttx_proto::proto;
+use rttx_proto::v3;
 
 #[tokio::test]
 async fn shutdown_stops_server_and_persists_state() {
@@ -17,22 +17,24 @@ async fn shutdown_stops_server_and_persists_state() {
     client.handshake().await;
 
     // Create a persistent session so there is state worth persisting.
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "persist-me".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
     assert!(
-        matches!(resp.msg, Some(proto::server_message::Msg::RuntimeCreated(_))),
+        matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeCreated(_))),
         "expected RuntimeCreated, got {resp:?}"
     );
 
     // Send shutdown.
-    let shutdown = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
+    let shutdown = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
     };
     client.send(&shutdown).await;
 
@@ -78,8 +80,9 @@ async fn shutdown_is_observable_by_other_clients() {
     client_b.handshake().await;
 
     // Client A triggers shutdown.
-    let shutdown = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Shutdown(proto::Shutdown {})),
+    let shutdown = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
     };
     client_a.send(&shutdown).await;
 

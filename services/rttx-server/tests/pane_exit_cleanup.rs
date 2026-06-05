@@ -8,14 +8,14 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Collect all Delta data bytes received before `PaneExited`.
 async fn collect_deltas_until_exit(
     client: &mut TestClient,
     timeout: Duration,
-) -> (Vec<u8>, Option<proto::PaneExited>) {
+) -> (Vec<u8>, Option<v3::PaneExited>) {
     let mut all_data = Vec::new();
     let mut exit_msg = None;
     let deadline = tokio::time::Instant::now() + timeout;
@@ -25,11 +25,11 @@ async fn collect_deltas_until_exit(
             break;
         }
         let Some(msg) = client.try_recv(remaining).await else { break };
-        match msg.msg {
-            Some(proto::server_message::Msg::Delta(d)) => {
+        match msg.payload {
+            Some(v3::server_envelope::Payload::OutputDelta(d)) => {
                 all_data.extend_from_slice(&d.data);
             }
-            Some(proto::server_message::Msg::PaneExited(pe)) => {
+            Some(v3::server_envelope::Payload::PaneExited(pe)) => {
                 exit_msg = Some(pe);
                 break;
             }
@@ -47,7 +47,7 @@ async fn cleanup_sequence_broadcast_on_pane_exit() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "cleanup-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "cleanup-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -75,7 +75,7 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "reattach-test", proto::RuntimePolicy::Persistent).await;
+    let sid = create_runtime(&mut client, "reattach-test", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -88,7 +88,7 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(!remaining.is_zero(), "timed out waiting for PaneExited");
         if let Some(msg) = client.try_recv(remaining).await
-            && matches!(msg.msg, Some(proto::server_message::Msg::PaneExited(_)))
+            && matches!(msg.payload, Some(v3::server_envelope::Payload::PaneExited(_)))
         {
             break;
         }
@@ -105,9 +105,18 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
         .expect("pane should still be in snapshot");
 
     // After cleanup, all TUI modes should be off.
-    assert!(!pane.bracketed_paste_mode, "bracketed paste should be off");
-    assert!(!pane.application_cursor_keys, "application cursor keys should be off");
-    assert!(!pane.application_keypad, "application keypad should be off");
-    assert_eq!(pane.mouse_tracking_mode, 0, "mouse tracking should be off");
-    assert!(!pane.sgr_mouse_mode, "SGR mouse should be off");
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().bracketed_paste,
+        "bracketed paste should be off"
+    );
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().application_cursor_keys,
+        "application cursor keys should be off"
+    );
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().application_keypad,
+        "application keypad should be off"
+    );
+    assert_eq!(pane.terminal_modes.as_ref().unwrap().mouse_mode, 0, "mouse tracking should be off");
+    assert!(!pane.terminal_modes.as_ref().unwrap().sgr_mouse, "SGR mouse should be off");
 }

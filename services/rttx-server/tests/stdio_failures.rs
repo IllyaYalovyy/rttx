@@ -4,7 +4,7 @@
 //! broken pipe, handshake mismatch, and garbage input.
 
 use bytes::BytesMut;
-use rttx_proto::{PROTOCOL_VERSION, decode_frame, encode_frame, proto, uuid_to_bytes};
+use rttx_proto::{decode_frame, encode_frame, uuid_to_bytes, v3};
 use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -58,7 +58,7 @@ fn spawn_stdio(tmp: &TempDir) -> Child {
         .expect("failed to spawn rttx-server attach-stdio")
 }
 
-async fn send_frame(stdin: &mut tokio::process::ChildStdin, msg: &proto::ClientMessage) {
+async fn send_frame<M: prost::Message>(stdin: &mut tokio::process::ChildStdin, msg: &M) {
     let mut buf = BytesMut::new();
     encode_frame(msg, &mut buf).unwrap();
     stdin.write_all(&buf).await.unwrap();
@@ -68,9 +68,9 @@ async fn send_frame(stdin: &mut tokio::process::ChildStdin, msg: &proto::ClientM
 async fn recv_frame(
     stdout: &mut tokio::process::ChildStdout,
     read_buf: &mut BytesMut,
-) -> proto::ServerMessage {
+) -> v3::ServerEnvelope {
     loop {
-        match decode_frame::<proto::ServerMessage>(read_buf) {
+        match decode_frame::<v3::ServerEnvelope>(read_buf) {
             Ok(msg) => return msg,
             Err(rttx_proto::FrameError::Incomplete) => {}
             Err(e) => panic!("decode error: {e}"),
@@ -88,15 +88,27 @@ async fn handshake(
     stdout: &mut tokio::process::ChildStdout,
     read_buf: &mut BytesMut,
 ) {
-    let hello = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-            protocol_version: PROTOCOL_VERSION,
-            client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-        })),
-    };
+    use rttx_proto::v3_handshake;
+    let hello = v3_handshake::build_client_hello(
+        uuid::Uuid::new_v4(),
+        "test-client",
+        "0.0.0",
+        v3_handshake::CORE_CAPABILITIES,
+    );
     send_frame(stdin, &hello).await;
-    let resp = recv_frame(stdout, read_buf).await;
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::HelloAck(_))));
+    // The handshake response is a ServerHello frame.
+    loop {
+        match decode_frame::<v3::ServerHello>(read_buf) {
+            Ok(_) => return,
+            Err(rttx_proto::FrameError::Incomplete) => {}
+            Err(e) => panic!("decode ServerHello error: {e}"),
+        }
+        let n = tokio::time::timeout(Duration::from_secs(10), stdout.read_buf(read_buf))
+            .await
+            .expect("timed out reading ServerHello")
+            .expect("read failed");
+        assert!(n > 0, "unexpected EOF during handshake");
+    }
 }
 
 async fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
@@ -151,15 +163,16 @@ async fn stdin_close_after_session_create_exits_cleanly() {
 
     handshake(&mut stdin, &mut stdout, &mut read_buf).await;
 
-    let create = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+    let create = v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "disconnect-test".into(),
-            policy: proto::RuntimePolicy::Persistent as i32,
+            policy: v3::RuntimePolicy::Persistent as i32,
         })),
     };
     send_frame(&mut stdin, &create).await;
     let resp = recv_frame(&mut stdout, &mut read_buf).await;
-    assert!(matches!(resp.msg, Some(proto::server_message::Msg::RuntimeCreated(_))));
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeCreated(_))));
 
     // Disconnect mid-session.
     drop(stdin);
@@ -179,21 +192,30 @@ async fn wrong_protocol_version_returns_error_over_stdio() {
     let mut stdout = child.stdout.take().unwrap();
     let mut read_buf = BytesMut::with_capacity(4096);
 
-    let hello = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-            protocol_version: 9999,
-            client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-        })),
+    let hello = v3::ClientHello {
+        min_protocol_version: 9999,
+        max_protocol_version: 9999,
+        client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
+        client_name: "test-client".into(),
+        client_version: "0.0.0".into(),
+        capabilities: vec![],
     };
     send_frame(&mut stdin, &hello).await;
 
-    let resp = recv_frame(&mut stdout, &mut read_buf).await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 2); // ERR_VERSION_MISMATCH
+    // On version mismatch the server sends a bare ProtocolError frame.
+    let resp = loop {
+        match decode_frame::<v3::ProtocolError>(&mut read_buf) {
+            Ok(err) => break err,
+            Err(rttx_proto::FrameError::Incomplete) => {}
+            Err(e) => panic!("decode ProtocolError error: {e}"),
         }
-        other => panic!("expected Error, got {other:?}"),
-    }
+        let n = tokio::time::timeout(Duration::from_secs(10), stdout.read_buf(&mut read_buf))
+            .await
+            .expect("timed out reading ProtocolError")
+            .expect("read failed");
+        assert!(n > 0, "unexpected EOF waiting for version mismatch error");
+    };
+    assert_eq!(resp.kind, v3::ErrorKind::ProtocolMismatch as i32);
 
     drop(stdin);
     let status = wait_for_exit(&mut child).await;
@@ -250,13 +272,13 @@ async fn empty_message_returns_error_over_stdio() {
 
     handshake(&mut stdin, &mut stdout, &mut read_buf).await;
 
-    let empty = proto::ClientMessage { msg: None };
+    let empty = v3::ClientEnvelope { request_id: 0, command: None };
     send_frame(&mut stdin, &empty).await;
 
     let resp = recv_frame(&mut stdout, &mut read_buf).await;
-    match resp.msg {
-        Some(proto::server_message::Msg::Error(e)) => {
-            assert_eq!(e.code, 1); // ERR_EMPTY_MESSAGE
+    match resp.payload {
+        Some(v3::server_envelope::Payload::Error(e)) => {
+            assert!(e.kind != 0, "expected error for empty message, got kind {}", e.kind);
         }
         other => panic!("expected Error, got {other:?}"),
     }

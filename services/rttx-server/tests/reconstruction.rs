@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 /// Create a session with a pane, write to it, stop the server, restart,
@@ -21,22 +21,24 @@ async fn reconstruct_session_after_restart() {
         client.handshake().await;
 
         // Create session.
-        let create = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+        let create = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "reconstruct-test".into(),
-                policy: proto::RuntimePolicy::Persistent as i32,
+                policy: v3::RuntimePolicy::Persistent as i32,
             })),
         };
         client.send(&create).await;
         let resp = client.recv().await;
-        runtime_id = match resp.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(sc)) => sc.runtime_id,
+        runtime_id = match resp.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         // Create pane (spawns a PTY).
-        let create_pane = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+        let create_pane = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
@@ -47,27 +49,31 @@ async fn reconstruct_session_after_restart() {
         };
         client.send(&create_pane).await;
         let resp = client.recv().await;
-        pane_id = match resp.msg {
-            Some(proto::server_message::Msg::PaneCreated(pc)) => pc.pane_id,
+        pane_id = match resp.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
             other => panic!("expected PaneCreated, got {other:?}"),
         };
 
         // Attach to get deltas.
-        let attach = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        let attach = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
         client.send(&attach).await;
         let _snapshot = client.recv().await;
 
         // Send a command that produces recognizable output.
-        let input = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::Input(proto::Input {
+        let input = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                data: bytes::Bytes::from_static(b"echo RECONSTRUCT_MARKER\n"),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(b"echo RECONSTRUCT_MARKER\n"),
+                })),
             })),
         };
         client.send(&input).await;
@@ -90,13 +96,14 @@ async fn reconstruct_session_after_restart() {
         client.handshake().await;
 
         // List sessions — should find our session.
-        let list = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::ListRuntimes(proto::ListRuntimes {})),
+        let list = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
         };
         client.send(&list).await;
         let resp = client.recv().await;
-        let runtimes = match resp.msg {
-            Some(proto::server_message::Msg::RuntimeList(sl)) => sl.runtimes,
+        let runtimes = match resp.payload {
+            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
             other => panic!("expected RuntimeList, got {other:?}"),
         };
         assert_eq!(runtimes.len(), 1, "session should be restored");
@@ -104,21 +111,22 @@ async fn reconstruct_session_after_restart() {
         assert_eq!(runtimes[0].id, runtime_id);
 
         // Attach and check snapshot contains scrollback with our marker.
-        let attach = proto::ClientMessage {
-            msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+        let attach = v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
             })),
         };
         client.send(&attach).await;
         let resp = client.recv().await;
-        let panes = match resp.msg {
-            Some(proto::server_message::Msg::Snapshot(snap)) => snap.panes,
+        let panes = match resp.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => snap.panes,
             other => panic!("expected Snapshot, got {other:?}"),
         };
         assert!(!panes.is_empty(), "should have at least one pane");
 
-        let scrollback = String::from_utf8_lossy(&panes[0].scrollback);
+        let scrollback = String::from_utf8_lossy(&panes[0].scrollback_tail);
         assert!(
             scrollback.contains("RECONSTRUCT_MARKER"),
             "scrollback should contain our marker after reconstruction, got: {scrollback}"
@@ -144,21 +152,23 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client.handshake().await;
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreateRuntime(proto::CreateRuntime {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                     name: "reconstruct-cwd".into(),
-                    policy: proto::RuntimePolicy::Persistent as i32,
+                    policy: v3::RuntimePolicy::Persistent as i32,
                 })),
             })
             .await;
-        runtime_id = match client.recv().await.msg {
-            Some(proto::server_message::Msg::RuntimeCreated(created)) => created.runtime_id,
+        runtime_id = match client.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
             other => panic!("expected RuntimeCreated, got {other:?}"),
         };
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::CreatePane(proto::CreatePane {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                     runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: None,
@@ -168,21 +178,22 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
                 })),
             })
             .await;
-        pane_id = match client.recv().await.msg {
-            Some(proto::server_message::Msg::PaneCreated(created)) => created.pane_id,
+        pane_id = match client.recv().await.payload {
+            Some(v3::server_envelope::Payload::PaneCreated(created)) => created.pane_id,
             other => panic!("expected PaneCreated, got {other:?}"),
         };
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                     runtime_id: runtime_id.clone(),
-                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
-        match client.recv().await.msg {
-            Some(proto::server_message::Msg::Snapshot(_)) => {}
+        match client.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
 
@@ -191,11 +202,14 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
             shell_quote(&project_dir_string)
         );
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Input(proto::Input {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
-                    data: bytes::Bytes::from(cwd_command.into_bytes()),
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from(cwd_command.into_bytes()),
+                    })),
                 })),
             })
             .await;
@@ -213,16 +227,17 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client.handshake().await;
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::AttachRuntime(proto::AttachRuntime {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                     runtime_id: runtime_id.clone(),
-                    attach_mode: proto::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
 
-        let panes = match client.recv().await.msg {
-            Some(proto::server_message::Msg::Snapshot(snapshot)) => snapshot.panes,
+        let panes = match client.recv().await.payload {
+            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => snapshot.panes,
             other => panic!("expected Snapshot, got {other:?}"),
         };
         let pane = panes
@@ -232,11 +247,14 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         assert_eq!(pane.cwd, project_dir_string);
 
         client
-            .send(&proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Input(proto::Input {
+            .send(&v3::ClientEnvelope {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id: pane_id.clone(),
-                    data: bytes::Bytes::from_static(b"pwd\n"),
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from_static(b"pwd\n"),
+                    })),
                 })),
             })
             .await;
@@ -257,7 +275,7 @@ async fn collect_delta_text(client: &mut TestClient, window: Duration) -> String
     let messages = client.drain(window).await;
     let mut output = Vec::new();
     for message in messages {
-        if let Some(proto::server_message::Msg::Delta(delta)) = message.msg {
+        if let Some(v3::server_envelope::Payload::OutputDelta(delta)) = message.payload {
             output.extend(delta.data);
         }
     }
@@ -281,8 +299,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        runtime_id =
-            create_runtime(&mut client, "multi-cwd", proto::RuntimePolicy::Persistent).await;
+        runtime_id = create_runtime(&mut client, "multi-cwd", v3::RuntimePolicy::Persistent).await;
         pane_a_id = create_pane(&mut client, &runtime_id).await;
         pane_b_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
@@ -340,8 +357,7 @@ async fn pane_gets_unique_histfile() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id =
-        create_runtime(&mut client, "hist-test", proto::RuntimePolicy::Persistent).await;
+    let runtime_id = create_runtime(&mut client, "hist-test", v3::RuntimePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
     attach_rw(&mut client, &runtime_id).await;
 
@@ -353,7 +369,7 @@ async fn pane_gets_unique_histfile() {
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(proto::server_message::Msg::Delta(d)) = msg.msg
+            && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
         {
             output.extend_from_slice(&d.data);
             let text = String::from_utf8_lossy(&output);

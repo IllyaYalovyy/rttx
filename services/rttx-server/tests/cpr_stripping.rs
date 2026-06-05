@@ -4,7 +4,7 @@
 mod common;
 
 use common::{TestClient, send_input, start_test_server};
-use rttx_proto::proto;
+use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
@@ -15,7 +15,7 @@ async fn cpr_responses_stripped_from_client_output() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "cpr-test", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(&mut client, "cpr-test", v3::RuntimePolicy::Persistent).await;
     let pane_id = common::create_pane(&mut client, &runtime_id).await;
     common::attach_rw(&mut client, &runtime_id).await;
 
@@ -28,7 +28,7 @@ async fn cpr_responses_stripped_from_client_output() {
 
     // Check that no Delta contains a raw CPR response pattern.
     for msg in &msgs {
-        if let Some(proto::server_message::Msg::Delta(delta)) = &msg.msg {
+        if let Some(v3::server_envelope::Payload::OutputDelta(delta)) = &msg.payload {
             let data = &delta.data;
             // CPR response: ESC [ <digits> ; <digits> R
             // Should have been stripped by strip_client_queries.

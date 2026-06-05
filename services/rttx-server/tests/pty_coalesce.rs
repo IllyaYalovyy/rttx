@@ -4,14 +4,14 @@
 mod common;
 
 use common::{TestClient, start_test_server};
-use rttx_proto::{bytes_to_uuid, proto};
+use rttx_proto::{bytes_to_uuid, v3};
 use std::time::Duration;
 
 /// Helper: create a session, create a pane, attach, and return IDs.
 async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
     let runtime_id =
-        common::create_runtime(client, "coalesce-test", proto::RuntimePolicy::Persistent).await;
+        common::create_runtime(client, "coalesce-test", v3::RuntimePolicy::Persistent).await;
     let pane_id = common::create_pane(client, &runtime_id).await;
     common::attach_rw(client, &runtime_id).await;
     (runtime_id, pane_id)
@@ -36,10 +36,10 @@ async fn burst_output_produces_coalesced_deltas() {
 
     // Collect all Delta messages for this pane.
     let msgs = client.drain(Duration::from_secs(5)).await;
-    let deltas: Vec<&proto::Delta> = msgs
+    let deltas: Vec<&v3::OutputDelta> = msgs
         .iter()
-        .filter_map(|m| match &m.msg {
-            Some(proto::server_message::Msg::Delta(d))
+        .filter_map(|m| match &m.payload {
+            Some(v3::server_envelope::Payload::OutputDelta(d))
                 if bytes_to_uuid(&d.pane_id).ok() == bytes_to_uuid(&pane_id).ok() =>
             {
                 Some(d)
@@ -86,8 +86,8 @@ async fn coalesced_deltas_preserve_all_output_bytes() {
     let msgs = client.drain(Duration::from_secs(5)).await;
     let output: Vec<u8> = msgs
         .iter()
-        .filter_map(|m| match &m.msg {
-            Some(proto::server_message::Msg::Delta(d))
+        .filter_map(|m| match &m.payload {
+            Some(v3::server_envelope::Payload::OutputDelta(d))
                 if bytes_to_uuid(&d.pane_id).ok() == bytes_to_uuid(&pane_id).ok() =>
             {
                 Some(d.data.to_vec())
@@ -128,10 +128,10 @@ async fn coalesced_deltas_identical_across_clients() {
     common::send_input(&mut client_a, &runtime_id, &pane_id, format!("echo {marker}\n").as_bytes())
         .await;
 
-    let collect = |msgs: &[proto::ServerMessage]| -> Vec<u8> {
+    let collect = |msgs: &[v3::ServerEnvelope]| -> Vec<u8> {
         msgs.iter()
-            .filter_map(|m| match &m.msg {
-                Some(proto::server_message::Msg::Delta(d))
+            .filter_map(|m| match &m.payload {
+                Some(v3::server_envelope::Payload::OutputDelta(d))
                     if bytes_to_uuid(&d.pane_id).ok() == bytes_to_uuid(&pane_id).ok() =>
                 {
                     Some(d.data.to_vec())
