@@ -2658,8 +2658,10 @@ pub async fn serialization_loop(
                 let mut s = crate::instrument::lock_server(&server, &metrics).await;
                 for (runtime_id, pane_id, cwd, revision, client_ids) in &cwd_changes {
                     let msg = ClientMsg::V2(protocol::cwd_changed(
-                        *runtime_id, *pane_id,
-                        cwd.clone(), *revision,
+                        *runtime_id,
+                        *pane_id,
+                        cwd.clone(),
+                        *revision,
                     ));
                     s.broadcast_to_clients(client_ids.iter().copied(), None, &msg);
                 }

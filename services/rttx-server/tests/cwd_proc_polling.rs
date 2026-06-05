@@ -83,8 +83,5 @@ async fn proc_cwd_poll_detects_cd_without_osc7() {
         }
     }
 
-    assert!(
-        found,
-        "expected CwdChanged with path {target} from /proc poll within 12 seconds"
-    );
+    assert!(found, "expected CwdChanged with path {target} from /proc poll within 12 seconds");
 }
