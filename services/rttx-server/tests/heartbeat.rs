@@ -72,8 +72,8 @@ fn ping_answered_while_mutex_held() {
                 request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static( })),
-                        b"for i in $(seq 1 500); do echo line$i; done\n",
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(
+                        b"for i in $(seq 1 500); do echo line$i; done\n") })),
                     )}))})
             .await;
 
@@ -204,8 +204,8 @@ fn sustained_pings_answered_during_continuous_output() {
                 request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static( })),
-                        b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n",
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(
+                        b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n") })),
                     )}))})
             .await;
 

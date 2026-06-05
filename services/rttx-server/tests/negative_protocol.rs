@@ -65,7 +65,7 @@ async fn empty_message_returns_error() {
     client.handshake().await;
 
     // Send a ClientMessage with msg = None.
-    let empty = v3::ClientEnvelope { msg: None };
+    let empty = v3::ClientEnvelope { request_id: 0, command: None };
     client.send(&empty).await;
 
     let resp = client.recv_or_timeout().await;
@@ -308,7 +308,7 @@ async fn wrong_protocol_version_returns_version_mismatch() {
         command: Some(
             /* TODO: v2 Hello removed in v3 migration */
             (v3::ClientHello {
-                protocol_version: 9999,
+                min_protocol_version: 9999,
                 client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
             }),
         ),

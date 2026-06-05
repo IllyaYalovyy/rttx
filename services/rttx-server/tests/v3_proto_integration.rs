@@ -161,10 +161,8 @@ fn v3_envelope_fire_and_forget_skips_id_allocation() {
     let cmd = v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
         runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
         pane_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-        kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
-            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"ls\n")})),
-    })),
-    };
+        kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"ls\n") })),
+    });
     let env = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_eq!(env.request_id, 0);
 

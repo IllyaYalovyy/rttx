@@ -111,7 +111,7 @@ async fn reconnect_restores_scrollback() {
             scrollback.contains("LIFECYCLE_MARKER_12345"),
             "snapshot scrollback should contain our marker.\nGot {} bytes: {:?}",
             pane_snap.scrollback_tail.len(),
-            &scrollback[..scrollback_tail.len().min(200)]
+            &scrollback[..scrollback.len().min(200)]
         );
 
         // Pane should be alive (not exited).
@@ -255,7 +255,7 @@ async fn restart_preserves_runtime_count_and_scrollback() {
         assert!(
             scrollback.contains("RESTART_STABLE_MARKER"),
             "scrollback should survive restart. Got: {:?}",
-            &scrollback[..scrollback_tail.len().min(200)]
+            &scrollback[..scrollback.len().min(200)]
         );
     }
 

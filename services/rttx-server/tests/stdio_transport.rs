@@ -85,17 +85,23 @@ async fn attach_stdio_hello_and_create_runtime() {
     let mut stdout = child.stdout.take().unwrap();
     let mut read_buf = BytesMut::with_capacity(4096);
 
-    // Hello.
-    let hello = v3::ClientEnvelope {
-        request_id: 0, command: Some(/* TODO: v2 Hello removed in v3 migration */(v3::ClientHello {
-            protocol_version: client_id: uuid_to_bytes(uuid::Uuid::new_v4())}))};
+    // v3 handshake.
+    let hello = rttx_proto::v3_handshake::build_client_hello(
+        uuid::Uuid::new_v4(), "test-stdio", "0.0.0",
+        rttx_proto::v3_handshake::CORE_CAPABILITIES,
+    );
     let mut buf = BytesMut::new();
     encode_frame(&hello, &mut buf).unwrap();
     stdin.write_all(&buf).await.unwrap();
     stdin.flush().await.unwrap();
 
-    let ack = read_response(&mut stdout, &mut read_buf).await;
-    assert!(matches!(ack.payload, Some(/* TODO: v2 HelloAck removed in v3 migration */(_))));
+    // Read ServerHello (bare frame).
+    loop {
+        let n = tokio::time::timeout(std::time::Duration::from_secs(10), stdout.read_buf(&mut read_buf))
+            .await.expect("timed out").expect("read failed");
+        assert!(n > 0, "unexpected EOF");
+        if decode_frame::<v3::ServerHello>(&mut read_buf).is_ok() { break; }
+    }
 
     // Create session.
     let create = v3::ClientEnvelope {
