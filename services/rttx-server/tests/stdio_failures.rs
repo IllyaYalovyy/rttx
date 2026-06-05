@@ -4,7 +4,7 @@
 //! broken pipe, handshake mismatch, and garbage input.
 
 use bytes::BytesMut;
-use rttx_proto::{decode_frame, encode_frame, v3, uuid_to_bytes};
+use rttx_proto::{decode_frame, encode_frame, uuid_to_bytes, v3};
 use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -73,7 +73,8 @@ async fn recv_frame(
         match decode_frame::<v3::ServerEnvelope>(read_buf) {
             Ok(msg) => return msg,
             Err(rttx_proto::FrameError::Incomplete) => {}
-            Err(e) => panic!("decode error: {e}")}
+            Err(e) => panic!("decode error: {e}"),
+        }
         let n = tokio::time::timeout(Duration::from_secs(10), stdout.read_buf(read_buf))
             .await
             .expect("timed out reading from stdout")
@@ -163,9 +164,12 @@ async fn stdin_close_after_session_create_exits_cleanly() {
     handshake(&mut stdin, &mut stdout, &mut read_buf).await;
 
     let create = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "disconnect-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32}))};
+            policy: v3::RuntimePolicy::Persistent as i32,
+        })),
+    };
     send_frame(&mut stdin, &create).await;
     let resp = recv_frame(&mut stdout, &mut read_buf).await;
     assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeCreated(_))));
@@ -276,7 +280,8 @@ async fn empty_message_returns_error_over_stdio() {
         Some(v3::server_envelope::Payload::Error(e)) => {
             assert!(e.kind != 0, "expected error for empty message, got kind {}", e.kind);
         }
-        other => panic!("expected Error, got {other:?}")}
+        other => panic!("expected Error, got {other:?}"),
+    }
 
     drop(stdin);
     let status = wait_for_exit(&mut child).await;

@@ -27,42 +27,56 @@ async fn reconnect_restores_scrollback() {
 
         // Create session.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "lifecycle-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32}))})
+                policy: v3::RuntimePolicy::Persistent as i32,
+            })),
+        })
         .await;
         runtime_id = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}")};
+            other => panic!("expected RuntimeCreated, got {other:?}"),
+        };
 
         // Create pane (spawns PTY).
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None}))})
+                no_persist: None,
+            })),
+        })
         .await;
         pane_id = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
-            other => panic!("expected PaneCreated, got {other:?}")};
+            other => panic!("expected PaneCreated, got {other:?}"),
+        };
 
         // Attach to receive deltas.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
         let _snapshot = c.recv().await; // initial snapshot
 
         // Send a command that produces recognizable output.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo LIFECYCLE_MARKER_12345\n")})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(b"echo LIFECYCLE_MARKER_12345\n"),
+                })),
             })),
         })
         .await;
@@ -83,24 +97,31 @@ async fn reconnect_restores_scrollback() {
 
         // List sessions — should find our session.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        })
         .await;
         let runtimes = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}")};
+            other => panic!("expected RuntimeList, got {other:?}"),
+        };
         assert_eq!(runtimes.len(), 1, "should have exactly 1 session");
         assert_eq!(runtimes[0].name, "lifecycle-test");
         assert_eq!(runtimes[0].id, runtime_id, "session ID should match");
 
         // Attach — should get snapshot with scrollback.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
         let snapshot = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
-            other => panic!("expected Snapshot, got {other:?}")};
+            other => panic!("expected Snapshot, got {other:?}"),
+        };
 
         assert!(!snapshot.panes.is_empty(), "snapshot should have panes");
         let pane_snap = &snapshot.panes[0];
@@ -131,9 +152,12 @@ async fn runtime_count_stable_across_reconnects() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "stable-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32}))})
+                policy: v3::RuntimePolicy::Persistent as i32,
+            })),
+        })
         .await;
         let _ = c.recv().await; // RuntimeCreated
     }
@@ -143,11 +167,14 @@ async fn runtime_count_stable_across_reconnects() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        })
         .await;
         let runtimes = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}")};
+            other => panic!("expected RuntimeList, got {other:?}"),
+        };
         assert_eq!(runtimes.len(), 1, "should still have exactly 1 session");
         assert_eq!(runtimes[0].name, "stable-test");
     }
@@ -157,11 +184,14 @@ async fn runtime_count_stable_across_reconnects() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        })
         .await;
         let runtimes = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}")};
+            other => panic!("expected RuntimeList, got {other:?}"),
+        };
         assert_eq!(runtimes.len(), 1, "reconnecting should not create new sessions");
     }
 }
@@ -181,39 +211,53 @@ async fn restart_preserves_runtime_count_and_scrollback() {
         c.handshake().await;
 
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "restart-stable".into(),
-                policy: v3::RuntimePolicy::Persistent as i32}))})
+                policy: v3::RuntimePolicy::Persistent as i32,
+            })),
+        })
         .await;
         runtime_id = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}")};
+            other => panic!("expected RuntimeCreated, got {other:?}"),
+        };
 
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None}))})
+                no_persist: None,
+            })),
+        })
         .await;
         let pane_id = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
-            other => panic!("expected PaneCreated, got {other:?}")};
+            other => panic!("expected PaneCreated, got {other:?}"),
+        };
 
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
         let _ = c.recv().await; // Snapshot
 
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo RESTART_STABLE_MARKER\n")})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(b"echo RESTART_STABLE_MARKER\n"),
+                })),
             })),
         })
         .await;
@@ -232,23 +276,30 @@ async fn restart_preserves_runtime_count_and_scrollback() {
 
         // List — should have exactly 1 session.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        })
         .await;
         let runtimes = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}")};
+            other => panic!("expected RuntimeList, got {other:?}"),
+        };
         assert_eq!(runtimes.len(), 1, "restart should preserve exactly 1 session");
         assert_eq!(runtimes[0].id, runtime_id, "session ID should survive restart");
 
         // Attach and check scrollback.
         c.send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
         let snapshot = match c.recv().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
-            other => panic!("expected Snapshot, got {other:?}")};
+            other => panic!("expected Snapshot, got {other:?}"),
+        };
         assert!(!snapshot.panes.is_empty(), "should have panes after restart");
 
         let scrollback = String::from_utf8_lossy(&snapshot.panes[0].scrollback_tail);

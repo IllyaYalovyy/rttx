@@ -105,9 +105,18 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
         .expect("pane should still be in snapshot");
 
     // After cleanup, all TUI modes should be off.
-    assert!(!pane.terminal_modes.as_ref().unwrap().bracketed_paste, "bracketed paste should be off");
-    assert!(!pane.terminal_modes.as_ref().unwrap().application_cursor_keys, "application cursor keys should be off");
-    assert!(!pane.terminal_modes.as_ref().unwrap().application_keypad, "application keypad should be off");
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().bracketed_paste,
+        "bracketed paste should be off"
+    );
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().application_cursor_keys,
+        "application cursor keys should be off"
+    );
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().application_keypad,
+        "application keypad should be off"
+    );
     assert_eq!(pane.terminal_modes.as_ref().unwrap().mouse_mode, 0, "mouse tracking should be off");
     assert!(!pane.terminal_modes.as_ref().unwrap().sgr_mouse, "SGR mouse should be off");
 }

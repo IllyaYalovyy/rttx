@@ -12,37 +12,49 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     // Create session.
     let create = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "io-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32}))};
+            policy: v3::RuntimePolicy::Persistent as i32,
+        })),
+    };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}")};
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
 
     // Create pane (spawns PTY).
     let create_pane = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: runtime_id.clone(),
             cwd: None,
             dark_background: None,
             cols: 0,
             rows: 0,
-            no_persist: None}))};
+            no_persist: None,
+        })),
+    };
     client.send(&create_pane).await;
     let pane_id = match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
-        other => panic!("expected PaneCreated, got {other:?}")};
+        other => panic!("expected PaneCreated, got {other:?}"),
+    };
 
     // Attach to receive Deltas.
     let attach = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))};
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
-        other => panic!("expected Snapshot, got {other:?}")}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
 
     (runtime_id, pane_id)
 }
@@ -59,10 +71,13 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
     // Force output by sending a harmless command, then poll for the Delta.
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo rttx_pty_test\n")})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(b"echo rttx_pty_test\n"),
+                })),
             })),
         })
         .await;
@@ -72,9 +87,14 @@ async fn pane_creation_spawns_pty_and_produces_deltas() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(!remaining.is_zero(), "timed out waiting for Delta from shell");
         match client.try_recv(remaining).await {
-            Some(msg) if matches!(msg.payload, Some(v3::server_envelope::Payload::OutputDelta(_))) => break,
+            Some(msg)
+                if matches!(msg.payload, Some(v3::server_envelope::Payload::OutputDelta(_))) =>
+            {
+                break;
+            }
             Some(_) => {}
-            None => panic!("timed out waiting for Delta from shell")}
+            None => panic!("timed out waiting for Delta from shell"),
+        }
     }
 }
 
@@ -93,11 +113,14 @@ async fn input_reaches_pty_and_echoes_back_as_delta() {
     let marker = "RTTX_TEST_MARKER_42";
     let input_data = format!("echo {marker}\n");
     let input = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from(input_data.into_bytes())})),
-    })),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from(input_data.into_bytes()),
+            })),
+        })),
     };
     client.send(&input).await;
 
@@ -107,7 +130,8 @@ async fn input_reaches_pty_and_echoes_back_as_delta() {
         .iter()
         .filter_map(|m| match &m.payload {
             Some(v3::server_envelope::Payload::OutputDelta(d)) => Some(d.data.clone()),
-            _ => None})
+            _ => None,
+        })
         .flatten()
         .collect();
     let output_str = String::from_utf8_lossy(&output);
@@ -124,18 +148,24 @@ async fn resize_updates_pane_dimensions() {
 
     // Send resize.
     let resize = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
             cols: 120,
-            rows: 40}))};
+            rows: 40,
+        })),
+    };
     client.send(&resize).await;
     client.ping().await; // barrier: flush the fire-and-forget resize before reattach
 
     // Verify by detaching and re-attaching: snapshot should show new dimensions.
     let detach = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-            runtime_id: runtime_id.clone()}))};
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            runtime_id: runtime_id.clone(),
+        })),
+    };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -143,18 +173,23 @@ async fn resize_updates_pane_dimensions() {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(
-                v3::server_envelope::Payload::OutputDelta(_) | v3::server_envelope::Payload::PaneExited(_),
+                v3::server_envelope::Payload::OutputDelta(_)
+                | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}")}
+            other => panic!("expected RuntimeDetached, got {other:?}"),
+        }
     }
 
     // Small delay for the resize to process.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let attach = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))};
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
     client.send(&attach).await;
     let resp = client.recv_or_timeout().await;
     match resp.payload {
@@ -164,7 +199,8 @@ async fn resize_updates_pane_dimensions() {
             assert_eq!(pane_snap.cols, 120, "expected cols=120");
             assert_eq!(pane_snap.rows, 40, "expected rows=40");
         }
-        other => panic!("expected Snapshot, got {other:?}")}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -177,9 +213,12 @@ async fn close_pane_kills_pty() {
 
     // Close the pane.
     let close = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::ClosePane(v3::ClosePane {
             runtime_id: runtime_id.clone(),
-            pane_id: pane_id.clone()}))};
+            pane_id: pane_id.clone(),
+        })),
+    };
     client.send(&close).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     let mut saw_close = false;
@@ -190,14 +229,18 @@ async fn close_pane_kills_pty() {
                 break;
             }
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected PaneClosed, got {other:?}")}
+            other => panic!("expected PaneClosed, got {other:?}"),
+        }
     }
     assert!(saw_close, "timed out waiting for PaneClosed");
 
     // Verify pane is gone: re-attach and check snapshot has no panes.
     let detach = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-            runtime_id: runtime_id.clone()}))};
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            runtime_id: runtime_id.clone(),
+        })),
+    };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -205,24 +248,30 @@ async fn close_pane_kills_pty() {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(
-                v3::server_envelope::Payload::OutputDelta(_) | v3::server_envelope::Payload::PaneExited(_),
+                v3::server_envelope::Payload::OutputDelta(_)
+                | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}")}
+            other => panic!("expected RuntimeDetached, got {other:?}"),
+        }
     }
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let attach = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))};
+            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        })),
+    };
     client.send(&attach).await;
     let resp = client.recv_or_timeout().await;
     match resp.payload {
         Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
             assert!(snap.panes.is_empty(), "expected no panes after close, got: {:?}", snap.panes);
         }
-        other => panic!("expected Snapshot, got {other:?}")}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -238,11 +287,14 @@ async fn pane_exit_produces_pane_exited_message() {
 
     // Tell the shell to exit with a specific code.
     let input = v3::ClientEnvelope {
-        request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"exit 7\n")})),
-    })),
+            kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                data: bytes::Bytes::from_static(b"exit 7\n"),
+            })),
+        })),
     };
     client.send(&input).await;
 
@@ -250,7 +302,8 @@ async fn pane_exit_produces_pane_exited_message() {
     let msgs = client.drain(Duration::from_secs(3)).await;
     let exited = msgs.iter().find_map(|m| match &m.payload {
         Some(v3::server_envelope::Payload::PaneExited(pe)) => Some(pe.clone()),
-        _ => None});
+        _ => None,
+    });
     let exited = exited.expect("expected PaneExited message");
 
     let exitpane_id = bytes_to_uuid(&exited.pane_id).unwrap();
@@ -275,9 +328,14 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(!remaining.is_zero(), "timed out waiting for shell prompt");
         match client.try_recv(remaining).await {
-            Some(msg) if matches!(msg.payload, Some(v3::server_envelope::Payload::OutputDelta(_))) => break,
+            Some(msg)
+                if matches!(msg.payload, Some(v3::server_envelope::Payload::OutputDelta(_))) =>
+            {
+                break;
+            }
             Some(_) => {}
-            None => panic!("timed out waiting for shell prompt")}
+            None => panic!("timed out waiting for shell prompt"),
+        }
     }
     // Drain any remaining startup output.
     client.drain(Duration::from_millis(300)).await;
@@ -285,10 +343,13 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
     // Send a newline first to ensure the input line is empty, then Ctrl+D.
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"\n")})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(b"\n"),
+                })),
             })),
         })
         .await;
@@ -296,10 +357,13 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.clone(),
                 pane_id: pane_id.clone(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(&[0x04])})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::from_static(&[0x04]),
+                })),
             })),
         })
         .await;
@@ -307,7 +371,8 @@ async fn ctrl_d_at_shell_prompt_produces_pane_exited_message() {
     let msgs = client.drain(Duration::from_secs(10)).await;
     let exited = msgs.iter().find_map(|m| match &m.payload {
         Some(v3::server_envelope::Payload::PaneExited(pe)) => Some(pe.clone()),
-        _ => None});
+        _ => None,
+    });
 
     let exited = exited.expect("Ctrl+D at shell prompt must produce PaneExited");
     assert_eq!(exited.pane_id, pane_id);
@@ -327,15 +392,19 @@ async fn multi_client_delta_broadcast_delivers_identical_data() {
     client_b.handshake().await;
     client_b
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
+            })),
+        })
         .await;
     loop {
         match client_b.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}")}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     }
     client_b.drain(Duration::from_millis(300)).await;
 
@@ -353,7 +422,8 @@ async fn multi_client_delta_broadcast_delivers_identical_data() {
                 {
                     Some(d.data.to_vec())
                 }
-                _ => None})
+                _ => None,
+            })
             .flatten()
             .collect()
     };

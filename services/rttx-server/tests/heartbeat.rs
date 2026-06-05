@@ -15,12 +15,15 @@ fn ping_receives_matching_pong() {
 
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 42 }))})
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 42 })),
+            })
             .await;
 
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::Pong(pong)) => assert_eq!(pong.nonce, 42),
-            other => panic!("expected Pong, got {other:?}")}
+            other => panic!("expected Pong, got {other:?}"),
+        }
     });
 }
 
@@ -38,12 +41,15 @@ fn ping_roundtrip_still_works_for_attached_clients() {
 
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 7 }))})
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 7 })),
+            })
             .await;
 
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::Pong(pong)) => assert_eq!(pong.nonce, 7),
-            other => panic!("expected Pong, got {other:?}")}
+            other => panic!("expected Pong, got {other:?}"),
+        }
     });
 }
 
@@ -87,7 +93,9 @@ fn ping_answered_while_mutex_held() {
         for nonce in [100, 200, 300] {
             client
                 .send(&v3::ClientEnvelope {
-                    request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce }))})
+                    request_id: 0,
+                    command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce })),
+                })
                 .await;
         }
 
@@ -101,7 +109,8 @@ fn ping_answered_while_mutex_held() {
                         pong_nonces.push(pong.nonce);
                     }
                 }
-                None => break}
+                None => break,
+            }
         }
         assert_eq!(pong_nonces, vec![100, 200, 300], "all pongs should arrive promptly");
     });
@@ -120,20 +129,22 @@ fn ping_answered_during_pty_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "ping-during-output", v3::RuntimePolicy::Persistent)
-                .await;
+            create_runtime(&mut client, "ping-during-output", v3::RuntimePolicy::Persistent).await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane that will produce output.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                     runtime_id: runtime_id.clone(),
                     cwd: None,
                     dark_background: Some(true),
                     cols: 0,
                     rows: 0,
-                    no_persist: None}))})
+                    no_persist: None,
+                })),
+            })
             .await;
 
         // Read PaneCreated response.
@@ -147,12 +158,15 @@ fn ping_answered_during_pty_output() {
         // Send some input to generate PTY output.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"echo hello\n")})),
-            })),
-        })
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from_static(b"echo hello\n"),
+                    })),
+                })),
+            })
             .await;
 
         // Wait briefly for output to start flowing.
@@ -161,7 +175,9 @@ fn ping_answered_during_pty_output() {
         // Send a ping while output may be in flight.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 99 }))})
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 99 })),
+            })
             .await;
 
         // Drain messages until we see the pong. With the concurrent
@@ -178,7 +194,8 @@ fn ping_answered_during_pty_output() {
                         break;
                     }
                 }
-                None => break}
+                None => break,
+            }
         }
         assert!(got_pong, "pong should arrive even during PTY output");
     });
@@ -198,8 +215,7 @@ fn sustained_pings_answered_during_continuous_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "sustained-heartbeat", v3::RuntimePolicy::Persistent)
-                .await;
+            create_runtime(&mut client, "sustained-heartbeat", v3::RuntimePolicy::Persistent).await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
         let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
@@ -226,7 +242,9 @@ fn sustained_pings_answered_during_continuous_output() {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             client
                 .send(&v3::ClientEnvelope {
-                    request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce }))})
+                    request_id: 0,
+                    command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce })),
+                })
                 .await;
         }
 
@@ -240,7 +258,8 @@ fn sustained_pings_answered_during_continuous_output() {
                         pong_nonces.push(pong.nonce);
                     }
                 }
-                None => break}
+                None => break,
+            }
         }
         let expected: Vec<u64> = (0..ping_count).collect();
         assert_eq!(

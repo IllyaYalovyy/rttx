@@ -235,7 +235,11 @@ async fn operations_after_detach_blocked_by_other_writer() {
     let resp = c1.recv().await;
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
-            assert_eq!(e.kind, v3::ErrorKind::OwnershipConflict as i32, "should be ERR_OWNERSHIP_CONFLICT");
+            assert_eq!(
+                e.kind,
+                v3::ErrorKind::OwnershipConflict as i32,
+                "should be ERR_OWNERSHIP_CONFLICT"
+            );
         }
         other => panic!("expected Error for close-pane while another writer owns, got {other:?}"),
     }

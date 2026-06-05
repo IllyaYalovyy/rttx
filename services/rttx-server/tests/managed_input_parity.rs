@@ -76,37 +76,49 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "parity-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32}))})
+                policy: v3::RuntimePolicy::Persistent as i32,
+            })),
+        })
         .await;
     let runtime_id = match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}")};
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None}))})
+                no_persist: None,
+            })),
+        })
         .await;
     let pane_id = match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::PaneCreated(pc)) => pc.pane_id,
-        other => panic!("expected PaneCreated, got {other:?}")};
+        other => panic!("expected PaneCreated, got {other:?}"),
+    };
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
-        other => panic!("expected Snapshot, got {other:?}")}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
 
     (runtime_id, pane_id)
 }
@@ -130,10 +142,13 @@ async fn wait_for_prompt(client: &mut TestClient) {
 async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::copy_from_slice(data)})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::copy_from_slice(data),
+                })),
             })),
         })
         .await;
@@ -145,7 +160,8 @@ async fn collect_output(client: &mut TestClient, window: Duration) -> String {
         .iter()
         .filter_map(|m| match &m.payload {
             Some(v3::server_envelope::Payload::OutputDelta(d)) => Some(d.data.clone()),
-            _ => None})
+            _ => None,
+        })
         .flatten()
         .collect();
     String::from_utf8_lossy(&bytes).to_string()
@@ -154,7 +170,9 @@ async fn collect_output(client: &mut TestClient, window: Duration) -> String {
 async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
+        })
         .await;
     let status = tokio::time::timeout(Duration::from_secs(10), server_child.wait())
         .await
@@ -170,27 +188,35 @@ async fn reattach_snapshot_text(
 ) -> String {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-                runtime_id: runtime_id.to_vec()}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                runtime_id: runtime_id.to_vec(),
+            })),
+        })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}")}
+            other => panic!("expected RuntimeDetached, got {other:?}"),
+        }
     }
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     let snapshot = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => break s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}")}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     };
     let scrollback = snapshot
         .panes
@@ -325,27 +351,35 @@ async fn snapshot_includes_bracketed_paste_mode() {
     // Bash enables bracketed paste by default. Detach and reattach to get a snapshot.
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-                runtime_id: sid.clone()}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                runtime_id: sid.clone(),
+            })),
+        })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}")}
+            other => panic!("expected RuntimeDetached, got {other:?}"),
+        }
     }
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: sid.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     let snapshot = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => break s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}")}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     };
 
     let pane =
@@ -436,27 +470,35 @@ async fn fkey_bytes_reach_pty_application() {
 async fn reattach_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-                runtime_id: runtime_id.to_vec()}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                runtime_id: runtime_id.to_vec(),
+            })),
+        })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}")}
+            other => panic!("expected RuntimeDetached, got {other:?}"),
+        }
     }
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => return s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}")}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     }
 }
 
@@ -476,7 +518,10 @@ async fn snapshot_includes_application_cursor_keys_mode() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert!(pane.terminal_modes.as_ref().unwrap().application_cursor_keys, "DECSET 1 must be reflected in snapshot");
+    assert!(
+        pane.terminal_modes.as_ref().unwrap().application_cursor_keys,
+        "DECSET 1 must be reflected in snapshot"
+    );
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -497,7 +542,10 @@ async fn snapshot_includes_application_keypad_mode() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert!(pane.terminal_modes.as_ref().unwrap().application_keypad, "DECKPAM must be reflected in snapshot");
+    assert!(
+        pane.terminal_modes.as_ref().unwrap().application_keypad,
+        "DECKPAM must be reflected in snapshot"
+    );
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -518,8 +566,15 @@ async fn snapshot_includes_mouse_tracking_mode() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert_eq!(pane.terminal_modes.as_ref().unwrap().mouse_mode, v3::MouseMode::Any as i32, "DECSET 1003 must be reflected in snapshot");
-    assert!(pane.terminal_modes.as_ref().unwrap().sgr_mouse, "DECSET 1006 must be reflected in snapshot");
+    assert_eq!(
+        pane.terminal_modes.as_ref().unwrap().mouse_mode,
+        v3::MouseMode::Any as i32,
+        "DECSET 1003 must be reflected in snapshot"
+    );
+    assert!(
+        pane.terminal_modes.as_ref().unwrap().sgr_mouse,
+        "DECSET 1006 must be reflected in snapshot"
+    );
 
     shutdown_server(&mut client, &mut server).await;
 }
@@ -542,7 +597,10 @@ async fn snapshot_modes_reset_when_disabled() {
 
     let snapshot = reattach_snapshot(&mut client, &sid).await;
     let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
-    assert!(!pane.terminal_modes.as_ref().unwrap().application_cursor_keys, "DECRST 1 must clear the flag in snapshot");
+    assert!(
+        !pane.terminal_modes.as_ref().unwrap().application_cursor_keys,
+        "DECRST 1 must clear the flag in snapshot"
+    );
 
     shutdown_server(&mut client, &mut server).await;
 }

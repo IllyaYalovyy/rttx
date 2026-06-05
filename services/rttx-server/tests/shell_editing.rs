@@ -73,37 +73,49 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
                 name: "shell-editing".into(),
-                policy: v3::RuntimePolicy::Persistent as i32}))})
+                policy: v3::RuntimePolicy::Persistent as i32,
+            })),
+        })
         .await;
     let runtime_id = match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}")};
+        other => panic!("expected RuntimeCreated, got {other:?}"),
+    };
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::CreatePane(v3::CreatePane {
                 runtime_id: runtime_id.clone(),
                 cwd: None,
                 dark_background: None,
                 cols: 0,
                 rows: 0,
-                no_persist: None}))})
+                no_persist: None,
+            })),
+        })
         .await;
     let pane_id = match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::PaneCreated(created)) => created.pane_id,
-        other => panic!("expected PaneCreated, got {other:?}")};
+        other => panic!("expected PaneCreated, got {other:?}"),
+    };
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     match client.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
-        other => panic!("expected Snapshot, got {other:?}")}
+        other => panic!("expected Snapshot, got {other:?}"),
+    }
 
     (runtime_id, pane_id)
 }
@@ -133,11 +145,14 @@ async fn resize_pane(
 ) {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::ResizePane(v3::ResizePane {
                 runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
                 cols,
-                rows}))})
+                rows,
+            })),
+        })
         .await;
     client.ping().await; // barrier: flush the fire-and-forget resize
 }
@@ -159,27 +174,35 @@ async fn reattach_snapshot_bytes(
 ) -> bytes::Bytes {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
-                runtime_id: runtime_id.to_vec()}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                runtime_id: runtime_id.to_vec(),
+            })),
+        })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}")}
+            other => panic!("expected RuntimeDetached, got {other:?}"),
+        }
     }
 
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     let snapshot = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => break snapshot,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}")}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     };
     pane_scrollback(&snapshot, pane_id)
 }
@@ -195,15 +218,19 @@ async fn attach_snapshot_bytes(
 ) -> bytes::Bytes {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32}))})
+                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            })),
+        })
         .await;
     let snapshot = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => break snapshot,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected Snapshot, got {other:?}")}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     };
     pane_scrollback(&snapshot, pane_id)
 }
@@ -236,10 +263,13 @@ async fn attach_and_collect_prompt(
 async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                 runtime_id: runtime_id.to_vec(),
                 pane_id: pane_id.to_vec(),
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::copy_from_slice(data)})),
+                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                    data: bytes::Bytes::copy_from_slice(data),
+                })),
             })),
         })
         .await;
@@ -252,7 +282,9 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
     client
         .send(&v3::ClientEnvelope {
-            request_id: 0, command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {}))})
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
+        })
         .await;
     let status = tokio::time::timeout(Duration::from_secs(5), server_child.wait())
         .await
