@@ -118,7 +118,6 @@ async fn multiple_readers_see_consistent_revision() {
 
     // Inventory should show consistent counts.
     let runtimes = list_runtimes(&mut r2).await;
-    assert_eq!(runtimes[0].read_only_client_count, 3);
     assert_eq!(runtimes[0].read_only_client_count, 2);
     assert!(runtimes[0].has_write_owner);
 }

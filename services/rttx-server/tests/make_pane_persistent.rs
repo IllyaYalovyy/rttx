@@ -114,7 +114,7 @@ async fn make_pane_persistent_flow() {
         })),
     })
     .await;
-    assert!(matches!(c.recv().await.payload, Some(v3::server_envelope::Payload::PaneResized(_))));
+    c.ping().await; // barrier: flush the fire-and-forget resize before reconnect
 
     // 7. Disconnect and reconnect — verify session persists.
     drop(c);

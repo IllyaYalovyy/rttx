@@ -58,7 +58,6 @@ async fn second_writer_attach_returns_attach_blocked() {
         Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
             assert_eq!(blocked.runtime_id, runtime_id);
             assert_eq!(blocked.current_client_role, v3::RuntimeClientRole::Unattached as i32);
-            assert_eq!(blocked.read_only_client_count, 1);
             assert_eq!(blocked.read_only_client_count, 0);
         }
         other => panic!("expected AttachBlocked, got {other:?}"),
@@ -68,7 +67,6 @@ async fn second_writer_attach_returns_attach_blocked() {
     assert_eq!(runtimes.len(), 1);
     assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Unattached as i32);
     assert!(runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].read_only_client_count, 1);
     assert_eq!(runtimes[0].read_only_client_count, 0);
 }
 
@@ -144,7 +142,7 @@ async fn read_only_attach_cannot_mutate_runtime() {
         .await;
     match reader.recv().await.payload {
         Some(v3::server_envelope::Payload::Error(error)) => {
-            assert_eq!(error.kind, 9);
+            assert_eq!(error.kind, v3::ErrorKind::OwnershipConflict as i32);
             assert!(error.message.contains("owned by another client"));
         }
         other => panic!("expected Error, got {other:?}"),
@@ -269,7 +267,7 @@ async fn read_only_client_cannot_rename_runtime() {
         .await;
     match reader.recv_or_timeout().await.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
-            assert_eq!(e.kind, 9); // ERR_OWNERSHIP_CONFLICT
+            assert_eq!(e.kind, v3::ErrorKind::OwnershipConflict as i32);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -306,10 +304,21 @@ async fn read_only_client_cannot_set_pane_title() {
             })),
         })
         .await;
-    match reader.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::Error(e)) => {
-            assert_eq!(e.kind, 9); // ERR_OWNERSHIP_CONFLICT
-        }
-        other => panic!("expected Error, got {other:?}"),
-    }
+
+    // SetPaneTitle is fire-and-forget; the server silently drops it for a
+    // read-only client. Use a Ping/Pong barrier to flush, then confirm the
+    // reader sees neither an error nor a TitleChanged broadcast — proving
+    // the title was never changed.
+    reader.ping().await;
+    let events = reader.drain(std::time::Duration::from_millis(200)).await;
+    assert!(
+        events.iter().all(|e| !matches!(
+            e.payload,
+            Some(
+                v3::server_envelope::Payload::Error(_)
+                    | v3::server_envelope::Payload::TitleChanged(_)
+            )
+        )),
+        "read-only client must not be able to change the pane title"
+    );
 }

@@ -139,12 +139,7 @@ async fn resize_pane(
                 cols,
                 rows}))})
         .await;
-    loop {
-        match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::PaneResized(_)) => break,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected PaneResized, got {other:?}")}
-    }
+    client.ping().await; // barrier: flush the fire-and-forget resize
 }
 
 fn pane_scrollback(snapshot: &v3::RuntimeSnapshot, pane_id: &[u8]) -> bytes::Bytes {

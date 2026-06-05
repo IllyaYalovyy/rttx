@@ -211,7 +211,7 @@ async fn wrong_protocol_version_returns_error_over_stdio() {
             .expect("read failed");
         assert!(n > 0, "unexpected EOF waiting for version mismatch error");
     };
-    assert_eq!(resp.kind, 2); // ERR_VERSION_MISMATCH
+    assert_eq!(resp.kind, v3::ErrorKind::ProtocolMismatch as i32);
 
     drop(stdin);
     let status = wait_for_exit(&mut child).await;

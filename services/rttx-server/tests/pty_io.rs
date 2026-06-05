@@ -130,10 +130,7 @@ async fn resize_updates_pane_dimensions() {
             cols: 120,
             rows: 40}))};
     client.send(&resize).await;
-    assert!(matches!(
-        client.recv_or_timeout().await.payload,
-        Some(v3::server_envelope::Payload::PaneResized(_))
-    ));
+    client.ping().await; // barrier: flush the fire-and-forget resize before reattach
 
     // Verify by detaching and re-attaching: snapshot should show new dimensions.
     let detach = v3::ClientEnvelope {

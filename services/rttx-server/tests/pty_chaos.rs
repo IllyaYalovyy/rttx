@@ -12,6 +12,7 @@ use std::time::Duration;
 // ── Helpers ─────────────────────────────────────────────────────
 
 async fn create_and_attach(client: &mut TestClient, name: &str) -> Vec<u8> {
+    client.handshake().await;
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,

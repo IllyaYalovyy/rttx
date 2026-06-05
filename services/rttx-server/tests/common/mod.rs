@@ -135,6 +135,65 @@ impl TestClient {
         request_id
     }
 
+    /// Send a command and return the reply envelope whose `request_id`
+    /// matches the request, skipping any interleaved push events.
+    ///
+    /// Push events (OutputDelta, PaneExited, etc.) carry `request_id == 0`;
+    /// command replies echo the request's id. PTY activity can interleave
+    /// pushes with the ack, so matching by id is the only robust way to
+    /// read a specific command's reply.
+    pub async fn request(&mut self, command: v3::client_envelope::Command) -> v3::ServerEnvelope {
+        let request_id = self.next_request_id();
+        let env = v3::ClientEnvelope { request_id, command: Some(command) };
+        self.send(&env).await;
+        loop {
+            let reply = self.recv().await;
+            if reply.request_id == request_id {
+                return reply;
+            }
+            // Interleaved push event or a stale reply — keep reading.
+        }
+    }
+
+    /// Wait for the first server envelope whose payload matches `predicate`,
+    /// skipping all other (typically push) events.
+    ///
+    /// Fire-and-forget commands (resize, set-title, input) produce broadcast
+    /// events with `request_id == 0` that arrive interleaved with other push
+    /// events such as `OutputDelta` and `CwdChanged`. This skips everything
+    /// until the awaited event is seen. Each read is bounded by the recv
+    /// timeout, so a never-arriving event fails the test instead of hanging.
+    pub async fn recv_matching<F>(&mut self, mut predicate: F) -> v3::ServerEnvelope
+    where
+        F: FnMut(&v3::server_envelope::Payload) -> bool,
+    {
+        loop {
+            let env = self.recv().await;
+            if env.payload.as_ref().is_some_and(&mut predicate) {
+                return env;
+            }
+        }
+    }
+
+    /// Round-trip a Ping/Pong, acting as a barrier that flushes all
+    /// previously-sent fire-and-forget commands.
+    ///
+    /// The server processes a single client's frames in order, so once the
+    /// matching Pong is received every earlier command (resize, set-title,
+    /// input, …) has been applied. v3 fire-and-forget commands produce no
+    /// ack of their own, so this is the canonical way to synchronise before
+    /// observing their effect (e.g. via a reattach snapshot).
+    pub async fn ping(&mut self) {
+        let nonce = self.next_request_id();
+        let reply = self.request(v3::client_envelope::Command::Ping(v3::Ping { nonce })).await;
+        match reply.payload {
+            Some(v3::server_envelope::Payload::Pong(pong)) => {
+                assert_eq!(pong.nonce, nonce, "Pong nonce must match Ping");
+            }
+            other => panic!("expected Pong, got {other:?}"),
+        }
+    }
+
     pub async fn collect_output_seqs(&mut self, window: std::time::Duration) -> Vec<u64> {
         let mut seqs = Vec::new();
         let deadline = tokio::time::Instant::now() + window;

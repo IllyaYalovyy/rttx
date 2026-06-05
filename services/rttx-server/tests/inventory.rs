@@ -46,6 +46,11 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
+    // Attach read-write so the client can set the pane title (SetPaneTitle is
+    // silently dropped for clients without write access in v3), then detach
+    // afterwards so the inventory reports the runtime as unattached.
+    common::attach_rw(&mut client, &runtime_id).await;
+
     // Let the interactive shell emit its initial prompt/title traffic before
     // asserting a later manual SetPaneTitle update.
     let _ = client.drain(Duration::from_millis(500)).await;
@@ -60,13 +65,14 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
             })),
         })
         .await;
-    assert!(matches!(
-        client.recv().await.payload,
-        Some(v3::server_envelope::Payload::TitleChanged(_))
-    ));
+    // SetPaneTitle is fire-and-forget; flush it with a Ping/Pong barrier.
+    client.ping().await;
 
     // Drain any PTY output that may overwrite the title via OSC sequences.
     let _ = client.drain(Duration::from_millis(300)).await;
+
+    // Detach so the runtime is reported as unattached in the inventory.
+    common::detach_runtime(&mut client, &runtime_id).await;
 
     let runtimes = list_runtimes(&mut client).await;
     assert_eq!(runtimes.len(), 1);
@@ -75,14 +81,9 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
     assert_eq!(session.id, runtime_id);
     assert_eq!(session.name, "inventory-test");
     assert_eq!(session.pane_count, 1);
-    assert!(
-        !session /* has_attached_client removed in v3 */
-            .has_write_owner
-    );
-    assert_eq!(session.read_only_client_count, 0);
-    assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
     assert!(!session.has_write_owner);
     assert_eq!(session.read_only_client_count, 0);
+    assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
     assert_eq!(v3::RuntimePolicy::try_from(session.policy).unwrap(), v3::RuntimePolicy::Persistent);
     assert!(!session.reconstructed);
     assert_eq!(session.panes.len(), 1);
@@ -152,24 +153,14 @@ async fn list_runtimes_tracks_attached_client_count() {
 
     let runtimes = list_runtimes(&mut second).await;
     assert_eq!(runtimes.len(), 1);
-    assert!(
-        runtimes[0] /* has_attached_client removed in v3 */
-            .has_write_owner
-    );
-    assert_eq!((runtimes[0].has_write_owner as u32) + runtimes[0].read_only_client_count, 2);
-    assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Reader as i32);
     assert!(runtimes[0].has_write_owner);
+    assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Reader as i32);
     assert_eq!(runtimes[0].read_only_client_count, 1);
 
     drop(first);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let runtimes = list_runtimes(&mut second).await;
-    assert_eq!((runtimes[0].has_write_owner as u32) + runtimes[0].read_only_client_count, 1);
-    assert!(
-        runtimes[0] /* has_attached_client removed in v3 */
-            .has_write_owner
-    );
     assert!(!runtimes[0].has_write_owner);
     assert_eq!(runtimes[0].read_only_client_count, 1);
 
@@ -180,10 +171,7 @@ async fn list_runtimes_tracks_attached_client_count() {
     third.handshake().await;
     let runtimes = list_runtimes(&mut third).await;
     assert_eq!(runtimes[0].read_only_client_count, 0);
-    assert!(
-        !runtimes[0] /* has_attached_client removed in v3 */
-            .has_write_owner
-    );
+    assert!(!runtimes[0].has_write_owner);
 }
 
 #[tokio::test]
@@ -229,6 +217,10 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
             other => panic!("expected PaneCreated, got {other:?}"),
         };
 
+        // Attach read-write so resize and set-title are applied (both are
+        // fire-and-forget and require write access in v3).
+        common::attach_rw(&mut client, &runtime_id).await;
+
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
@@ -240,10 +232,8 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
                 })),
             })
             .await;
-        assert!(matches!(
-            client.recv().await.payload,
-            Some(v3::server_envelope::Payload::PaneResized(_))
-        ));
+        // Fire-and-forget: flush with a Ping/Pong barrier.
+        client.ping().await;
 
         client
             .send(&v3::ClientEnvelope {
@@ -255,10 +245,7 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
                 })),
             })
             .await;
-        assert!(matches!(
-            client.recv().await.payload,
-            Some(v3::server_envelope::Payload::TitleChanged(_))
-        ));
+        client.ping().await;
 
         wait_for_state_containing(tmp.path(), "reconstructed-inventory", Duration::from_secs(10))
             .await;
@@ -280,13 +267,8 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
         assert_eq!(session.name, "reconstructed-inventory");
         assert_eq!(session.pane_count, 1);
         assert_eq!(session.read_only_client_count, 0);
-        assert!(
-            !session /* has_attached_client removed in v3 */
-                .has_write_owner
-        );
-        assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
         assert!(!session.has_write_owner);
-        assert_eq!(session.read_only_client_count, 0);
+        assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
         assert_eq!(
             v3::RuntimePolicy::try_from(session.policy).unwrap(),
             v3::RuntimePolicy::Persistent
