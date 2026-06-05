@@ -299,13 +299,13 @@ async fn detach_without_attach_is_harmless() {
 
 #[tokio::test]
 async fn wrong_protocol_version_returns_version_mismatch() {
+    use bytes::BytesMut;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let tmp = tempfile::tempdir().unwrap();
     let (socket_path, _handle) = start_test_server(tmp.path()).await;
 
     // Connect raw and send a ClientHello with an unsupported version.
-    use bytes::BytesMut;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
     let hello = v3::ClientHello {
         min_protocol_version: 9999,
@@ -319,12 +319,12 @@ async fn wrong_protocol_version_returns_version_mismatch() {
     rttx_proto::encode_frame(&hello, &mut buf).unwrap();
     stream.write_all(&buf).await.unwrap();
 
-    // Read the response — should be a ServerHello with an error or the connection drops.
+    // Read the response — should be a ProtocolError frame or the connection drops.
     let mut read_buf = BytesMut::with_capacity(4096);
     let n = stream.read_buf(&mut read_buf).await.unwrap();
     // Server should close the connection for unsupported version.
     // Either we get 0 bytes (EOF) or an error frame.
-    assert!(n == 0 || read_buf.len() > 0, "server should respond or disconnect");
+    assert!(n == 0 || !read_buf.is_empty(), "server should respond or disconnect");
 }
 
 // ── Input to nonexistent pane is silently dropped ───────────────

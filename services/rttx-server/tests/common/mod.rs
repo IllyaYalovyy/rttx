@@ -42,12 +42,11 @@ impl TestClient {
     /// suite — inherits it, so a missing or delayed server message fails
     /// the test promptly instead of hanging the whole `cargo test` run.
     pub async fn recv(&mut self) -> v3::ServerEnvelope {
-        match tokio::time::timeout(DEFAULT_RECV_TIMEOUT, self.recv_raw()).await {
-            Ok(env) => env,
-            Err(_) => panic!(
+        tokio::time::timeout(DEFAULT_RECV_TIMEOUT, self.recv_raw()).await.unwrap_or_else(|_| {
+            panic!(
                 "TestClient::recv timed out after {DEFAULT_RECV_TIMEOUT:?} waiting for a server message"
-            ),
-        }
+            )
+        })
     }
 
     /// Inner receive loop with no timeout. Callers must wrap this in a
@@ -138,7 +137,7 @@ impl TestClient {
     /// Send a command and return the reply envelope whose `request_id`
     /// matches the request, skipping any interleaved push events.
     ///
-    /// Push events (OutputDelta, PaneExited, etc.) carry `request_id == 0`;
+    /// Push events (`OutputDelta`, `PaneExited`, etc.) carry `request_id == 0`;
     /// command replies echo the request's id. PTY activity can interleave
     /// pushes with the ack, so matching by id is the only robust way to
     /// read a specific command's reply.
@@ -492,5 +491,5 @@ pub async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
         .await;
 }
 
-/// Alias for backward compatibility with tests that imported TestV3Client.
+/// Alias for backward compatibility with tests that imported `TestV3Client`.
 pub type TestV3Client = TestClient;
