@@ -37,7 +37,6 @@ fn pong_arrives_promptly_during_burst_output() {
                 })),
             })
             .await;
-            .await;
 
         // Let output accumulate in the push channel.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -45,7 +44,9 @@ fn pong_arrives_promptly_during_burst_output() {
         // Send a ping while Deltas are queued.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 557 }))})
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::Ping(v3::Ping { nonce: 557 })),
+            })
             .await;
 
         // The Pong must arrive within a tight deadline even though the
@@ -62,7 +63,8 @@ fn pong_arrives_promptly_during_burst_output() {
                         break;
                     }
                 }
-                None => break}
+                None => break,
+            }
         }
 
         assert!(got_pong, "pong must arrive during burst output");

@@ -69,12 +69,17 @@ fn ping_answered_while_mutex_held() {
         // Generate a burst of PTY output that keeps the server busy.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(
-                        b"for i in $(seq 1 500); do echo line$i; done\n") })),
-                    )}))})
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from_static(
+                            b"for i in $(seq 1 500); do echo line$i; done\n",
+                        ),
+                    })),
+                })),
+            })
             .await;
 
         // Immediately send multiple pings — they must all be answered
@@ -201,12 +206,17 @@ fn sustained_pings_answered_during_continuous_output() {
         // Generate continuous output to create backpressure.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(
-                        b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n") })),
-                    )}))})
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from_static(
+                            b"for i in $(seq 1 2000); do echo backpressure_line_$i; done\n",
+                        ),
+                    })),
+                })),
+            })
             .await;
 
         // Simulate the client heartbeat pattern: send 8 pings at short

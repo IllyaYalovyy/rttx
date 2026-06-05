@@ -188,20 +188,22 @@ fn v3_envelope_mixed_command_sequence() {
     let commands: Vec<v3::client_envelope::Command> = vec![
         v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
             name: "seq".into(),
-            policy: v3::RuntimePolicy::Ephemeral as i32}),
+            policy: v3::RuntimePolicy::Ephemeral as i32,
+        }),
         v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: rt.clone(),
             pane_id: pn.clone(),
             kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"x")})),
+                data: bytes::Bytes::from_static(b"x"),
             })),
-        })
+        }),
         v3::client_envelope::Command::Ping(v3::Ping { nonce: 1 }),
         v3::client_envelope::Command::ResizePane(v3::ResizePane {
             runtime_id: rt.clone(),
             pane_id: pn.clone(),
             cols: 80,
-            rows: 24}),
+            rows: 24,
+        }),
         v3::client_envelope::Command::ClosePane(v3::ClosePane { runtime_id: rt, pane_id: pn }),
     ];
     let expected_ids: Vec<u64> = vec![1, 0, 2, 0, 3];
@@ -234,7 +236,9 @@ fn v3_handshake_happy_path() {
     let negotiated = v3_handshake::negotiate_version(
         decoded_hello.min_protocol_version,
         decoded_hello.max_protocol_version,
-        v3_handshake::V3_v3_handshake::V3_PROTOCOL_VERSION)
+        v3_handshake::V3_PROTOCOL_VERSION,
+        v3_handshake::V3_PROTOCOL_VERSION,
+    )
     .unwrap();
     assert_eq!(negotiated, 3);
 
@@ -641,7 +645,7 @@ fn v3_snapshot_attach_response_roundtrip() {
         terminal_modes: v3::TerminalModeState { bracketed_paste: true, ..Default::default() },
         scrollback_tail: bytes::Bytes::from_static(b"$ ls\nfile.txt\n"),
         total_scrollback_bytes: 4096});
-    assert!(!pane.scrollback_tail_complete);
+    assert!(!pane.scrollback_complete);
 
     let snapshot = v3_snapshot::build_runtime_snapshot(
         runtime_id,
@@ -668,7 +672,7 @@ fn v3_snapshot_attach_response_roundtrip() {
     assert_eq!(snap.panes.len(), 1);
     assert_eq!(snap.panes[0].pane_output_seq, 42);
     assert_eq!(snap.panes[0].scrollback_tail.as_ref(), b"$ ls\nfile.txt\n");
-    assert!(!snap.panes[0].scrollback_tail_complete);
+    assert!(!snap.panes[0].scrollback_complete);
     assert!(snap.panes[0].terminal_modes.as_ref().unwrap().bracketed_paste);
 }
 
@@ -738,7 +742,7 @@ fn v3_scrollback_truncation_and_snapshot() {
         terminal_modes: v3::TerminalModeState::default(),
         scrollback_tail: tail,
         total_scrollback_bytes: full_scrollback.len() as u64});
-    assert!(!pane.scrollback_tail_complete);
+    assert!(!pane.scrollback_complete);
     assert_eq!(pane.total_scrollback_bytes, 500_000);
 
     // Wire roundtrip preserves all fields
@@ -746,7 +750,7 @@ fn v3_scrollback_truncation_and_snapshot() {
     encode_frame(&pane, &mut buf).unwrap();
     let decoded: v3::PaneSnapshot = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.scrollback_tail.len(), v3_snapshot::DEFAULT_SCROLLBACK_TAIL_LIMIT);
-    assert!(!decoded.scrollback_tail_complete);
+    assert!(!decoded.scrollback_complete);
     assert_eq!(decoded.total_scrollback_bytes, 500_000);
 }
 
@@ -1316,9 +1320,9 @@ fn v3_send_discipline_core_commands_always_allowed() {
             runtime_id: rt,
             pane_id: pn,
             kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
-                kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(b"x")})),
+                data: bytes::Bytes::from_static(b"x"),
             })),
-        })
+        }),
     ];
 
     for cmd in core_commands {

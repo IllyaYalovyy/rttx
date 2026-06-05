@@ -304,7 +304,7 @@ impl ModeState {
         Self {
             application_cursor_keys: screen.application_cursor_keys(),
             application_keypad: screen.application_keypad(),
-            bracketed_paste: screen.bracketed_paste(),
+            bracketed_paste: screen.bracketed_paste_mode(),
             focus_reporting: screen.focus_event_mode(),
             mouse_tracking_mode: screen.mouse_tracking_mode(),
             sgr_mouse: screen.sgr_mouse_mode(),
@@ -369,10 +369,10 @@ async fn parity_application_cursor_keys_set() {
     let commands = &["SET app_cursor"];
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
-    assert!(direct.terminal_modes.as_ref().unwrap().application_cursor_keys, "direct: app cursor must be on");
-    assert!(managed.terminal_modes.as_ref().unwrap().application_cursor_keys, "managed: app cursor must be on");
+    assert!(direct.application_cursor_keys, "direct: app cursor must be on");
+    assert!(managed.application_cursor_keys, "managed: app cursor must be on");
     assert_eq!(
-        direct.terminal_modes.as_ref().unwrap().application_cursor_keys, managed.terminal_modes.as_ref().unwrap().application_cursor_keys,
+        direct.application_cursor_keys, managed.application_cursor_keys,
         "parity: application_cursor_keys must match"
     );
 }
@@ -382,8 +382,8 @@ async fn parity_application_cursor_keys_set_then_reset() {
     let commands = &["SET app_cursor", "RESET app_cursor"];
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
-    assert!(!direct.terminal_modes.as_ref().unwrap().application_cursor_keys, "direct: app cursor must be off after reset");
-    assert!(!managed.terminal_modes.as_ref().unwrap().application_cursor_keys, "managed: app cursor must be off after reset");
+    assert!(!direct.application_cursor_keys, "direct: app cursor must be off after reset");
+    assert!(!managed.application_cursor_keys, "managed: app cursor must be off after reset");
 }
 
 #[tokio::test]
@@ -391,10 +391,10 @@ async fn parity_application_keypad_set() {
     let commands = &["SET app_keypad"];
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
-    assert!(direct.terminal_modes.as_ref().unwrap().application_keypad, "direct: app keypad must be on");
-    assert!(managed.terminal_modes.as_ref().unwrap().application_keypad, "managed: app keypad must be on");
+    assert!(direct.application_keypad, "direct: app keypad must be on");
+    assert!(managed.application_keypad, "managed: app keypad must be on");
     assert_eq!(
-        direct.terminal_modes.as_ref().unwrap().application_keypad, managed.terminal_modes.as_ref().unwrap().application_keypad,
+        direct.application_keypad, managed.application_keypad,
         "parity: application_keypad must match"
     );
 }
@@ -459,16 +459,16 @@ async fn parity_all_modes_combined() {
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
 
-    assert!(direct.terminal_modes.as_ref().unwrap().application_cursor_keys);
-    assert!(direct.terminal_modes.as_ref().unwrap().application_keypad);
+    assert!(direct.application_cursor_keys);
+    assert!(direct.application_keypad);
     assert!(direct.bracketed_paste);
     assert!(direct.focus_reporting);
     assert_eq!(direct.mouse_tracking_mode, 1003);
     assert!(direct.sgr_mouse);
 
     // Managed parity (excluding focus_reporting which v2 proto lacks).
-    assert_eq!(direct.terminal_modes.as_ref().unwrap().application_cursor_keys, managed.terminal_modes.as_ref().unwrap().application_cursor_keys);
-    assert_eq!(direct.terminal_modes.as_ref().unwrap().application_keypad, managed.terminal_modes.as_ref().unwrap().application_keypad);
+    assert_eq!(direct.application_cursor_keys, managed.application_cursor_keys);
+    assert_eq!(direct.application_keypad, managed.application_keypad);
     assert_eq!(direct.bracketed_paste, managed.bracketed_paste);
     assert_eq!(direct.mouse_tracking_mode, managed.mouse_tracking_mode);
     assert_eq!(direct.sgr_mouse, managed.sgr_mouse);
@@ -480,15 +480,15 @@ async fn parity_modes_default_off() {
     let direct = direct_mode_state(commands).await;
     let managed = managed_mode_state(commands).await;
 
-    assert!(!direct.terminal_modes.as_ref().unwrap().application_cursor_keys);
-    assert!(!direct.terminal_modes.as_ref().unwrap().application_keypad);
+    assert!(!direct.application_cursor_keys);
+    assert!(!direct.application_keypad);
     assert!(!direct.bracketed_paste);
     assert!(!direct.focus_reporting);
     assert_eq!(direct.mouse_tracking_mode, 0);
     assert!(!direct.sgr_mouse);
 
-    assert_eq!(direct.terminal_modes.as_ref().unwrap().application_cursor_keys, managed.terminal_modes.as_ref().unwrap().application_cursor_keys);
-    assert_eq!(direct.terminal_modes.as_ref().unwrap().application_keypad, managed.terminal_modes.as_ref().unwrap().application_keypad);
+    assert_eq!(direct.application_cursor_keys, managed.application_cursor_keys);
+    assert_eq!(direct.application_keypad, managed.application_keypad);
     // Note: managed bracketed_paste may differ because bash enables it by default.
     // The exerciser runs without bash, so both should be off.
     assert_eq!(direct.bracketed_paste, managed.bracketed_paste);
