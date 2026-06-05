@@ -304,7 +304,6 @@ async fn wrong_protocol_version_returns_version_mismatch() {
 
     // Connect raw and send a ClientHello with an unsupported version.
     use bytes::BytesMut;
-    use prost::Message;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();

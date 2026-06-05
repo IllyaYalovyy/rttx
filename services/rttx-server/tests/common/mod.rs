@@ -35,7 +35,24 @@ impl TestClient {
         self.stream.write_all(&buf).await.expect("write failed");
     }
 
+    /// Receive one server envelope, bounded by [`DEFAULT_RECV_TIMEOUT`].
+    ///
+    /// The timeout lives in the foundation on purpose: every call site —
+    /// including the many direct `recv().await` calls across the test
+    /// suite — inherits it, so a missing or delayed server message fails
+    /// the test promptly instead of hanging the whole `cargo test` run.
     pub async fn recv(&mut self) -> v3::ServerEnvelope {
+        match tokio::time::timeout(DEFAULT_RECV_TIMEOUT, self.recv_raw()).await {
+            Ok(env) => env,
+            Err(_) => panic!(
+                "TestClient::recv timed out after {DEFAULT_RECV_TIMEOUT:?} waiting for a server message"
+            ),
+        }
+    }
+
+    /// Inner receive loop with no timeout. Callers must wrap this in a
+    /// timeout (see [`recv`](Self::recv) and [`try_recv`](Self::try_recv)).
+    async fn recv_raw(&mut self) -> v3::ServerEnvelope {
         loop {
             match decode_frame::<v3::ServerEnvelope>(&mut self.read_buf) {
                 Ok(env) => return env,
@@ -48,7 +65,7 @@ impl TestClient {
     }
 
     pub async fn try_recv(&mut self, timeout: std::time::Duration) -> Option<v3::ServerEnvelope> {
-        tokio::time::timeout(timeout, self.recv()).await.ok()
+        tokio::time::timeout(timeout, self.recv_raw()).await.ok()
     }
 
     pub async fn recv_or_timeout(&mut self) -> v3::ServerEnvelope {
@@ -72,11 +89,26 @@ impl TestClient {
     }
 
     pub async fn handshake(&mut self) -> v3::ServerHello {
+        // A test client advertises every capability so that all server
+        // features (diagnostics, inventory, takeover, etc.) are negotiated.
+        const ALL_CAPABILITIES: &[v3::Capability] = &[
+            v3::Capability::CoreRuntimeLifecycle,
+            v3::Capability::CorePaneLifecycle,
+            v3::Capability::CoreTerminalIo,
+            v3::Capability::CoreTerminalModes,
+            v3::Capability::CorePasteIntent,
+            v3::Capability::CoreFocusEvents,
+            v3::Capability::OptRuntimeInventoryV2,
+            v3::Capability::OptResync,
+            v3::Capability::OptChunkedScrollback,
+            v3::Capability::OptDiagnostics,
+            v3::Capability::OptRuntimeTakeover,
+        ];
         let hello = v3_handshake::build_client_hello(
             uuid::Uuid::new_v4(),
             "test-client",
             "0.0.0",
-            v3_handshake::CORE_CAPABILITIES,
+            ALL_CAPABILITIES,
         );
         let mut buf = BytesMut::new();
         encode_frame(&hello, &mut buf).expect("encode ClientHello");

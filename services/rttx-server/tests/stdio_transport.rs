@@ -6,7 +6,7 @@
 
 use bytes::BytesMut;
 use rttx_proto::{
-    bytes_to_uuid, decode_frame, encode_frame, v3, uuid_to_bytes};
+    bytes_to_uuid, decode_frame, encode_frame, v3};
 use std::process::Stdio;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

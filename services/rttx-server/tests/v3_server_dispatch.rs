@@ -5,7 +5,6 @@
 
 mod common;
 
-use rttx_proto::v3;
 
 #[tokio::test]
 async fn v3_dispatch_create_and_list_runtimes() {

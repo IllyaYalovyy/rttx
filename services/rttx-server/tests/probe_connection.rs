@@ -5,7 +5,6 @@
 mod common;
 
 use common::start_test_server;
-use rttx_proto::v3;
 use tokio::net::UnixStream;
 
 /// A bare connect-and-drop (the pattern used by `is_server_running`)
