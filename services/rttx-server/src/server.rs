@@ -477,6 +477,7 @@ impl Server {
                         let _ = std::fs::create_dir_all(parent);
                     }
                     env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
+                    env.push(("PROMPT_COMMAND".into(), "history -a".into()));
                 }
                 env.push(("COLORFGBG".into(), "15;0".into()));
                 let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
@@ -987,6 +988,7 @@ impl Server {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
+                        env.push(("PROMPT_COMMAND".into(), "history -a".into()));
                     }
                     let colorfgbg =
                         if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
@@ -1967,6 +1969,7 @@ impl Server {
                     let _ = std::fs::create_dir_all(parent);
                 }
                 env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
+                env.push(("PROMPT_COMMAND".into(), "history -a".into()));
             }
             let colorfgbg = if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
             env.push(("COLORFGBG".into(), colorfgbg.into()));
