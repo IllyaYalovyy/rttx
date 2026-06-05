@@ -25,12 +25,18 @@ fn pong_arrives_promptly_during_burst_output() {
         // Generate a burst of PTY output to fill the push channel with Deltas.
         client
             .send(&v3::ClientEnvelope {
-                request_id: 0, command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
+                request_id: 0,
+                command: Some(v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
                     runtime_id: runtime_id.clone(),
                     pane_id,
-                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput { data: bytes::Bytes::from_static(
-                        b"for i in $(seq 1 1000); do echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA$i; done\n") })),
-                    )}))})
+                    kind: Some(v3::terminal_input::Kind::Raw(v3::RawInput {
+                        data: bytes::Bytes::from_static(
+                            b"for i in $(seq 1 1000); do echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA$i; done\n",
+                        ),
+                    })),
+                })),
+            })
+            .await;
             .await;
 
         // Let output accumulate in the push channel.
