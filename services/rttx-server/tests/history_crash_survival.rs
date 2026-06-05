@@ -140,23 +140,11 @@ async fn history_survives_hard_restart() {
         // The shell inherits PROMPT_COMMAND="history -a" but user rc files
         // may overwrite it. Ensure history -a is active for this test by
         // explicitly setting PROMPT_COMMAND in the shell.
-        send_input(
-            &mut client,
-            &runtime_id,
-            &pane_id,
-            b"PROMPT_COMMAND='history -a'\n",
-        )
-        .await;
+        send_input(&mut client, &runtime_id, &pane_id, b"PROMPT_COMMAND='history -a'\n").await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Run a unique command so it gets written to history.
-        send_input(
-            &mut client,
-            &runtime_id,
-            &pane_id,
-            b"echo UNIQUE_MARKER_12345\n",
-        )
-        .await;
+        send_input(&mut client, &runtime_id, &pane_id, b"echo UNIQUE_MARKER_12345\n").await;
 
         // Wait for output to confirm command executed.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -184,8 +172,7 @@ async fn history_survives_hard_restart() {
     let state_dir = tmp.path().join("state/rttx/daemon");
     let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
     let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
-    let hist_path =
-        rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+    let hist_path = rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
 
     let hist_content = std::fs::read_to_string(&hist_path).unwrap_or_default();
     assert!(
