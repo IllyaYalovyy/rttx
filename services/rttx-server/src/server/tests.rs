@@ -90,21 +90,20 @@ fn parse_v3_client_hello_accepts_valid_v3_hello() {
     assert!(parsed.is_some(), "a valid v3 ClientHello must be accepted");
 }
 
-/// Regression for #980: a legacy v2 `ClientMessage` frame must NOT be
-/// mistaken for a v3 `ClientHello`. The detector returns `None`, which makes
-/// `handle_client` reject the connection — v2 is no longer supported.
+/// Regression for #980: a frame that is not a valid v3 `ClientHello` (e.g. a
+/// legacy v2 frame or arbitrary bytes) must be rejected by the detector,
+/// which makes `handle_client` drop the connection.
 #[test]
-fn parse_v3_client_hello_rejects_legacy_v2_client_message() {
-    let v2_hello = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-            protocol_version: 2,
-            client_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
-        })),
-    };
-    let mut buf = bytes::BytesMut::new();
-    rttx_proto::encode_frame(&v2_hello, &mut buf).unwrap();
-    let parsed = parse_v3_client_hello(&buf[4..]);
-    assert!(parsed.is_none(), "a legacy v2 ClientMessage must not be accepted as a v3 hello");
+fn parse_v3_client_hello_rejects_non_v3_frame() {
+    // Arbitrary bytes that do not form a valid v3 ClientHello (no 16-byte
+    // client_id, no protocol version). Stand-in for a legacy v2 frame now
+    // that the v2 message types no longer exist.
+    let garbage: &[u8] = b"not a v3 client hello frame";
+    let parsed = parse_v3_client_hello(garbage);
+    assert!(parsed.is_none(), "a non-v3 frame must not be accepted as a v3 hello");
+
+    // An empty payload must also be rejected.
+    assert!(parse_v3_client_hello(&[]).is_none());
 }
 
 #[test]
@@ -210,11 +209,10 @@ async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
     server.lock().await.client_senders.insert(client_id, tx);
 
     // Fill the channel to capacity.
-    let msg = ClientMsg::V2(protocol::delta(
+    let msg = protocol::v3_delta(
         runtime_id,
         Uuid::new_v4(),
-        bytes::Bytes::from(vec![0u8; 64]),
-    ));
+        bytes::Bytes::from(vec![0u8; 64]), 0);
     for _ in 0..PUSH_CHANNEL_BOUND {
         broadcast_to_runtime(&server, runtime_id, &msg).await;
     }
@@ -268,25 +266,19 @@ async fn delta_broadcast_shares_bytes_across_clients() {
     }
 
     let data = bytes::Bytes::from(vec![b'X'; 4096]);
-    let msg = ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), data.clone()));
+    let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), data.clone(), 0);
     broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     let msg_a = rx_a.try_recv().unwrap();
     let msg_b = rx_b.try_recv().unwrap();
 
-    let data_a = match msg_a {
-        ClientMsg::V2(ref m) => match &m.msg {
-            Some(proto::server_message::Msg::Delta(d)) => d.data.clone(),
-            other => panic!("expected Delta, got {other:?}"),
-        },
-        ClientMsg::V3(ref other) => panic!("expected V2, got V3({other:?})"),
+    let data_a = match msg_a.payload {
+        Some(rttx_proto::v3::server_envelope::Payload::OutputDelta(ref d)) => d.data.clone(),
+        other => panic!("expected OutputDelta, got {other:?}"),
     };
-    let data_b = match msg_b {
-        ClientMsg::V2(ref m) => match &m.msg {
-            Some(proto::server_message::Msg::Delta(d)) => d.data.clone(),
-            other => panic!("expected Delta, got {other:?}"),
-        },
-        ClientMsg::V3(ref other) => panic!("expected V2, got V3({other:?})"),
+    let data_b = match msg_b.payload {
+        Some(rttx_proto::v3::server_envelope::Payload::OutputDelta(ref d)) => d.data.clone(),
+        other => panic!("expected OutputDelta, got {other:?}"),
     };
 
     // Both clones share the same backing allocation.
@@ -336,20 +328,20 @@ async fn client_writer_prioritizes_resp_over_push() {
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
 
     // Pre-fill push channel with many Deltas.
-    let delta = ClientMsg::V2(protocol::delta(
+    let delta = protocol::v3_delta(
         Uuid::new_v4(),
         Uuid::new_v4(),
-        bytes::Bytes::from_static(b"x"),
-    ));
+        bytes::Bytes::from_static(b"x"), 0);
     for _ in 0..push_count {
         push_tx.send(delta.clone()).await.unwrap();
     }
 
     // Then add a single Pong to the response channel.
     resp_tx
-        .send(ClientMsg::V2(proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 42 })),
-        }))
+        .send(rttx_proto::v3_envelope::build_response_envelope(
+            0,
+            rttx_proto::v3::server_envelope::Payload::Pong(rttx_proto::v3::Pong { nonce: 42 }),
+        ))
         .await
         .unwrap();
 
@@ -381,7 +373,7 @@ async fn client_writer_prioritizes_resp_over_push() {
 
     let mut messages = Vec::new();
     loop {
-        match rttx_proto::decode_frame::<proto::ServerMessage>(&mut buf) {
+        match rttx_proto::decode_frame::<rttx_proto::v3::ServerEnvelope>(&mut buf) {
             Ok(msg) => messages.push(msg),
             Err(rttx_proto::FrameError::Incomplete) => break,
             Err(e) => panic!("unexpected decode error: {e:?}"),
@@ -392,9 +384,9 @@ async fn client_writer_prioritizes_resp_over_push() {
 
     // With biased select, the Pong must be the very first message written.
     assert!(
-        matches!(messages[0].msg, Some(proto::server_message::Msg::Pong(ref p)) if p.nonce == 42),
+        matches!(messages[0].payload, Some(rttx_proto::v3::server_envelope::Payload::Pong(ref p)) if p.nonce == 42),
         "first message should be Pong(42), got {:?}",
-        messages[0].msg
+        messages[0].payload
     );
 }
 
@@ -451,13 +443,14 @@ async fn send_to_collected_delivers_messages() {
     let senders = vec![(client_id, tx, None)];
     let metrics = crate::metrics::DaemonMetrics::new();
 
-    let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"hi")));
-    send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics);
+    let msg = protocol::v3_delta(runtime_id, pane_id, bytes::Bytes::from_static(b"hi"), 0);
+    send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics);
 
     let received = rx.try_recv().unwrap();
-    assert!(
-        matches!(received, ClientMsg::V2(ref m) if matches!(m.msg, Some(proto::server_message::Msg::Delta(_))))
-    );
+    assert!(matches!(
+        received.payload,
+        Some(rttx_proto::v3::server_envelope::Payload::OutputDelta(_))
+    ));
 }
 
 #[tokio::test]
@@ -470,12 +463,12 @@ async fn send_to_collected_returns_overflowed_clients() {
     let senders = vec![(client_id, tx, None)];
     let metrics = crate::metrics::DaemonMetrics::new();
 
-    let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"a")));
-    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics);
+    let msg = protocol::v3_delta(runtime_id, pane_id, bytes::Bytes::from_static(b"a"), 0);
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics);
     assert!(overflows.is_empty(), "first send should succeed");
 
     // Channel is now full.
-    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics);
+    let overflows = send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics);
     assert_eq!(overflows.len(), 1, "second send should report overflow");
     assert_eq!(overflows[0], client_id);
     assert!(logs_contain("channel full"));
@@ -503,22 +496,19 @@ async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
     }
 
     let msg =
-        ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
+        protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should send StreamOverflow via resp channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
 
     let overflow_msg = resp_rx.try_recv().expect("should receive StreamOverflow via resp channel");
-    match overflow_msg {
-        ClientMsg::V3(env) => match env.payload {
-            Some(rttx_proto::v3::server_envelope::Payload::StreamOverflow(so)) => {
-                assert_eq!(so.runtime_id, rttx_proto::uuid_to_bytes(runtime_id));
-                assert!(so.dropped_count > 0);
-            }
-            other => panic!("expected StreamOverflow payload, got {other:?}"),
-        },
-        ClientMsg::V2(other) => panic!("expected V3 message, got V2({other:?})"),
+    match overflow_msg.payload {
+        Some(rttx_proto::v3::server_envelope::Payload::StreamOverflow(so)) => {
+            assert_eq!(so.runtime_id, rttx_proto::uuid_to_bytes(runtime_id));
+            assert!(so.dropped_count > 0);
+        }
+        other => panic!("expected StreamOverflow payload, got {other:?}"),
     }
 }
 
@@ -536,7 +526,7 @@ async fn broadcast_overflow_v2_removes_sender() {
     }
 
     let msg =
-        ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
+        protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
@@ -562,7 +552,7 @@ async fn broadcast_overflow_v3_no_resync_removes_sender() {
     }
 
     let msg =
-        ClientMsg::V2(protocol::delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x")));
+        protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
@@ -662,18 +652,18 @@ async fn real_client_logs_connected_and_disconnected_at_info() {
         let _ = super::handle_client(server, conn, None).await;
     });
 
-    // Send a Hello message from the client side.
-    let hello = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-            protocol_version: rttx_proto::PROTOCOL_VERSION,
-            client_id: uuid_to_bytes(Uuid::new_v4()),
-        })),
-    };
+    // Send a v3 ClientHello from the client side.
+    let hello = rttx_proto::v3_handshake::build_client_hello(
+        Uuid::new_v4(),
+        "test-client",
+        "0.0.0",
+        rttx_proto::v3_handshake::CORE_CAPABILITIES,
+    );
     let mut buf = bytes::BytesMut::new();
     rttx_proto::encode_frame(&hello, &mut buf).unwrap();
     tokio::io::AsyncWriteExt::write_all(&mut client_half, &buf).await.unwrap();
 
-    // Read the HelloAck response.
+    // Read the ServerHello response.
     let mut resp_buf = [0u8; 4096];
     let _ = tokio::io::AsyncReadExt::read(&mut client_half, &mut resp_buf).await.unwrap();
 
@@ -998,15 +988,10 @@ async fn v3_pane_output_seq_increments_on_feed() {
 }
 
 #[tokio::test]
-async fn v3_convert_delta_carries_pane_output_seq() {
+async fn v3_delta_carries_pane_output_seq() {
     let runtime_id = Uuid::new_v4();
     let pane_id = Uuid::new_v4();
-    let msg =
-        ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from_static(b"data")));
-    let converted = convert_v2_push_to_v3(&msg, 42);
-    let ClientMsg::V3(env) = converted else {
-        panic!("expected V3 message");
-    };
+    let env = protocol::v3_delta(runtime_id, pane_id, bytes::Bytes::from_static(b"data"), 42);
     let Some(v3::server_envelope::Payload::OutputDelta(delta)) = env.payload else {
         panic!("expected OutputDelta");
     };
@@ -1317,9 +1302,10 @@ async fn client_writer_records_bytes_written_metric() {
 
     // Send a Pong message.
     resp_tx
-        .send(ClientMsg::V2(proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 99 })),
-        }))
+        .send(rttx_proto::v3_envelope::build_response_envelope(
+            0,
+            rttx_proto::v3::server_envelope::Payload::Pong(rttx_proto::v3::Pong { nonce: 99 }),
+        ))
         .await
         .unwrap();
     drop(push_tx);
@@ -1365,9 +1351,10 @@ async fn client_writer_records_write_latency() {
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
 
     resp_tx
-        .send(ClientMsg::V2(proto::ServerMessage {
-            msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 1 })),
-        }))
+        .send(rttx_proto::v3_envelope::build_response_envelope(
+            0,
+            rttx_proto::v3::server_envelope::Payload::Pong(rttx_proto::v3::Pong { nonce: 1 }),
+        ))
         .await
         .unwrap();
     // Drop both senders so client_writer exits after processing the message.
