@@ -143,7 +143,6 @@ mod tests {
     fn uuid_invalid_length() {
         assert!(bytes_to_uuid(&[0; 5]).is_err());
     }
-
 }
 
 #[cfg(test)]

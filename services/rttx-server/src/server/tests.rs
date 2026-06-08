@@ -209,10 +209,7 @@ async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
     server.lock().await.client_senders.insert(client_id, tx);
 
     // Fill the channel to capacity.
-    let msg = protocol::v3_delta(
-        runtime_id,
-        Uuid::new_v4(),
-        bytes::Bytes::from(vec![0u8; 64]), 0);
+    let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from(vec![0u8; 64]), 0);
     for _ in 0..PUSH_CHANNEL_BOUND {
         broadcast_to_runtime(&server, runtime_id, &msg).await;
     }
@@ -328,10 +325,8 @@ async fn client_writer_prioritizes_resp_over_push() {
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
 
     // Pre-fill push channel with many Deltas.
-    let delta = protocol::v3_delta(
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        bytes::Bytes::from_static(b"x"), 0);
+    let delta =
+        protocol::v3_delta(Uuid::new_v4(), Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     for _ in 0..push_count {
         push_tx.send(delta.clone()).await.unwrap();
     }
@@ -495,8 +490,7 @@ async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
         s.set_client_protocol(client_id, ClientProtocol::V3 { effective_caps: caps });
     }
 
-    let msg =
-        protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
+    let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should send StreamOverflow via resp channel.
@@ -525,8 +519,7 @@ async fn broadcast_overflow_v2_removes_sender() {
         s.client_senders.insert(client_id, tx);
     }
 
-    let msg =
-        protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
+    let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
@@ -551,8 +544,7 @@ async fn broadcast_overflow_v3_no_resync_removes_sender() {
         s.set_client_protocol(client_id, ClientProtocol::V3 { effective_caps: caps });
     }
 
-    let msg =
-        protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
+    let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
     broadcast_to_runtime(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).

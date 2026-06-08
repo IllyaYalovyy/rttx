@@ -1970,7 +1970,8 @@ pub async fn serialization_loop(
             if !cwd_changes.is_empty() {
                 let mut s = crate::instrument::lock_server(&server, &metrics).await;
                 for (runtime_id, pane_id, cwd, revision, client_ids) in &cwd_changes {
-                    let msg = protocol::v3_cwd_changed(*runtime_id, *pane_id, cwd.clone(), *revision);
+                    let msg =
+                        protocol::v3_cwd_changed(*runtime_id, *pane_id, cwd.clone(), *revision);
                     s.broadcast_to_clients(client_ids.iter().copied(), None, &msg);
                 }
             }
@@ -2302,7 +2303,7 @@ where
         return Ok(());
     };
 
-    // Try v3 ClientHello first, then fall back to v2 ClientMessage.
+    // Detect the v3 ClientHello handshake; any non-v3 first frame is rejected.
     let is_v3 =
         try_v3_handshake(&server, client_id, &client_short, &mut conn, &raw_frame, &metrics)
             .await?;
@@ -2560,9 +2561,7 @@ async fn client_writer(
             bytes_written = bytes_len,
         );
 
-        let result = async { writer.send_v3_envelope(&msg).await }
-            .instrument(write_span)
-            .await;
+        let result = async { writer.send_v3_envelope(&msg).await }.instrument(write_span).await;
 
         match result {
             Ok(()) => {

@@ -64,7 +64,7 @@ async fn empty_message_returns_error() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    // Send a ClientMessage with msg = None.
+    // Send a ClientEnvelope with no command.
     let empty = v3::ClientEnvelope { request_id: 0, command: None };
     client.send(&empty).await;
 
