@@ -90,6 +90,94 @@ pub fn cwd_changed(
 
 // ── V3 protocol helpers ─────────────────────────────────────────
 
+/// Build a v3 `OutputDelta` push envelope.
+#[must_use]
+pub fn v3_delta(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    data: bytes::Bytes,
+    pane_output_seq: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::OutputDelta(
+        v3::OutputDelta {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            data,
+            pane_output_seq,
+        },
+    ))
+}
+
+/// Build a v3 `CwdChanged` push envelope.
+#[must_use]
+pub fn v3_cwd_changed(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    cwd: String,
+    runtime_revision: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::CwdChanged(
+        v3::CwdChanged {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            cwd,
+            runtime_revision,
+        },
+    ))
+}
+
+/// Build a v3 `TitleChanged` push envelope.
+#[must_use]
+pub fn v3_title_changed(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    title: String,
+    runtime_revision: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::TitleChanged(
+        v3::TitleChanged {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            title,
+            runtime_revision,
+        },
+    ))
+}
+
+/// Build a v3 `PaneExited` push envelope.
+#[must_use]
+pub fn v3_pane_exited(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    status: i32,
+    runtime_revision: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneExited(
+        v3::PaneExited {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            status,
+            runtime_revision,
+        },
+    ))
+}
+
+/// Build a v3 `RuntimeTerminated` push envelope.
+#[must_use]
+pub fn v3_runtime_terminated(
+    runtime_id: Uuid,
+    final_revision: u64,
+    reason: TerminationReason,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::RuntimeTerminated(
+        v3::RuntimeTerminated {
+            runtime_id: uuid_to_bytes(runtime_id),
+            final_revision,
+            reason: reason.as_v3_proto() as i32,
+        },
+    ))
+}
+
 /// Build a v3 `RuntimeSnapshot` from a runtime's current state.
 #[must_use]
 pub fn build_v3_runtime_snapshot(
