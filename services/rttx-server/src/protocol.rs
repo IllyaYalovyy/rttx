@@ -3,90 +3,8 @@
 //! Convenience functions for constructing server response messages.
 
 use crate::runtime::{ClientRole, Runtime, TerminationReason};
-use rttx_proto::{proto, uuid_to_bytes, v3};
+use rttx_proto::{uuid_to_bytes, v3};
 use uuid::Uuid;
-
-/// Build a `RuntimeTerminated` response.
-#[must_use]
-pub fn runtime_terminated(
-    runtime_id: Uuid,
-    final_revision: u64,
-    reason: TerminationReason,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::RuntimeTerminated(proto::RuntimeTerminated {
-            runtime_id: uuid_to_bytes(runtime_id),
-            final_revision,
-            reason: reason.as_proto() as i32,
-        })),
-    }
-}
-
-/// Build a `Delta` message.
-#[must_use]
-pub fn delta(runtime_id: Uuid, pane_id: Uuid, data: bytes::Bytes) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::Delta(proto::Delta {
-            runtime_id: uuid_to_bytes(runtime_id),
-            pane_id: uuid_to_bytes(pane_id),
-            data,
-        })),
-    }
-}
-
-/// Build a `PaneExited` message.
-#[must_use]
-pub fn pane_exited(
-    runtime_id: Uuid,
-    pane_id: Uuid,
-    status: i32,
-    revision: u64,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::PaneExited(proto::PaneExited {
-            runtime_id: uuid_to_bytes(runtime_id),
-            pane_id: uuid_to_bytes(pane_id),
-            status,
-            revision,
-        })),
-    }
-}
-
-/// Build a `TitleChanged` message.
-#[must_use]
-pub fn title_changed(
-    runtime_id: Uuid,
-    pane_id: Uuid,
-    title: String,
-    revision: u64,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::TitleChanged(proto::TitleChanged {
-            runtime_id: uuid_to_bytes(runtime_id),
-            pane_id: uuid_to_bytes(pane_id),
-            title,
-            revision,
-        })),
-    }
-}
-
-/// Build a `CwdChanged` message.
-#[must_use]
-pub fn cwd_changed(
-    runtime_id: Uuid,
-    pane_id: Uuid,
-    cwd: String,
-    revision: u64,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::CwdChanged(proto::CwdChanged {
-            runtime_id: uuid_to_bytes(runtime_id),
-            pane_id: uuid_to_bytes(pane_id),
-            cwd,
-            revision,
-        })),
-    }
-}
 
 // ── V3 protocol helpers ─────────────────────────────────────────
 
@@ -346,15 +264,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cwd_changed_message_contains_correct_fields() {
+    fn v3_cwd_changed_message_contains_correct_fields() {
         let sid = Uuid::new_v4();
         let pid = Uuid::new_v4();
-        let msg = cwd_changed(sid, pid, "/home/user".into(), 42);
-        let proto::server_message::Msg::CwdChanged(inner) = msg.msg.unwrap() else {
+        let env = v3_cwd_changed(sid, pid, "/home/user".into(), 42);
+        let Some(v3::server_envelope::Payload::CwdChanged(inner)) = env.payload else {
             panic!("expected CwdChanged");
         };
         assert_eq!(inner.cwd, "/home/user");
-        assert_eq!(inner.revision, 42);
+        assert_eq!(inner.runtime_revision, 42);
         assert_eq!(inner.runtime_id, sid.as_bytes().to_vec());
         assert_eq!(inner.pane_id, pid.as_bytes().to_vec());
     }

@@ -6,7 +6,7 @@
 //! and stdin/stdout (remote via SSH).
 
 use bytes::BytesMut;
-use rttx_proto::{decode_frame, encode_frame, proto, v3};
+use rttx_proto::{decode_frame, encode_frame, v3};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -85,15 +85,6 @@ where
     #[must_use]
     pub fn new(stream: S) -> Self {
         Self { stream, read_buf: BytesMut::with_capacity(8192) }
-    }
-
-    /// Send a server message to this client.
-    pub async fn send_message(&mut self, msg: &proto::ServerMessage) -> Result<(), IpcError> {
-        let mut buf = BytesMut::new();
-        encode_frame(msg, &mut buf)?;
-        self.stream.write_all(&buf).await?;
-        self.stream.flush().await?;
-        Ok(())
     }
 
     /// Read the next raw frame as bytes without decoding.
@@ -239,15 +230,6 @@ pub struct ClientConnectionWriter {
 }
 
 impl ClientConnectionWriter {
-    /// Send a server message to this client.
-    pub async fn send_message(&mut self, msg: &proto::ServerMessage) -> Result<(), IpcError> {
-        let mut buf = BytesMut::new();
-        encode_frame(msg, &mut buf)?;
-        self.stream.write_all(&buf).await?;
-        self.stream.flush().await?;
-        Ok(())
-    }
-
     /// Send a v3 server envelope to this client.
     pub async fn send_v3_envelope(&mut self, msg: &v3::ServerEnvelope) -> Result<(), IpcError> {
         let mut buf = BytesMut::new();

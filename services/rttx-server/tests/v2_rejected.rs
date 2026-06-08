@@ -8,27 +8,24 @@ mod common;
 
 use bytes::BytesMut;
 use common::start_test_server;
-use rttx_proto::{decode_frame, encode_frame, proto, uuid_to_bytes, v3};
+use rttx_proto::{decode_frame, encode_frame, v3};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
-async fn v2_client_message_first_frame_is_rejected() {
+async fn non_v3_first_frame_is_rejected() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut stream = tokio::net::UnixStream::connect(&sock).await.unwrap();
 
-    // Send a legacy v2 Hello (ClientMessage), which is no longer supported.
-    let v2_hello = proto::ClientMessage {
-        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-            protocol_version: 2,
-            client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-        })),
-    };
-    let mut buf = BytesMut::new();
-    encode_frame(&v2_hello, &mut buf).unwrap();
-    stream.write_all(&buf).await.unwrap();
+    // Send a length-prefixed frame that is NOT a valid v3 ClientHello — a
+    // stand-in for a legacy v2 frame now that v2 message types are gone.
+    let payload = b"legacy v2 frame / arbitrary bytes";
+    let mut frame = BytesMut::new();
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    stream.write_all(&frame).await.unwrap();
 
     // The server must reject the connection: no ServerHello is sent and the
     // socket is closed (read returns EOF). Bounded so the test cannot hang.
@@ -42,7 +39,7 @@ async fn v2_client_message_first_frame_is_rejected() {
         // If any bytes came back, they must NOT be a successful ServerHello.
         assert!(
             decode_frame::<v3::ServerHello>(&mut read_buf).is_err(),
-            "a v2 client must not receive a v3 ServerHello"
+            "a rejected client must not receive a v3 ServerHello"
         );
     }
     // n == 0 (EOF) is the expected outcome: the connection was rejected.
