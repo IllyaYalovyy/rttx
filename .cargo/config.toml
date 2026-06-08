@@ -1,0 +1,8 @@
+# Cap the number of tests that run concurrently within a single test binary.
+#
+# The rttx-server integration tests each spawn a real daemon subprocess. With
+# the default (one thread per CPU), a single binary can launch dozens of
+# daemons at once and exhaust local machine resources. Capping to 5 keeps the
+# concurrent daemon count bounded while still allowing useful parallelism.
+[env]
+RUST_TEST_THREADS = "5"
