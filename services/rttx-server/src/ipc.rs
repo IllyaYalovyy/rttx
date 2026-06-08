@@ -332,7 +332,6 @@ pub async fn is_server_running(socket_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rttx_proto::uuid_to_bytes;
     use tempfile::TempDir;
 
     #[tokio::test]
