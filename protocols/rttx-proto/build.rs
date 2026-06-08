@@ -1,10 +1,5 @@
 fn main() -> std::io::Result<()> {
-    // v2 protocol (current)
-    let mut v2 = prost_build::Config::new();
-    v2.bytes(["Delta.data", "Input.data", "PaneSnapshot.scrollback"]);
-    v2.compile_protos(&["proto/rttx.proto"], &["proto/"])?;
-
-    // v3 protocol (RFC-021)
+    // v3 protocol (RFC-021) — the only supported wire protocol.
     let mut v3 = prost_build::Config::new();
     v3.bytes([
         "rttx.v3.OutputDelta.data",

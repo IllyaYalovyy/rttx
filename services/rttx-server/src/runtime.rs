@@ -4,7 +4,7 @@
 //! persist across GUI disconnects and can be serialized to disk.
 
 use crate::pane::Pane;
-use rttx_proto::{proto, v3};
+use rttx_proto::v3;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -22,24 +22,6 @@ pub enum RuntimePolicy {
 }
 
 impl RuntimePolicy {
-    /// Convert to the protocol enum value used on the wire.
-    #[must_use]
-    pub const fn as_proto(self) -> proto::RuntimePolicy {
-        match self {
-            Self::Persistent => proto::RuntimePolicy::Persistent,
-            Self::Ephemeral => proto::RuntimePolicy::Ephemeral,
-        }
-    }
-
-    /// Convert from the wire enum, defaulting to `Persistent` for legacy/unknown values.
-    #[must_use]
-    pub fn from_proto(value: i32) -> Self {
-        match proto::RuntimePolicy::try_from(value).ok() {
-            Some(proto::RuntimePolicy::Ephemeral) => Self::Ephemeral,
-            _ => Self::Persistent,
-        }
-    }
-
     /// Convert from the v3 wire enum.
     #[must_use]
     pub fn from_v3_proto(value: i32) -> Self {
@@ -60,15 +42,6 @@ pub enum ClientRole {
 }
 
 impl ClientRole {
-    /// Convert to the protocol enum value used on the wire.
-    #[must_use]
-    pub const fn as_proto(self) -> proto::RuntimeClientRole {
-        match self {
-            Self::Writer => proto::RuntimeClientRole::Writer,
-            Self::Reader => proto::RuntimeClientRole::Reader,
-        }
-    }
-
     /// Convert to the v3 protocol enum value.
     #[must_use]
     pub const fn as_v3_proto(self) -> v3::RuntimeClientRole {
@@ -91,16 +64,6 @@ pub enum AttachMode {
 }
 
 impl AttachMode {
-    /// Convert from the wire enum, defaulting to `ReadWrite` for compatibility.
-    #[must_use]
-    pub fn from_proto(value: i32) -> Self {
-        match proto::RuntimeAttachMode::try_from(value).ok() {
-            Some(proto::RuntimeAttachMode::ReadOnly) => Self::ReadOnly,
-            Some(proto::RuntimeAttachMode::TakeOver) => Self::TakeOver,
-            _ => Self::ReadWrite,
-        }
-    }
-
     /// Convert from the v3 wire enum.
     #[must_use]
     pub fn from_v3_proto(value: i32) -> Self {
@@ -121,15 +84,6 @@ pub enum TerminationReason {
 }
 
 impl TerminationReason {
-    /// Convert to the wire enum.
-    #[must_use]
-    pub const fn as_proto(self) -> proto::RuntimeTerminationReason {
-        match self {
-            Self::Explicit => proto::RuntimeTerminationReason::Explicit,
-            Self::EphemeralLastDetach => proto::RuntimeTerminationReason::EphemeralLastDetach,
-        }
-    }
-
     /// Convert to the v3 wire enum.
     #[must_use]
     pub const fn as_v3_proto(self) -> v3::RuntimeTerminationReason {
