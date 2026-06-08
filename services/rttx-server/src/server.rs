@@ -2475,10 +2475,27 @@ where
     result
 }
 
+/// Parse and validate a length-prefix-stripped frame as a v3 `ClientHello`.
+///
+/// Returns `Some` only for a structurally valid v3 hello (16-byte client id
+/// and a non-zero `max_protocol_version`). Legacy v2 `ClientMessage` frames —
+/// which are no longer supported — fail this check and yield `None`, so the
+/// caller rejects the connection.
+fn parse_v3_client_hello(payload: &[u8]) -> Option<v3::ClientHello> {
+    use prost::Message;
+    let client_hello = v3::ClientHello::decode(payload).ok()?;
+    if client_hello.client_id.len() != 16 || client_hello.max_protocol_version == 0 {
+        return None;
+    }
+    Some(client_hello)
+}
+
 /// Attempt v3 handshake. Returns `true` if the client speaks v3.
 ///
 /// On success, sends `ServerHello` and registers the client protocol.
-/// On failure (frame is v2), leaves the connection unchanged for v2 handling.
+/// On failure (the frame is not a valid v3 `ClientHello`), returns `false`
+/// so the caller can reject the connection — the legacy v2 protocol is no
+/// longer supported.
 async fn try_v3_handshake<S>(
     server: &Arc<Mutex<Server>>,
     client_id: Uuid,
@@ -2490,18 +2507,11 @@ async fn try_v3_handshake<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    use prost::Message;
-
     // Skip the 4-byte length prefix.
     let payload = &raw_frame[4..];
-    let Ok(client_hello) = v3::ClientHello::decode(payload) else {
+    let Some(client_hello) = parse_v3_client_hello(payload) else {
         return Ok(false);
     };
-
-    // Validate: a real ClientHello has a non-empty client_id and version range.
-    if client_hello.client_id.len() != 16 || client_hello.max_protocol_version == 0 {
-        return Ok(false);
-    }
 
     let server_version = env!("CARGO_PKG_VERSION");
     let server_id = crate::instrument::lock_server(server, metrics).await.server_id;

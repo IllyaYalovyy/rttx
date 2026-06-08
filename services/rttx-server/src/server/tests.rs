@@ -74,6 +74,39 @@ async fn setup_runtime_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -
 
 // ── Existing tests (migrated) ───────────────────────────────────
 
+/// A v3 handshake frame is accepted by the protocol detector.
+#[test]
+fn parse_v3_client_hello_accepts_valid_v3_hello() {
+    let hello = rttx_proto::v3_handshake::build_client_hello(
+        Uuid::new_v4(),
+        "test",
+        "0.0.0",
+        rttx_proto::v3_handshake::CORE_CAPABILITIES,
+    );
+    let mut buf = bytes::BytesMut::new();
+    rttx_proto::encode_frame(&hello, &mut buf).unwrap();
+    // Strip the 4-byte length prefix, as handle_client does before detection.
+    let parsed = parse_v3_client_hello(&buf[4..]);
+    assert!(parsed.is_some(), "a valid v3 ClientHello must be accepted");
+}
+
+/// Regression for #980: a legacy v2 `ClientMessage` frame must NOT be
+/// mistaken for a v3 `ClientHello`. The detector returns `None`, which makes
+/// `handle_client` reject the connection — v2 is no longer supported.
+#[test]
+fn parse_v3_client_hello_rejects_legacy_v2_client_message() {
+    let v2_hello = proto::ClientMessage {
+        msg: Some(proto::client_message::Msg::Hello(proto::Hello {
+            protocol_version: 2,
+            client_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
+        })),
+    };
+    let mut buf = bytes::BytesMut::new();
+    rttx_proto::encode_frame(&v2_hello, &mut buf).unwrap();
+    let parsed = parse_v3_client_hello(&buf[4..]);
+    assert!(parsed.is_none(), "a legacy v2 ClientMessage must not be accepted as a v3 hello");
+}
+
 #[test]
 fn short_id_returns_first_eight_characters() {
     let id = Uuid::parse_str("17f448df-95be-4d4e-b010-b5021b4e6eb5").unwrap();
