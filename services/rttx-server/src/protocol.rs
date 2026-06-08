@@ -276,4 +276,40 @@ mod tests {
         assert_eq!(inner.runtime_id, sid.as_bytes().to_vec());
         assert_eq!(inner.pane_id, pid.as_bytes().to_vec());
     }
+
+    #[test]
+    fn v3_delta_builds_output_delta_push_envelope() {
+        let rid = Uuid::new_v4();
+        let pid = Uuid::new_v4();
+        let env = v3_delta(rid, pid, bytes::Bytes::from_static(b"payload"), 7);
+        // Push events carry request_id 0.
+        assert_eq!(env.request_id, 0);
+        let Some(v3::server_envelope::Payload::OutputDelta(d)) = env.payload else {
+            panic!("expected OutputDelta");
+        };
+        assert_eq!(d.runtime_id, rid.as_bytes().to_vec());
+        assert_eq!(d.pane_id, pid.as_bytes().to_vec());
+        assert_eq!(d.data.as_ref(), b"payload");
+        assert_eq!(d.pane_output_seq, 7);
+    }
+
+    #[test]
+    fn v3_pane_exited_carries_status_and_revision() {
+        let env = v3_pane_exited(Uuid::new_v4(), Uuid::new_v4(), 137, 9);
+        let Some(v3::server_envelope::Payload::PaneExited(p)) = env.payload else {
+            panic!("expected PaneExited");
+        };
+        assert_eq!(p.status, 137);
+        assert_eq!(p.runtime_revision, 9);
+    }
+
+    #[test]
+    fn v3_runtime_terminated_maps_reason() {
+        let env = v3_runtime_terminated(Uuid::new_v4(), 3, TerminationReason::EphemeralLastDetach);
+        let Some(v3::server_envelope::Payload::RuntimeTerminated(t)) = env.payload else {
+            panic!("expected RuntimeTerminated");
+        };
+        assert_eq!(t.final_revision, 3);
+        assert_eq!(t.reason, v3::RuntimeTerminationReason::EphemeralDetach as i32);
+    }
 }
