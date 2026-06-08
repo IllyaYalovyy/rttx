@@ -3,92 +3,98 @@
 //! Convenience functions for constructing server response messages.
 
 use crate::runtime::{ClientRole, Runtime, TerminationReason};
-use rttx_proto::{proto, uuid_to_bytes, v3};
+use rttx_proto::{uuid_to_bytes, v3};
 use uuid::Uuid;
 
-/// Build a `RuntimeTerminated` response.
-#[must_use]
-pub fn runtime_terminated(
-    runtime_id: Uuid,
-    final_revision: u64,
-    reason: TerminationReason,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::RuntimeTerminated(proto::RuntimeTerminated {
-            runtime_id: uuid_to_bytes(runtime_id),
-            final_revision,
-            reason: reason.as_proto() as i32,
-        })),
-    }
-}
+// ── V3 protocol helpers ─────────────────────────────────────────
 
-/// Build a `Delta` message.
+/// Build a v3 `OutputDelta` push envelope.
 #[must_use]
-pub fn delta(runtime_id: Uuid, pane_id: Uuid, data: bytes::Bytes) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::Delta(proto::Delta {
+pub fn v3_delta(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    data: bytes::Bytes,
+    pane_output_seq: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::OutputDelta(
+        v3::OutputDelta {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             data,
-        })),
-    }
+            pane_output_seq,
+        },
+    ))
 }
 
-/// Build a `PaneExited` message.
+/// Build a v3 `CwdChanged` push envelope.
 #[must_use]
-pub fn pane_exited(
-    runtime_id: Uuid,
-    pane_id: Uuid,
-    status: i32,
-    revision: u64,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::PaneExited(proto::PaneExited {
-            runtime_id: uuid_to_bytes(runtime_id),
-            pane_id: uuid_to_bytes(pane_id),
-            status,
-            revision,
-        })),
-    }
-}
-
-/// Build a `TitleChanged` message.
-#[must_use]
-pub fn title_changed(
-    runtime_id: Uuid,
-    pane_id: Uuid,
-    title: String,
-    revision: u64,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::TitleChanged(proto::TitleChanged {
-            runtime_id: uuid_to_bytes(runtime_id),
-            pane_id: uuid_to_bytes(pane_id),
-            title,
-            revision,
-        })),
-    }
-}
-
-/// Build a `CwdChanged` message.
-#[must_use]
-pub fn cwd_changed(
+pub fn v3_cwd_changed(
     runtime_id: Uuid,
     pane_id: Uuid,
     cwd: String,
-    revision: u64,
-) -> proto::ServerMessage {
-    proto::ServerMessage {
-        msg: Some(proto::server_message::Msg::CwdChanged(proto::CwdChanged {
+    runtime_revision: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::CwdChanged(
+        v3::CwdChanged {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cwd,
-            revision,
-        })),
-    }
+            runtime_revision,
+        },
+    ))
 }
 
-// ── V3 protocol helpers ─────────────────────────────────────────
+/// Build a v3 `TitleChanged` push envelope.
+#[must_use]
+pub fn v3_title_changed(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    title: String,
+    runtime_revision: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::TitleChanged(
+        v3::TitleChanged {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            title,
+            runtime_revision,
+        },
+    ))
+}
+
+/// Build a v3 `PaneExited` push envelope.
+#[must_use]
+pub fn v3_pane_exited(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    status: i32,
+    runtime_revision: u64,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneExited(
+        v3::PaneExited {
+            runtime_id: uuid_to_bytes(runtime_id),
+            pane_id: uuid_to_bytes(pane_id),
+            status,
+            runtime_revision,
+        },
+    ))
+}
+
+/// Build a v3 `RuntimeTerminated` push envelope.
+#[must_use]
+pub fn v3_runtime_terminated(
+    runtime_id: Uuid,
+    final_revision: u64,
+    reason: TerminationReason,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::RuntimeTerminated(
+        v3::RuntimeTerminated {
+            runtime_id: uuid_to_bytes(runtime_id),
+            final_revision,
+            reason: reason.as_v3_proto() as i32,
+        },
+    ))
+}
 
 /// Build a v3 `RuntimeSnapshot` from a runtime's current state.
 #[must_use]
@@ -258,16 +264,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cwd_changed_message_contains_correct_fields() {
+    fn v3_cwd_changed_message_contains_correct_fields() {
         let sid = Uuid::new_v4();
         let pid = Uuid::new_v4();
-        let msg = cwd_changed(sid, pid, "/home/user".into(), 42);
-        let proto::server_message::Msg::CwdChanged(inner) = msg.msg.unwrap() else {
+        let env = v3_cwd_changed(sid, pid, "/home/user".into(), 42);
+        let Some(v3::server_envelope::Payload::CwdChanged(inner)) = env.payload else {
             panic!("expected CwdChanged");
         };
         assert_eq!(inner.cwd, "/home/user");
-        assert_eq!(inner.revision, 42);
+        assert_eq!(inner.runtime_revision, 42);
         assert_eq!(inner.runtime_id, sid.as_bytes().to_vec());
         assert_eq!(inner.pane_id, pid.as_bytes().to_vec());
+    }
+
+    #[test]
+    fn v3_delta_builds_output_delta_push_envelope() {
+        let rid = Uuid::new_v4();
+        let pid = Uuid::new_v4();
+        let env = v3_delta(rid, pid, bytes::Bytes::from_static(b"payload"), 7);
+        // Push events carry request_id 0.
+        assert_eq!(env.request_id, 0);
+        let Some(v3::server_envelope::Payload::OutputDelta(d)) = env.payload else {
+            panic!("expected OutputDelta");
+        };
+        assert_eq!(d.runtime_id, rid.as_bytes().to_vec());
+        assert_eq!(d.pane_id, pid.as_bytes().to_vec());
+        assert_eq!(d.data.as_ref(), b"payload");
+        assert_eq!(d.pane_output_seq, 7);
+    }
+
+    #[test]
+    fn v3_pane_exited_carries_status_and_revision() {
+        let env = v3_pane_exited(Uuid::new_v4(), Uuid::new_v4(), 137, 9);
+        let Some(v3::server_envelope::Payload::PaneExited(p)) = env.payload else {
+            panic!("expected PaneExited");
+        };
+        assert_eq!(p.status, 137);
+        assert_eq!(p.runtime_revision, 9);
+    }
+
+    #[test]
+    fn v3_runtime_terminated_maps_reason() {
+        let env = v3_runtime_terminated(Uuid::new_v4(), 3, TerminationReason::EphemeralLastDetach);
+        let Some(v3::server_envelope::Payload::RuntimeTerminated(t)) = env.payload else {
+            panic!("expected RuntimeTerminated");
+        };
+        assert_eq!(t.final_revision, 3);
+        assert_eq!(t.reason, v3::RuntimeTerminationReason::EphemeralDetach as i32);
     }
 }

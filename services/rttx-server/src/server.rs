@@ -15,7 +15,7 @@ use crate::runtime::{
     RuntimePolicy, TerminationReason,
 };
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
-use rttx_proto::{bytes_to_uuid, proto, uuid_to_bytes, v3};
+use rttx_proto::{bytes_to_uuid, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -31,12 +31,9 @@ pub enum ClientProtocol {
     V3 { effective_caps: Vec<i32> },
 }
 
-/// Message that can be sent to a client, abstracting over v2 and v3.
-#[derive(Debug, Clone)]
-pub enum ClientMsg {
-    V2(proto::ServerMessage),
-    V3(v3::ServerEnvelope),
-}
+/// A message sent to a client. With v2 removed, every client message is a
+/// v3 `ServerEnvelope`.
+pub type ClientMsg = v3::ServerEnvelope;
 
 /// Return the first 8 characters of a UUID for compact log output.
 #[must_use]
@@ -67,19 +64,12 @@ fn send_to_collected(
     runtime_id: Uuid,
     pane_id: Uuid,
     msg: &ClientMsg,
-    pane_output_seq: u64,
     metrics: &crate::metrics::DaemonMetrics,
 ) -> Vec<Uuid> {
-    let mut v3_msg: Option<ClientMsg> = None;
     let mut overflowed = Vec::new();
-    for (client_id, sender, protocol) in senders {
-        let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
-            v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg, pane_output_seq))
-        } else {
-            msg
-        };
+    for (client_id, sender, _protocol) in senders {
         if let Err(mpsc::error::TrySendError::Full(_)) =
-            crate::instrument::instrumented_try_send(sender, outgoing.clone(), metrics)
+            crate::instrument::instrumented_try_send(sender, msg.clone(), metrics)
         {
             tracing::warn!(
                 "Client {} push channel full — dropping message (runtime={}, pane={})",
@@ -91,82 +81,6 @@ fn send_to_collected(
         }
     }
     overflowed
-}
-
-/// Convert a v2 push message to a v3 `ServerEnvelope`.
-///
-/// Falls back to the original v2 message if conversion is not applicable
-/// (e.g., the message is already v3 or is not a push event).
-fn convert_v2_push_to_v3(msg: &ClientMsg, pane_output_seq: u64) -> ClientMsg {
-    let ClientMsg::V2(v2) = msg else {
-        return msg.clone();
-    };
-    let Some(ref inner) = v2.msg else {
-        return msg.clone();
-    };
-    let payload = match inner {
-        proto::server_message::Msg::Delta(d) => {
-            v3::server_envelope::Payload::OutputDelta(v3::OutputDelta {
-                runtime_id: d.runtime_id.clone(),
-                pane_id: d.pane_id.clone(),
-                data: d.data.clone(),
-                pane_output_seq,
-            })
-        }
-        proto::server_message::Msg::TitleChanged(t) => {
-            v3::server_envelope::Payload::TitleChanged(v3::TitleChanged {
-                runtime_id: t.runtime_id.clone(),
-                pane_id: t.pane_id.clone(),
-                title: t.title.clone(),
-                runtime_revision: t.revision,
-            })
-        }
-        proto::server_message::Msg::CwdChanged(c) => {
-            v3::server_envelope::Payload::CwdChanged(v3::CwdChanged {
-                runtime_id: c.runtime_id.clone(),
-                pane_id: c.pane_id.clone(),
-                cwd: c.cwd.clone(),
-                runtime_revision: c.revision,
-            })
-        }
-        proto::server_message::Msg::PaneExited(p) => {
-            v3::server_envelope::Payload::PaneExited(v3::PaneExited {
-                runtime_id: p.runtime_id.clone(),
-                pane_id: p.pane_id.clone(),
-                status: p.status,
-                runtime_revision: p.revision,
-            })
-        }
-        proto::server_message::Msg::Bell(b) => v3::server_envelope::Payload::Bell(v3::Bell {
-            runtime_id: b.runtime_id.clone(),
-            pane_id: b.pane_id.clone(),
-        }),
-        proto::server_message::Msg::PaneResized(r) => {
-            v3::server_envelope::Payload::PaneResized(v3::PaneResized {
-                runtime_id: r.runtime_id.clone(),
-                pane_id: r.pane_id.clone(),
-                cols: r.cols,
-                rows: r.rows,
-                runtime_revision: r.revision,
-            })
-        }
-        proto::server_message::Msg::RuntimeTerminated(t) => {
-            v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
-                runtime_id: t.runtime_id.clone(),
-                final_revision: t.final_revision,
-                reason: t.reason,
-            })
-        }
-        proto::server_message::Msg::RuntimeRenamed(r) => {
-            v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
-                runtime_id: r.runtime_id.clone(),
-                name: r.name.clone(),
-                runtime_revision: r.revision,
-            })
-        }
-        _ => return msg.clone(),
-    };
-    ClientMsg::V3(rttx_proto::v3_envelope::build_push_envelope(payload))
 }
 
 /// Per-runtime lock type used throughout the server.
@@ -543,7 +457,6 @@ impl Server {
     ) where
         I: IntoIterator<Item = Uuid>,
     {
-        let mut v3_msg: Option<ClientMsg> = None;
         let mut overflowed: Vec<Uuid> = Vec::new();
         for client_id in client_ids {
             if Some(client_id) == exclude_client_id {
@@ -552,15 +465,8 @@ impl Server {
             let Some(sender) = self.client_senders.get(&client_id) else {
                 continue;
             };
-            let outgoing =
-                if matches!(self.client_protocols.get(&client_id), Some(ClientProtocol::V3 { .. }))
-                {
-                    v3_msg.get_or_insert_with(|| convert_v2_push_to_v3(msg, 0))
-                } else {
-                    msg
-                };
             if let Err(mpsc::error::TrySendError::Full(_)) =
-                crate::instrument::instrumented_try_send(sender, outgoing.clone(), &self.metrics)
+                crate::instrument::instrumented_try_send(sender, msg.clone(), &self.metrics)
             {
                 tracing::warn!(
                     "Client {} push channel full — dropping message",
@@ -632,7 +538,7 @@ impl Server {
             let overflow = rttx_proto::v3_resync::build_stream_overflow(runtime_id, None, 1);
             let env = rttx_proto::v3_resync::build_stream_overflow_envelope(overflow);
             if let Some(resp_tx) = self.client_resp_senders.get(&client_id) {
-                if resp_tx.try_send(ClientMsg::V3(env)).is_err() {
+                if resp_tx.try_send(env).is_err() {
                     tracing::error!(
                         "Client {} resp channel also full — forcing disconnect",
                         short_id(client_id),
@@ -707,7 +613,7 @@ impl Server {
         let state_dir = self.os.state_dir();
         crate::state::cleanup::remove_runtime_dir_background(&state_dir, runtime_id);
 
-        let msg = ClientMsg::V2(protocol::runtime_terminated(runtime_id, final_revision, reason));
+        let msg = protocol::v3_runtime_terminated(runtime_id, final_revision, reason);
         self.broadcast_to_clients(attached_client_ids, exclude_client_id, &msg);
         Some(msg)
     }
@@ -1852,16 +1758,16 @@ fn spawn_pty_read_loop(
                             let client_data = crate::screen::strip_client_queries(&data);
                             let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
-                                let msg = ClientMsg::V2(protocol::delta(runtime_id, pane_id, bytes::Bytes::from(client_data.clone())));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, output_seq, &metrics));
+                                let msg = protocol::v3_delta(runtime_id, pane_id, bytes::Bytes::from(client_data.clone()), output_seq);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics));
                             }
                             if let Some((cwd, revision)) = new_cwd {
-                                let msg = ClientMsg::V2(protocol::cwd_changed(runtime_id, pane_id, cwd, revision));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics));
+                                let msg = protocol::v3_cwd_changed(runtime_id, pane_id, cwd, revision);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics));
                             }
                             if let Some((title, revision)) = new_title {
-                                let msg = ClientMsg::V2(protocol::title_changed(runtime_id, pane_id, title, revision));
-                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, 0, &metrics));
+                                let msg = protocol::v3_title_changed(runtime_id, pane_id, title, revision);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics));
                             }
                             if !all_overflows.is_empty() {
                                 all_overflows.sort_unstable();
@@ -1914,21 +1820,17 @@ fn spawn_pty_read_loop(
             let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
             drop(rt);
 
-            let cleanup_delta = ClientMsg::V2(protocol::delta(
+            let cleanup_delta = protocol::v3_delta(
                 runtime_id,
                 pane_id,
                 bytes::Bytes::from_static(crate::screen::terminal_cleanup_bytes()),
-            ));
+                0,
+            );
             let s = crate::instrument::lock_server(&server, &metrics).await;
             let senders = s.collect_senders_for_clients(&client_ids);
             drop(s);
-            for (_, sender, protocol) in &senders {
-                let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
-                    convert_v2_push_to_v3(&cleanup_delta, 0)
-                } else {
-                    cleanup_delta.clone()
-                };
-                let _ = sender.try_send(outgoing);
+            for (_, sender, _) in &senders {
+                let _ = sender.try_send(cleanup_delta.clone());
             }
         }
 
@@ -1936,7 +1838,7 @@ fn spawn_pty_read_loop(
             let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
             let exit_msg = {
                 let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
-                    ClientMsg::V2(protocol::pane_exited(runtime_id, pane_id, status, revision))
+                    protocol::v3_pane_exited(runtime_id, pane_id, status, revision)
                 });
                 if let Some(pane) = rt.panes.get_mut(&pane_id) {
                     pane.release_scrollback();
@@ -1950,13 +1852,8 @@ fn spawn_pty_read_loop(
                 let s = crate::instrument::lock_server(&server, &metrics).await;
                 let senders = s.collect_senders_for_clients(&client_ids);
                 drop(s);
-                for (_, sender, protocol) in &senders {
-                    let outgoing = if matches!(protocol, Some(ClientProtocol::V3 { .. })) {
-                        convert_v2_push_to_v3(&msg, 0)
-                    } else {
-                        msg.clone()
-                    };
-                    let _ = sender.try_send(outgoing);
+                for (_, sender, _) in &senders {
+                    let _ = sender.try_send(msg.clone());
                 }
             }
         }
@@ -2073,12 +1970,8 @@ pub async fn serialization_loop(
             if !cwd_changes.is_empty() {
                 let mut s = crate::instrument::lock_server(&server, &metrics).await;
                 for (runtime_id, pane_id, cwd, revision, client_ids) in &cwd_changes {
-                    let msg = ClientMsg::V2(protocol::cwd_changed(
-                        *runtime_id,
-                        *pane_id,
-                        cwd.clone(),
-                        *revision,
-                    ));
+                    let msg =
+                        protocol::v3_cwd_changed(*runtime_id, *pane_id, cwd.clone(), *revision);
                     s.broadcast_to_clients(client_ids.iter().copied(), None, &msg);
                 }
             }
@@ -2410,7 +2303,7 @@ where
         return Ok(());
     };
 
-    // Try v3 ClientHello first, then fall back to v2 ClientMessage.
+    // Detect the v3 ClientHello handshake; any non-v3 first frame is rejected.
     let is_v3 =
         try_v3_handshake(&server, client_id, &client_short, &mut conn, &raw_frame, &metrics)
             .await?;
@@ -2596,7 +2489,7 @@ async fn v3_client_reader(
                 envelope.request_id,
                 v3::server_envelope::Payload::Pong(v3::Pong { nonce: ping.nonce }),
             );
-            if resp_tx.send(ClientMsg::V3(response)).await.is_err() {
+            if resp_tx.send(response).await.is_err() {
                 return (Ok(()), true);
             }
             continue;
@@ -2617,7 +2510,7 @@ async fn v3_client_reader(
 
         if let Some(response) =
             Server::handle_v3_message(&server, client_id, &effective_caps, envelope, &metrics).await
-            && resp_tx.send(ClientMsg::V3(response)).await.is_err()
+            && resp_tx.send(response).await.is_err()
         {
             metrics.dispatch_latency_us.record(dispatch_start.elapsed().as_micros() as u64);
             return (Ok(()), true);
@@ -2658,10 +2551,7 @@ async fn client_writer(
             },
         };
 
-        let bytes_len = match &msg {
-            ClientMsg::V2(v2_msg) => 4 + v2_msg.encoded_len(),
-            ClientMsg::V3(v3_msg) => 4 + v3_msg.encoded_len(),
-        };
+        let bytes_len = 4 + msg.encoded_len();
 
         let write_span = tracing::info_span!(
             target: "rttx_profile",
@@ -2671,14 +2561,7 @@ async fn client_writer(
             bytes_written = bytes_len,
         );
 
-        let result = async {
-            match &msg {
-                ClientMsg::V2(v2_msg) => writer.send_message(v2_msg).await,
-                ClientMsg::V3(v3_msg) => writer.send_v3_envelope(v3_msg).await,
-            }
-        }
-        .instrument(write_span)
-        .await;
+        let result = async { writer.send_v3_envelope(&msg).await }.instrument(write_span).await;
 
         match result {
             Ok(()) => {

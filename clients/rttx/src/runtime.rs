@@ -24,15 +24,6 @@ impl WorkspacePolicy {
         }
     }
 
-    /// Wire value for daemon session creation.
-    #[must_use]
-    pub const fn as_proto(self) -> i32 {
-        match self {
-            Self::Persistent => rttx_proto::proto::RuntimePolicy::Persistent as i32,
-            Self::Ephemeral => rttx_proto::proto::RuntimePolicy::Ephemeral as i32,
-        }
-    }
-
     /// Wire value for v3 daemon session creation.
     #[must_use]
     pub const fn as_v3_proto(self) -> i32 {

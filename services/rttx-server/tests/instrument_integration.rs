@@ -43,7 +43,7 @@ async fn instrumented_locks_do_not_affect_message_handling() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    // Create runtime — exercises instrumented server lock in handle_message.
+    // Create runtime — exercises instrumented server lock in the v3 dispatcher.
     let sid = create_runtime(&mut client, "lock-test", v3::RuntimePolicy::Persistent).await;
 
     // Attach — exercises instrumented runtime lock.
