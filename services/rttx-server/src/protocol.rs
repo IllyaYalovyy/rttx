@@ -6,7 +6,6 @@ use crate::runtime::{ClientRole, Runtime, TerminationReason};
 use rttx_proto::{proto, uuid_to_bytes, v3};
 use uuid::Uuid;
 
-
 /// Build a `RuntimeTerminated` response.
 #[must_use]
 pub fn runtime_terminated(
