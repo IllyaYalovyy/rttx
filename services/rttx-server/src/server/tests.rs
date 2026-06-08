@@ -313,7 +313,7 @@ async fn client_writer_prioritizes_resp_over_push() {
     }
 
     // Then add a single Pong to the response channel.
-    resp_tx.send(ClientMsg::V2(protocol::pong(42))).await.unwrap();
+    resp_tx.send(ClientMsg::V2(proto::ServerMessage { msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 42 })) })).await.unwrap();
 
     // Drop senders so the writer will exit after draining.
     drop(push_tx);
@@ -1278,7 +1278,7 @@ async fn client_writer_records_bytes_written_metric() {
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
 
     // Send a Pong message.
-    resp_tx.send(ClientMsg::V2(protocol::pong(99))).await.unwrap();
+    resp_tx.send(ClientMsg::V2(proto::ServerMessage { msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 99 })) })).await.unwrap();
     drop(push_tx);
     drop(resp_tx);
 
@@ -1321,7 +1321,7 @@ async fn client_writer_records_write_latency() {
     let (push_tx, push_rx) = mpsc::channel::<ClientMsg>(16);
     let (resp_tx, resp_rx) = mpsc::channel::<ClientMsg>(16);
 
-    resp_tx.send(ClientMsg::V2(protocol::pong(1))).await.unwrap();
+    resp_tx.send(ClientMsg::V2(proto::ServerMessage { msg: Some(proto::server_message::Msg::Pong(proto::Pong { nonce: 1 })) })).await.unwrap();
     // Drop both senders so client_writer exits after processing the message.
     drop(resp_tx);
     drop(push_tx);
