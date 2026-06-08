@@ -87,36 +87,8 @@ where
         Self { stream, read_buf: BytesMut::with_capacity(8192) }
     }
 
-    /// Read the next client message. Returns `None` on clean disconnect.
-    pub async fn read_message(&mut self) -> Result<Option<proto::ClientMessage>, IpcError> {
-        loop {
-            match decode_frame::<proto::ClientMessage>(&mut self.read_buf) {
-                Ok(msg) => return Ok(Some(msg)),
-                Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(e) => return Err(IpcError::Frame(e)),
-            }
-
-            let n = self.stream.read_buf(&mut self.read_buf).await?;
-            if n == 0 {
-                return Ok(None);
-            }
-        }
-    }
-
     /// Send a server message to this client.
     pub async fn send_message(&mut self, msg: &proto::ServerMessage) -> Result<(), IpcError> {
-        let mut buf = BytesMut::new();
-        encode_frame(msg, &mut buf)?;
-        self.stream.write_all(&buf).await?;
-        self.stream.flush().await?;
-        Ok(())
-    }
-
-    /// Send a client message (used by the `stop` command).
-    pub async fn send_client_message(
-        &mut self,
-        msg: &proto::ClientMessage,
-    ) -> Result<(), IpcError> {
         let mut buf = BytesMut::new();
         encode_frame(msg, &mut buf)?;
         self.stream.write_all(&buf).await?;
@@ -245,21 +217,6 @@ pub struct ClientConnectionReader {
 }
 
 impl ClientConnectionReader {
-    /// Read the next client message. Returns `None` on clean disconnect.
-    pub async fn read_message(&mut self) -> Result<Option<proto::ClientMessage>, IpcError> {
-        loop {
-            match decode_frame::<proto::ClientMessage>(&mut self.read_buf) {
-                Ok(msg) => return Ok(Some(msg)),
-                Err(rttx_proto::FrameError::Incomplete) => {}
-                Err(e) => return Err(IpcError::Frame(e)),
-            }
-            let n = self.stream.read_buf(&mut self.read_buf).await?;
-            if n == 0 {
-                return Ok(None);
-            }
-        }
-    }
-
     /// Read the next v3 client envelope. Returns `None` on clean disconnect.
     pub async fn read_v3_envelope(&mut self) -> Result<Option<v3::ClientEnvelope>, IpcError> {
         loop {
@@ -394,40 +351,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_and_receive_hello() {
-        let tmp = TempDir::new().unwrap();
-        let sock_path = tmp.path().join("test.sock");
-        let listener = Listener::bind(&sock_path).unwrap();
-
-        let path_clone = sock_path.clone();
-        let client_task = tokio::spawn(async move {
-            let stream = UnixStream::connect(&path_clone).await.unwrap();
-            let mut conn = ClientConnection::new(stream);
-
-            let hello = proto::ClientMessage {
-                msg: Some(proto::client_message::Msg::Hello(proto::Hello {
-                    protocol_version: rttx_proto::PROTOCOL_VERSION,
-                    client_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-                })),
-            };
-            let mut buf = BytesMut::new();
-            encode_frame(&hello, &mut buf).unwrap();
-            conn.stream.write_all(&buf).await.unwrap();
-        });
-
-        let (mut server_conn, _) = listener.accept().await.unwrap();
-        let msg = server_conn.read_message().await.unwrap().unwrap();
-        assert!(msg.msg.is_some());
-        if let Some(proto::client_message::Msg::Hello(hello)) = msg.msg {
-            assert_eq!(hello.protocol_version, rttx_proto::PROTOCOL_VERSION);
-        } else {
-            panic!("expected Hello message");
-        }
-
-        client_task.await.unwrap();
-    }
-
-    #[tokio::test]
     async fn client_disconnect_returns_none() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
@@ -442,8 +365,8 @@ mod tests {
         client_task.await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let msg = server_conn.read_message().await.unwrap();
-        assert!(msg.is_none());
+        let frame = server_conn.read_raw_frame().await.unwrap();
+        assert!(frame.is_none());
     }
 
     #[tokio::test]
