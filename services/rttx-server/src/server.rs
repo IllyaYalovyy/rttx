@@ -27,8 +27,6 @@ use uuid::Uuid;
 /// Per-client protocol state negotiated during handshake.
 #[derive(Debug, Clone)]
 pub enum ClientProtocol {
-    /// V2 client (legacy `ClientMessage`/`ServerMessage`).
-    V2,
     /// V3 client with negotiated capabilities.
     V3 { effective_caps: Vec<i32> },
 }
