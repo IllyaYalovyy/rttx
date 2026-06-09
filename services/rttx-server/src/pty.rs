@@ -54,7 +54,7 @@ impl Pty {
         let (pty, pts) = pty_process::open()?;
         pty.resize(pty_process::Size::new(config.rows, config.cols))?;
 
-        let mut cmd = pty_process::Command::new(&config.command[0]);
+        let mut cmd = pty_process::Command::new(&config.command[0]).kill_on_drop(true);
         if config.command.len() > 1 {
             cmd = cmd.args(&config.command[1..]);
         } else {
@@ -215,6 +215,34 @@ mod tests {
                 "PTY child must have PROMPT_COMMAND=history -a in its environment"
             );
             pty.kill().expect("kill must succeed");
+        });
+    }
+
+    #[test]
+    fn dropping_pty_kills_child_process() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let config = PtyConfig {
+                command: vec!["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+                ..PtyConfig::default()
+            };
+            let pid = {
+                let pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+                pty.pid().expect("child must be running")
+            };
+
+            let proc_path = format!("/proc/{pid}");
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::path::Path::new(&proc_path).exists()
+                && tokio::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            assert!(
+                !std::path::Path::new(&proc_path).exists(),
+                "dropping Pty must kill child process {pid}"
+            );
         });
     }
 
