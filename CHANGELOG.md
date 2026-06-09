@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Server-authoritative pane tree: the daemon now owns an immutable `PaneId` and
+  a `WorkspaceTree` (leaves + splits with logical ratios + default-active pane)
+  as the single source of truth for workspace structure (RFC-031 Step 1).
+
 ## [0.9.0] - 2026-05-26
 
 ## [0.6.5] - 2026-05-26

@@ -4,6 +4,7 @@
 //! persist across GUI disconnects and can be serialized to disk.
 
 use crate::pane::Pane;
+use crate::pane_tree::{CloseOutcome, PaneId, Side, SplitAxis, WorkspaceTree};
 use rttx_proto::v3;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -134,6 +135,12 @@ const fn default_runtime_revision() -> u64 {
     1
 }
 
+/// Axis used when a pane is added without an explicit split request. Explicit
+/// axis selection arrives with the protocol tree mutations (RFC-031 Step 3).
+const DEFAULT_SPLIT_AXIS: SplitAxis = SplitAxis::Horizontal;
+/// Even split for synthesized splits until an explicit ratio is provided.
+const DEFAULT_SPLIT_RATIO: f32 = 0.5;
+
 /// Runtime state of a single runtime.
 pub struct Runtime {
     /// Unique runtime identifier.
@@ -144,6 +151,12 @@ pub struct Runtime {
     pub panes: HashMap<Uuid, Pane>,
     /// The currently focused pane.
     pub active_pane_id: Option<Uuid>,
+    /// Authoritative pane-arrangement tree and default-active pane (RFC-031).
+    ///
+    /// The tree is the single source of truth for structure, split ratios, and
+    /// ordering; `panes` holds the per-pane runtime state keyed by the same
+    /// immutable ids.
+    pub tree: WorkspaceTree,
     /// Runtime retention policy.
     pub policy: RuntimePolicy,
     /// Whether this runtime was resurrected from persisted state.
@@ -171,6 +184,7 @@ impl Runtime {
             name,
             panes: HashMap::new(),
             active_pane_id: None,
+            tree: WorkspaceTree::new(),
             policy: RuntimePolicy::Persistent,
             reconstructed: false,
             revision: default_runtime_revision(),
@@ -203,25 +217,76 @@ impl Runtime {
     }
 
     /// Add a pane to this runtime.
+    ///
+    /// The new pane is recorded in the authoritative tree: it seeds the root
+    /// when the workspace is empty, otherwise it splits the active pane's leaf.
     pub fn add_pane(&mut self, pane: Pane) {
         let id = pane.id;
         self.panes.insert(id, pane);
+        self.insert_pane_into_tree(id);
         if self.active_pane_id.is_none() {
             self.active_pane_id = Some(id);
         }
         self.bump_revision();
     }
 
+    /// Place `id` in the tree without bumping the revision (callers do that).
+    fn insert_pane_into_tree(&mut self, id: Uuid) {
+        let new = PaneId::from_uuid(id);
+        if self.tree.insert_root(new) {
+            return;
+        }
+        let target = self
+            .active_pane_id
+            .map(PaneId::from_uuid)
+            .filter(|t| self.tree.contains(*t))
+            .or_else(|| self.tree.panes().first().copied());
+        if let Some(target) = target {
+            self.tree.split(target, new, DEFAULT_SPLIT_AXIS, DEFAULT_SPLIT_RATIO);
+        }
+    }
+
     /// Remove a pane from this runtime.
+    ///
+    /// The pane is dropped from the authoritative tree, collapsing its parent
+    /// split into the sibling. When the removed pane held live focus, focus
+    /// follows the tree's recomputed default-active so the two stay coherent.
     pub fn remove_pane(&mut self, pane_id: Uuid) -> Option<Pane> {
         let pane = self.panes.remove(&pane_id);
         if pane.is_some() {
+            let outcome = self.tree.close(PaneId::from_uuid(pane_id));
             if self.active_pane_id == Some(pane_id) {
-                self.active_pane_id = self.panes.keys().next().copied();
+                self.active_pane_id = match outcome {
+                    CloseOutcome::Removed { default_active } => Some(default_active.uuid()),
+                    CloseOutcome::Emptied | CloseOutcome::NotFound => None,
+                };
             }
             self.bump_revision();
         }
         pane
+    }
+
+    /// Set the logical ratio of the split addressed by `path`, returning the
+    /// new revision on success.
+    pub fn resize_split(&mut self, path: &[Side], ratio: f32) -> Option<u64> {
+        if self.tree.resize_split(path, ratio) {
+            self.bump_revision();
+            Some(self.revision())
+        } else {
+            None
+        }
+    }
+
+    /// Make `pane_id` the default-active pane (and live focus), returning the
+    /// new revision on success, or `None` if the pane is not in the tree.
+    pub fn set_default_active_pane(&mut self, pane_id: Uuid) -> Option<u64> {
+        if self.tree.set_default_active(PaneId::from_uuid(pane_id)) {
+            self.active_pane_id = Some(pane_id);
+            self.bump_revision();
+            Some(self.revision())
+        } else {
+            None
+        }
     }
 
     /// The current role for a given client, if attached.
@@ -468,10 +533,29 @@ impl Runtime {
             })
             .collect();
 
+        // The flat v1 schema carries no structure; synthesize a valid tree from
+        // the persisted pane order. Durable structure arrives with the v2 file
+        // schema (RFC-031 Step 2).
+        let mut tree = WorkspaceTree::new();
+        let mut previous: Option<PaneId> = None;
+        for ps in &rf.spec.panes {
+            let pane = PaneId::from_uuid(ps.id);
+            if let Some(prev) = previous {
+                tree.split(prev, pane, DEFAULT_SPLIT_AXIS, DEFAULT_SPLIT_RATIO);
+            } else {
+                tree.insert_root(pane);
+            }
+            previous = Some(pane);
+        }
+        if let Some(active) = rf.spec.active_pane_id {
+            tree.set_default_active(PaneId::from_uuid(active));
+        }
+
         Self {
             id: rf.spec.id,
             name: rf.spec.name.clone(),
             active_pane_id: rf.spec.active_pane_id,
+            tree,
             policy: rf.spec.policy,
             reconstructed: true,
             revision: rf.instance.revision.max(default_runtime_revision()),
@@ -806,5 +890,154 @@ mod tests {
         runtime.add_pane(pane);
 
         assert_eq!(runtime.any_pane_cwd().as_deref(), Some("/home/user/projects"));
+    }
+
+    // ── Authoritative pane tree integration (RFC-031 Step 1) ────
+
+    #[test]
+    fn new_runtime_has_empty_tree() {
+        let runtime = Runtime::new("test".into());
+        assert!(runtime.tree.is_empty());
+        assert_eq!(runtime.tree.default_active(), None);
+        assert!(runtime.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn first_pane_seeds_tree_root_and_default_active() {
+        let mut runtime = Runtime::new("test".into());
+        let id = Uuid::new_v4();
+        runtime.add_pane(Pane::new(id, 80, 24));
+        assert_eq!(runtime.tree.leaf_count(), 1);
+        assert_eq!(runtime.tree.default_active(), Some(PaneId::from_uuid(id)));
+        assert!(runtime.tree.contains(PaneId::from_uuid(id)));
+        assert!(runtime.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn second_pane_splits_active_leaf_in_tree() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        assert_eq!(runtime.tree.leaf_count(), 2);
+        assert!(runtime.tree.contains(PaneId::from_uuid(a)));
+        assert!(runtime.tree.contains(PaneId::from_uuid(b)));
+        // default-active stays on the first pane after a split.
+        assert_eq!(runtime.tree.default_active(), Some(PaneId::from_uuid(a)));
+        assert!(runtime.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn pane_id_is_stable_across_tree_growth() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        for _ in 0..5 {
+            runtime.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+            // The original pane's id never changes as the tree grows.
+            assert!(runtime.tree.contains(PaneId::from_uuid(a)));
+            assert!(runtime.panes.contains_key(&a));
+        }
+    }
+
+    #[test]
+    fn remove_pane_collapses_tree() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        runtime.remove_pane(a);
+        assert_eq!(runtime.tree.leaf_count(), 1);
+        assert!(!runtime.tree.contains(PaneId::from_uuid(a)));
+        assert!(runtime.tree.contains(PaneId::from_uuid(b)));
+        assert!(runtime.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn closing_active_pane_moves_focus_to_tree_default_active() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        runtime.active_pane_id = Some(a);
+        runtime.remove_pane(a);
+        // Live focus follows the tree's recomputed default-active, not an
+        // arbitrary HashMap entry.
+        assert_eq!(runtime.active_pane_id, Some(b));
+        assert_eq!(runtime.tree.default_active(), Some(PaneId::from_uuid(b)));
+    }
+
+    #[test]
+    fn closing_inactive_pane_leaves_focus_untouched() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        runtime.active_pane_id = Some(a);
+        runtime.remove_pane(b);
+        assert_eq!(runtime.active_pane_id, Some(a));
+    }
+
+    #[test]
+    fn removing_last_pane_empties_tree() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.remove_pane(a);
+        assert!(runtime.tree.is_empty());
+        assert!(runtime.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn resize_split_updates_tree_ratio_and_revision() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        let before = runtime.revision();
+        assert_eq!(runtime.resize_split(&[], 0.3), Some(before + 1));
+        // Invalid ratio is rejected without bumping the revision.
+        assert_eq!(runtime.resize_split(&[], 1.0), None);
+        assert_eq!(runtime.revision(), before + 1);
+    }
+
+    #[test]
+    fn set_default_active_pane_updates_tree_and_focus() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        assert!(runtime.set_default_active_pane(b).is_some());
+        assert_eq!(runtime.tree.default_active(), Some(PaneId::from_uuid(b)));
+        assert_eq!(runtime.active_pane_id, Some(b));
+        // Unknown pane is rejected.
+        assert!(runtime.set_default_active_pane(Uuid::new_v4()).is_none());
+    }
+
+    #[test]
+    fn reconstructed_runtime_rebuilds_tree_from_panes() {
+        let mut runtime = Runtime::new("rebuild".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let c = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        runtime.add_pane(Pane::new(c, 80, 24));
+        runtime.active_pane_id = Some(b);
+
+        let rf = runtime.to_runtime_file();
+        let restored = Runtime::from_runtime_file(&rf);
+        assert_eq!(restored.tree.leaf_count(), 3);
+        for id in [a, b, c] {
+            assert!(restored.tree.contains(PaneId::from_uuid(id)));
+        }
+        assert_eq!(restored.tree.default_active(), Some(PaneId::from_uuid(b)));
+        assert!(restored.tree.validate().is_ok());
     }
 }
