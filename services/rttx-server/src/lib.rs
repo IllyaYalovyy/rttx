@@ -10,6 +10,7 @@ pub mod logging;
 pub mod metrics;
 pub mod os;
 pub mod pane;
+pub mod pane_tree;
 pub mod profile;
 pub mod profiling;
 pub mod protocol;
