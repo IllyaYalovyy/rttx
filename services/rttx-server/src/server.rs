@@ -192,8 +192,7 @@ impl Server {
         let state_dir = self.os.state_dir();
 
         if let Some(result) = crate::state::persistence::load_all(&state_dir) {
-            let total =
-                result.runtimes.len() + result.failed_ids.len() + result.reset_ids.len();
+            let total = result.runtimes.len() + result.failed_ids.len() + result.reset_ids.len();
             tracing::info!(
                 "Loaded {} persisted runtimes ({} failed, {} reset for old schema)",
                 result.runtimes.len(),
