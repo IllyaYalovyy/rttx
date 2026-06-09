@@ -81,20 +81,19 @@ async fn startup_quarantines_orphaned_runtime_directories() {
     let known_id = uuid::Uuid::new_v4();
     let orphan_id = uuid::Uuid::new_v4();
 
-    // Create a valid runtime file for the known runtime.
+    // Create a valid v2 runtime file for the known runtime.
     let runtimes_dir = state_dir.join("runtimes");
     let known_dir = runtimes_dir.join(known_id.to_string());
     std::fs::create_dir_all(&known_dir).unwrap();
     let known_rf = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "spec": {
             "id": known_id.to_string(),
             "name": "known",
             "policy": "persistent",
             "created_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 },
-            "panes": [],
-            "active_pane_id": null,
-            "command_history": []
+            "tree": { "root": null, "default_active": null },
+            "panes": []
         },
         "instance": {
             "revision": 1,

@@ -8,7 +8,7 @@
 use proptest::prelude::*;
 use rttx_server::screen::{PaneScreen, restart_safe_scrollback, strip_client_queries};
 use rttx_server::state::types::{
-    DaemonIndexV1, RuntimeFileV1, SchemaVersionEnvelope, ScreenSnapshotV1,
+    DaemonIndexV1, SchemaVersionEnvelope, ScreenSnapshotV1, WorkspaceFileV2,
 };
 
 // ── PaneScreen: arbitrary byte streams never panic ──────────────────
@@ -115,7 +115,7 @@ proptest! {
 
     #[test]
     fn runtime_file_corrupt_json_never_panics(data in "\\PC{0,512}") {
-        let _: Result<RuntimeFileV1, _> = serde_json::from_str(&data);
+        let _: Result<WorkspaceFileV2, _> = serde_json::from_str(&data);
     }
 
     #[test]

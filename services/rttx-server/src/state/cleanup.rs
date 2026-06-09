@@ -148,17 +148,16 @@ mod tests {
     use std::collections::HashSet;
     use tempfile::TempDir;
 
-    fn sample_runtime_file(id: Uuid) -> RuntimeFileV1 {
-        RuntimeFileV1 {
+    fn sample_runtime_file(id: Uuid) -> WorkspaceFileV2 {
+        WorkspaceFileV2 {
             schema_version: RUNTIME_FILE_SCHEMA_VERSION,
-            spec: RuntimeSpecV1 {
+            spec: WorkspaceSpecV2 {
                 id,
                 name: "test".into(),
                 policy: RuntimePolicy::Persistent,
                 created_at: SystemTime::now(),
+                tree: crate::pane_tree::WorkspaceTree::new(),
                 panes: vec![],
-                active_pane_id: None,
-                command_history: vec![],
             },
             instance: RuntimeInstanceV1 {
                 revision: 1,

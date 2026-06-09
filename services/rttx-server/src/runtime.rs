@@ -471,12 +471,12 @@ impl Runtime {
         !self.attached_clients.is_empty()
     }
 
-    /// Build a v2 `RuntimeFileV1` for per-runtime persistence.
+    /// Build a [`WorkspaceFileV2`] for per-workspace persistence (RFC-031 §6).
     #[must_use]
-    pub fn to_runtime_file(&self) -> crate::state::types::RuntimeFileV1 {
+    pub fn to_runtime_file(&self) -> crate::state::types::WorkspaceFileV2 {
         use crate::state::types::{
-            PaneSpecV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1, RuntimeInstanceV1,
-            RuntimeSpecV1,
+            PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, RuntimeInstanceV1, WorkspaceFileV2,
+            WorkspaceSpecV2,
         };
 
         let panes = self
@@ -484,8 +484,8 @@ impl Runtime {
             .values()
             .map(|p| {
                 let cwd = p.cwd.clone().or_else(|| p.read_proc_cwd());
-                PaneSpecV1 {
-                    id: p.id,
+                PaneSpecV2 {
+                    id: PaneId::from_uuid(p.id),
                     cwd,
                     title: p.title.clone(),
                     exit_status: p.exit_status,
@@ -496,16 +496,15 @@ impl Runtime {
             })
             .collect();
 
-        RuntimeFileV1 {
+        WorkspaceFileV2 {
             schema_version: RUNTIME_FILE_SCHEMA_VERSION,
-            spec: RuntimeSpecV1 {
+            spec: WorkspaceSpecV2 {
                 id: self.id,
                 name: self.name.clone(),
                 policy: self.policy,
                 created_at: self.created_at,
+                tree: self.tree.clone(),
                 panes,
-                active_pane_id: self.active_pane_id,
-                command_history: vec![],
             },
             instance: RuntimeInstanceV1 {
                 revision: self.revision,
@@ -515,47 +514,35 @@ impl Runtime {
         }
     }
 
-    /// Resurrect a runtime from a v2 `RuntimeFileV1`.
+    /// Resurrect a runtime from a [`WorkspaceFileV2`].
+    ///
+    /// The durable tree is restored verbatim; live focus follows the tree's
+    /// persisted default-active pane.
     #[must_use]
-    pub fn from_runtime_file(rf: &crate::state::types::RuntimeFileV1) -> Self {
+    pub fn from_runtime_file(rf: &crate::state::types::WorkspaceFileV2) -> Self {
         let panes: HashMap<Uuid, Pane> = rf
             .spec
             .panes
             .iter()
             .map(|ps| {
-                let mut pane = Pane::new(ps.id, ps.cols, ps.rows);
+                let id = ps.id.uuid();
+                let mut pane = Pane::new(id, ps.cols, ps.rows);
                 pane.cwd.clone_from(&ps.cwd);
                 pane.title.clone_from(&ps.title);
                 pane.exit_status = ps.exit_status;
                 pane.reconstructed = true;
                 pane.no_persist = ps.no_persist;
-                (ps.id, pane)
+                (id, pane)
             })
             .collect();
 
-        // The flat v1 schema carries no structure; synthesize a valid tree from
-        // the persisted pane order. Durable structure arrives with the v2 file
-        // schema (RFC-031 Step 2).
-        let mut tree = WorkspaceTree::new();
-        let mut previous: Option<PaneId> = None;
-        for ps in &rf.spec.panes {
-            let pane = PaneId::from_uuid(ps.id);
-            if let Some(prev) = previous {
-                tree.split(prev, pane, DEFAULT_SPLIT_AXIS, DEFAULT_SPLIT_RATIO);
-            } else {
-                tree.insert_root(pane);
-            }
-            previous = Some(pane);
-        }
-        if let Some(active) = rf.spec.active_pane_id {
-            tree.set_default_active(PaneId::from_uuid(active));
-        }
+        let active_pane_id = rf.spec.tree.default_active().map(PaneId::uuid);
 
         Self {
             id: rf.spec.id,
             name: rf.spec.name.clone(),
-            active_pane_id: rf.spec.active_pane_id,
-            tree,
+            active_pane_id,
+            tree: rf.spec.tree.clone(),
             policy: rf.spec.policy,
             reconstructed: true,
             revision: rf.instance.revision.max(default_runtime_revision()),
@@ -748,7 +735,7 @@ mod tests {
         assert_eq!(rf.spec.id, runtime.id);
         assert_eq!(rf.spec.name, "v2-test");
         assert_eq!(rf.spec.panes.len(), 1);
-        assert_eq!(rf.spec.panes[0].id, pane_id);
+        assert_eq!(rf.spec.panes[0].id, PaneId::from_uuid(pane_id));
         assert_eq!(rf.spec.panes[0].cols, 100);
         assert_eq!(rf.instance.revision, runtime.revision());
 
@@ -1029,7 +1016,7 @@ mod tests {
         runtime.add_pane(Pane::new(a, 80, 24));
         runtime.add_pane(Pane::new(b, 80, 24));
         runtime.add_pane(Pane::new(c, 80, 24));
-        runtime.active_pane_id = Some(b);
+        runtime.set_default_active_pane(b);
 
         let rf = runtime.to_runtime_file();
         let restored = Runtime::from_runtime_file(&rf);
@@ -1038,6 +1025,36 @@ mod tests {
             assert!(restored.tree.contains(PaneId::from_uuid(id)));
         }
         assert_eq!(restored.tree.default_active(), Some(PaneId::from_uuid(b)));
+        assert!(restored.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn durable_tree_round_trips_exact_structure_and_ratios() {
+        // Build an asymmetric tree with custom split ratios and a non-default
+        // active pane, then prove the persisted tree is restored verbatim —
+        // not re-synthesized from a flat pane list (which would lose ratios and
+        // structure).
+        let mut runtime = Runtime::new("durable".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let c = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        runtime.add_pane(Pane::new(b, 80, 24));
+        runtime.add_pane(Pane::new(c, 80, 24));
+        // Each new pane splits the active leaf (a), so the tree is
+        // Split(Split(a, c), b). Give both splits distinct ratios.
+        assert_eq!(runtime.resize_split(&[], 0.25), Some(runtime.revision()));
+        assert_eq!(runtime.resize_split(&[Side::First], 0.8), Some(runtime.revision()));
+        runtime.set_default_active_pane(c);
+
+        let tree_before = runtime.tree.clone();
+
+        let rf = runtime.to_runtime_file();
+        let restored = Runtime::from_runtime_file(&rf);
+
+        assert_eq!(restored.tree, tree_before, "durable tree must round-trip exactly");
+        assert_eq!(restored.tree.default_active(), Some(PaneId::from_uuid(c)));
+        assert_eq!(restored.active_pane_id, Some(c));
         assert!(restored.tree.validate().is_ok());
     }
 }

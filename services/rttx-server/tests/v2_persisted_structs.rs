@@ -1,14 +1,16 @@
-//! Integration test for v2 persisted structs and migration chain (RFC-022 §2–§4).
+//! Integration tests for persisted state structs and the clean-break loader
+//! (RFC-022 §2–§4, RFC-031 §6).
 //!
-//! Verifies that structs serialize to disk and load back through the
-//! migration chain, including future-version rejection and forward
-//! compatibility with unknown fields.
+//! Verifies that the daemon index and screen snapshots round-trip through the
+//! migration chain, that the durable `WorkspaceFileV2` (tree + panes) round-trips
+//! through the persistence layer, and that old-schema runtime state is detected,
+//! ignored, and removed with no migration path.
 
+use rttx_server::pane_tree::{PaneId, SplitAxis, WorkspaceTree};
 use rttx_server::runtime::RuntimePolicy;
-use rttx_server::state::migrations::{
-    load_daemon_index, load_runtime_file, load_screen_snapshot, peek_schema_version,
-};
+use rttx_server::state::migrations::{load_daemon_index, load_screen_snapshot, peek_schema_version};
 use rttx_server::state::types::*;
+use rttx_server::state::{layout, persistence};
 use std::time::SystemTime;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -20,15 +22,6 @@ fn write_and_load_daemon_index(index: &DaemonIndexV1) -> DaemonIndexV1 {
     std::fs::write(&path, &json).unwrap();
     let loaded = std::fs::read_to_string(&path).unwrap();
     load_daemon_index(&loaded).unwrap()
-}
-
-fn write_and_load_runtime_file(file: &RuntimeFileV1) -> RuntimeFileV1 {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("runtime.json");
-    let json = serde_json::to_string_pretty(file).unwrap();
-    std::fs::write(&path, &json).unwrap();
-    let loaded = std::fs::read_to_string(&path).unwrap();
-    load_runtime_file(&loaded).unwrap()
 }
 
 fn write_and_load_screen_snapshot(snap: &ScreenSnapshotV1) -> ScreenSnapshotV1 {
@@ -54,26 +47,38 @@ fn daemon_index_persists_and_loads_via_migration_chain() {
 }
 
 #[test]
-fn runtime_file_persists_and_loads_via_migration_chain() {
-    let pane = PaneSpecV1 {
-        id: Uuid::new_v4(),
+fn workspace_file_persists_and_reloads_with_tree() {
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path();
+    let rt_id = Uuid::new_v4();
+
+    // A two-level tree with distinct ratios and a non-default active pane.
+    let (a, b, c) = (PaneId::new(), PaneId::new(), PaneId::new());
+    let mut tree = WorkspaceTree::new();
+    tree.insert_root(a);
+    tree.split(a, b, SplitAxis::Horizontal, 0.3);
+    tree.split(b, c, SplitAxis::Vertical, 0.6);
+    tree.set_default_active(b);
+    let expected_tree = tree.clone();
+
+    let mk = |id: PaneId, title: &str| PaneSpecV2 {
+        id,
         cwd: Some("/home/user/project".into()),
-        title: Some("nvim".into()),
+        title: Some(title.into()),
         exit_status: None,
         cols: 120,
         rows: 40,
         no_persist: false,
     };
-    let original = RuntimeFileV1 {
+    let original = WorkspaceFileV2 {
         schema_version: RUNTIME_FILE_SCHEMA_VERSION,
-        spec: RuntimeSpecV1 {
-            id: Uuid::new_v4(),
+        spec: WorkspaceSpecV2 {
+            id: rt_id,
             name: "workspace-1".into(),
             policy: RuntimePolicy::Persistent,
             created_at: SystemTime::now(),
-            panes: vec![pane],
-            active_pane_id: None,
-            command_history: vec![],
+            tree,
+            panes: vec![mk(a, "bash"), mk(b, "nvim"), mk(c, "logs")],
         },
         instance: RuntimeInstanceV1 {
             revision: 7,
@@ -81,8 +86,20 @@ fn runtime_file_persists_and_loads_via_migration_chain() {
             last_snapshot_at: SystemTime::now(),
         },
     };
-    let recovered = write_and_load_runtime_file(&original);
-    assert_eq!(original, recovered);
+
+    persistence::save_daemon_index(state_dir, &[rt_id]).unwrap();
+    persistence::save_runtime(state_dir, &original).unwrap();
+
+    let result = persistence::load_all(state_dir).unwrap();
+    assert!(result.failed_ids.is_empty());
+    assert!(result.reset_ids.is_empty());
+    assert_eq!(result.runtimes.len(), 1);
+
+    let recovered = &result.runtimes[0];
+    assert_eq!(recovered.spec.tree, expected_tree, "tree structure + ratios must survive");
+    assert_eq!(recovered.spec.tree.default_active(), Some(b));
+    assert_eq!(recovered.spec.panes.len(), 3);
+    assert_eq!(recovered.instance.revision, 7);
 }
 
 #[test]
@@ -143,8 +160,16 @@ fn future_version_rejected_from_disk() {
 }
 
 #[test]
-fn old_runtime_file_with_command_history_loads_through_migration() {
-    let json = r#"{
+fn old_schema_runtime_file_is_reset_not_migrated() {
+    // RFC-031 clean break: an old v1 runtime.json (flat panes, active_pane_id,
+    // command_history, no durable tree) is detected, ignored, and removed.
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path();
+    let old_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+
+    let old_dir = layout::runtime_dir(state_dir, old_id);
+    std::fs::create_dir_all(&old_dir).unwrap();
+    let v1_json = r#"{
         "schema_version": 1,
         "spec": {
             "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -161,12 +186,7 @@ fn old_runtime_file_with_command_history_loads_through_migration() {
             }],
             "active_pane_id": null,
             "command_history": [
-                {
-                    "command": "cargo build",
-                    "cwd": "/home/user/project",
-                    "timestamp": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
-                    "pane_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-                }
+                {"command": "cargo build", "cwd": "/home/user/project"}
             ]
         },
         "instance": {
@@ -175,8 +195,12 @@ fn old_runtime_file_with_command_history_loads_through_migration() {
             "last_snapshot_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
         }
     }"#;
-    let loaded = load_runtime_file(json).unwrap();
-    assert_eq!(loaded.spec.name, "legacy-ws");
-    assert_eq!(loaded.spec.panes.len(), 1);
-    assert_eq!(loaded.instance.revision, 5);
+    std::fs::write(layout::runtime_file(state_dir, old_id), v1_json).unwrap();
+    persistence::save_daemon_index(state_dir, &[old_id]).unwrap();
+
+    let result = persistence::load_all(state_dir).unwrap();
+    assert!(result.runtimes.is_empty(), "old-schema runtime must not load");
+    assert!(result.failed_ids.is_empty(), "old schema is a reset, not a failure");
+    assert_eq!(result.reset_ids, vec![old_id]);
+    assert!(!old_dir.exists(), "old-schema runtime directory must be removed on load");
 }

@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Server-authoritative pane tree: the daemon now owns an immutable `PaneId` and
   a `WorkspaceTree` (leaves + splits with logical ratios + default-active pane)
   as the single source of truth for workspace structure (RFC-031 Step 1).
+- Durable workspace persistence (`WorkspaceFileV2`): the daemon now persists the
+  authoritative pane tree — structure, logical split ratios, and default-active
+  pane — so layout survives daemon restarts (RFC-031 Step 2).
+
+### Changed
+
+- Daemon state schema bumped to version 2. This is a clean break: old-schema
+  (v1) runtime state is detected, ignored, and removed on first load with no
+  migration path. The obsolete `command_history` field is gone.
 
 ## [0.9.0] - 2026-05-26
 
