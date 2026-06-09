@@ -50,6 +50,33 @@ async fn pty_resize() {
     pty.kill().expect("kill failed");
 }
 
+#[tokio::test]
+async fn dropping_pty_kills_child_process() {
+    let config = PtyConfig {
+        command: vec!["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+        cwd: None,
+        env: Vec::new(),
+        cols: 80,
+        rows: 24,
+    };
+
+    let pid = {
+        let pty = Pty::spawn(Uuid::new_v4(), &config).expect("failed to spawn PTY");
+        pty.pid().expect("child must be running")
+    };
+
+    let proc_path = format!("/proc/{pid}");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::path::Path::new(&proc_path).exists() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        !std::path::Path::new(&proc_path).exists(),
+        "dropping Pty must kill child process {pid}"
+    );
+}
+
 #[test]
 fn pty_sets_colorterm_truecolor() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
