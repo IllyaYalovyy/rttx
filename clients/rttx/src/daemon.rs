@@ -723,6 +723,8 @@ pub fn extract_pane_id(env: &v3::ServerEnvelope) -> Option<Uuid> {
         Payload::Bell(m) => &m.pane_id,
         Payload::PaneResized(m) => &m.pane_id,
         Payload::TerminalModeChanged(m) => &m.pane_id,
+        Payload::PaneSplit(m) => &m.new_pane_id,
+        Payload::FocusChanged(m) => &m.pane_id,
         Payload::Pong(_)
         | Payload::RuntimeList(_)
         | Payload::RuntimeCreated(_)
@@ -737,6 +739,7 @@ pub fn extract_pane_id(env: &v3::ServerEnvelope) -> Option<Uuid> {
         | Payload::ScrollbackChunk(_)
         | Payload::TakeoverCompleted(_)
         | Payload::LeaseLost(_)
+        | Payload::SplitResized(_)
         | Payload::OwnerDisconnected(_) => return None,
     };
     bytes_to_uuid(bytes).ok()

@@ -261,6 +261,45 @@ message PaneInfo {
   bool no_persist = 8;
 }
 
+// ─── Workspace tree (RFC-031 §2, §5) ─────────────────────────────────
+
+// Orientation of a split node in the authoritative workspace tree.
+enum PaneSplitAxis {
+  PANE_SPLIT_AXIS_UNSPECIFIED = 0;
+  // Children placed side by side (a vertical divider between them).
+  PANE_SPLIT_AXIS_HORIZONTAL = 1;
+  // Children stacked top and bottom (a horizontal divider between them).
+  PANE_SPLIT_AXIS_VERTICAL = 2;
+}
+
+// One step when addressing a split node by its path from the tree root.
+enum PaneTreeSide {
+  PANE_TREE_SIDE_UNSPECIFIED = 0;
+  PANE_TREE_SIDE_FIRST = 1;
+  PANE_TREE_SIDE_SECOND = 2;
+}
+
+// A node in the server-authoritative pane tree: either a leaf naming one
+// pane or a split joining two subtrees with a logical ratio.
+message PaneTreeNode {
+  oneof node {
+    PaneTreeLeaf leaf = 1;
+    PaneTreeSplit split = 2;
+  }
+}
+
+message PaneTreeLeaf {
+  bytes pane_id = 1;
+}
+
+message PaneTreeSplit {
+  PaneSplitAxis axis = 1;
+  // Fraction of space allocated to `first`, in the open interval (0, 1).
+  float ratio = 2;
+  PaneTreeNode first = 3;
+  PaneTreeNode second = 4;
+}
+
 // ─── Snapshots ───────────────────────────────────────────────────────
 
 message RuntimeSnapshot {
@@ -268,6 +307,12 @@ message RuntimeSnapshot {
   uint64 runtime_revision = 2;
   RuntimeClientRole client_role = 3;
   repeated PaneSnapshot panes = 4;
+  // Authoritative workspace structure (RFC-031). Absent only for an empty
+  // workspace with no panes.
+  PaneTreeNode tree = 5;
+  // Fallback focus pane for a fresh attach (RFC-031 §2). Empty when the
+  // workspace has no panes.
+  bytes default_active_pane_id = 6;
 }
 
 message PaneSnapshot {
@@ -319,6 +364,56 @@ message SetPaneNoPersist {
   bool no_persist = 3;
 }
 
+// ─── Tree mutations (RFC-031 §5) ─────────────────────────────────────
+//
+// Structural mutations are server-authoritative: the server applies them to
+// the workspace tree, persists the result, and reports a tree delta. Pane
+// identity is always server-assigned (RFC-031 G1).
+
+// Split the leaf holding `target_pane_id`, adding a server-minted pane as the
+// second child. Replaces the client-identity CreatePane for tree growth.
+message SplitPane {
+  bytes runtime_id = 1;
+  bytes target_pane_id = 2;
+  PaneSplitAxis axis = 3;
+  // Fraction of space allocated to the existing pane, in (0, 1).
+  float ratio = 4;
+  optional string cwd = 5;
+  optional bool dark_background = 6;
+  uint32 cols = 7;
+  uint32 rows = 8;
+  optional bool no_persist = 9;
+}
+
+// Set the logical ratio of the split addressed by `path` from the tree root.
+message ResizeSplit {
+  bytes runtime_id = 1;
+  repeated PaneTreeSide path = 2;
+  float ratio = 3;
+}
+
+// ─── Viewport messages (RFC-031 §3–§5) ───────────────────────────────
+//
+// Per-client viewport state. SetFocus updates the server's fallback focus
+// (default-active) pane; ReportClientSize drives the multi-client PTY
+// min-size policy (RFC-031 §4).
+
+message SetFocus {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+}
+
+message ClientPaneSize {
+  bytes pane_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message ReportClientSize {
+  bytes runtime_id = 1;
+  repeated ClientPaneSize panes = 2;
+}
+
 // ─── Pane lifecycle — events ─────────────────────────────────────────
 
 message PaneCreated {
@@ -365,6 +460,34 @@ message CwdChanged {
 message Bell {
   bytes runtime_id = 1;
   bytes pane_id = 2;
+}
+
+// ─── Tree mutation events (RFC-031 §5) ───────────────────────────────
+
+// A split was applied to the workspace tree. The new pane id is
+// server-assigned; the target/axis/ratio describe where it landed.
+message PaneSplit {
+  bytes runtime_id = 1;
+  bytes target_pane_id = 2;
+  bytes new_pane_id = 3;
+  PaneSplitAxis axis = 4;
+  float ratio = 5;
+  uint64 runtime_revision = 6;
+}
+
+// A split's logical ratio changed.
+message SplitResized {
+  bytes runtime_id = 1;
+  repeated PaneTreeSide path = 2;
+  float ratio = 3;
+  uint64 runtime_revision = 4;
+}
+
+// The fallback focus (default-active) pane changed.
+message FocusChanged {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  uint64 runtime_revision = 3;
 }
 
 // ─── Recovery (OPT_RESYNC) ──────────────────────────────────────────
@@ -469,6 +592,14 @@ message ClientEnvelope {
     SetPaneTitle set_pane_title = 33;
     SetPaneNoPersist set_pane_no_persist = 34;
 
+    // Tree mutations (RFC-031 §5)
+    SplitPane split_pane = 35;
+    ResizeSplit resize_split = 36;
+
+    // Viewport (RFC-031 §3–§5)
+    SetFocus set_focus = 37;
+    ReportClientSize report_client_size = 38;
+
     // Recovery (OPT_RESYNC)
     ResyncRuntime resync_runtime = 50;
 
@@ -510,6 +641,11 @@ message ServerEnvelope {
     TitleChanged title_changed = 34;
     CwdChanged cwd_changed = 35;
     Bell bell = 36;
+
+    // Tree mutation events (RFC-031 §5)
+    PaneSplit pane_split = 37;
+    SplitResized split_resized = 38;
+    FocusChanged focus_changed = 39;
 
     // Recovery events (OPT_RESYNC)
     StreamOverflow stream_overflow = 50;

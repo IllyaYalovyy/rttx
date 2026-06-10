@@ -2,6 +2,7 @@
 //!
 //! Convenience functions for constructing server response messages.
 
+use crate::pane_tree::{PaneId, PaneTree, Side, SplitAxis, WorkspaceTree};
 use crate::runtime::{ClientRole, Runtime, TerminationReason};
 use rttx_proto::{uuid_to_bytes, v3};
 use uuid::Uuid;
@@ -96,6 +97,93 @@ pub fn v3_runtime_terminated(
     ))
 }
 
+// ── Workspace tree conversions (RFC-031 §5) ─────────────────────
+
+/// Map a server split axis to its wire enum.
+#[must_use]
+pub const fn split_axis_to_proto(axis: SplitAxis) -> v3::PaneSplitAxis {
+    match axis {
+        SplitAxis::Horizontal => v3::PaneSplitAxis::Horizontal,
+        SplitAxis::Vertical => v3::PaneSplitAxis::Vertical,
+    }
+}
+
+/// Map a wire split axis to the server axis. An unspecified axis defaults to
+/// horizontal (the daemon's even-split convention).
+#[must_use]
+pub const fn proto_axis_to_split(axis: v3::PaneSplitAxis) -> SplitAxis {
+    match axis {
+        v3::PaneSplitAxis::Vertical => SplitAxis::Vertical,
+        v3::PaneSplitAxis::Unspecified | v3::PaneSplitAxis::Horizontal => SplitAxis::Horizontal,
+    }
+}
+
+/// Map a wire tree side to the server `Side`, dropping the unspecified value
+/// (which never addresses a real split branch).
+#[must_use]
+pub const fn proto_side_to_side(side: v3::PaneTreeSide) -> Option<Side> {
+    match side {
+        v3::PaneTreeSide::First => Some(Side::First),
+        v3::PaneTreeSide::Second => Some(Side::Second),
+        v3::PaneTreeSide::Unspecified => None,
+    }
+}
+
+/// Decode a wire side path into a server path. Any unspecified or out-of-range
+/// step makes the whole path unaddressable and yields `None`.
+#[must_use]
+pub fn decode_side_path(raw: &[i32]) -> Option<Vec<Side>> {
+    raw.iter().map(|&v| v3::PaneTreeSide::try_from(v).ok().and_then(proto_side_to_side)).collect()
+}
+
+fn pane_tree_to_proto(node: &PaneTree) -> v3::PaneTreeNode {
+    match node {
+        PaneTree::Leaf { pane } => rttx_proto::v3_tree::pane_tree_leaf(pane.uuid()),
+        PaneTree::Split { axis, ratio, first, second } => rttx_proto::v3_tree::pane_tree_split(
+            split_axis_to_proto(*axis),
+            *ratio,
+            pane_tree_to_proto(first),
+            pane_tree_to_proto(second),
+        ),
+    }
+}
+
+/// Build the wire representation of a workspace tree, or `None` for an empty
+/// workspace.
+#[must_use]
+pub fn workspace_tree_to_proto(tree: &WorkspaceTree) -> Option<v3::PaneTreeNode> {
+    tree.root().map(pane_tree_to_proto)
+}
+
+/// The wire bytes of the tree's default-active pane, or empty when there is
+/// none.
+#[must_use]
+pub fn default_active_bytes(tree: &WorkspaceTree) -> Vec<u8> {
+    tree.default_active().map(PaneId::uuid).map(uuid_to_bytes).unwrap_or_default()
+}
+
+/// The PTY size for a pane shared by multiple clients: the per-axis minimum of
+/// every client's reported render size, so no client sees truncated output
+/// (RFC-031 §4). Zero dimensions are ignored. Returns `None` when no client has
+/// reported a usable size on the corresponding axis.
+#[must_use]
+pub fn min_client_pane_size<I>(sizes: I) -> Option<(u16, u16)>
+where
+    I: IntoIterator<Item = (u16, u16)>,
+{
+    let mut min_cols: Option<u16> = None;
+    let mut min_rows: Option<u16> = None;
+    for (cols, rows) in sizes {
+        if cols > 0 {
+            min_cols = Some(min_cols.map_or(cols, |m| m.min(cols)));
+        }
+        if rows > 0 {
+            min_rows = Some(min_rows.map_or(rows, |m| m.min(rows)));
+        }
+    }
+    Some((min_cols?, min_rows?))
+}
+
 /// Build a v3 `RuntimeSnapshot` from a runtime's current state.
 #[must_use]
 pub fn build_v3_runtime_snapshot(
@@ -127,7 +215,14 @@ pub fn build_v3_runtime_snapshot(
             )
         })
         .collect();
-    rttx_proto::v3_snapshot::build_runtime_snapshot(runtime_id, rt.revision(), client_role, panes)
+    rttx_proto::v3_snapshot::build_runtime_snapshot_with_tree(
+        runtime_id,
+        rt.revision(),
+        client_role,
+        panes,
+        workspace_tree_to_proto(&rt.tree),
+        default_active_bytes(&rt.tree),
+    )
 }
 
 /// Build a v3 runtime inventory for `ListRuntimes`.
@@ -311,5 +406,79 @@ mod tests {
         };
         assert_eq!(t.final_revision, 3);
         assert_eq!(t.reason, v3::RuntimeTerminationReason::EphemeralDetach as i32);
+    }
+
+    // ── Workspace tree conversions (RFC-031 §5) ──
+
+    #[test]
+    fn split_axis_round_trips_through_proto() {
+        for axis in [SplitAxis::Horizontal, SplitAxis::Vertical] {
+            assert_eq!(proto_axis_to_split(split_axis_to_proto(axis)), axis);
+        }
+        // An unspecified wire axis defaults to horizontal.
+        assert_eq!(proto_axis_to_split(v3::PaneSplitAxis::Unspecified), SplitAxis::Horizontal);
+    }
+
+    #[test]
+    fn decode_side_path_rejects_unaddressable_steps() {
+        assert_eq!(
+            decode_side_path(&[v3::PaneTreeSide::First as i32, v3::PaneTreeSide::Second as i32,]),
+            Some(vec![Side::First, Side::Second])
+        );
+        // An unspecified step makes the whole path unaddressable.
+        assert_eq!(decode_side_path(&[v3::PaneTreeSide::Unspecified as i32]), None);
+        assert_eq!(decode_side_path(&[42]), None);
+        // The empty path addresses the root split and is valid.
+        assert_eq!(decode_side_path(&[]), Some(vec![]));
+    }
+
+    #[test]
+    fn empty_workspace_tree_has_no_proto_node() {
+        let tree = WorkspaceTree::new();
+        assert!(workspace_tree_to_proto(&tree).is_none());
+        assert!(default_active_bytes(&tree).is_empty());
+    }
+
+    #[test]
+    fn workspace_tree_converts_to_matching_proto_structure() {
+        let mut tree = WorkspaceTree::new();
+        let a = PaneId::new();
+        let b = PaneId::new();
+        tree.insert_root(a);
+        assert!(tree.split(a, b, SplitAxis::Vertical, 0.25));
+
+        let node = workspace_tree_to_proto(&tree).expect("non-empty tree");
+        let Some(v3::pane_tree_node::Node::Split(split)) = node.node else {
+            panic!("expected a split at the root");
+        };
+        assert_eq!(split.axis, v3::PaneSplitAxis::Vertical as i32);
+        assert!((split.ratio - 0.25).abs() < f32::EPSILON);
+        // default-active is the first pane, encoded as its raw uuid bytes.
+        assert_eq!(default_active_bytes(&tree), uuid_to_bytes(a.uuid()));
+    }
+
+    // ── Multi-client PTY min-size policy (RFC-031 §4) ──
+
+    #[test]
+    fn min_pane_size_is_per_axis_minimum() {
+        assert_eq!(min_client_pane_size([(100, 40), (80, 50), (120, 24)]), Some((80, 24)));
+    }
+
+    #[test]
+    fn min_pane_size_ignores_zero_dimensions() {
+        // A client reporting 0 on an axis (not yet rendered) is ignored on
+        // that axis but can still constrain the other.
+        assert_eq!(min_client_pane_size([(100, 0), (0, 30)]), Some((100, 30)));
+    }
+
+    #[test]
+    fn min_pane_size_single_client_tracks_that_client() {
+        assert_eq!(min_client_pane_size([(90, 30)]), Some((90, 30)));
+    }
+
+    #[test]
+    fn min_pane_size_none_when_no_usable_dimensions() {
+        assert_eq!(min_client_pane_size(std::iter::empty()), None);
+        assert_eq!(min_client_pane_size([(0, 0)]), None);
     }
 }

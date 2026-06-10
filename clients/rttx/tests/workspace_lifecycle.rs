@@ -933,6 +933,8 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
         workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: runtime_id.clone(),
         snapshot: rttx_proto::v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
             panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(first_uuid.parse().unwrap()),
@@ -1090,6 +1092,8 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
         workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: new_runtime.to_string(),
         snapshot: rttx_proto::v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(new_runtime),
             panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
@@ -1309,6 +1313,8 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
     let ws_id = state.workspaces[0].uuid.clone();
 
     let snapshot = rttx_proto::v3::RuntimeSnapshot {
+        tree: None,
+        default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
         panes: vec![rttx_proto::v3::PaneSnapshot {
             pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
@@ -1376,6 +1382,8 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
     let ws_id = state.workspaces[0].uuid.clone();
 
     let snapshot = rttx_proto::v3::RuntimeSnapshot {
+        tree: None,
+        default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
         panes: vec![rttx_proto::v3::PaneSnapshot {
             pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),

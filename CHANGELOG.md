@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Durable workspace persistence (`WorkspaceFileV2`): the daemon now persists the
   authoritative pane tree — structure, logical split ratios, and default-active
   pane — so layout survives daemon restarts (RFC-031 Step 2).
+- Server-authoritative tree protocol (RFC-031 Step 3): the attach snapshot now
+  carries the full workspace tree and default-active pane; new tree mutations
+  `SplitPane` (server-minted, immutable pane id), `ResizeSplit`, and viewport
+  messages `SetFocus`/`ReportClientSize` drive a multi-client PTY min-size
+  policy so no client sees truncated output.
 
 ### Changed
 

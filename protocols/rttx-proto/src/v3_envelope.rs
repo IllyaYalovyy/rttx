@@ -49,6 +49,7 @@ pub fn is_fire_and_forget(command: &v3::client_envelope::Command) -> bool {
             | v3::client_envelope::Command::ResizePane(_)
             | v3::client_envelope::Command::SetPaneTitle(_)
             | v3::client_envelope::Command::SetPaneNoPersist(_)
+            | v3::client_envelope::Command::ReportClientSize(_)
             | v3::client_envelope::Command::Shutdown(_)
     )
 }

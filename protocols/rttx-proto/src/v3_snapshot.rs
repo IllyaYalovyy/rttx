@@ -54,6 +54,9 @@ pub fn build_pane_snapshot(params: PaneSnapshotParams) -> v3::PaneSnapshot {
 }
 
 /// Build a `RuntimeSnapshot` response for a successful attach.
+///
+/// The workspace tree is left empty; use [`build_runtime_snapshot_with_tree`]
+/// to carry the authoritative structure (RFC-031).
 #[must_use]
 pub fn build_runtime_snapshot(
     runtime_id: uuid::Uuid,
@@ -66,6 +69,29 @@ pub fn build_runtime_snapshot(
         runtime_revision,
         client_role: client_role as i32,
         panes,
+        tree: None,
+        default_active_pane_id: Vec::new(),
+    }
+}
+
+/// Build a `RuntimeSnapshot` carrying the authoritative workspace tree and
+/// fallback-focus pane (RFC-031 §5).
+#[must_use]
+pub fn build_runtime_snapshot_with_tree(
+    runtime_id: uuid::Uuid,
+    runtime_revision: u64,
+    client_role: v3::RuntimeClientRole,
+    panes: Vec<v3::PaneSnapshot>,
+    tree: Option<v3::PaneTreeNode>,
+    default_active_pane_id: Vec<u8>,
+) -> v3::RuntimeSnapshot {
+    v3::RuntimeSnapshot {
+        runtime_id: crate::uuid_to_bytes(runtime_id),
+        runtime_revision,
+        client_role: client_role as i32,
+        panes,
+        tree,
+        default_active_pane_id,
     }
 }
 

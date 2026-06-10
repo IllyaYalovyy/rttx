@@ -493,3 +493,108 @@ pub async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
 
 /// Alias for backward compatibility with tests that imported `TestV3Client`.
 pub type TestV3Client = TestClient;
+
+// ── RFC-031 §5 tree-protocol helpers ────────────────────────────────
+
+/// Split `target_pane_id`, returning the server's `PaneSplit` delta (carrying
+/// the server-assigned new pane id).
+pub async fn split_pane(
+    client: &mut TestClient,
+    runtime_id: &[u8],
+    target_pane_id: &[u8],
+    axis: v3::PaneSplitAxis,
+    ratio: f32,
+) -> v3::PaneSplit {
+    let reply = client
+        .request(v3::client_envelope::Command::SplitPane(v3::SplitPane {
+            runtime_id: runtime_id.to_vec(),
+            target_pane_id: target_pane_id.to_vec(),
+            axis: axis as i32,
+            ratio,
+            cwd: None,
+            dark_background: None,
+            cols: 0,
+            rows: 0,
+            no_persist: None,
+        }))
+        .await;
+    match reply.payload {
+        Some(v3::server_envelope::Payload::PaneSplit(p)) => p,
+        other => panic!("expected PaneSplit, got {other:?}"),
+    }
+}
+
+/// Resize the split addressed by `path`, returning the `SplitResized` delta.
+pub async fn resize_split(
+    client: &mut TestClient,
+    runtime_id: &[u8],
+    path: &[v3::PaneTreeSide],
+    ratio: f32,
+) -> v3::SplitResized {
+    let reply = client
+        .request(v3::client_envelope::Command::ResizeSplit(v3::ResizeSplit {
+            runtime_id: runtime_id.to_vec(),
+            path: path.iter().map(|s| *s as i32).collect(),
+            ratio,
+        }))
+        .await;
+    match reply.payload {
+        Some(v3::server_envelope::Payload::SplitResized(r)) => r,
+        other => panic!("expected SplitResized, got {other:?}"),
+    }
+}
+
+/// Set the fallback focus pane, returning the `FocusChanged` delta.
+pub async fn set_focus(
+    client: &mut TestClient,
+    runtime_id: &[u8],
+    pane_id: &[u8],
+) -> v3::FocusChanged {
+    let reply = client
+        .request(v3::client_envelope::Command::SetFocus(v3::SetFocus {
+            runtime_id: runtime_id.to_vec(),
+            pane_id: pane_id.to_vec(),
+        }))
+        .await;
+    match reply.payload {
+        Some(v3::server_envelope::Payload::FocusChanged(f)) => f,
+        other => panic!("expected FocusChanged, got {other:?}"),
+    }
+}
+
+/// Report per-pane render sizes (fire-and-forget) and barrier on a ping so the
+/// min-size policy has been applied before the caller observes its effect.
+pub async fn report_client_size(
+    client: &mut TestClient,
+    runtime_id: &[u8],
+    panes: &[(Vec<u8>, u32, u32)],
+) {
+    client
+        .send_cmd(v3::client_envelope::Command::ReportClientSize(v3::ReportClientSize {
+            runtime_id: runtime_id.to_vec(),
+            panes: panes
+                .iter()
+                .map(|(id, cols, rows)| v3::ClientPaneSize {
+                    pane_id: id.clone(),
+                    cols: *cols,
+                    rows: *rows,
+                })
+                .collect(),
+        }))
+        .await;
+    client.ping().await;
+}
+
+/// Reattach (resync) and return a fresh snapshot carrying the authoritative
+/// tree.
+pub async fn resync(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
+    let reply = client
+        .request(v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+            runtime_id: runtime_id.to_vec(),
+        }))
+        .await;
+    match reply.payload {
+        Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
+        other => panic!("expected RuntimeSnapshot, got {other:?}"),
+    }
+}

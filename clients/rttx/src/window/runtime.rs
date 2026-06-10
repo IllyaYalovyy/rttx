@@ -1107,9 +1107,14 @@ impl Window {
                     );
                 }
             }
+            // Tree-delta and viewport events are consumed by the
+            // server-authoritative client view in RFC-031 Step 4 (#1001).
             Payload::PaneResized(_)
             | Payload::PaneCreated(_)
             | Payload::PaneClosed(_)
+            | Payload::PaneSplit(_)
+            | Payload::SplitResized(_)
+            | Payload::FocusChanged(_)
             | Payload::RuntimeList(_)
             | Payload::RuntimeCreated(_)
             | Payload::RuntimeSnapshot(_)

@@ -2703,6 +2703,8 @@ fn managed_workspace_recovery_does_not_steal_visible_session_from_selected_row()
         workspace_id: recovered_session.uuid.clone(),
         runtime_id: runtime_id.to_string(),
         snapshot: rttx_proto::v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
             runtime_revision: 7,
             client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
@@ -3266,6 +3268,8 @@ fn retry_workspace_connection_sets_connecting_and_rebuilds_on_open() {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
         snapshot: rttx_proto::v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
             runtime_revision: 5,
             client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
@@ -7256,6 +7260,8 @@ fn workspace_resynced_event_restores_pane_content() {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
         snapshot: rttx_proto::v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
             runtime_revision: 7,
             client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
@@ -7281,6 +7287,8 @@ fn workspace_resynced_event_restores_pane_content() {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
         snapshot: rttx_proto::v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
             runtime_revision: 8,
             client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,

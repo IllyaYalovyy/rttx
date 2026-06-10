@@ -115,6 +115,10 @@ pub struct Server {
     pty_writers: HashMap<Uuid, Arc<tokio::sync::Mutex<pty_process::OwnedWritePty>>>,
     /// Per-pane kill signals to cancel PTY read loops.
     pty_kill_senders: HashMap<Uuid, oneshot::Sender<()>>,
+    /// Per-client, per-pane render sizes reported via `ReportClientSize`.
+    /// Drives the multi-client PTY min-size policy (RFC-031 §4). Ephemeral:
+    /// cleared when the client disconnects.
+    client_pane_sizes: HashMap<Uuid, HashMap<Uuid, (u16, u16)>>,
     /// Cooperative shutdown signal — set to `true` to stop the server.
     shutdown_tx: watch::Sender<bool>,
 }
@@ -140,6 +144,7 @@ impl Server {
             client_protocols: HashMap::new(),
             pty_writers: HashMap::new(),
             pty_kill_senders: HashMap::new(),
+            client_pane_sizes: HashMap::new(),
             shutdown_tx,
         }
     }
@@ -743,6 +748,18 @@ impl Server {
             v3::client_envelope::Command::SetPaneNoPersist(req) => {
                 Self::handle_v3_set_pane_no_persist(server, client_id, req, metrics).await
             }
+            v3::client_envelope::Command::SplitPane(req) => {
+                Self::handle_v3_split_pane(server, client_id, request_id, req, metrics).await
+            }
+            v3::client_envelope::Command::ResizeSplit(req) => {
+                Self::handle_v3_resize_split(server, client_id, request_id, req, metrics).await
+            }
+            v3::client_envelope::Command::SetFocus(req) => {
+                Self::handle_v3_set_focus(server, client_id, request_id, req, metrics).await
+            }
+            v3::client_envelope::Command::ReportClientSize(req) => {
+                Self::handle_v3_report_client_size(server, client_id, req, metrics).await
+            }
 
             v3::client_envelope::Command::RenameRuntime(req) => {
                 let runtime_id = match bytes_to_uuid(&req.runtime_id) {
@@ -1279,20 +1296,13 @@ impl Server {
                 ));
             }
             let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
-            let mut env = vec![];
-            if no_persist {
-                env.push(("HISTFILE".into(), "/dev/null".into()));
-            } else {
-                let hist =
-                    crate::state::layout::history_file(&s.os.state_dir(), runtime_id, pane_id);
-                if let Some(parent) = hist.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
-                env.push(("PROMPT_COMMAND".into(), "history -a".into()));
-            }
-            let colorfgbg = if req.dark_background.unwrap_or(true) { "15;0" } else { "0;15" };
-            env.push(("COLORFGBG".into(), colorfgbg.into()));
+            let env = pane_spawn_env(
+                &s.os.state_dir(),
+                runtime_id,
+                pane_id,
+                no_persist,
+                req.dark_background.unwrap_or(true),
+            );
             let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
             let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
             let cwd = req.cwd.or_else(|| rt.any_pane_cwd());
@@ -1580,6 +1590,349 @@ impl Server {
         let _ = rt.set_pane_no_persist(pane_id, req.no_persist);
         None
     }
+
+    // ── Tree mutations and viewport (RFC-031 §5) ────────────────
+
+    /// Split the leaf holding `target_pane_id`, spawning a shell in a
+    /// server-minted pane (RFC-031 G1). Replaces the client-identity
+    /// `CreatePane` for tree growth.
+    async fn handle_v3_split_pane(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::SplitPane,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
+    ) -> Option<v3::ServerEnvelope> {
+        let err = |kind, msg: &str| {
+            Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(kind, msg, "SplitPane"),
+            ))
+        };
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
+            return err(v3::ErrorKind::InvalidArgument, "invalid runtime id");
+        };
+        let Ok(target_pane_id) = bytes_to_uuid(&req.target_pane_id) else {
+            return err(v3::ErrorKind::InvalidArgument, "invalid target pane id");
+        };
+        let axis = protocol::proto_axis_to_split(
+            v3::PaneSplitAxis::try_from(req.axis).unwrap_or(v3::PaneSplitAxis::Horizontal),
+        );
+        // A client that omits the ratio gets an even split rather than a rejection.
+        let ratio = if crate::pane_tree::ratio_is_valid(req.ratio) { req.ratio } else { 0.5 };
+        let pane_id = Uuid::new_v4();
+        let no_persist = req.no_persist.unwrap_or(false);
+
+        let (pty_result, cols, rows, initial_cwd) = {
+            let s = crate::instrument::lock_server(server, metrics).await;
+            let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
+                return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+            };
+            let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
+            if !rt.client_has_write_access(client_id) {
+                return err(
+                    v3::ErrorKind::OwnershipConflict,
+                    "runtime is currently owned by another client",
+                );
+            }
+            if !rt.tree.contains(crate::pane_tree::PaneId::from_uuid(target_pane_id)) {
+                return err(v3::ErrorKind::PaneNotFound, "split target pane not found");
+            }
+            let env = pane_spawn_env(
+                &s.os.state_dir(),
+                runtime_id,
+                pane_id,
+                no_persist,
+                req.dark_background.unwrap_or(true),
+            );
+            let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
+            let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
+            // Inherit the working directory from the pane being split.
+            let cwd = req
+                .cwd
+                .clone()
+                .or_else(|| rt.panes.get(&target_pane_id).and_then(Pane::effective_cwd))
+                .or_else(|| rt.any_pane_cwd());
+            let config = PaneSpawnConfig { command: vec![], cwd: cwd.clone(), env, cols, rows };
+            (s.engine.spawn_pane(pane_id, &config), cols, rows, cwd)
+        };
+
+        let pty = match pty_result {
+            Ok(pty) => pty,
+            Err(e) => {
+                tracing::error!("Failed to spawn PTY for split pane {}: {e}", short_id(pane_id));
+                return err(v3::ErrorKind::Internal, &format!("failed to spawn pane: {e}"));
+            }
+        };
+        let child_pid = pty.pid();
+        let (reader, writer, mut child) = pty.into_parts();
+        let (kill_tx, kill_rx) = oneshot::channel();
+
+        let (revision, runtime_name, read_metrics, ring) = {
+            let mut s = crate::instrument::lock_server(server, metrics).await;
+            let Some(rt_lock) = s.runtimes.get(&runtime_id).cloned() else {
+                let _ = child.start_kill();
+                return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+            };
+            let split = {
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let mut pane = Pane::new(pane_id, cols, rows);
+                pane.child_pid = child_pid;
+                pane.no_persist = no_persist;
+                pane.cwd = initial_cwd;
+                rt.split_pane(target_pane_id, pane, axis, ratio).map(|revision| {
+                    (
+                        revision,
+                        rt.name.clone(),
+                        rt.attached_clients.keys().copied().collect::<Vec<_>>(),
+                    )
+                })
+            };
+            let Some((revision, name, attached)) = split else {
+                // The target vanished between phases; do not leak the shell.
+                let _ = child.start_kill();
+                return err(v3::ErrorKind::PaneNotFound, "split target pane not found");
+            };
+            s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
+            s.pty_kill_senders.insert(pane_id, kill_tx);
+            let evt = rttx_proto::v3_tree::build_pane_split(
+                runtime_id,
+                target_pane_id,
+                pane_id,
+                protocol::split_axis_to_proto(axis),
+                ratio,
+                revision,
+            );
+            s.broadcast_to_clients(
+                attached.iter().copied(),
+                Some(client_id),
+                &rttx_proto::v3_tree::build_pane_split_push(evt),
+            );
+            (revision, name, s.metrics.clone(), Arc::clone(&s.ring))
+        };
+
+        spawn_pty_read_loop(
+            Arc::clone(server),
+            runtime_id,
+            pane_id,
+            &runtime_name,
+            reader,
+            child,
+            kill_rx,
+            read_metrics,
+            ring,
+        );
+        tracing::info!(
+            "Pane {} split from {} in runtime \"{}\" ({})",
+            short_id(pane_id),
+            short_id(target_pane_id),
+            runtime_name,
+            short_id(runtime_id),
+        );
+        Some(rttx_proto::v3_tree::build_pane_split_response(
+            request_id,
+            rttx_proto::v3_tree::build_pane_split(
+                runtime_id,
+                target_pane_id,
+                pane_id,
+                protocol::split_axis_to_proto(axis),
+                ratio,
+                revision,
+            ),
+        ))
+    }
+
+    /// Set the logical ratio of the split addressed by `path` (RFC-031 §5).
+    async fn handle_v3_resize_split(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::ResizeSplit,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
+    ) -> Option<v3::ServerEnvelope> {
+        let err = |kind, msg: &str| {
+            Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(kind, msg, "ResizeSplit"),
+            ))
+        };
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
+            return err(v3::ErrorKind::InvalidArgument, "invalid runtime id");
+        };
+        let Some(path) = protocol::decode_side_path(&req.path) else {
+            return err(v3::ErrorKind::InvalidArgument, "invalid split path");
+        };
+        let mut s = crate::instrument::lock_server(server, metrics).await;
+        let Some(rt_lock) = s.runtimes.get(&runtime_id).cloned() else {
+            return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+        };
+        let result = {
+            let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+            if !rt.client_has_write_access(client_id) {
+                return err(
+                    v3::ErrorKind::OwnershipConflict,
+                    "runtime is currently owned by another client",
+                );
+            }
+            rt.resize_split(&path, req.ratio)
+                .map(|revision| (revision, rt.attached_clients.keys().copied().collect::<Vec<_>>()))
+        };
+        let Some((revision, attached)) = result else {
+            return err(v3::ErrorKind::InvalidArgument, "split not found or invalid ratio");
+        };
+        let wire_path = rttx_proto::v3_tree::decode_side_path(&req.path);
+        let evt =
+            rttx_proto::v3_tree::build_split_resized(runtime_id, wire_path, req.ratio, revision);
+        s.broadcast_to_clients(
+            attached.iter().copied(),
+            Some(client_id),
+            &rttx_proto::v3_tree::build_split_resized_push(evt.clone()),
+        );
+        Some(rttx_proto::v3_tree::build_split_resized_response(request_id, evt))
+    }
+
+    /// Update the fallback focus (default-active) pane (RFC-031 §3, §5).
+    async fn handle_v3_set_focus(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        request_id: u64,
+        req: v3::SetFocus,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
+    ) -> Option<v3::ServerEnvelope> {
+        let err = |kind, msg: &str| {
+            Some(rttx_proto::v3_error::build_error_response(
+                request_id,
+                rttx_proto::v3_error::build_error(kind, msg, "SetFocus"),
+            ))
+        };
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
+            return err(v3::ErrorKind::InvalidArgument, "invalid runtime id");
+        };
+        let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
+            return err(v3::ErrorKind::InvalidArgument, "invalid pane id");
+        };
+        let mut s = crate::instrument::lock_server(server, metrics).await;
+        let Some(rt_lock) = s.runtimes.get(&runtime_id).cloned() else {
+            return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+        };
+        let result = {
+            let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+            if !rt.client_has_write_access(client_id) {
+                return err(
+                    v3::ErrorKind::OwnershipConflict,
+                    "runtime is currently owned by another client",
+                );
+            }
+            rt.set_default_active_pane(pane_id)
+                .map(|revision| (revision, rt.attached_clients.keys().copied().collect::<Vec<_>>()))
+        };
+        let Some((revision, attached)) = result else {
+            return err(v3::ErrorKind::PaneNotFound, "pane not found");
+        };
+        let evt = rttx_proto::v3_tree::build_focus_changed(runtime_id, pane_id, revision);
+        s.broadcast_to_clients(
+            attached.iter().copied(),
+            Some(client_id),
+            &rttx_proto::v3_tree::build_focus_changed_push(evt.clone()),
+        );
+        Some(rttx_proto::v3_tree::build_focus_changed_response(request_id, evt))
+    }
+
+    /// Record a client's per-pane render sizes and apply the multi-client PTY
+    /// min-size policy (RFC-031 §4). Ephemeral viewport state — no response.
+    async fn handle_v3_report_client_size(
+        server: &Arc<Mutex<Self>>,
+        client_id: Uuid,
+        req: v3::ReportClientSize,
+        metrics: &Arc<crate::metrics::DaemonMetrics>,
+    ) -> Option<v3::ServerEnvelope> {
+        let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else { return None };
+        let reported: Vec<(Uuid, u16, u16)> = req
+            .panes
+            .iter()
+            .filter_map(|p| {
+                let id = bytes_to_uuid(&p.pane_id).ok()?;
+                Some((id, u16::try_from(p.cols).unwrap_or(0), u16::try_from(p.rows).unwrap_or(0)))
+            })
+            .collect();
+        if reported.is_empty() {
+            return None;
+        }
+
+        // Phase 1: record sizes, then resolve the new min size per pane.
+        let mut targets: Vec<(
+            Uuid,
+            u16,
+            u16,
+            Arc<tokio::sync::Mutex<pty_process::OwnedWritePty>>,
+        )> = Vec::new();
+        {
+            let mut s = crate::instrument::lock_server(server, metrics).await;
+            let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+            {
+                let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                rt.client_role(client_id)?;
+            }
+            let entry = s.client_pane_sizes.entry(client_id).or_default();
+            for (id, cols, rows) in &reported {
+                entry.insert(*id, (*cols, *rows));
+            }
+            for (id, _, _) in &reported {
+                let sizes = s.client_pane_sizes.values().filter_map(|m| m.get(id).copied());
+                if let (Some((cols, rows)), Some(writer)) =
+                    (protocol::min_client_pane_size(sizes), s.pty_writers.get(id).cloned())
+                {
+                    targets.push((*id, cols, rows, writer));
+                }
+            }
+        }
+
+        // Phase 2: apply PTY resizes (writer lock is async; held without the
+        // server lock), then record the new pane dimensions.
+        for (id, cols, rows, writer) in targets {
+            {
+                let w = writer.lock().await;
+                if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
+                    tracing::warn!("min-size PTY resize failed for pane {}: {e}", short_id(id));
+                    continue;
+                }
+            }
+            let rt_lock = {
+                let s = crate::instrument::lock_server(server, metrics).await;
+                s.runtimes.get(&runtime_id).cloned()
+            };
+            if let Some(rt_lock) = rt_lock {
+                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let _ = rt.resize_pane(id, cols, rows);
+            }
+        }
+        None
+    }
+}
+
+/// Build the environment for a freshly spawned pane shell: history file (or
+/// `/dev/null` when non-persistent) and the light/dark `COLORFGBG` hint.
+fn pane_spawn_env(
+    state_dir: &std::path::Path,
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    no_persist: bool,
+    dark_background: bool,
+) -> Vec<(String, String)> {
+    let mut env = vec![];
+    if no_persist {
+        env.push(("HISTFILE".into(), "/dev/null".into()));
+    } else {
+        let hist = crate::state::layout::history_file(state_dir, runtime_id, pane_id);
+        if let Some(parent) = hist.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
+        env.push(("PROMPT_COMMAND".into(), "history -a".into()));
+    }
+    let colorfgbg = if dark_background { "15;0" } else { "0;15" };
+    env.push(("COLORFGBG".into(), colorfgbg.into()));
+    env
 }
 const COALESCE_MAX_BYTES: usize = 64 * 1024;
 
@@ -2243,6 +2596,10 @@ const fn v3_msg_type(envelope: &v3::ClientEnvelope) -> &'static str {
         Some(v3::client_envelope::Command::ResizePane(_)) => "ResizePane",
         Some(v3::client_envelope::Command::SetPaneTitle(_)) => "SetPaneTitle",
         Some(v3::client_envelope::Command::SetPaneNoPersist(_)) => "SetPaneNoPersist",
+        Some(v3::client_envelope::Command::SplitPane(_)) => "SplitPane",
+        Some(v3::client_envelope::Command::ResizeSplit(_)) => "ResizeSplit",
+        Some(v3::client_envelope::Command::SetFocus(_)) => "SetFocus",
+        Some(v3::client_envelope::Command::ReportClientSize(_)) => "ReportClientSize",
         Some(v3::client_envelope::Command::Shutdown(_)) => "Shutdown",
         Some(v3::client_envelope::Command::GetDiagnostics(_)) => "GetDiagnostics",
         Some(v3::client_envelope::Command::RenameRuntime(_)) => "RenameRuntime",
@@ -2339,6 +2696,7 @@ where
         s.client_senders.remove(&client_id);
         s.client_resp_senders.remove(&client_id);
         s.client_protocols.remove(&client_id);
+        s.client_pane_sizes.remove(&client_id);
         if handshake_completed {
             let rt_locks: Vec<RuntimeLock> = s.runtimes.values().cloned().collect();
             drop(s);
