@@ -80,9 +80,10 @@ pub fn build(
         ShellKind::Bash => build_bash(shell_path, state_dir, runtime_id, pane_id),
         ShellKind::Zsh => build_zsh(state_dir, runtime_id, pane_id),
         ShellKind::Fish => build_fish(shell_path, pane_id),
-        ShellKind::Other => {
-            ShellSpawn { command: vec![], env: vec![histfile_env(&histfile(state_dir, runtime_id, pane_id))] }
-        }
+        ShellKind::Other => ShellSpawn {
+            command: vec![],
+            env: vec![histfile_env(&histfile(state_dir, runtime_id, pane_id))],
+        },
     }
 }
 
