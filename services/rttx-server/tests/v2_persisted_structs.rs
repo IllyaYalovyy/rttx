@@ -1,12 +1,13 @@
-//! Integration test for v2 persisted structs and migration chain (RFC-022 §2–§4).
+//! Integration tests for persisted state structs and the migration chain
+//! (RFC-022 §2–§4).
 //!
-//! Verifies that structs serialize to disk and load back through the
-//! migration chain, including future-version rejection and forward
-//! compatibility with unknown fields.
+//! Verifies that the daemon index and screen snapshots round-trip through the
+//! migration chain, including forward compatibility with unknown fields and
+//! future-version rejection. Workspace-file persistence and the clean-break
+//! loader are covered in `workspace_file_v2.rs`.
 
-use rttx_server::runtime::RuntimePolicy;
 use rttx_server::state::migrations::{
-    load_daemon_index, load_runtime_file, load_screen_snapshot, peek_schema_version,
+    load_daemon_index, load_screen_snapshot, peek_schema_version,
 };
 use rttx_server::state::types::*;
 use std::time::SystemTime;
@@ -20,15 +21,6 @@ fn write_and_load_daemon_index(index: &DaemonIndexV1) -> DaemonIndexV1 {
     std::fs::write(&path, &json).unwrap();
     let loaded = std::fs::read_to_string(&path).unwrap();
     load_daemon_index(&loaded).unwrap()
-}
-
-fn write_and_load_runtime_file(file: &RuntimeFileV1) -> RuntimeFileV1 {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("runtime.json");
-    let json = serde_json::to_string_pretty(file).unwrap();
-    std::fs::write(&path, &json).unwrap();
-    let loaded = std::fs::read_to_string(&path).unwrap();
-    load_runtime_file(&loaded).unwrap()
 }
 
 fn write_and_load_screen_snapshot(snap: &ScreenSnapshotV1) -> ScreenSnapshotV1 {
@@ -50,38 +42,6 @@ fn daemon_index_persists_and_loads_via_migration_chain() {
         last_serialized_at: SystemTime::now(),
     };
     let recovered = write_and_load_daemon_index(&original);
-    assert_eq!(original, recovered);
-}
-
-#[test]
-fn runtime_file_persists_and_loads_via_migration_chain() {
-    let pane = PaneSpecV1 {
-        id: Uuid::new_v4(),
-        cwd: Some("/home/user/project".into()),
-        title: Some("nvim".into()),
-        exit_status: None,
-        cols: 120,
-        rows: 40,
-        no_persist: false,
-    };
-    let original = RuntimeFileV1 {
-        schema_version: RUNTIME_FILE_SCHEMA_VERSION,
-        spec: RuntimeSpecV1 {
-            id: Uuid::new_v4(),
-            name: "workspace-1".into(),
-            policy: RuntimePolicy::Persistent,
-            created_at: SystemTime::now(),
-            panes: vec![pane],
-            active_pane_id: None,
-            command_history: vec![],
-        },
-        instance: RuntimeInstanceV1 {
-            revision: 7,
-            last_active_at: SystemTime::now(),
-            last_snapshot_at: SystemTime::now(),
-        },
-    };
-    let recovered = write_and_load_runtime_file(&original);
     assert_eq!(original, recovered);
 }
 
@@ -140,43 +100,4 @@ fn future_version_rejected_from_disk() {
     let loaded = std::fs::read_to_string(&path).unwrap();
     let result = load_daemon_index(&loaded);
     assert!(result.is_err());
-}
-
-#[test]
-fn old_runtime_file_with_command_history_loads_through_migration() {
-    let json = r#"{
-        "schema_version": 1,
-        "spec": {
-            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "name": "legacy-ws",
-            "policy": "persistent",
-            "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
-            "panes": [{
-                "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                "cwd": "/home/user",
-                "title": "bash",
-                "exit_status": null,
-                "cols": 80,
-                "rows": 24
-            }],
-            "active_pane_id": null,
-            "command_history": [
-                {
-                    "command": "cargo build",
-                    "cwd": "/home/user/project",
-                    "timestamp": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
-                    "pane_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-                }
-            ]
-        },
-        "instance": {
-            "revision": 5,
-            "last_active_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
-            "last_snapshot_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}
-        }
-    }"#;
-    let loaded = load_runtime_file(json).unwrap();
-    assert_eq!(loaded.spec.name, "legacy-ws");
-    assert_eq!(loaded.spec.panes.len(), 1);
-    assert_eq!(loaded.instance.revision, 5);
 }

@@ -103,7 +103,7 @@ async fn serialization_creates_backup_symlink() {
 async fn restart_prefers_v2_over_v1() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create runtime, let serialization write both v1 and v2.
+    // Phase 1: create runtime, let serialization write v2 state.
     let runtime_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;

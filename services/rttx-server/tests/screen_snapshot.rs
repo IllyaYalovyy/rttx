@@ -90,15 +90,19 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
     let runtime_id = uuid::Uuid::new_v4();
     let pane_id = uuid::Uuid::new_v4();
 
-    let rf = rttx_server::state::types::RuntimeFileV1 {
+    let pane_spec_id = rttx_server::pane_tree::PaneId::from_uuid(pane_id);
+    let mut tree = rttx_server::pane_tree::WorkspaceTree::new();
+    tree.insert_root(pane_spec_id);
+    let rf = rttx_server::state::types::WorkspaceFileV2 {
         schema_version: rttx_server::state::types::RUNTIME_FILE_SCHEMA_VERSION,
-        spec: rttx_server::state::types::RuntimeSpecV1 {
+        spec: rttx_server::state::types::WorkspaceSpecV2 {
             id: runtime_id,
             name: "corrupt-snap-test".into(),
             policy: rttx_server::runtime::RuntimePolicy::Persistent,
             created_at: std::time::SystemTime::now(),
-            panes: vec![rttx_server::state::types::PaneSpecV1 {
-                id: pane_id,
+            tree,
+            panes: vec![rttx_server::state::types::PaneSpecV2 {
+                id: pane_spec_id,
                 cwd: Some("/tmp".into()),
                 title: None,
                 exit_status: None,
@@ -106,8 +110,6 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
                 rows: 24,
                 no_persist: false,
             }],
-            active_pane_id: None,
-            command_history: vec![],
         },
         instance: rttx_server::state::types::RuntimeInstanceV1 {
             revision: 1,

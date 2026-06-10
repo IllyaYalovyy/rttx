@@ -1084,16 +1084,15 @@ fn load_persisted_state_sweeps_orphans() {
     let orphan_id = Uuid::new_v4();
 
     // Create runtime files for both.
-    let known_rf = crate::state::types::RuntimeFileV1 {
+    let known_rf = crate::state::types::WorkspaceFileV2 {
         schema_version: crate::state::types::RUNTIME_FILE_SCHEMA_VERSION,
-        spec: crate::state::types::RuntimeSpecV1 {
+        spec: crate::state::types::WorkspaceSpecV2 {
             id: known_id,
             name: "known".into(),
             policy: RuntimePolicy::Persistent,
             created_at: std::time::SystemTime::now(),
+            tree: crate::pane_tree::WorkspaceTree::new(),
             panes: vec![],
-            active_pane_id: None,
-            command_history: vec![],
         },
         instance: crate::state::types::RuntimeInstanceV1 {
             revision: 1,

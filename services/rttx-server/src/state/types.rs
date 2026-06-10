@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use uuid::Uuid;
 
+use crate::pane_tree::{PaneId, WorkspaceTree};
 use crate::runtime::RuntimePolicy;
 
 // ── Schema version constants ────────────────────────────────────────
@@ -15,8 +16,13 @@ use crate::runtime::RuntimePolicy;
 /// Current schema version for [`DaemonIndexV1`].
 pub const DAEMON_INDEX_SCHEMA_VERSION: u32 = 1;
 
-/// Current schema version for [`RuntimeFileV1`].
-pub const RUNTIME_FILE_SCHEMA_VERSION: u32 = 1;
+/// Current schema version for [`WorkspaceFileV2`].
+///
+/// Version 2 (RFC-031 §6) persists the authoritative [`WorkspaceTree`] —
+/// structure, logical split ratios, and default-active pane — as durable state.
+/// It is a clean break from version 1: old-schema files are detected, ignored,
+/// and removed on load with no migration path.
+pub const RUNTIME_FILE_SCHEMA_VERSION: u32 = 2;
 
 /// Current schema version for [`ScreenSnapshotV1`].
 pub const SCREEN_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -41,43 +47,43 @@ pub struct DaemonIndexV1 {
     pub last_serialized_at: SystemTime,
 }
 
-// ── Per-runtime file ────────────────────────────────────────────────
+// ── Per-workspace file ──────────────────────────────────────────────
 
-/// Top-level wrapper stored in `<runtime_dir>/runtime.json` (RFC-022 §3).
+/// Top-level wrapper stored in `<runtime_dir>/runtime.json` (RFC-031 §6).
 ///
-/// Combines the durable spec with the semi-durable instance data.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeFileV1 {
+/// Combines the durable spec — including the authoritative pane tree — with
+/// the semi-durable instance data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceFileV2 {
     /// Must be [`RUNTIME_FILE_SCHEMA_VERSION`].
     pub schema_version: u32,
-    /// Durable runtime specification.
-    pub spec: RuntimeSpecV1,
+    /// Durable workspace specification.
+    pub spec: WorkspaceSpecV2,
     /// Semi-durable instance data (bounded age, rebuilt on restart).
     pub instance: RuntimeInstanceV1,
 }
 
-/// Durable runtime specification — identity, policy, panes, history.
+/// Durable workspace specification — identity, policy, pane tree, and panes.
 ///
 /// These fields survive daemon restarts and are the source of truth for
-/// runtime reconstruction.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeSpecV1 {
-    /// Unique runtime identifier.
+/// workspace reconstruction. The [`WorkspaceTree`] carries structure, logical
+/// split ratios, ordering, and the default-active pane (RFC-031 §2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceSpecV2 {
+    /// Unique workspace identifier.
     pub id: Uuid,
-    /// Human-readable runtime name.
+    /// Human-readable workspace name.
     pub name: String,
     /// Retention policy.
     pub policy: RuntimePolicy,
-    /// When this runtime was created.
+    /// When this workspace was created.
     pub created_at: SystemTime,
-    /// Pane specifications.
-    pub panes: Vec<PaneSpecV1>,
-    /// Active pane ID within this runtime.
-    pub active_pane_id: Option<Uuid>,
-    /// Ignored — retained only for backward-compatible deserialization of
-    /// state files written before the field was removed.
-    #[serde(default, skip_serializing)]
-    pub command_history: Vec<serde_json::Value>,
+    /// Authoritative pane-arrangement tree: structure, logical ratios, and the
+    /// default-active pane.
+    pub tree: WorkspaceTree,
+    /// Per-pane specifications, keyed by the immutable [`PaneId`] carried in the
+    /// tree.
+    pub panes: Vec<PaneSpecV2>,
 }
 
 /// Semi-durable instance data — revision counters and timestamps.
@@ -96,15 +102,16 @@ pub struct RuntimeInstanceV1 {
 
 // ── Pane spec ───────────────────────────────────────────────────────
 
-/// Durable pane specification (RFC-022 §3).
+/// Durable pane specification (RFC-031 §6).
 ///
 /// Captures the identity and last-known terminal state of a single pane.
-/// Scrollback and screen data live in separate files; this struct holds
-/// only the metadata needed to reconstruct the pane.
+/// Scrollback and screen data live in separate files keyed on the same
+/// [`PaneId`]; this struct holds only the metadata needed to reconstruct the
+/// pane.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PaneSpecV1 {
-    /// Unique pane identifier.
-    pub id: Uuid,
+pub struct PaneSpecV2 {
+    /// Immutable pane identifier (RFC-031 G1).
+    pub id: PaneId,
     /// Last known working directory.
     pub cwd: Option<String>,
     /// Pane title.
@@ -193,11 +200,12 @@ pub struct SchemaVersionEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pane_tree::SplitAxis;
     use std::time::SystemTime;
 
-    fn sample_pane_spec() -> PaneSpecV1 {
-        PaneSpecV1 {
-            id: Uuid::new_v4(),
+    fn sample_pane_spec() -> PaneSpecV2 {
+        PaneSpecV2 {
+            id: PaneId::new(),
             cwd: Some("/home/user".into()),
             title: Some("bash".into()),
             exit_status: None,
@@ -207,15 +215,26 @@ mod tests {
         }
     }
 
-    fn sample_runtime_spec() -> RuntimeSpecV1 {
-        RuntimeSpecV1 {
+    /// A two-pane tree whose panes match the returned specs.
+    fn sample_tree_and_panes() -> (WorkspaceTree, Vec<PaneSpecV2>) {
+        let a = sample_pane_spec();
+        let mut b = sample_pane_spec();
+        b.title = Some("nvim".into());
+        let mut tree = WorkspaceTree::new();
+        tree.insert_root(a.id);
+        tree.split(a.id, b.id, SplitAxis::Vertical, 0.4);
+        (tree, vec![a, b])
+    }
+
+    fn sample_runtime_spec() -> WorkspaceSpecV2 {
+        let (tree, panes) = sample_tree_and_panes();
+        WorkspaceSpecV2 {
             id: Uuid::new_v4(),
             name: "dev".into(),
             policy: RuntimePolicy::Persistent,
             created_at: SystemTime::now(),
-            panes: vec![sample_pane_spec()],
-            active_pane_id: None,
-            command_history: vec![],
+            tree,
+            panes,
         }
     }
 
@@ -237,8 +256,8 @@ mod tests {
         }
     }
 
-    fn sample_runtime_file() -> RuntimeFileV1 {
-        RuntimeFileV1 {
+    fn sample_runtime_file() -> WorkspaceFileV2 {
+        WorkspaceFileV2 {
             schema_version: RUNTIME_FILE_SCHEMA_VERSION,
             spec: sample_runtime_spec(),
             instance: sample_runtime_instance(),
@@ -284,7 +303,7 @@ mod tests {
     fn runtime_file_round_trip() {
         let original = sample_runtime_file();
         let json = serde_json::to_string_pretty(&original).unwrap();
-        let recovered: RuntimeFileV1 = serde_json::from_str(&json).unwrap();
+        let recovered: WorkspaceFileV2 = serde_json::from_str(&json).unwrap();
         assert_eq!(original, recovered);
     }
 
@@ -300,8 +319,19 @@ mod tests {
     fn pane_spec_round_trip() {
         let original = sample_pane_spec();
         let json = serde_json::to_string_pretty(&original).unwrap();
-        let recovered: PaneSpecV1 = serde_json::from_str(&json).unwrap();
+        let recovered: PaneSpecV2 = serde_json::from_str(&json).unwrap();
         assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn workspace_spec_persists_tree_structure_and_ratios() {
+        let original = sample_runtime_spec();
+        let json = serde_json::to_string_pretty(&original).unwrap();
+        let recovered: WorkspaceSpecV2 = serde_json::from_str(&json).unwrap();
+        // The durable tree — structure, ratios, and default-active — round-trips
+        // byte-for-byte, not just the flat set of panes.
+        assert_eq!(original.tree, recovered.tree);
+        assert!(recovered.tree.validate().is_ok());
     }
 
     // ── Schema version field presence ───────────────────────────────
@@ -374,25 +404,25 @@ mod tests {
 
     #[test]
     fn runtime_spec_with_no_panes() {
-        let spec = RuntimeSpecV1 {
+        let spec = WorkspaceSpecV2 {
             id: Uuid::new_v4(),
             name: "empty".into(),
             policy: RuntimePolicy::Ephemeral,
             created_at: SystemTime::now(),
+            tree: WorkspaceTree::new(),
             panes: vec![],
-            active_pane_id: None,
-            command_history: vec![],
         };
         let json = serde_json::to_string_pretty(&spec).unwrap();
-        let recovered: RuntimeSpecV1 = serde_json::from_str(&json).unwrap();
+        let recovered: WorkspaceSpecV2 = serde_json::from_str(&json).unwrap();
         assert!(recovered.panes.is_empty());
+        assert!(recovered.tree.is_empty());
         assert_eq!(recovered.policy, RuntimePolicy::Ephemeral);
     }
 
     #[test]
     fn pane_spec_with_all_optional_fields_none() {
-        let pane = PaneSpecV1 {
-            id: Uuid::new_v4(),
+        let pane = PaneSpecV2 {
+            id: PaneId::new(),
             cwd: None,
             title: None,
             exit_status: None,
@@ -401,7 +431,7 @@ mod tests {
             no_persist: false,
         };
         let json = serde_json::to_string_pretty(&pane).unwrap();
-        let recovered: PaneSpecV1 = serde_json::from_str(&json).unwrap();
+        let recovered: PaneSpecV2 = serde_json::from_str(&json).unwrap();
         assert!(recovered.cwd.is_none());
         assert!(recovered.title.is_none());
         assert!(recovered.exit_status.is_none());
@@ -477,7 +507,7 @@ mod tests {
             "cols": 80,
             "rows": 24
         }"#;
-        let recovered: PaneSpecV1 = serde_json::from_str(json).unwrap();
+        let recovered: PaneSpecV2 = serde_json::from_str(json).unwrap();
         assert!(!recovered.no_persist);
     }
 
@@ -486,7 +516,7 @@ mod tests {
         let mut pane = sample_pane_spec();
         pane.no_persist = true;
         let json = serde_json::to_string_pretty(&pane).unwrap();
-        let recovered: PaneSpecV1 = serde_json::from_str(&json).unwrap();
+        let recovered: PaneSpecV2 = serde_json::from_str(&json).unwrap();
         assert!(recovered.no_persist);
     }
 
@@ -509,43 +539,13 @@ mod tests {
     }
 
     #[test]
-    fn runtime_spec_deserializes_old_command_history() {
-        let json = r#"{
-            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "name": "legacy",
-            "policy": "persistent",
-            "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
-            "panes": [],
-            "active_pane_id": null,
-            "command_history": [
-                {"command": "ls", "cwd": "/", "timestamp": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}, "pane_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
-            ]
-        }"#;
-        let spec: RuntimeSpecV1 = serde_json::from_str(json).unwrap();
-        assert_eq!(spec.name, "legacy");
-    }
-
-    #[test]
-    fn runtime_spec_deserializes_without_command_history() {
-        let json = r#"{
-            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "name": "new-format",
-            "policy": "persistent",
-            "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
-            "panes": [],
-            "active_pane_id": null
-        }"#;
-        let spec: RuntimeSpecV1 = serde_json::from_str(json).unwrap();
-        assert_eq!(spec.name, "new-format");
-    }
-
-    #[test]
-    fn runtime_spec_serialization_omits_command_history() {
+    fn workspace_spec_serialization_drops_legacy_fields() {
+        // The clean break (RFC-031) removes `command_history` and the standalone
+        // `active_pane_id`; the latter is subsumed by the tree's default-active.
         let spec = sample_runtime_spec();
         let json = serde_json::to_string(&spec).unwrap();
-        assert!(
-            !json.contains("command_history"),
-            "new serialization should not include command_history"
-        );
+        assert!(!json.contains("command_history"), "command_history must be gone");
+        assert!(!json.contains("active_pane_id"), "active_pane_id must be gone");
+        assert!(json.contains("tree"), "the durable tree must be serialized");
     }
 }

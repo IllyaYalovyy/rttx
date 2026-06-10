@@ -10,8 +10,8 @@
 //! to load data it does not understand rather than guessing.
 
 use crate::state::types::{
-    DAEMON_INDEX_SCHEMA_VERSION, DaemonIndexV1, RUNTIME_FILE_SCHEMA_VERSION, RuntimeFileV1,
-    SCREEN_SNAPSHOT_SCHEMA_VERSION, SchemaVersionEnvelope, ScreenSnapshotV1,
+    DAEMON_INDEX_SCHEMA_VERSION, DaemonIndexV1, SCREEN_SNAPSHOT_SCHEMA_VERSION,
+    SchemaVersionEnvelope, ScreenSnapshotV1,
 };
 use std::fmt;
 
@@ -84,28 +84,6 @@ pub fn load_daemon_index(json: &str) -> Result<DaemonIndexV1, MigrationError> {
     }
 }
 
-/// Load and migrate a runtime file from JSON to the current version.
-pub fn load_runtime_file(json: &str) -> Result<RuntimeFileV1, MigrationError> {
-    let version = peek_schema_version(json)?;
-    match version {
-        1 => serde_json::from_str(json).map_err(|e| MigrationError::DeserializationFailed {
-            file_kind: "RuntimeFile",
-            version: 1,
-            source: e,
-        }),
-        v if v > RUNTIME_FILE_SCHEMA_VERSION => Err(MigrationError::UnsupportedFutureVersion {
-            file_kind: "RuntimeFile",
-            found: v,
-            max_supported: RUNTIME_FILE_SCHEMA_VERSION,
-        }),
-        v => Err(MigrationError::UnsupportedFutureVersion {
-            file_kind: "RuntimeFile",
-            found: v,
-            max_supported: RUNTIME_FILE_SCHEMA_VERSION,
-        }),
-    }
-}
-
 /// Load and migrate a screen snapshot from JSON to the current version.
 pub fn load_screen_snapshot(json: &str) -> Result<ScreenSnapshotV1, MigrationError> {
     let version = peek_schema_version(json)?;
@@ -131,7 +109,6 @@ pub fn load_screen_snapshot(json: &str) -> Result<ScreenSnapshotV1, MigrationErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::RuntimePolicy;
     use crate::state::types::*;
     use std::time::SystemTime;
 
@@ -144,27 +121,6 @@ mod tests {
             last_serialized_at: SystemTime::now(),
         };
         serde_json::to_string_pretty(&index).unwrap()
-    }
-
-    fn sample_runtime_file_json() -> String {
-        let file = RuntimeFileV1 {
-            schema_version: RUNTIME_FILE_SCHEMA_VERSION,
-            spec: RuntimeSpecV1 {
-                id: uuid::Uuid::new_v4(),
-                name: "test".into(),
-                policy: RuntimePolicy::Persistent,
-                created_at: SystemTime::now(),
-                panes: vec![],
-                active_pane_id: None,
-                command_history: vec![],
-            },
-            instance: RuntimeInstanceV1 {
-                revision: 1,
-                last_active_at: SystemTime::now(),
-                last_snapshot_at: SystemTime::now(),
-            },
-        };
-        serde_json::to_string_pretty(&file).unwrap()
     }
 
     fn sample_screen_snapshot_json() -> String {
@@ -204,14 +160,6 @@ mod tests {
     }
 
     #[test]
-    fn load_runtime_file_v1() {
-        let json = sample_runtime_file_json();
-        let result = load_runtime_file(&json);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().schema_version, 1);
-    }
-
-    #[test]
     fn load_screen_snapshot_v1() {
         let json = sample_screen_snapshot_json();
         let result = load_screen_snapshot(&json);
@@ -228,16 +176,6 @@ mod tests {
         assert!(matches!(
             err,
             MigrationError::UnsupportedFutureVersion { file_kind: "DaemonIndex", found: 99, .. }
-        ));
-    }
-
-    #[test]
-    fn runtime_file_rejects_future_version() {
-        let json = r#"{"schema_version": 42}"#;
-        let err = load_runtime_file(json).unwrap_err();
-        assert!(matches!(
-            err,
-            MigrationError::UnsupportedFutureVersion { file_kind: "RuntimeFile", found: 42, .. }
         ));
     }
 
