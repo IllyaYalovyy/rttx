@@ -1,10 +1,12 @@
 pub mod layout;
 pub mod recovery;
 pub mod state;
+pub mod tree;
 
 pub use layout::{Direction, LayoutNode, MAX_SPLIT_DEPTH, SplitOrientation};
 pub use recovery::{PaneRecovery, PaneSource, PaneTarget, StartupStep};
 pub use state::{WindowState, WorkspaceColor, WorkspaceState};
+pub use tree::layout_from_pane_tree;
 
 use gtk4::glib;
 use gtk4::prelude::*;

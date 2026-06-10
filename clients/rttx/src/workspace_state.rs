@@ -1,6 +1,8 @@
 use crate::daemon_bridge::EndpointEvent;
 use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
-use crate::workspace::{LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceState};
+use crate::workspace::{
+    LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceState, layout_from_pane_tree,
+};
 use rttx_proto::v3;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -627,6 +629,19 @@ fn snapshot_pane_id(pane_snapshot: &v3::PaneSnapshot) -> Option<String> {
     rttx_proto::bytes_to_uuid(&pane_snapshot.pane_id).ok().map(|uuid| uuid.to_string())
 }
 
+/// Build the client render layout from a workspace snapshot's authoritative
+/// server tree (RFC-031 §3, Step 4).
+///
+/// Returns `None` when the snapshot carries no tree — an empty workspace, or a
+/// pre-tree daemon — in which case the caller falls back to its existing
+/// reconciliation path. The returned [`LayoutNode`] keys every leaf by the
+/// durable server pane id, so the render tree and the daemon share one
+/// identity with no client-side binding indirection.
+#[must_use]
+pub fn render_layout_from_snapshot(snapshot: &v3::RuntimeSnapshot) -> Option<LayoutNode> {
+    snapshot.tree.as_ref().and_then(layout_from_pane_tree)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,6 +678,35 @@ mod tests {
             runtime_revision: 7,
             client_role: v3::RuntimeClientRole::Writer as i32,
         }
+    }
+
+    #[test]
+    fn render_layout_from_snapshot_returns_none_without_tree() {
+        let snap = snapshot("11111111-1111-1111-1111-111111111111", Vec::new());
+        assert!(render_layout_from_snapshot(&snap).is_none());
+    }
+
+    #[test]
+    fn render_layout_from_snapshot_builds_split_keyed_by_server_pane_ids() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
+        let left = uuid::Uuid::new_v4();
+        let right = uuid::Uuid::new_v4();
+        let mut snap = snapshot("22222222-2222-2222-2222-222222222222", Vec::new());
+        snap.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(left),
+            pane_tree_leaf(right),
+        ));
+
+        let layout = render_layout_from_snapshot(&snap).expect("snapshot with tree renders");
+        let LayoutNode::Split { orientation, first, second, .. } = layout else {
+            panic!("expected a split");
+        };
+        assert_eq!(orientation, SplitOrientation::Horizontal);
+        assert_eq!(first.terminal_uuids(), vec![left.to_string()]);
+        assert_eq!(second.terminal_uuids(), vec![right.to_string()]);
     }
 
     fn pane_info(pane_id: &str, title: &str, cwd: &str) -> v3::PaneInfo {
