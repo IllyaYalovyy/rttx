@@ -87,8 +87,7 @@ fn salvage_recovers_every_orphan_without_touching_live_state() {
     // Scan: three orphans (stale in A, old1 + old2 in B); the live pane is not
     // reported.
     let orphans = scan_orphans(&state_dir);
-    let recovered: std::collections::BTreeSet<Uuid> =
-        orphans.iter().map(|o| o.pane_id).collect();
+    let recovered: std::collections::BTreeSet<Uuid> = orphans.iter().map(|o| o.pane_id).collect();
     assert_eq!(orphans.len(), 3, "found: {orphans:?}");
     assert!(recovered.contains(&stale));
     assert!(recovered.contains(&old1));

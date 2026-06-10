@@ -85,7 +85,10 @@ pub fn scan_orphans(state_dir: &Path) -> Vec<OrphanHistfile> {
 ///
 /// Returns the first I/O error encountered while creating directories or copying
 /// a file.
-pub fn export_orphans(orphans: &[OrphanHistfile], dest_dir: &Path) -> std::io::Result<SalvageReport> {
+pub fn export_orphans(
+    orphans: &[OrphanHistfile],
+    dest_dir: &Path,
+) -> std::io::Result<SalvageReport> {
     let mut exported = Vec::new();
     let mut total_bytes = 0u64;
 
