@@ -304,7 +304,7 @@ no compatibility shims.
   client-identity `CreatePane`. *(prereq: Step 1)*
 - [ ] **Step 4** — Client: render from server tree; per-client viewport; delete
   `pane_bindings`, `reconcile_bindings`, client layout persistence. *(prereq: Step 3)*
-- [ ] **Step 5** — Shell history: per-shell rc/ZDOTDIR injection keyed on
+- [x] **Step 5** — Shell history: per-shell rc/ZDOTDIR injection keyed on
   `PaneId`; crash-survival integration tests for bash/zsh/fish. *(prereq: Step 1)*
 - [ ] **Step 6** — Delete dead paths (§8); `Runtime`→`Workspace` rename;
   crash-recovery integration test asserting **zero** orphaned state. *(prereq: 1–5)*

@@ -385,20 +385,9 @@ impl Server {
             let pane_short = short_id(pane_id);
             let pty_result = {
                 let s = crate::instrument::lock_server(server, &metrics).await;
-                let mut env = vec![];
-                if no_persist {
-                    env.push(("HISTFILE".into(), "/dev/null".into()));
-                } else {
-                    let hist =
-                        crate::state::layout::history_file(&s.os.state_dir(), runtime_id, pane_id);
-                    if let Some(parent) = hist.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
-                    env.push(("PROMPT_COMMAND".into(), "history -a".into()));
-                }
-                env.push(("COLORFGBG".into(), "15;0".into()));
-                let config = PaneSpawnConfig { command: vec![], cwd, env, cols, rows };
+                let (command, env) =
+                    pane_spawn_parts(&s.os.state_dir(), runtime_id, pane_id, no_persist, true);
+                let config = PaneSpawnConfig { command, cwd, env, cols, rows };
                 s.engine.spawn_pane(pane_id, &config)
             };
 
@@ -1296,7 +1285,7 @@ impl Server {
                 ));
             }
             let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
-            let env = pane_spawn_env(
+            let (command, env) = pane_spawn_parts(
                 &s.os.state_dir(),
                 runtime_id,
                 pane_id,
@@ -1306,7 +1295,7 @@ impl Server {
             let cols = if req.cols > 0 { req.cols as u16 } else { 80 };
             let rows = if req.rows > 0 { req.rows as u16 } else { 24 };
             let cwd = req.cwd.or_else(|| rt.any_pane_cwd());
-            let config = PaneSpawnConfig { command: vec![], cwd: cwd.clone(), env, cols, rows };
+            let config = PaneSpawnConfig { command, cwd: cwd.clone(), env, cols, rows };
             (s.engine.spawn_pane(pane_id, &config), label, cols, rows, cwd)
         };
         match pty_result {
@@ -1638,7 +1627,7 @@ impl Server {
             if !rt.tree.contains(crate::pane_tree::PaneId::from_uuid(target_pane_id)) {
                 return err(v3::ErrorKind::PaneNotFound, "split target pane not found");
             }
-            let env = pane_spawn_env(
+            let (command, env) = pane_spawn_parts(
                 &s.os.state_dir(),
                 runtime_id,
                 pane_id,
@@ -1653,7 +1642,7 @@ impl Server {
                 .clone()
                 .or_else(|| rt.panes.get(&target_pane_id).and_then(Pane::effective_cwd))
                 .or_else(|| rt.any_pane_cwd());
-            let config = PaneSpawnConfig { command: vec![], cwd: cwd.clone(), env, cols, rows };
+            let config = PaneSpawnConfig { command, cwd: cwd.clone(), env, cols, rows };
             (s.engine.spawn_pane(pane_id, &config), cols, rows, cwd)
         };
 
@@ -1910,29 +1899,27 @@ impl Server {
     }
 }
 
-/// Build the environment for a freshly spawned pane shell: history file (or
-/// `/dev/null` when non-persistent) and the light/dark `COLORFGBG` hint.
-fn pane_spawn_env(
+/// Build the command + environment for a freshly spawned pane shell:
+/// shell-correct durable history (RFC-031 §7) plus the light/dark `COLORFGBG`
+/// hint. Returns the command override (empty = default login shell) and the
+/// environment additions.
+fn pane_spawn_parts(
     state_dir: &std::path::Path,
     runtime_id: Uuid,
     pane_id: Uuid,
     no_persist: bool,
     dark_background: bool,
-) -> Vec<(String, String)> {
-    let mut env = vec![];
-    if no_persist {
-        env.push(("HISTFILE".into(), "/dev/null".into()));
-    } else {
-        let hist = crate::state::layout::history_file(state_dir, runtime_id, pane_id);
-        if let Some(parent) = hist.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        env.push(("HISTFILE".into(), hist.to_string_lossy().into_owned()));
-        env.push(("PROMPT_COMMAND".into(), "history -a".into()));
-    }
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut spawn = crate::shell_init::build(
+        &crate::shell_init::user_shell(),
+        state_dir,
+        runtime_id,
+        pane_id,
+        no_persist,
+    );
     let colorfgbg = if dark_background { "15;0" } else { "0;15" };
-    env.push(("COLORFGBG".into(), colorfgbg.into()));
-    env
+    spawn.env.push(("COLORFGBG".into(), colorfgbg.into()));
+    (spawn.command, spawn.env)
 }
 const COALESCE_MAX_BYTES: usize = 64 * 1024;
 
