@@ -1,7 +1,10 @@
-//! Integration tests for shell history crash survival.
+//! Integration tests for shell history crash survival through the full server.
 //!
-//! Verifies that spawned panes have `PROMPT_COMMAND` set to flush history
-//! after every command, so history survives hard crashes.
+//! These exercise the default `$SHELL` end-to-end: a command run in a
+//! persistent pane must reach the per-pane `HISTFILE` on disk *during* normal
+//! operation (incremental flush), so it survives a hard crash with no clean
+//! shutdown. Shell-specific generation logic is covered by the `shell_init`
+//! unit tests and the per-shell `shell_history` integration tests.
 
 mod common;
 
@@ -9,56 +12,80 @@ use common::*;
 use rttx_proto::v3;
 use std::time::Duration;
 
-/// Persistent panes must have `history -a` in the `PROMPT_COMMAND` env var
-/// passed to the shell process at spawn time.
+/// After a hard crash (server kill + restart), shell history from a persistent
+/// pane must survive because the shell flushed it to disk incrementally —
+/// without the test or the user's rc explicitly arranging it.
 #[tokio::test]
-async fn persistent_pane_spawns_with_history_flush_env() {
+async fn history_survives_hard_restart() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (sock, _handle) = start_test_server(tmp.path()).await;
-    let mut client = TestClient::connect(&sock).await;
-    client.handshake().await;
 
-    let runtime_id =
-        create_runtime(&mut client, "history-flush", v3::RuntimePolicy::Persistent).await;
-    let pane_id = create_pane(&mut client, &runtime_id).await;
-    attach_rw(&mut client, &runtime_id).await;
+    let runtime_id;
+    let pane_id;
+    {
+        let (sock, handle) = start_test_server(tmp.path()).await;
+        let mut client = TestClient::connect(&sock).await;
+        client.handshake().await;
 
-    // Use /proc to read the initial environment passed to the shell process.
-    // This is more reliable than echoing $PROMPT_COMMAND because rc files may
-    // modify it after shell startup.
-    send_input(
-        &mut client,
-        &runtime_id,
-        &pane_id,
-        b"cat /proc/$$/environ | tr '\\0' '\\n' | grep --color=never PROMPT_COMMAND\n",
-    )
-    .await;
+        runtime_id = create_runtime(&mut client, "crash-hist", v3::RuntimePolicy::Persistent).await;
+        pane_id = create_pane(&mut client, &runtime_id).await;
+        attach_rw(&mut client, &runtime_id).await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let mut output = Vec::new();
-    while tokio::time::Instant::now() < deadline {
-        if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-            && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
-        {
-            output.extend_from_slice(&d.data);
-            let text = String::from_utf8_lossy(&output);
-            if text.contains("PROMPT_COMMAND=") && text.contains("history") {
+        // Run a unique command, then trigger the next prompt so the shell's
+        // incremental flush writes it to disk. No manual PROMPT_COMMAND setup:
+        // the generated rc handles it (RFC-031 §7).
+        send_input(&mut client, &runtime_id, &pane_id, b"echo UNIQUE_MARKER_12345\n").await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
+                && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
+                && String::from_utf8_lossy(&d.data).contains("UNIQUE_MARKER_12345")
+            {
                 break;
             }
         }
+        send_input(&mut client, &runtime_id, &pane_id, b"true\n").await;
+
+        // Poll the on-disk HISTFILE until the incremental flush lands. Polling
+        // instead of a fixed sleep keeps the test deterministic under parallel
+        // load.
+        let state_dir = tmp.path().join("state/rttx/daemon");
+        let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
+        let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+        let hist_path =
+            rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            if std::fs::read_to_string(&hist_path)
+                .unwrap_or_default()
+                .contains("UNIQUE_MARKER_12345")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Simulate a hard crash: abort the server with no clean shutdown.
+        handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let text = String::from_utf8_lossy(&output);
+    let state_dir = tmp.path().join("state/rttx/daemon");
+    let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
+    let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+    let hist_path = rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+
+    let hist_content = std::fs::read_to_string(&hist_path).unwrap_or_default();
     assert!(
-        text.contains("PROMPT_COMMAND=") && text.contains("history -a"),
-        "spawn env must contain PROMPT_COMMAND with 'history -a', got: {text}"
+        hist_content.contains("UNIQUE_MARKER_12345"),
+        "history file must contain the command after crash, path={}, content={hist_content}",
+        hist_path.display()
     );
 }
 
-/// Ephemeral (no-persist) panes must NOT get history -a since their
-/// HISTFILE is /dev/null — flushing to /dev/null is pointless overhead.
+/// Ephemeral (no-persist) panes must flush to `/dev/null`, never to a per-pane
+/// history file — flushing disposable panes would pollute durable state.
 #[tokio::test]
-async fn ephemeral_pane_skips_history_flush_env() {
+async fn ephemeral_pane_does_not_write_persistent_history() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
     let mut client = TestClient::connect(&sock).await;
@@ -67,7 +94,6 @@ async fn ephemeral_pane_skips_history_flush_env() {
     let runtime_id =
         create_runtime(&mut client, "ephemeral-hist", v3::RuntimePolicy::Persistent).await;
 
-    // Create pane with no_persist=true.
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
@@ -90,15 +116,9 @@ async fn ephemeral_pane_skips_history_flush_env() {
     };
     attach_rw(&mut client, &runtime_id).await;
 
-    // Read PROMPT_COMMAND from /proc environ.
-    send_input(
-        &mut client,
-        &runtime_id,
-        &pane_id,
-        b"cat /proc/$$/environ | tr '\\0' '\\n' | grep --color=never PROMPT_COMMAND || echo NO_PROMPT_CMD\n",
-    )
-    .await;
-
+    // The shell reports its HISTFILE; for an ephemeral pane it must be
+    // /dev/null, not a path under the runtime's history dir.
+    send_input(&mut client, &runtime_id, &pane_id, b"echo RTTX_HF=$HISTFILE\n").await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
@@ -106,8 +126,9 @@ async fn ephemeral_pane_skips_history_flush_env() {
             && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
         {
             output.extend_from_slice(&d.data);
-            let text = String::from_utf8_lossy(&output);
-            if text.contains("NO_PROMPT_CMD") || text.contains("PROMPT_COMMAND") {
+            // Match the resolved value, not the echoed command (which contains
+            // the literal "$HISTFILE").
+            if String::from_utf8_lossy(&output).contains("/dev/null") {
                 break;
             }
         }
@@ -115,90 +136,17 @@ async fn ephemeral_pane_skips_history_flush_env() {
 
     let text = String::from_utf8_lossy(&output);
     assert!(
-        !text.contains("history -a"),
-        "ephemeral pane env must NOT contain 'history -a', got: {text}"
+        text.contains("RTTX_HF=/dev/null"),
+        "ephemeral HISTFILE must be /dev/null, got: {text}"
     );
-}
 
-/// After a hard crash (server kill + restart), shell history from a
-/// persistent pane must survive because `history -a` flushed it to disk.
-#[tokio::test]
-async fn history_survives_hard_restart() {
-    let tmp = tempfile::TempDir::new().unwrap();
-
-    let runtime_id;
-    let pane_id;
-    {
-        let (sock, handle) = start_test_server(tmp.path()).await;
-        let mut client = TestClient::connect(&sock).await;
-        client.handshake().await;
-
-        runtime_id = create_runtime(&mut client, "crash-hist", v3::RuntimePolicy::Persistent).await;
-        pane_id = create_pane(&mut client, &runtime_id).await;
-        attach_rw(&mut client, &runtime_id).await;
-
-        // The shell inherits PROMPT_COMMAND="history -a" but user rc files
-        // may overwrite it. Ensure history -a is active for this test by
-        // explicitly setting PROMPT_COMMAND in the shell.
-        send_input(&mut client, &runtime_id, &pane_id, b"PROMPT_COMMAND='history -a'\n").await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        // Run a unique command so it gets written to history.
-        send_input(&mut client, &runtime_id, &pane_id, b"echo UNIQUE_MARKER_12345\n").await;
-
-        // Wait for output to confirm command executed.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while tokio::time::Instant::now() < deadline {
-            if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
-                && let Some(v3::server_envelope::Payload::OutputDelta(d)) = msg.payload
-            {
-                let text = String::from_utf8_lossy(&d.data);
-                if text.contains("UNIQUE_MARKER_12345") {
-                    break;
-                }
-            }
-        }
-
-        // Trigger the next prompt so PROMPT_COMMAND runs history -a.
-        send_input(&mut client, &runtime_id, &pane_id, b"true\n").await;
-
-        // Poll the on-disk HISTFILE until history -a flushes the command. This
-        // is the invariant under test: history reaches disk during normal
-        // operation (via history -a), so it survives a later hard crash.
-        // Polling instead of a fixed sleep keeps the test deterministic under
-        // parallel load, where a short sleep can race the shell's flush.
-        let state_dir = tmp.path().join("state/rttx/daemon");
-        let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
-        let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
-        let hist_path =
-            rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while tokio::time::Instant::now() < deadline {
-            if std::fs::read_to_string(&hist_path)
-                .unwrap_or_default()
-                .contains("UNIQUE_MARKER_12345")
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-
-        // Simulate hard crash: abort the handle.
-        handle.abort();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    // Verify the HISTFILE on disk still contains the command after the hard
-    // crash — it was flushed by history -a, not by a graceful shutdown.
     let state_dir = tmp.path().join("state/rttx/daemon");
     let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
     let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
     let hist_path = rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
-
-    let hist_content = std::fs::read_to_string(&hist_path).unwrap_or_default();
     assert!(
-        hist_content.contains("UNIQUE_MARKER_12345"),
-        "history file must contain the command after crash, path={}, content={hist_content}",
+        !hist_path.exists(),
+        "ephemeral pane must not create a persistent history file at {}",
         hist_path.display()
     );
 }
