@@ -656,6 +656,8 @@ mod tests {
 
     fn snapshot(runtime_id: &str, panes: Vec<v3::PaneSnapshot>) -> v3::RuntimeSnapshot {
         v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             panes,
             runtime_revision: 7,
@@ -1497,6 +1499,8 @@ mod tests {
             workspace_id: "ws-1".into(),
             runtime_id: runtime_id.clone(),
             snapshot: v3::RuntimeSnapshot {
+                tree: None,
+                default_active_pane_id: Vec::new(),
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
                 panes: vec![v3::PaneSnapshot {
                     pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),

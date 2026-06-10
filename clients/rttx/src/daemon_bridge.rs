@@ -2027,6 +2027,8 @@ mod tests {
                     request_id: request.request_id,
                     payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
                         v3::RuntimeSnapshot {
+                            tree: None,
+                            default_active_pane_id: Vec::new(),
                             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                             panes: vec![],
                             runtime_revision: 1,
@@ -2862,6 +2864,8 @@ mod tests {
                     request_id: request.request_id,
                     payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
                         v3::RuntimeSnapshot {
+                            tree: None,
+                            default_active_pane_id: Vec::new(),
                             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                             panes: vec![],
                             runtime_revision: 1,
@@ -3271,6 +3275,8 @@ mod tests {
                     request_id: msg2.request_id,
                     payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
                         v3::RuntimeSnapshot {
+                            tree: None,
+                            default_active_pane_id: Vec::new(),
                             runtime_id: rttx_proto::uuid_to_bytes(attached_runtime_id),
                             panes: vec![],
                             runtime_revision: 1,

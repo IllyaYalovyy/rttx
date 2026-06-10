@@ -82,6 +82,8 @@ fn snapshot(
     panes: Vec<rttx_proto::v3::PaneSnapshot>,
 ) -> rttx_proto::v3::RuntimeSnapshot {
     rttx_proto::v3::RuntimeSnapshot {
+        tree: None,
+        default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
         panes,
         runtime_revision: 1,
