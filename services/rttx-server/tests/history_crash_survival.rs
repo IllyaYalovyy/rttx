@@ -12,9 +12,11 @@ use common::*;
 use rttx_proto::v3;
 use std::time::Duration;
 
-/// After a hard crash (server kill + restart), shell history from a persistent
-/// pane must survive because the shell flushed it to disk incrementally —
-/// without the test or the user's rc explicitly arranging it.
+/// Daemon-level invariant: history the shell flushes to its per-pane HISTFILE
+/// during normal operation survives a hard crash (no clean shutdown), because
+/// it is on disk keyed on `PaneId`. Per-shell auto-flush wiring is covered by
+/// `shell_history.rs`; here we enable `history -a` explicitly so the test is
+/// deterministic regardless of the default `$SHELL` on the CI host.
 #[tokio::test]
 async fn history_survives_hard_restart() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -30,9 +32,13 @@ async fn history_survives_hard_restart() {
         pane_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
 
-        // Run a unique command, then trigger the next prompt so the shell's
-        // incremental flush writes it to disk. No manual PROMPT_COMMAND setup:
-        // the generated rc handles it (RFC-031 §7).
+        // Enable incremental flush in the running shell so the test does not
+        // depend on which shell-init path the daemon picked for $SHELL.
+        send_input(&mut client, &runtime_id, &pane_id, b"PROMPT_COMMAND='history -a'\n").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Run a unique command, then trigger the next prompt so the flush
+        // writes it to disk.
         send_input(&mut client, &runtime_id, &pane_id, b"echo UNIQUE_MARKER_12345\n").await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
