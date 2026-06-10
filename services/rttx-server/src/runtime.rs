@@ -246,6 +246,32 @@ impl Runtime {
         }
     }
 
+    /// Add `pane` to the workspace by splitting the leaf holding `target`.
+    ///
+    /// The new pane's identity is server-assigned and immutable (RFC-031 G1).
+    /// Returns the new revision on success, or `None` (no change, pane not
+    /// inserted) if `target` is absent, the ratio is invalid, or the new pane
+    /// id already exists. The pane is added to the map only when the tree
+    /// mutation succeeds, so structure and pane state never diverge.
+    pub fn split_pane(
+        &mut self,
+        target: Uuid,
+        pane: Pane,
+        axis: SplitAxis,
+        ratio: f32,
+    ) -> Option<u64> {
+        let new = PaneId::from_uuid(pane.id);
+        if !self.tree.split(PaneId::from_uuid(target), new, axis, ratio) {
+            return None;
+        }
+        if self.active_pane_id.is_none() {
+            self.active_pane_id = Some(pane.id);
+        }
+        self.panes.insert(pane.id, pane);
+        self.bump_revision();
+        Some(self.revision())
+    }
+
     /// Remove a pane from this runtime.
     ///
     /// The pane is dropped from the authoritative tree, collapsing its parent
@@ -991,6 +1017,58 @@ mod tests {
         // Invalid ratio is rejected without bumping the revision.
         assert_eq!(runtime.resize_split(&[], 1.0), None);
         assert_eq!(runtime.revision(), before + 1);
+    }
+
+    #[test]
+    fn split_pane_targets_explicit_leaf_with_axis_and_ratio() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        let before = runtime.revision();
+
+        let rev = runtime.split_pane(a, Pane::new(b, 80, 24), SplitAxis::Vertical, 0.3);
+        assert_eq!(rev, Some(before + 1));
+        assert_eq!(runtime.tree.leaf_count(), 2);
+        assert!(runtime.panes.contains_key(&b));
+        // The target keeps its identity and stays default-active after a split.
+        assert!(runtime.tree.contains(PaneId::from_uuid(a)));
+        assert_eq!(runtime.tree.default_active(), Some(PaneId::from_uuid(a)));
+        assert!(runtime.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn split_pane_rejects_unknown_target_without_inserting_pane() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        let before = runtime.revision();
+
+        let orphan = Uuid::new_v4();
+        // Target is not in the tree: the split is rejected and the candidate
+        // pane is never added to the map (structure/state never diverge).
+        assert_eq!(
+            runtime.split_pane(
+                Uuid::new_v4(),
+                Pane::new(orphan, 80, 24),
+                SplitAxis::Horizontal,
+                0.5
+            ),
+            None
+        );
+        assert!(!runtime.panes.contains_key(&orphan));
+        assert_eq!(runtime.tree.leaf_count(), 1);
+        assert_eq!(runtime.revision(), before);
+    }
+
+    #[test]
+    fn split_pane_rejects_invalid_ratio() {
+        let mut runtime = Runtime::new("test".into());
+        let a = Uuid::new_v4();
+        runtime.add_pane(Pane::new(a, 80, 24));
+        let b = Uuid::new_v4();
+        assert_eq!(runtime.split_pane(a, Pane::new(b, 80, 24), SplitAxis::Horizontal, 1.5), None);
+        assert!(!runtime.panes.contains_key(&b));
     }
 
     #[test]

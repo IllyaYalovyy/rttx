@@ -1601,6 +1601,8 @@ fn v3_core_runtime_lifecycle_end_to_end() {
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
         v3::server_envelope::Payload::RuntimeSnapshot(v3::RuntimeSnapshot {
+            tree: None,
+            default_active_pane_id: Vec::new(),
             runtime_id: runtime_id.clone(),
             runtime_revision: 2,
             client_role: v3::RuntimeClientRole::Writer as i32,
