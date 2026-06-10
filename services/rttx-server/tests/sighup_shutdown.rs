@@ -20,11 +20,13 @@ async fn sighup_triggers_graceful_shutdown() {
         .arg("start")
         .arg("--foreground")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", &cache_dir)
         .env("XDG_STATE_HOME", &state_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .expect("spawn daemon");
 

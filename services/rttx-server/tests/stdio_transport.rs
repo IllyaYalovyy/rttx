@@ -21,11 +21,13 @@ async fn start_daemon(
         .arg("start")
         .arg("--foreground")
         .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", cache_dir)
         .env("XDG_STATE_HOME", state_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn daemon");
 
@@ -73,11 +75,13 @@ async fn attach_stdio_hello_and_create_runtime() {
     let mut child = Command::new(bin)
         .arg("attach-stdio")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", &cache_dir)
         .env("XDG_STATE_HOME", &state_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn attach-stdio");
 
@@ -178,6 +182,7 @@ fn attach_stdio_requires_running_daemon() {
     let output = std::process::Command::new(bin)
         .arg("attach-stdio")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", &cache_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -204,6 +209,7 @@ fn status_command_shows_not_running_when_no_daemon() {
     let output = std::process::Command::new(bin)
         .arg("status")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .output()
         .expect("failed to run status");
 

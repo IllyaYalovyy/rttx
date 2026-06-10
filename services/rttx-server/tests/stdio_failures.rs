@@ -22,11 +22,13 @@ async fn spawn_daemon(tmp: &TempDir) -> Child {
         .arg("start")
         .arg("--foreground")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", &cache_dir)
         .env("XDG_STATE_HOME", tmp.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn daemon");
 
@@ -49,11 +51,13 @@ fn spawn_stdio(tmp: &TempDir) -> Child {
     Command::new(bin)
         .arg("attach-stdio")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", &cache_dir)
         .env("XDG_STATE_HOME", tmp.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn rttx-server attach-stdio")
 }
