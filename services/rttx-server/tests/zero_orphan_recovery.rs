@@ -147,21 +147,15 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
         let all_durable = poll_until(deadline, || {
             markers.iter().all(|(pane, marker)| {
                 let pane_uuid = rttx_proto::bytes_to_uuid(pane).unwrap();
-                let hist = rttx_server::state::layout::history_file(
-                    &state_dir,
-                    runtime_uuid,
-                    pane_uuid,
-                );
+                let hist =
+                    rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
                 let screen = rttx_server::state::layout::screen_snapshot(
                     &state_dir,
                     runtime_uuid,
                     pane_uuid,
                 );
-                let scroll = rttx_server::state::layout::scrollback_log(
-                    &state_dir,
-                    runtime_uuid,
-                    pane_uuid,
-                );
+                let scroll =
+                    rttx_server::state::layout::scrollback_log(&state_dir, runtime_uuid, pane_uuid);
                 std::fs::read_to_string(&hist).unwrap_or_default().contains(marker)
                     && screen.exists()
                     && scroll.exists()
@@ -222,8 +216,16 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
                 "cycle {cycle}: history for pane must survive, expected {marker} in {}",
                 hist.display()
             );
-            assert!(screen.exists(), "cycle {cycle}: screen snapshot must survive at {}", screen.display());
-            assert!(scroll.exists(), "cycle {cycle}: scrollback log must survive at {}", scroll.display());
+            assert!(
+                screen.exists(),
+                "cycle {cycle}: screen snapshot must survive at {}",
+                screen.display()
+            );
+            assert!(
+                scroll.exists(),
+                "cycle {cycle}: scrollback log must survive at {}",
+                scroll.display()
+            );
         }
 
         // Let the reconstructed runtime re-persist (it is dirty after reattach)
