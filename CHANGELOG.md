@@ -19,12 +19,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SplitPane` (server-minted, immutable pane id), `ResizeSplit`, and viewport
   messages `SetFocus`/`ReportClientSize` drive a multi-client PTY min-size
   policy so no client sees truncated output.
+- Shell-correct durable history (RFC-031 Step 5): per-pane history is now
+  initialized per shell, keyed on the durable `PaneId`, and robust against the
+  user's rc files. bash spawns with a generated `--rcfile` that sources
+  `~/.bashrc` then *appends* `history -a` to `PROMPT_COMMAND` (so a user's own
+  `PROMPT_COMMAND` can no longer disable capture); zsh uses a generated
+  `ZDOTDIR` with `INC_APPEND_HISTORY`; fish selects a per-pane history session;
+  other shells set `HISTFILE` best-effort.
 
 ### Changed
 
 - Daemon state schema bumped to version 2. This is a clean break: old-schema
   (v1) runtime state is detected, ignored, and removed on first load with no
   migration path. The obsolete `command_history` field is gone.
+- Replaced the bash-only `PROMPT_COMMAND=history -a` environment hack with
+  shell-aware history initialization (see Added, RFC-031 Step 5).
 
 ## [0.9.0] - 2026-05-26
 
