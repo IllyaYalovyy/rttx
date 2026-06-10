@@ -33,6 +33,9 @@ pub mod v3_error;
 /// V3 snapshot and output delta: builders and helpers (RFC-021 Sections 7–8).
 pub mod v3_snapshot;
 
+/// V3 workspace tree: server-authoritative tree, mutations, and viewport messages (RFC-031 §5).
+pub mod v3_tree;
+
 /// V3 chunked scrollback: builders, validation, and capability gating (RFC-021 Section 8, `OPT_CHUNKED_SCROLLBACK`).
 pub mod v3_scrollback;
 
@@ -358,6 +361,8 @@ mod v3_tests {
                 total_scrollback_bytes: 4096,
                 scrollback_complete: false,
             }],
+            tree: None,
+            default_active_pane_id: Vec::new(),
         };
         let mut buf = BytesMut::new();
         encode_frame(&msg, &mut buf).unwrap();
@@ -610,6 +615,8 @@ mod v3_envelope_tests {
                     runtime_revision: 10,
                     client_role: v3::RuntimeClientRole::Writer as i32,
                     panes: vec![],
+                    tree: None,
+                    default_active_pane_id: Vec::new(),
                 })),
             },
             v3::ServerEnvelope {
