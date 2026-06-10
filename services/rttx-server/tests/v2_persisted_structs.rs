@@ -6,7 +6,9 @@
 //! future-version rejection. Workspace-file persistence and the clean-break
 //! loader are covered in `workspace_file_v2.rs`.
 
-use rttx_server::state::migrations::{load_daemon_index, load_screen_snapshot, peek_schema_version};
+use rttx_server::state::migrations::{
+    load_daemon_index, load_screen_snapshot, peek_schema_version,
+};
 use rttx_server::state::types::*;
 use std::time::SystemTime;
 use tempfile::TempDir;
