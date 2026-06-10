@@ -35,6 +35,10 @@ const SCROLLBACK_DIR: &str = "scrollback";
 /// Subdirectory for per-pane shell history.
 const HISTORY_DIR: &str = "history";
 
+/// Subdirectory for per-pane generated shell-init files (bash rcfile, zsh
+/// `ZDOTDIR`).
+const SHELL_INIT_DIR: &str = "shell-init";
+
 /// Subdirectory for orphaned runtime directories awaiting pruning.
 const ORPHANS_DIR: &str = ".orphans";
 
@@ -78,6 +82,14 @@ pub fn scrollback_log(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> Path
 #[must_use]
 pub fn history_file(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> PathBuf {
     runtime_dir(state_dir, runtime_id).join(HISTORY_DIR).join(format!("{pane_id}.hist"))
+}
+
+/// Path to a pane's generated shell-init directory (holds the bash rcfile or
+/// the zsh `ZDOTDIR` contents). Keyed on `pane_id` so it is stable across
+/// shell respawns and daemon restarts.
+#[must_use]
+pub fn shell_init_dir(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> PathBuf {
+    runtime_dir(state_dir, runtime_id).join(SHELL_INIT_DIR).join(pane_id.to_string())
 }
 
 /// Path to the `.orphans/` directory inside `runtimes/`.
@@ -153,6 +165,15 @@ mod tests {
         let p = history_file(Path::new(STATE), rt, pane);
         assert!(p.to_string_lossy().contains("/history/"));
         assert!(p.to_string_lossy().ends_with(".hist"));
+        assert!(p.starts_with(runtime_dir(Path::new(STATE), rt)));
+    }
+
+    #[test]
+    fn shell_init_dir_path() {
+        let (rt, pane) = ids();
+        let p = shell_init_dir(Path::new(STATE), rt, pane);
+        assert!(p.to_string_lossy().contains("/shell-init/"));
+        assert!(p.ends_with(pane.to_string()));
         assert!(p.starts_with(runtime_dir(Path::new(STATE), rt)));
     }
 

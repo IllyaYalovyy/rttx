@@ -18,6 +18,7 @@ pub mod pty;
 pub mod runtime;
 pub mod screen;
 pub mod server;
+pub mod shell_init;
 pub mod single_instance;
 pub mod state;
 pub mod watchdog;
