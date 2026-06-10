@@ -43,6 +43,7 @@ async fn start_binary_server(tmp: &tempfile::TempDir) -> (PathBuf, Child) {
         .arg("start")
         .arg("--foreground")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .env("XDG_CACHE_HOME", &cache_dir)
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_STATE_HOME", tmp.path())

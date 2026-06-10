@@ -109,6 +109,7 @@ fn clean_reports_not_running_without_daemon() {
     let output = std::process::Command::new(bin)
         .arg("clean")
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .output()
         .expect("failed to run clean");
 

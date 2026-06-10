@@ -59,9 +59,14 @@ async fn kill_nonexistent_runtime_returns_error() {
 #[test]
 fn kill_invalid_uuid_exits_with_error() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runtime_dir = tmp.path().join("runtime");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
 
     let output = std::process::Command::new(bin)
         .args(["kill", "not-a-uuid"])
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .output()
         .expect("failed to run kill");
 
@@ -84,6 +89,7 @@ fn kill_reports_not_running_without_daemon() {
     let output = std::process::Command::new(bin)
         .args(["kill", "d7d04564-b2bf-4302-9495-e65c4df12ac6"])
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RTTX_DEV_MODE", "")
         .output()
         .expect("failed to run kill");
 
