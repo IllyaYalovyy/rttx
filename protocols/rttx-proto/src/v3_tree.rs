@@ -173,12 +173,8 @@ mod tests {
     fn split_node_carries_axis_ratio_and_children() {
         let a = pid();
         let b = pid();
-        let node = pane_tree_split(
-            v3::PaneSplitAxis::Vertical,
-            0.3,
-            pane_tree_leaf(a),
-            pane_tree_leaf(b),
-        );
+        let node =
+            pane_tree_split(v3::PaneSplitAxis::Vertical, 0.3, pane_tree_leaf(a), pane_tree_leaf(b));
         let Some(v3::pane_tree_node::Node::Split(split)) = node.node else {
             panic!("expected split");
         };
@@ -220,8 +216,14 @@ mod tests {
 
     #[test]
     fn pane_split_push_has_zero_request_id() {
-        let env =
-            build_pane_split_push(build_pane_split(pid(), pid(), pid(), v3::PaneSplitAxis::Vertical, 0.6, 9));
+        let env = build_pane_split_push(build_pane_split(
+            pid(),
+            pid(),
+            pid(),
+            v3::PaneSplitAxis::Vertical,
+            0.6,
+            9,
+        ));
         assert_eq!(env.request_id, 0);
         assert!(crate::v3_envelope::is_push_event(&env));
     }
@@ -242,10 +244,7 @@ mod tests {
         let Some(v3::server_envelope::Payload::SplitResized(r)) = decoded.payload else {
             panic!("expected SplitResized");
         };
-        assert_eq!(r.path, vec![
-            v3::PaneTreeSide::Second as i32,
-            v3::PaneTreeSide::First as i32,
-        ]);
+        assert_eq!(r.path, vec![v3::PaneTreeSide::Second as i32, v3::PaneTreeSide::First as i32,]);
         assert!((r.ratio - 0.25).abs() < f32::EPSILON);
     }
 
