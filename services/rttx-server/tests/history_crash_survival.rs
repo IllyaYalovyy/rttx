@@ -161,14 +161,35 @@ async fn history_survives_hard_restart() {
 
         // Trigger the next prompt so PROMPT_COMMAND runs history -a.
         send_input(&mut client, &runtime_id, &pane_id, b"true\n").await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Poll the on-disk HISTFILE until history -a flushes the command. This
+        // is the invariant under test: history reaches disk during normal
+        // operation (via history -a), so it survives a later hard crash.
+        // Polling instead of a fixed sleep keeps the test deterministic under
+        // parallel load, where a short sleep can race the shell's flush.
+        let state_dir = tmp.path().join("state/rttx/daemon");
+        let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
+        let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+        let hist_path =
+            rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            if std::fs::read_to_string(&hist_path)
+                .unwrap_or_default()
+                .contains("UNIQUE_MARKER_12345")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
         // Simulate hard crash: abort the handle.
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Verify the HISTFILE on disk contains the command.
+    // Verify the HISTFILE on disk still contains the command after the hard
+    // crash — it was flushed by history -a, not by a graceful shutdown.
     let state_dir = tmp.path().join("state/rttx/daemon");
     let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
     let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
