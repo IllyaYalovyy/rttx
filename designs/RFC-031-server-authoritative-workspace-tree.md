@@ -308,7 +308,7 @@ no compatibility shims.
   `PaneId`; crash-survival integration tests for bash/zsh/fish. *(prereq: Step 1)*
 - [ ] **Step 6** — Delete dead paths (§8); `Runtime`→`Workspace` rename;
   crash-recovery integration test asserting **zero** orphaned state. *(prereq: 1–5)*
-- [ ] **Step 7** — One-time histfile salvage utility (separate binary/subcommand,
+- [x] **Step 7** — One-time histfile salvage utility (separate binary/subcommand,
   not a runtime code path) for users upgrading from the old layout. *(prereq: Step 2)*
 
 ---

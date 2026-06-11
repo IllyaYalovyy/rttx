@@ -26,6 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PROMPT_COMMAND` can no longer disable capture); zsh uses a generated
   `ZDOTDIR` with `INC_APPEND_HISTORY`; fish selects a per-pane history session;
   other shells set `HISTFILE` best-effort.
+- One-time orphaned-histfile salvage utility (RFC-031 Step 7): the new
+  `rttx-server salvage-history` subcommand performs a read-only scan of the
+  daemon state directory for per-pane history files left unreferenced by the
+  pre-RFC-031 layout and copies them into a recovery directory (`--dry-run` to
+  preview, `--dest` to choose the target). It is strictly opt-in and never
+  touches live runtime state, so it adds no compatibility code to normal daemon
+  operation.
 
 ### Changed
 
