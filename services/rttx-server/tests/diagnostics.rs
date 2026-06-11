@@ -26,13 +26,13 @@ async fn diagnostics_empty_server() {
         other => panic!("expected DiagnosticsReport, got {other:?}"),
     };
 
-    assert_eq!(report.runtime_count, 0);
+    assert_eq!(report.workspace_count, 0);
     assert_eq!(report.total_pane_count, 0);
     assert_eq!(report.total_active_panes, 0);
     assert_eq!(report.total_exited_panes, 0);
     assert_eq!(report.total_raw_bytes, 0);
     assert_eq!(report.total_pending_flush, 0);
-    assert!(report.runtimes.is_empty());
+    assert!(report.workspaces.is_empty());
 }
 
 #[tokio::test]
@@ -43,7 +43,7 @@ async fn diagnostics_with_session_and_pane() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "diag-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "diag-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let _pane_id = create_pane(&mut client, &sid).await;
 
@@ -66,12 +66,12 @@ async fn diagnostics_with_session_and_pane() {
         }
     };
 
-    assert_eq!(resp.runtime_count, 1);
+    assert_eq!(resp.workspace_count, 1);
     assert!(resp.total_pane_count >= 1);
     assert!(resp.total_active_panes >= 1);
-    assert_eq!(resp.runtimes.len(), 1);
-    assert_eq!(resp.runtimes[0].name, "diag-test");
-    assert!(!resp.runtimes[0].panes.is_empty());
+    assert_eq!(resp.workspaces.len(), 1);
+    assert_eq!(resp.workspaces[0].name, "diag-test");
+    assert!(!resp.workspaces[0].panes.is_empty());
 }
 
 #[tokio::test]
@@ -82,7 +82,7 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "cleanup", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "cleanup", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let _pane_id = create_pane(&mut client, &sid).await;
 
@@ -100,10 +100,10 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
-    assert_eq!(before.runtime_count, 1);
+    assert_eq!(before.workspace_count, 1);
 
     // Terminate and verify cleanup.
-    terminate_runtime(&mut client, &sid).await;
+    terminate_workspace(&mut client, &sid).await;
 
     client
         .send(&v3::ClientEnvelope {
@@ -118,7 +118,7 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
-    assert_eq!(after.runtime_count, 0, "terminated session must be cleaned up");
+    assert_eq!(after.workspace_count, 0, "terminated session must be cleaned up");
     assert_eq!(after.total_pane_count, 0);
     assert_eq!(after.total_raw_bytes, 0);
     assert_eq!(after.total_pending_flush, 0);

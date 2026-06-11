@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{create_runtime, start_test_server};
+use common::{create_workspace, start_test_server};
 use rttx_proto::v3;
 use rttx_server::state::layout;
 use std::time::Duration;
@@ -19,7 +19,8 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
     let mut c = common::TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes = create_runtime(&mut c, "first-run-test", v3::RuntimePolicy::Persistent).await;
+    let rt_id_bytes =
+        create_workspace(&mut c, "first-run-test", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = rttx_proto::bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for serialization to write state.
@@ -30,7 +31,7 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
     let rt_path = layout::runtime_file(&state_dir, runtime_id);
     assert!(
         rt_path.exists(),
-        "runtime.json should be written to state_dir ({}), not cache_dir",
+        "workspace.json should be written to state_dir ({}), not cache_dir",
         rt_path.display()
     );
 
@@ -44,7 +45,7 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
 async fn v1_state_json_in_cache_is_not_loaded() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Write a v1 state.json with a runtime.
+    // Write a v1 state.json with a workspace.
     let cache_dir = tmp.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
     std::fs::write(
@@ -71,6 +72,6 @@ async fn v1_state_json_in_cache_is_not_loaded() {
     let mut c = common::TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let runtimes = common::list_runtimes(&mut c).await;
-    assert!(runtimes.is_empty(), "v1 state.json must not be loaded — daemon should start fresh");
+    let workspaces = common::list_workspaces(&mut c).await;
+    assert!(workspaces.is_empty(), "v1 state.json must not be loaded — daemon should start fresh");
 }

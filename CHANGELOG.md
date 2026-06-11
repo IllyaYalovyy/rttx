@@ -47,6 +47,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a pane is closed it leaves the tree and its durable artifacts (screen
   snapshot, scrollback log, history file, shell-init dir) are removed
   (RFC-031 Step 6).
+- Renamed the daemon's `Runtime` type and concept to `Workspace` (RFC-031
+  Step 6 terminology unification): the server domain type, its module, the v3
+  protocol messages/enums (`CreateWorkspace`, `AttachWorkspace`,
+  `WorkspaceSnapshot`, `WorkspaceInfo`, `WorkspacePolicy`, …), and the proto
+  helper API now use `Workspace`. This is a mechanical rename with no behavior
+  change; the durable `runtime_id` key, on-disk `runtimes/` layout, and async
+  (tokio) runtime names are unchanged.
 
 ## [0.9.0] - 2026-05-26
 

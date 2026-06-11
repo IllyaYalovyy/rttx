@@ -45,14 +45,14 @@ fn pane_snapshot(
 fn snapshot(
     runtime_id: &str,
     panes: Vec<rttx_proto::v3::PaneSnapshot>,
-) -> rttx_proto::v3::RuntimeSnapshot {
-    rttx_proto::v3::RuntimeSnapshot {
+) -> rttx_proto::v3::WorkspaceSnapshot {
+    rttx_proto::v3::WorkspaceSnapshot {
         tree: None,
         default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
         panes,
-        runtime_revision: 1,
-        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+        workspace_revision: 1,
+        client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
     }
 }
 

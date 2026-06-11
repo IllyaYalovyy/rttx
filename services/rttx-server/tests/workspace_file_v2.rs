@@ -6,11 +6,11 @@
 //! ignored, and removed on load with no migration path.
 
 use rttx_server::pane_tree::{PaneId, SplitAxis, WorkspaceTree};
-use rttx_server::runtime::RuntimePolicy;
 use rttx_server::state::types::{
-    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, RuntimeInstanceV1, WorkspaceFileV2, WorkspaceSpecV2,
+    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceFileV2, WorkspaceInstanceV1, WorkspaceSpecV2,
 };
 use rttx_server::state::{layout, persistence};
+use rttx_server::workspace::WorkspacePolicy;
 use std::time::SystemTime;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -44,12 +44,12 @@ fn multi_pane_tree_survives_save_and_load() {
         spec: WorkspaceSpecV2 {
             id: rt_id,
             name: "workspace-1".into(),
-            policy: RuntimePolicy::Persistent,
+            policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
             panes: vec![mk(a, "bash"), mk(b, "nvim"), mk(c, "logs")],
         },
-        instance: RuntimeInstanceV1 {
+        instance: WorkspaceInstanceV1 {
             revision: 7,
             last_active_at: SystemTime::now(),
             last_snapshot_at: SystemTime::now(),
@@ -57,14 +57,14 @@ fn multi_pane_tree_survives_save_and_load() {
     };
 
     persistence::save_daemon_index(state_dir, &[rt_id]).unwrap();
-    persistence::save_runtime(state_dir, &original).unwrap();
+    persistence::save_workspace(state_dir, &original).unwrap();
 
     let result = persistence::load_all(state_dir).unwrap();
     assert!(result.failed_ids.is_empty());
     assert!(result.reset_ids.is_empty());
-    assert_eq!(result.runtimes.len(), 1);
+    assert_eq!(result.workspaces.len(), 1);
 
-    let recovered = &result.runtimes[0];
+    let recovered = &result.workspaces[0];
     assert_eq!(recovered.spec.tree, expected_tree, "tree structure + ratios must survive");
     assert_eq!(recovered.spec.tree.default_active(), Some(b));
     assert_eq!(recovered.spec.panes.len(), 3);
@@ -73,7 +73,7 @@ fn multi_pane_tree_survives_save_and_load() {
 
 #[test]
 fn old_schema_runtime_file_is_reset_not_migrated() {
-    // RFC-031 clean break: an old v1 runtime.json (flat panes, active_pane_id,
+    // RFC-031 clean break: an old v1 workspace.json (flat panes, active_pane_id,
     // command_history, no durable tree) is detected, ignored, and removed.
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path();
@@ -111,14 +111,14 @@ fn old_schema_runtime_file_is_reset_not_migrated() {
     persistence::save_daemon_index(state_dir, &[old_id]).unwrap();
 
     let result = persistence::load_all(state_dir).unwrap();
-    assert!(result.runtimes.is_empty(), "old-schema runtime must not load");
+    assert!(result.workspaces.is_empty(), "old-schema workspace must not load");
     assert!(result.failed_ids.is_empty(), "old schema is a reset, not a failure");
     assert_eq!(result.reset_ids, vec![old_id]);
-    assert!(!old_dir.exists(), "old-schema runtime directory must be removed on load");
+    assert!(!old_dir.exists(), "old-schema workspace directory must be removed on load");
 }
 
 #[test]
-fn good_v2_runtime_survives_alongside_old_schema_sibling() {
+fn good_v2_workspace_survives_alongside_old_schema_sibling() {
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path();
     let good_id = Uuid::new_v4();
@@ -133,7 +133,7 @@ fn good_v2_runtime_survives_alongside_old_schema_sibling() {
         spec: WorkspaceSpecV2 {
             id: good_id,
             name: "current".into(),
-            policy: RuntimePolicy::Persistent,
+            policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
             panes: vec![PaneSpecV2 {
@@ -146,13 +146,13 @@ fn good_v2_runtime_survives_alongside_old_schema_sibling() {
                 no_persist: false,
             }],
         },
-        instance: RuntimeInstanceV1 {
+        instance: WorkspaceInstanceV1 {
             revision: 1,
             last_active_at: SystemTime::now(),
             last_snapshot_at: SystemTime::now(),
         },
     };
-    persistence::save_runtime(state_dir, &good).unwrap();
+    persistence::save_workspace(state_dir, &good).unwrap();
 
     // A stale v1 sibling.
     let old_dir = layout::runtime_dir(state_dir, old_id);
@@ -166,8 +166,8 @@ fn good_v2_runtime_survives_alongside_old_schema_sibling() {
     persistence::save_daemon_index(state_dir, &[good_id, old_id]).unwrap();
 
     let result = persistence::load_all(state_dir).unwrap();
-    assert_eq!(result.runtimes.len(), 1);
-    assert_eq!(result.runtimes[0].spec.id, good_id);
+    assert_eq!(result.workspaces.len(), 1);
+    assert_eq!(result.workspaces[0].spec.id, good_id);
     assert_eq!(result.reset_ids, vec![old_id]);
     assert!(!old_dir.exists());
 }

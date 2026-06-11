@@ -1,8 +1,8 @@
-//! Runtime and pane directory cleanup (RFC-022 §7, RFC-031 §8).
+//! Workspace and pane directory cleanup (RFC-022 §7, RFC-031 §8).
 //!
 //! Cleanup is explicit and close-driven, keyed on pane-tree membership:
 //!
-//! - On runtime delete: remove `runtimes/<id>/` in a background task.
+//! - On workspace delete: remove `workspaces/<id>/` in a background task.
 //! - On pane close: remove that pane's durable artifacts (screen snapshot,
 //!   scrollback log, history file, generated shell-init dir) in a background
 //!   task. A pane that leaves the tree leaves nothing behind.
@@ -15,10 +15,10 @@ use crate::state::layout;
 use std::path::Path;
 use uuid::Uuid;
 
-/// Remove a runtime's directory in a background task.
+/// Remove a workspace's directory in a background task.
 ///
 /// Errors are logged but do not propagate — the caller should not block
-/// on cleanup of a terminated runtime.
+/// on cleanup of a terminated workspace.
 pub fn remove_runtime_dir_background(state_dir: &Path, runtime_id: Uuid) {
     let dir = layout::runtime_dir(state_dir, runtime_id);
     let short = &runtime_id.to_string()[..8];
@@ -28,9 +28,9 @@ pub fn remove_runtime_dir_background(state_dir: &Path, runtime_id: Uuid) {
     let short = short.to_string();
     std::thread::spawn(move || {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
-            tracing::error!("Failed to remove runtime directory for {short}: {e}");
+            tracing::error!("Failed to remove workspace directory for {short}: {e}");
         } else {
-            tracing::info!("Removed runtime directory for {short}");
+            tracing::info!("Removed workspace directory for {short}");
         }
     });
 }
@@ -77,10 +77,10 @@ fn remove_file_if_present(path: &Path, short_pane: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::RuntimePolicy;
     use crate::state::layout;
     use crate::state::persistence;
     use crate::state::types::*;
+    use crate::workspace::WorkspacePolicy;
     use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -91,12 +91,12 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id,
                 name: "test".into(),
-                policy: RuntimePolicy::Persistent,
+                policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree: crate::pane_tree::WorkspaceTree::new(),
                 panes: vec![],
             },
-            instance: RuntimeInstanceV1 {
+            instance: WorkspaceInstanceV1 {
                 revision: 1,
                 last_active_at: SystemTime::now(),
                 last_snapshot_at: SystemTime::now(),
@@ -131,9 +131,9 @@ mod tests {
         let state_dir = tmp.path();
         let rt_id = Uuid::new_v4();
 
-        // Create a runtime directory with some content.
+        // Create a workspace directory with some content.
         let rf = sample_runtime_file(rt_id);
-        persistence::save_runtime(state_dir, &rf).unwrap();
+        persistence::save_workspace(state_dir, &rf).unwrap();
         let dir = layout::runtime_dir(state_dir, rt_id);
         assert!(dir.exists());
 

@@ -23,7 +23,7 @@ pub enum WorkspaceColor {
     Orange,
 }
 
-/// Runtime retention policy.
+/// Workspace retention policy.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspacePolicy {

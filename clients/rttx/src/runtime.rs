@@ -28,8 +28,8 @@ impl WorkspacePolicy {
     #[must_use]
     pub const fn as_v3_proto(self) -> i32 {
         match self {
-            Self::Persistent => rttx_proto::v3::RuntimePolicy::Persistent as i32,
-            Self::Ephemeral => rttx_proto::v3::RuntimePolicy::Ephemeral as i32,
+            Self::Persistent => rttx_proto::v3::WorkspacePolicy::Persistent as i32,
+            Self::Ephemeral => rttx_proto::v3::WorkspacePolicy::Ephemeral as i32,
         }
     }
 }
@@ -99,7 +99,7 @@ pub struct WorkspaceRuntime {
     /// Endpoint that hosts the runtime.
     #[serde(default)]
     pub endpoint: RuntimeEndpoint,
-    /// Runtime retention policy.
+    /// Workspace retention policy.
     #[serde(default)]
     pub policy: WorkspacePolicy,
     /// Live daemon runtime ID, if known.
@@ -279,7 +279,7 @@ impl ConnectionProblem {
             Self::DaemonUnavailable => "Daemon unavailable".into(),
             Self::DaemonDied => "Daemon stopped".into(),
             Self::VersionMismatch => "Version mismatch".into(),
-            Self::OwnershipConflict => "Runtime already owned".into(),
+            Self::OwnershipConflict => "Workspace already owned".into(),
             Self::PermissionDenied => "Permission denied".into(),
             Self::SessionMissing => "Session no longer exists".into(),
             Self::DaemonNotInstalled(detail)
@@ -296,7 +296,7 @@ pub fn classify_connection_problem(error: &DaemonError) -> ConnectionProblem {
         DaemonError::VersionMismatch { .. } => ConnectionProblem::VersionMismatch,
         DaemonError::AttachBlocked(_) => ConnectionProblem::OwnershipConflict,
         DaemonError::ProtocolError { kind, message, .. } => match kind {
-            v3::ErrorKind::RuntimeNotFound => ConnectionProblem::SessionMissing,
+            v3::ErrorKind::WorkspaceNotFound => ConnectionProblem::SessionMissing,
             v3::ErrorKind::OwnershipConflict | v3::ErrorKind::TakeoverRequired => {
                 ConnectionProblem::OwnershipConflict
             }
@@ -588,7 +588,7 @@ fn is_generic_title(title: &str) -> bool {
 pub struct BindingReconciliation {
     /// Valid layout -> runtime bindings after reconciliation.
     pub bindings: BTreeMap<String, String>,
-    /// Runtime panes that still need recovered GUI panes.
+    /// Workspace panes that still need recovered GUI panes.
     pub recovered_runtime_panes: Vec<String>,
     /// Layout panes that have no live runtime pane.
     pub disconnected_layout_panes: Vec<String>,

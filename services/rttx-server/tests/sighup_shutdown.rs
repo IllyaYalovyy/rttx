@@ -8,7 +8,7 @@ use tokio::process::Command;
 #[tokio::test]
 async fn sighup_triggers_graceful_shutdown() {
     let tmp = TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     let cache_dir = tmp.path().join("cache");
     let state_dir = tmp.path().join("state");
     tokio::fs::create_dir_all(&runtime_dir).await.unwrap();

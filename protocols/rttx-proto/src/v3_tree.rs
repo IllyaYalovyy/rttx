@@ -44,7 +44,7 @@ pub fn build_pane_split(
     new_pane_id: uuid::Uuid,
     axis: v3::PaneSplitAxis,
     ratio: f32,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::PaneSplit {
     v3::PaneSplit {
         runtime_id: crate::uuid_to_bytes(runtime_id),
@@ -52,7 +52,7 @@ pub fn build_pane_split(
         new_pane_id: crate::uuid_to_bytes(new_pane_id),
         axis: axis as i32,
         ratio,
-        runtime_revision,
+        workspace_revision,
     }
 }
 
@@ -77,13 +77,13 @@ pub fn build_split_resized(
     runtime_id: uuid::Uuid,
     path: Vec<v3::PaneTreeSide>,
     ratio: f32,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::SplitResized {
     v3::SplitResized {
         runtime_id: crate::uuid_to_bytes(runtime_id),
         path: path.into_iter().map(|s| s as i32).collect(),
         ratio,
-        runtime_revision,
+        workspace_revision,
     }
 }
 
@@ -110,12 +110,12 @@ pub fn build_split_resized_push(resized: v3::SplitResized) -> v3::ServerEnvelope
 pub fn build_focus_changed(
     runtime_id: uuid::Uuid,
     pane_id: uuid::Uuid,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::FocusChanged {
     v3::FocusChanged {
         runtime_id: crate::uuid_to_bytes(runtime_id),
         pane_id: crate::uuid_to_bytes(pane_id),
-        runtime_revision,
+        workspace_revision,
     }
 }
 
@@ -211,7 +211,7 @@ mod tests {
         let Some(v3::server_envelope::Payload::PaneSplit(p)) = env.payload else {
             panic!("expected PaneSplit");
         };
-        assert_eq!(p.runtime_revision, 3);
+        assert_eq!(p.workspace_revision, 3);
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
             panic!("expected FocusChanged");
         };
         assert_eq!(f.pane_id, uuid_to_bytes(p));
-        assert_eq!(f.runtime_revision, 5);
+        assert_eq!(f.workspace_revision, 5);
     }
 
     #[test]

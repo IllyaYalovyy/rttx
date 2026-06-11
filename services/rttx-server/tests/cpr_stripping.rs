@@ -15,7 +15,7 @@ async fn cpr_responses_stripped_from_client_output() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "cpr-test", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "cpr-test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = common::create_pane(&mut client, &runtime_id).await;
     common::attach_rw(&mut client, &runtime_id).await;
 

@@ -1,6 +1,6 @@
 //! Scale and scrollback stress tests.
 //!
-//! Exercises larger runtime inventories, multiple panes per runtime,
+//! Exercises larger workspace inventories, multiple panes per workspace,
 //! and scrollback volume under attach and restart. Sized to stay
 //! reliable in CI (~10s) while catching scale regressions.
 
@@ -12,10 +12,10 @@ use std::time::Duration;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-// ── Many runtimes in inventory ──────────────────────────────────
+// ── Many workspaces in inventory ──────────────────────────────────
 
 #[tokio::test]
-async fn ten_runtimes_listed_in_stable_order() {
+async fn ten_workspaces_listed_in_stable_order() {
     let tmp = tempfile::tempdir().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -23,35 +23,37 @@ async fn ten_runtimes_listed_in_stable_order() {
     client.handshake().await;
 
     for i in 0..10 {
-        create_runtime(&mut client, &format!("session-{i}"), v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut client, &format!("session-{i}"), v3::WorkspacePolicy::Persistent)
+            .await;
     }
 
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 10);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 10);
 
     // Inventory must be sorted by session ID (server contract).
-    let listed_ids: Vec<&[u8]> = runtimes.iter().map(|s| s.id.as_slice()).collect();
+    let listed_ids: Vec<&[u8]> = workspaces.iter().map(|s| s.id.as_slice()).collect();
     let mut sorted_ids = listed_ids.clone();
     sorted_ids.sort();
     assert_eq!(listed_ids, sorted_ids, "inventory must be sorted by session ID");
 
     // List again — order must be stable.
-    let sessions2 = list_runtimes(&mut client).await;
+    let sessions2 = list_workspaces(&mut client).await;
     let listed_ids2: Vec<&[u8]> = sessions2.iter().map(|s| s.id.as_slice()).collect();
     assert_eq!(listed_ids, listed_ids2, "inventory order must be stable across calls");
 }
 
-// ── Many panes in a single runtime ──────────────────────────────
+// ── Many panes in a single workspace ──────────────────────────────
 
 #[tokio::test]
-async fn five_panes_in_one_runtime() {
+async fn five_panes_in_one_workspace() {
     let tmp = tempfile::tempdir().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "multi-pane", v3::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "multi-pane", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
 
     let mut pane_ids = Vec::new();
@@ -59,8 +61,8 @@ async fn five_panes_in_one_runtime() {
         pane_ids.push(create_pane(&mut client, &runtime_id).await);
     }
 
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes[0].pane_count, 5);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces[0].pane_count, 5);
 
     // All pane IDs must be unique.
     let mut sorted = pane_ids.clone();
@@ -79,7 +81,8 @@ async fn large_scrollback_survives_detach_and_reattach() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "scrollback", v3::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "scrollback", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
 
@@ -110,7 +113,7 @@ async fn large_scrollback_survives_detach_and_reattach() {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                 runtime_id: runtime_id.clone(),
             })),
         })
@@ -139,7 +142,7 @@ async fn scrollback_survives_restart() {
         client.handshake().await;
 
         runtime_id =
-            create_runtime(&mut client, "restart-scroll", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, "restart-scroll", v3::WorkspacePolicy::Persistent).await;
         attach_rw(&mut client, &runtime_id).await;
         pane_id = create_pane(&mut client, &runtime_id).await;
 
@@ -154,7 +157,7 @@ async fn scrollback_survives_restart() {
         }
 
         // Wait for serialization + scrollback flush.
-        // The serialization loop ticks every 1s. Wait for the v2 runtime
+        // The serialization loop ticks every 1s. Wait for the v2 workspace
         // file to contain our session data.
         common::wait_for_state_containing(tmp.path(), "restart-scroll", Duration::from_secs(10))
             .await;
@@ -167,9 +170,9 @@ async fn scrollback_survives_restart() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert!(runtimes[0].reconstructed);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert!(workspaces[0].reconstructed);
 
     let snap = attach_rw(&mut client, &runtime_id).await;
     let total_bytes: usize = snap.panes.iter().map(|p| p.scrollback_tail.len()).sum();
@@ -187,17 +190,17 @@ async fn repeated_list_under_load_is_consistent() {
     client.handshake().await;
 
     for i in 0..5 {
-        create_runtime(&mut client, &format!("load-{i}"), v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut client, &format!("load-{i}"), v3::WorkspacePolicy::Persistent).await;
     }
 
     // List 10 times — count and order must be stable.
-    let baseline = list_runtimes(&mut client).await;
+    let baseline = list_workspaces(&mut client).await;
     assert_eq!(baseline.len(), 5);
 
     for round in 0..10 {
-        let runtimes = list_runtimes(&mut client).await;
-        assert_eq!(runtimes.len(), 5, "round {round}: session count changed");
-        let ids: Vec<&[u8]> = runtimes.iter().map(|s| s.id.as_slice()).collect();
+        let workspaces = list_workspaces(&mut client).await;
+        assert_eq!(workspaces.len(), 5, "round {round}: session count changed");
+        let ids: Vec<&[u8]> = workspaces.iter().map(|s| s.id.as_slice()).collect();
         let baseline_ids: Vec<&[u8]> = baseline.iter().map(|s| s.id.as_slice()).collect();
         assert_eq!(ids, baseline_ids, "round {round}: inventory order changed");
     }

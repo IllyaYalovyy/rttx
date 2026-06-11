@@ -28,10 +28,10 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
     assert_eq!(req_env, decoded_req);
     assert_ne!(decoded_req.request_id, 0);
 
-    // 2. Server builds a report with runtimes and panes
+    // 2. Server builds a report with workspaces and panes
     let p1 = v3_diagnostics::build_pane_diagnostics_info(pn(), 4096, 128, false);
     let p2 = v3_diagnostics::build_pane_diagnostics_info(pn(), 0, 0, true);
-    let rt1 = v3_diagnostics::build_runtime_diagnostics_info(
+    let rt1 = v3_diagnostics::build_workspace_diagnostics_info(
         rt(),
         "workspace-1".into(),
         1,
@@ -40,7 +40,7 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
         vec![p1, p2],
     );
     let report = v3_diagnostics::build_diagnostics_report(DiagnosticsReportArgs {
-        runtime_count: 1,
+        workspace_count: 1,
         total_pane_count: 2,
         total_active_panes: 1,
         total_exited_panes: 1,
@@ -48,7 +48,7 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
         pty_writer_count: 1,
         total_raw_bytes: 4096,
         total_pending_flush: 128,
-        runtimes: vec![rt1],
+        workspaces: vec![rt1],
     });
 
     // 3. Server responds with DiagnosticsReport
@@ -65,17 +65,19 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
     else {
         panic!("expected DiagnosticsReport payload");
     };
-    assert_eq!(r.runtime_count, 1);
+    assert_eq!(r.workspace_count, 1);
     assert_eq!(r.total_pane_count, 2);
-    assert_eq!(r.runtimes.len(), 1);
-    assert_eq!(r.runtimes[0].panes.len(), 2);
-    assert!(r.runtimes[0].panes[1].is_exited);
+    assert_eq!(r.workspaces.len(), 1);
+    assert_eq!(r.workspaces[0].panes.len(), 2);
+    assert!(r.workspaces[0].panes[1].is_exited);
 }
 
 #[test]
 fn v3_diagnostics_capability_gating_rejects_when_absent() {
-    let caps_without_diagnostics =
-        vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::CorePaneLifecycle as i32];
+    let caps_without_diagnostics = vec![
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::CorePaneLifecycle as i32,
+    ];
     assert!(!v3_diagnostics::is_supported(&caps_without_diagnostics));
 
     // Server returns UnsupportedCapability error
@@ -101,7 +103,7 @@ fn v3_diagnostics_empty_server_report() {
 
     let req_env = v3_diagnostics::build_get_diagnostics_envelope(&id_gen);
     let report = v3_diagnostics::build_diagnostics_report(DiagnosticsReportArgs {
-        runtime_count: 0,
+        workspace_count: 0,
         total_pane_count: 0,
         total_active_panes: 0,
         total_exited_panes: 0,
@@ -109,7 +111,7 @@ fn v3_diagnostics_empty_server_report() {
         pty_writer_count: 0,
         total_raw_bytes: 0,
         total_pending_flush: 0,
-        runtimes: vec![],
+        workspaces: vec![],
     });
     let resp_env = v3_diagnostics::build_diagnostics_report_response(req_env.request_id, report);
     let mut buf = bytes::BytesMut::new();
@@ -118,8 +120,8 @@ fn v3_diagnostics_empty_server_report() {
     let v3::server_envelope::Payload::DiagnosticsReport(ref r) = decoded.payload.unwrap() else {
         panic!("expected DiagnosticsReport payload");
     };
-    assert_eq!(r.runtime_count, 0);
-    assert!(r.runtimes.is_empty());
+    assert_eq!(r.workspace_count, 0);
+    assert!(r.workspaces.is_empty());
 }
 
 #[test]

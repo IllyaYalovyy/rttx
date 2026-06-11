@@ -47,7 +47,7 @@ async fn cleanup_sequence_broadcast_on_pane_exit() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "cleanup-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "cleanup-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -75,7 +75,7 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "reattach-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "reattach-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
     let pane_id = create_pane(&mut client, &sid).await;
 
@@ -95,7 +95,7 @@ async fn reattach_after_exit_sees_clean_terminal_modes() {
     }
 
     // Detach and reattach to get a fresh snapshot.
-    detach_runtime(&mut client, &sid).await;
+    detach_workspace(&mut client, &sid).await;
     let snapshot = attach_rw(&mut client, &sid).await;
 
     let pane = snapshot

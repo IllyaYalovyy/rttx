@@ -17,11 +17,11 @@ fn leaf_uuids(layout: &LayoutNode) -> Vec<String> {
     layout.terminal_uuids()
 }
 
-fn snapshot_with_tree(tree: Option<v3::PaneTreeNode>) -> v3::RuntimeSnapshot {
-    v3::RuntimeSnapshot {
+fn snapshot_with_tree(tree: Option<v3::PaneTreeNode>) -> v3::WorkspaceSnapshot {
+    v3::WorkspaceSnapshot {
         runtime_id: rttx_proto::uuid_to_bytes(Uuid::new_v4()),
-        runtime_revision: 1,
-        client_role: v3::RuntimeClientRole::Writer as i32,
+        workspace_revision: 1,
+        client_role: v3::WorkspaceClientRole::Writer as i32,
         panes: Vec::new(),
         tree,
         default_active_pane_id: Vec::new(),

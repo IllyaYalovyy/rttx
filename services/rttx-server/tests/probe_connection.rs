@@ -48,10 +48,10 @@ async fn repeated_probes_do_not_leak_resources() {
     client.handshake().await;
 
     // Create a session to verify full functionality.
-    let sid = common::create_runtime(
+    let sid = common::create_workspace(
         &mut client,
         "after-probes",
-        rttx_proto::v3::RuntimePolicy::Persistent,
+        rttx_proto::v3::WorkspacePolicy::Persistent,
     )
     .await;
     assert!(!sid.is_empty());

@@ -16,27 +16,27 @@ async fn create_and_attach(client: &mut TestClient, name: &str) -> Vec<u8> {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: name.into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
     runtime_id
@@ -118,9 +118,9 @@ async fn close_pane_during_output_burst() {
     assert!(saw_closed, "must receive PaneClosed after close during burst");
 
     // Session should still exist with 0 panes.
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].pane_count, 0);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].pane_count, 0);
 }
 
 // ── Resize after pane exit ──────────────────────────────────────
@@ -158,8 +158,8 @@ async fn resize_after_pane_exit_is_silently_dropped() {
     );
 
     // Server must remain functional.
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
 }
 
 // ── Title change interleaved with output ────────────────────────
@@ -197,9 +197,9 @@ async fn title_change_during_output_does_not_corrupt_state() {
     }
 
     // Server should still be responsive — list sessions as a liveness check.
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].pane_count, 1);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].pane_count, 1);
 }
 
 // ── Shell exits before first attach ─────────────────────────────
@@ -218,7 +218,7 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                 runtime_id: runtime_id.clone(),
             })),
         })
@@ -228,10 +228,10 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     // Poll inventory until the pane reports an exit status.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let runtimes = list_runtimes(&mut client).await;
-        if !runtimes.is_empty()
-            && !runtimes[0].panes.is_empty()
-            && runtimes[0].panes[0].exit_status.is_some()
+        let workspaces = list_workspaces(&mut client).await;
+        if !workspaces.is_empty()
+            && !workspaces[0].panes.is_empty()
+            && workspaces[0].panes[0].exit_status.is_some()
         {
             break;
         }
@@ -243,11 +243,11 @@ async fn shell_exits_before_reattach_shows_exit_status_in_inventory() {
     }
 
     // Reattach — inventory should show exit status.
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].panes.len(), 1);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].panes.len(), 1);
     assert!(
-        runtimes[0].panes[0].exit_status.is_some(),
+        workspaces[0].panes[0].exit_status.is_some(),
         "pane that exited while detached must report exit status"
     );
 }

@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{TestClient, attach_rw, create_pane, create_runtime, start_test_server};
+use common::{TestClient, attach_rw, create_pane, create_workspace, start_test_server};
 use rttx_proto::v3;
 
 #[test]
@@ -18,7 +18,7 @@ fn pong_arrives_promptly_during_burst_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "pong-priority", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, "pong-priority", v3::WorkspacePolicy::Persistent).await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
         let pane_id = create_pane(&mut client, &runtime_id).await;
 

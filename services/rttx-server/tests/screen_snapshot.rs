@@ -1,7 +1,7 @@
 //! Integration tests for `ScreenSnapshotV1` serialization (RFC-022 Step 5).
 //!
-//! Verifies that the daemon writes screen snapshots alongside per-runtime
-//! files and that corrupt snapshots do not block runtime loading.
+//! Verifies that the daemon writes screen snapshots alongside per-workspace
+//! files and that corrupt snapshots do not block workspace loading.
 
 mod common;
 
@@ -10,7 +10,7 @@ use rttx_proto::{bytes_to_uuid, v3};
 use rttx_server::state::{layout, persistence};
 use std::time::Duration;
 
-/// After creating a persistent runtime with a pane, the daemon writes
+/// After creating a persistent workspace with a pane, the daemon writes
 /// screen snapshot files at `screen/<pane_id>.snap`.
 #[tokio::test]
 async fn serialization_writes_screen_snapshots() {
@@ -20,27 +20,27 @@ async fn serialization_writes_screen_snapshots() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    // Create a persistent runtime.
+    // Create a persistent workspace.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "snap-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     })
     .await;
     let runtime_id_bytes = match c.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
     let runtime_id = bytes_to_uuid(&runtime_id_bytes).unwrap();
 
-    // Attach to the runtime (ReadWrite).
+    // Attach to the workspace (ReadWrite).
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id_bytes.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     })
     .await;
@@ -81,9 +81,9 @@ async fn serialization_writes_screen_snapshots() {
     assert_eq!(snap.schema_version, rttx_server::state::types::SCREEN_SNAPSHOT_SCHEMA_VERSION);
 }
 
-/// A corrupt screen snapshot does not prevent runtime loading.
+/// A corrupt screen snapshot does not prevent workspace loading.
 #[tokio::test]
-async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
+async fn corrupt_screen_snapshot_does_not_block_workspace_load() {
     let tmp = tempfile::TempDir::new().unwrap();
     let state_dir = tmp.path().join("state/rttx/daemon");
 
@@ -98,7 +98,7 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
         spec: rttx_server::state::types::WorkspaceSpecV2 {
             id: runtime_id,
             name: "corrupt-snap-test".into(),
-            policy: rttx_server::runtime::RuntimePolicy::Persistent,
+            policy: rttx_server::workspace::WorkspacePolicy::Persistent,
             created_at: std::time::SystemTime::now(),
             tree,
             panes: vec![rttx_server::state::types::PaneSpecV2 {
@@ -111,7 +111,7 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
                 no_persist: false,
             }],
         },
-        instance: rttx_server::state::types::RuntimeInstanceV1 {
+        instance: rttx_server::state::types::WorkspaceInstanceV1 {
             revision: 1,
             last_active_at: std::time::SystemTime::now(),
             last_snapshot_at: std::time::SystemTime::now(),
@@ -119,7 +119,7 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
     };
 
     persistence::save_daemon_index(&state_dir, &[runtime_id]).unwrap();
-    persistence::save_runtime(&state_dir, &rf).unwrap();
+    persistence::save_workspace(&state_dir, &rf).unwrap();
 
     // Write a corrupt screen snapshot.
     let snap_path = layout::screen_snapshot(&state_dir, runtime_id, pane_id);
@@ -130,8 +130,8 @@ async fn corrupt_screen_snapshot_does_not_block_runtime_load() {
     let snap = persistence::load_screen_snapshot(&state_dir, runtime_id, pane_id);
     assert!(snap.is_none(), "corrupt snapshot should return None");
 
-    // The runtime itself should still load fine.
+    // The workspace itself should still load fine.
     let result = persistence::load_all(&state_dir).expect("v2 state should load");
-    assert_eq!(result.runtimes.len(), 1);
-    assert_eq!(result.runtimes[0].spec.id, runtime_id);
+    assert_eq!(result.workspaces.len(), 1);
+    assert_eq!(result.workspaces[0].spec.id, runtime_id);
 }

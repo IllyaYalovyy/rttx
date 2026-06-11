@@ -1,4 +1,4 @@
-//! Integration tests for the `rttx-server kill <runtime-id>` command.
+//! Integration tests for the `rttx-server kill <workspace-id>` command.
 
 mod common;
 
@@ -6,7 +6,7 @@ use common::{TestClient, start_test_server};
 use rttx_proto::v3;
 
 #[tokio::test]
-async fn kill_terminates_existing_runtime() {
+async fn kill_terminates_existing_workspace() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -14,22 +14,22 @@ async fn kill_terminates_existing_runtime() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "target", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "target", v3::WorkspacePolicy::Persistent).await;
 
     // Verify it exists.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
 
     // Terminate via the same protocol path the kill command uses.
-    common::terminate_runtime(&mut client, &runtime_id).await;
+    common::terminate_workspace(&mut client, &runtime_id).await;
 
     // Verify it's gone.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert!(runtimes.is_empty());
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert!(workspaces.is_empty());
 }
 
 #[tokio::test]
-async fn kill_nonexistent_runtime_returns_error() {
+async fn kill_nonexistent_workspace_returns_error() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -40,7 +40,7 @@ async fn kill_nonexistent_runtime_returns_error() {
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        command: Some(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: fake_id,
         })),
     };
@@ -60,7 +60,7 @@ async fn kill_nonexistent_runtime_returns_error() {
 fn kill_invalid_uuid_exits_with_error() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = tempfile::TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     std::fs::create_dir_all(&runtime_dir).unwrap();
 
     let output = std::process::Command::new(bin)
@@ -73,8 +73,8 @@ fn kill_invalid_uuid_exits_with_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("invalid runtime ID"),
-        "expected 'invalid runtime ID' in stderr, got: {stderr}"
+        stderr.contains("invalid workspace ID"),
+        "expected 'invalid workspace ID' in stderr, got: {stderr}"
     );
 }
 
@@ -83,7 +83,7 @@ fn kill_invalid_uuid_exits_with_error() {
 fn kill_reports_not_running_without_daemon() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = tempfile::TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     std::fs::create_dir_all(&runtime_dir).unwrap();
 
     let output = std::process::Command::new(bin)

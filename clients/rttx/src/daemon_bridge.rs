@@ -57,12 +57,12 @@ pub enum ManagerOperation {
     OpenWorkspace,
     CreatePane,
     ClosePane,
-    DetachRuntime,
-    TerminateRuntime,
+    DetachWorkspace,
+    TerminateWorkspace,
     RefreshInventory,
     SendInput,
     ResizePane,
-    RenameRuntime,
+    RenameWorkspace,
     SetPaneNoPersist,
 }
 
@@ -76,7 +76,7 @@ pub enum EndpointEvent {
     WorkspaceOpened {
         workspace_id: String,
         runtime_id: String,
-        snapshot: v3::RuntimeSnapshot,
+        snapshot: v3::WorkspaceSnapshot,
     },
     PaneCreated {
         workspace_id: String,
@@ -94,23 +94,23 @@ pub enum EndpointEvent {
         workspace_id: String,
         runtime_id: String,
     },
-    RuntimeTerminated {
+    WorkspaceTerminated {
         workspace_id: String,
         runtime_id: String,
-        reason: v3::RuntimeTerminationReason,
+        reason: v3::WorkspaceTerminationReason,
     },
     InventoryLoaded {
         endpoint: RuntimeEndpoint,
-        runtimes: Vec<v3::RuntimeInfo>,
+        workspaces: Vec<v3::WorkspaceInfo>,
     },
-    RuntimeMessage {
+    WorkspaceMessage {
         endpoint: RuntimeEndpoint,
         message: v3::ServerEnvelope,
     },
     WorkspaceResynced {
         workspace_id: String,
         runtime_id: String,
-        snapshot: v3::RuntimeSnapshot,
+        snapshot: v3::WorkspaceSnapshot,
     },
     WorkspaceError {
         workspace_id: String,
@@ -146,11 +146,11 @@ enum EndpointCommand {
         layout_terminal_uuid: String,
         runtime_pane_id: String,
     },
-    DetachRuntime {
+    DetachWorkspace {
         workspace_id: String,
         runtime_id: String,
     },
-    TerminateRuntime {
+    TerminateWorkspace {
         workspace_id: String,
         runtime_id: String,
     },
@@ -172,7 +172,7 @@ enum EndpointCommand {
     ForgetWorkspace {
         workspace_id: String,
     },
-    RenameRuntime {
+    RenameWorkspace {
         workspace_id: String,
         runtime_id: String,
         name: String,
@@ -183,7 +183,7 @@ enum EndpointCommand {
         runtime_pane_id: String,
         no_persist: bool,
     },
-    ResyncRuntime {
+    ResyncWorkspace {
         workspace_id: String,
         runtime_id: String,
     },
@@ -344,7 +344,7 @@ impl EndpointConnectionManager {
 
     /// Gracefully detach a workspace from its runtime.
     pub fn detach_runtime(&self, workspace_id: &str, endpoint: &RuntimeEndpoint, runtime_id: &str) {
-        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::DetachRuntime {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::DetachWorkspace {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
         });
@@ -357,7 +357,7 @@ impl EndpointConnectionManager {
         endpoint: &RuntimeEndpoint,
         runtime_id: &str,
     ) {
-        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::TerminateRuntime {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::TerminateWorkspace {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
         });
@@ -414,7 +414,7 @@ impl EndpointConnectionManager {
         runtime_id: &str,
         name: &str,
     ) {
-        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::RenameRuntime {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::RenameWorkspace {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             name: name.to_string(),
@@ -661,7 +661,7 @@ impl EndpointActor {
                 self.observe_inbound_pong(&env);
             } else if matches!(
                 env.payload,
-                Some(v3::server_envelope::Payload::RuntimeTerminated(_))
+                Some(v3::server_envelope::Payload::WorkspaceTerminated(_))
             ) && expect_terminated
             {
                 // Expected terminated response but with wrong request_id — skip.
@@ -672,7 +672,7 @@ impl EndpointActor {
     }
 
     fn dispatch_push(&mut self, env: v3::ServerEnvelope) {
-        if let Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) = &env.payload
+        if let Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) = &env.payload
             && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
         {
             self.tracked_workspaces.retain(|_, tracked| tracked != &runtime_id.to_string());
@@ -937,10 +937,10 @@ impl EndpointActor {
                     }
                 }
             }
-            EndpointCommand::DetachRuntime { workspace_id, runtime_id } => {
+            EndpointCommand::DetachWorkspace { workspace_id, runtime_id } => {
                 let Some(runtime_uuid) = parse_uuid(
                     &workspace_id,
-                    ManagerOperation::DetachRuntime,
+                    ManagerOperation::DetachWorkspace,
                     &runtime_id,
                     &self.event_tx,
                 ) else {
@@ -950,7 +950,7 @@ impl EndpointActor {
                     if !problem.is_transient() {
                         self.emit_error(
                             &workspace_id,
-                            ManagerOperation::DetachRuntime,
+                            ManagerOperation::DetachWorkspace,
                             problem.clone(),
                             problem.label(),
                         );
@@ -958,38 +958,38 @@ impl EndpointActor {
                     return;
                 }
 
-                let msg = v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                let msg = v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                     runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                 });
                 match self.send_and_read(msg, true).await {
                     Ok(response) => match response.payload {
-                        Some(v3::server_envelope::Payload::RuntimeDetached(_)) => {
+                        Some(v3::server_envelope::Payload::WorkspaceDetached(_)) => {
                             self.tracked_workspaces.remove(&workspace_id);
                             let _ = self.event_tx.try_send(EndpointEvent::WorkspaceDetached {
                                 workspace_id,
                                 runtime_id,
                             });
                         }
-                        Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
+                        Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
-                            let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
+                            let _ = self.event_tx.try_send(EndpointEvent::WorkspaceTerminated {
                                 workspace_id,
                                 runtime_id,
-                                reason: v3::RuntimeTerminationReason::try_from(terminated.reason)
-                                    .unwrap_or(v3::RuntimeTerminationReason::Unspecified),
+                                reason: v3::WorkspaceTerminationReason::try_from(terminated.reason)
+                                    .unwrap_or(v3::WorkspaceTerminationReason::Unspecified),
                             });
                         }
                         Some(v3::server_envelope::Payload::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
-                                ManagerOperation::DetachRuntime,
+                                ManagerOperation::DetachWorkspace,
                                 &protocol_error_to_daemon(e),
                             );
                         }
                         _ => {
                             self.handle_command_error(
                                 &workspace_id,
-                                ManagerOperation::DetachRuntime,
+                                ManagerOperation::DetachWorkspace,
                                 &DaemonError::UnexpectedMessage,
                             );
                         }
@@ -997,16 +997,16 @@ impl EndpointActor {
                     Err(error) => {
                         self.handle_command_error(
                             &workspace_id,
-                            ManagerOperation::DetachRuntime,
+                            ManagerOperation::DetachWorkspace,
                             &error,
                         );
                     }
                 }
             }
-            EndpointCommand::TerminateRuntime { workspace_id, runtime_id } => {
+            EndpointCommand::TerminateWorkspace { workspace_id, runtime_id } => {
                 let Some(runtime_uuid) = parse_uuid(
                     &workspace_id,
-                    ManagerOperation::TerminateRuntime,
+                    ManagerOperation::TerminateWorkspace,
                     &runtime_id,
                     &self.event_tx,
                 ) else {
@@ -1016,7 +1016,7 @@ impl EndpointActor {
                     if !problem.is_transient() {
                         self.emit_error(
                             &workspace_id,
-                            ManagerOperation::TerminateRuntime,
+                            ManagerOperation::TerminateWorkspace,
                             problem.clone(),
                             problem.label(),
                         );
@@ -1024,31 +1024,32 @@ impl EndpointActor {
                     return;
                 }
 
-                let msg = v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
-                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                });
+                let msg =
+                    v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    });
                 match self.send_and_read(msg, true).await {
                     Ok(response) => match response.payload {
-                        Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
+                        Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) => {
                             self.tracked_workspaces.remove(&workspace_id);
-                            let _ = self.event_tx.try_send(EndpointEvent::RuntimeTerminated {
+                            let _ = self.event_tx.try_send(EndpointEvent::WorkspaceTerminated {
                                 workspace_id,
                                 runtime_id,
-                                reason: v3::RuntimeTerminationReason::try_from(terminated.reason)
-                                    .unwrap_or(v3::RuntimeTerminationReason::Unspecified),
+                                reason: v3::WorkspaceTerminationReason::try_from(terminated.reason)
+                                    .unwrap_or(v3::WorkspaceTerminationReason::Unspecified),
                             });
                         }
                         Some(v3::server_envelope::Payload::Error(e)) => {
                             self.handle_command_error(
                                 &workspace_id,
-                                ManagerOperation::TerminateRuntime,
+                                ManagerOperation::TerminateWorkspace,
                                 &protocol_error_to_daemon(e),
                             );
                         }
                         _ => {
                             self.handle_command_error(
                                 &workspace_id,
-                                ManagerOperation::TerminateRuntime,
+                                ManagerOperation::TerminateWorkspace,
                                 &DaemonError::UnexpectedMessage,
                             );
                         }
@@ -1056,7 +1057,7 @@ impl EndpointActor {
                     Err(error) => {
                         self.handle_command_error(
                             &workspace_id,
-                            ManagerOperation::TerminateRuntime,
+                            ManagerOperation::TerminateWorkspace,
                             &error,
                         );
                     }
@@ -1129,11 +1130,11 @@ impl EndpointActor {
                     return;
                 }
                 let list_result = if self.writer.is_some() {
-                    let msg = v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {});
+                    let msg = v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {});
                     match self.send_and_read(msg, false).await {
                         Ok(response) => match response.payload {
-                            Some(v3::server_envelope::Payload::RuntimeList(list)) => {
-                                Ok(list.runtimes)
+                            Some(v3::server_envelope::Payload::WorkspaceList(list)) => {
+                                Ok(list.workspaces)
                             }
                             Some(v3::server_envelope::Payload::Error(e)) => {
                                 Err(protocol_error_to_daemon(e))
@@ -1144,13 +1145,13 @@ impl EndpointActor {
                     }
                 } else {
                     let connection = self.connection.as_mut().expect("connection must exist");
-                    connection.list_runtimes().await
+                    connection.list_workspaces().await
                 };
                 match list_result {
                     Ok(inventory) => {
                         let _ = self.event_tx.try_send(EndpointEvent::InventoryLoaded {
                             endpoint: self.endpoint.clone(),
-                            runtimes: inventory,
+                            workspaces: inventory,
                         });
                     }
                     Err(error) => self.handle_command_error(
@@ -1253,10 +1254,10 @@ impl EndpointActor {
                     self.reconnect_attempt = 0;
                 }
             }
-            EndpointCommand::RenameRuntime { workspace_id, runtime_id, name } => {
+            EndpointCommand::RenameWorkspace { workspace_id, runtime_id, name } => {
                 let Some(runtime_uuid) = parse_uuid(
                     &workspace_id,
-                    ManagerOperation::RenameRuntime,
+                    ManagerOperation::RenameWorkspace,
                     &runtime_id,
                     &self.event_tx,
                 ) else {
@@ -1267,10 +1268,12 @@ impl EndpointActor {
                 }
                 let env = v3::ClientEnvelope {
                     request_id: 0,
-                    command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                        name,
-                    })),
+                    command: Some(v3::client_envelope::Command::RenameWorkspace(
+                        v3::RenameWorkspace {
+                            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                            name,
+                        },
+                    )),
                 };
                 let _ = self.send_message(&env).await;
             }
@@ -1311,15 +1314,15 @@ impl EndpointActor {
                 };
                 let _ = self.send_message(&env).await;
             }
-            EndpointCommand::ResyncRuntime { workspace_id, runtime_id } => {
+            EndpointCommand::ResyncWorkspace { workspace_id, runtime_id } => {
                 let Ok(runtime_uuid) = runtime_id.parse::<Uuid>() else {
                     return;
                 };
-                let resync = rttx_proto::v3_resync::build_resync_runtime(runtime_uuid);
-                let msg = v3::client_envelope::Command::ResyncRuntime(resync);
+                let resync = rttx_proto::v3_resync::build_resync_workspace(runtime_uuid);
+                let msg = v3::client_envelope::Command::ResyncWorkspace(resync);
                 match self.send_and_read(msg, false).await {
                     Ok(response) => match response.payload {
-                        Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => {
+                        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => {
                             let _ = self.event_tx.try_send(EndpointEvent::WorkspaceResynced {
                                 workspace_id,
                                 runtime_id,
@@ -1531,7 +1534,7 @@ impl EndpointActor {
         &mut self,
         workspace_id: &str,
         runtime_id: &str,
-    ) -> Result<v3::RuntimeSnapshot, ()> {
+    ) -> Result<v3::WorkspaceSnapshot, ()> {
         let Some(runtime_uuid) =
             parse_uuid(workspace_id, ManagerOperation::OpenWorkspace, runtime_id, &self.event_tx)
         else {
@@ -1560,7 +1563,7 @@ impl EndpointActor {
         name: &str,
         policy: WorkspacePolicy,
         existing_runtime_id: Option<&str>,
-    ) -> Result<(String, v3::RuntimeSnapshot), ()> {
+    ) -> Result<(String, v3::WorkspaceSnapshot), ()> {
         if let Some(runtime_id) = existing_runtime_id
             && let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>()
         {
@@ -1589,7 +1592,7 @@ impl EndpointActor {
                     self.emit_status(workspace_id, ConnectionStatus::SessionMissing);
                     return Err(());
                 }
-                // Runtime gone for other reasons — fall through to create a new one.
+                // Workspace gone for other reasons — fall through to create a new one.
                 Err(error) => {
                     tracing::info!(
                         "Reattach to {runtime_id} failed for {workspace_id}: \
@@ -1617,13 +1620,13 @@ impl EndpointActor {
             return connection.create_runtime(name, policy).await;
         }
 
-        let msg = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        let msg = v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: name.to_string(),
             policy: policy.as_v3_proto(),
         });
         let response = self.send_and_read(msg, false).await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => {
+            Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => {
                 rttx_proto::bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error_to_daemon(e)),
@@ -1634,18 +1637,20 @@ impl EndpointActor {
     async fn attach_runtime_via_active_channel(
         &mut self,
         runtime_uuid: Uuid,
-    ) -> Result<v3::RuntimeSnapshot, DaemonError> {
+    ) -> Result<v3::WorkspaceSnapshot, DaemonError> {
         if let Some(connection) = self.connection.as_mut() {
-            return connection.attach_runtime(runtime_uuid, v3::RuntimeAttachMode::ReadWrite).await;
+            return connection
+                .attach_runtime(runtime_uuid, v3::WorkspaceAttachMode::ReadWrite)
+                .await;
         }
 
-        let msg = v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        let msg = v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         });
         let response = self.send_and_read(msg, false).await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => Ok(snapshot),
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => Ok(snapshot),
             Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
                 Err(DaemonError::AttachBlocked(blocked))
             }
@@ -1661,7 +1666,7 @@ impl EndpointActor {
                     return;
                 }
                 self.observe_inbound_any();
-                if let Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) =
+                if let Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) =
                     &env.payload
                     && let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id)
                 {
@@ -1698,15 +1703,16 @@ impl EndpointActor {
             dropped = overflow.dropped_count,
             "StreamOverflow received, requesting resync"
         );
-        let _ = self
-            .self_tx
-            .try_send(EndpointCommand::ResyncRuntime { workspace_id, runtime_id: runtime_id_str });
+        let _ = self.self_tx.try_send(EndpointCommand::ResyncWorkspace {
+            workspace_id,
+            runtime_id: runtime_id_str,
+        });
     }
 
     fn forward_push(&self, message: v3::ServerEnvelope) {
         let _ = self
             .event_tx
-            .try_send(EndpointEvent::RuntimeMessage { endpoint: self.endpoint.clone(), message });
+            .try_send(EndpointEvent::WorkspaceMessage { endpoint: self.endpoint.clone(), message });
     }
 
     fn observe_inbound_pong(&mut self, env: &v3::ServerEnvelope) -> bool {
@@ -1976,20 +1982,20 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
             match request.command {
-                Some(v3::client_envelope::Command::CreateRuntime(create)) => {
+                Some(v3::client_envelope::Command::CreateWorkspace(create)) => {
                     assert_eq!(create.name, "Workspace 2");
                     assert_eq!(create.policy, WorkspacePolicy::Persistent.as_v3_proto());
                 }
-                other => panic!("expected CreateRuntime request, got {other:?}"),
+                other => panic!("expected CreateWorkspace request, got {other:?}"),
             }
             send_server_envelope(
                 &mut server_stream,
                 &v3::ServerEnvelope {
                     request_id: request.request_id,
-                    payload: Some(v3::server_envelope::Payload::RuntimeCreated(
-                        v3::RuntimeCreated {
+                    payload: Some(v3::server_envelope::Payload::WorkspaceCreated(
+                        v3::WorkspaceCreated {
                             runtime_id: rttx_proto::uuid_to_bytes(expected_runtime),
-                            runtime_revision: 1,
+                            workspace_revision: 1,
                         },
                     )),
                 },
@@ -2000,7 +2006,7 @@ mod tests {
         let runtime_id = actor
             .create_runtime_via_active_channel("Workspace 2", WorkspacePolicy::Persistent)
             .await
-            .expect("split transport should support CreateRuntime");
+            .expect("split transport should support CreateWorkspace");
         assert_eq!(runtime_id, expected_runtime);
         server.await.expect("fake server task should complete");
     }
@@ -2015,24 +2021,24 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
             match request.command {
-                Some(v3::client_envelope::Command::AttachRuntime(attach)) => {
+                Some(v3::client_envelope::Command::AttachWorkspace(attach)) => {
                     assert_eq!(rttx_proto::bytes_to_uuid(&attach.runtime_id).unwrap(), runtime_id);
-                    assert_eq!(attach.attach_mode, v3::RuntimeAttachMode::ReadWrite as i32);
+                    assert_eq!(attach.attach_mode, v3::WorkspaceAttachMode::ReadWrite as i32);
                 }
-                other => panic!("expected AttachRuntime request, got {other:?}"),
+                other => panic!("expected AttachWorkspace request, got {other:?}"),
             }
             send_server_envelope(
                 &mut server_stream,
                 &v3::ServerEnvelope {
                     request_id: request.request_id,
-                    payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
-                        v3::RuntimeSnapshot {
+                    payload: Some(v3::server_envelope::Payload::WorkspaceSnapshot(
+                        v3::WorkspaceSnapshot {
                             tree: None,
                             default_active_pane_id: Vec::new(),
                             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                             panes: vec![],
-                            runtime_revision: 1,
-                            client_role: v3::RuntimeClientRole::Writer as i32,
+                            workspace_revision: 1,
+                            client_role: v3::WorkspaceClientRole::Writer as i32,
                         },
                     )),
                 },
@@ -2043,7 +2049,7 @@ mod tests {
         let snapshot = actor
             .attach_runtime_via_active_channel(runtime_id)
             .await
-            .expect("split transport should support AttachRuntime");
+            .expect("split transport should support AttachWorkspace");
         assert_eq!(rttx_proto::bytes_to_uuid(&snapshot.runtime_id).unwrap(), runtime_id);
         server.await.expect("fake server task should complete");
     }
@@ -2472,18 +2478,18 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
 
-            // Receive AttachRuntime for the stale runtime — reply "not found".
+            // Receive AttachWorkspace for the stale runtime — reply "not found".
             let msg = recv_client_envelope(&mut server_stream, &mut read_buf).await;
             assert!(
-                matches!(msg.command, Some(v3::client_envelope::Command::AttachRuntime(_))),
-                "expected AttachRuntime, got {msg:?}"
+                matches!(msg.command, Some(v3::client_envelope::Command::AttachWorkspace(_))),
+                "expected AttachWorkspace, got {msg:?}"
             );
             send_server_envelope(
                 &mut server_stream,
                 &v3::ServerEnvelope {
                     request_id: msg.request_id,
                     payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
-                        kind: v3::ErrorKind::RuntimeNotFound as i32,
+                        kind: v3::ErrorKind::WorkspaceNotFound as i32,
                         message: "session not found".into(),
                         retryable: false,
                         operation: String::new(),
@@ -2555,9 +2561,9 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
 
-            // Receive AttachRuntime — reply with AttachBlocked.
+            // Receive AttachWorkspace — reply with AttachBlocked.
             let msg = recv_client_envelope(&mut server_stream, &mut read_buf).await;
-            assert!(matches!(msg.command, Some(v3::client_envelope::Command::AttachRuntime(_))));
+            assert!(matches!(msg.command, Some(v3::client_envelope::Command::AttachWorkspace(_))));
             send_server_envelope(
                 &mut server_stream,
                 &v3::ServerEnvelope {
@@ -2837,8 +2843,8 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
             match request.command {
-                Some(v3::client_envelope::Command::AttachRuntime(_)) => {}
-                other => panic!("expected AttachRuntime, got {other:?}"),
+                Some(v3::client_envelope::Command::AttachWorkspace(_)) => {}
+                other => panic!("expected AttachWorkspace, got {other:?}"),
             }
 
             // Send a delta push message first (simulating PTY output from
@@ -2862,14 +2868,14 @@ mod tests {
                 &mut server_stream,
                 &v3::ServerEnvelope {
                     request_id: request.request_id,
-                    payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
-                        v3::RuntimeSnapshot {
+                    payload: Some(v3::server_envelope::Payload::WorkspaceSnapshot(
+                        v3::WorkspaceSnapshot {
                             tree: None,
                             default_active_pane_id: Vec::new(),
                             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
                             panes: vec![],
-                            runtime_revision: 1,
-                            client_role: v3::RuntimeClientRole::Writer as i32,
+                            workspace_revision: 1,
+                            client_role: v3::WorkspaceClientRole::Writer as i32,
                         },
                     )),
                 },
@@ -2886,7 +2892,7 @@ mod tests {
         // The delta should have been forwarded as a push event.
         let mut saw_delta = false;
         while let Ok(event) = event_rx.try_recv() {
-            if let EndpointEvent::RuntimeMessage { message, .. } = event
+            if let EndpointEvent::WorkspaceMessage { message, .. } = event
                 && matches!(message.payload, Some(v3::server_envelope::Payload::OutputDelta(_)))
             {
                 saw_delta = true;
@@ -3243,15 +3249,15 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut read_buf = BytesMut::new();
 
-            // First attach: respond with RuntimeNotFound (session missing).
+            // First attach: respond with WorkspaceNotFound (session missing).
             let msg1 = recv_client_envelope(&mut server_stream, &mut read_buf).await;
-            assert!(matches!(msg1.command, Some(v3::client_envelope::Command::AttachRuntime(_))));
+            assert!(matches!(msg1.command, Some(v3::client_envelope::Command::AttachWorkspace(_))));
             send_server_envelope(
                 &mut server_stream,
                 &v3::ServerEnvelope {
                     request_id: msg1.request_id,
                     payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
-                        kind: v3::ErrorKind::RuntimeNotFound as i32,
+                        kind: v3::ErrorKind::WorkspaceNotFound as i32,
                         message: "runtime not found".into(),
                         retryable: false,
                         operation: String::new(),
@@ -3264,8 +3270,8 @@ mod tests {
 
             // Second attach: respond with success.
             let msg2 = recv_client_envelope(&mut server_stream, &mut read_buf).await;
-            assert!(matches!(msg2.command, Some(v3::client_envelope::Command::AttachRuntime(_))));
-            let Some(v3::client_envelope::Command::AttachRuntime(attach)) = msg2.command else {
+            assert!(matches!(msg2.command, Some(v3::client_envelope::Command::AttachWorkspace(_))));
+            let Some(v3::client_envelope::Command::AttachWorkspace(attach)) = msg2.command else {
                 unreachable!()
             };
             let attached_runtime_id = rttx_proto::bytes_to_uuid(&attach.runtime_id).unwrap();
@@ -3273,14 +3279,14 @@ mod tests {
                 &mut server_stream,
                 &v3::ServerEnvelope {
                     request_id: msg2.request_id,
-                    payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(
-                        v3::RuntimeSnapshot {
+                    payload: Some(v3::server_envelope::Payload::WorkspaceSnapshot(
+                        v3::WorkspaceSnapshot {
                             tree: None,
                             default_active_pane_id: Vec::new(),
                             runtime_id: rttx_proto::uuid_to_bytes(attached_runtime_id),
                             panes: vec![],
-                            runtime_revision: 1,
-                            client_role: v3::RuntimeClientRole::Writer as i32,
+                            workspace_revision: 1,
+                            client_role: v3::WorkspaceClientRole::Writer as i32,
                         },
                     )),
                 },
@@ -3349,11 +3355,11 @@ mod tests {
         actor.handle_stream_overflow(&overflow);
 
         match cmd_rx.try_recv() {
-            Ok(EndpointCommand::ResyncRuntime { workspace_id, runtime_id: rid }) => {
+            Ok(EndpointCommand::ResyncWorkspace { workspace_id, runtime_id: rid }) => {
                 assert_eq!(workspace_id, "ws-1");
                 assert_eq!(rid, runtime_id.to_string());
             }
-            other => panic!("expected ResyncRuntime command, got {other:?}"),
+            other => panic!("expected ResyncWorkspace command, got {other:?}"),
         }
     }
 
@@ -3404,16 +3410,16 @@ mod tests {
             let mut read_buf = BytesMut::new();
             let request = recv_client_envelope(&mut server_stream, &mut read_buf).await;
             match request.command {
-                Some(v3::client_envelope::Command::ResyncRuntime(resync)) => {
+                Some(v3::client_envelope::Command::ResyncWorkspace(resync)) => {
                     assert_eq!(rttx_proto::bytes_to_uuid(&resync.runtime_id).unwrap(), runtime_id);
                 }
-                other => panic!("expected ResyncRuntime, got {other:?}"),
+                other => panic!("expected ResyncWorkspace, got {other:?}"),
             }
             let pane_id = Uuid::new_v4();
-            let snap = rttx_proto::v3_snapshot::build_runtime_snapshot(
+            let snap = rttx_proto::v3_snapshot::build_workspace_snapshot(
                 runtime_id,
                 42,
-                v3::RuntimeClientRole::Writer,
+                v3::WorkspaceClientRole::Writer,
                 vec![rttx_proto::v3_snapshot::build_pane_snapshot(
                     rttx_proto::v3_snapshot::PaneSnapshotParams {
                         pane_id,
@@ -3437,7 +3443,7 @@ mod tests {
         });
 
         actor
-            .handle_command(EndpointCommand::ResyncRuntime {
+            .handle_command(EndpointCommand::ResyncWorkspace {
                 workspace_id: "ws-1".into(),
                 runtime_id: runtime_id.to_string(),
             })
@@ -3469,7 +3475,7 @@ mod tests {
             let err = rttx_proto::v3_error::build_error(
                 v3::ErrorKind::Internal,
                 "resync failed",
-                "ResyncRuntime",
+                "ResyncWorkspace",
             );
             send_server_envelope(
                 &mut server_stream,
@@ -3479,7 +3485,7 @@ mod tests {
         });
 
         actor
-            .handle_command(EndpointCommand::ResyncRuntime {
+            .handle_command(EndpointCommand::ResyncWorkspace {
                 workspace_id: "ws-1".into(),
                 runtime_id: runtime_id.to_string(),
             })
@@ -3554,7 +3560,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
         let mut saw_delta = false;
         while tokio::time::Instant::now() < deadline {
-            if let Ok(EndpointEvent::RuntimeMessage { .. }) = event_rx.try_recv() {
+            if let Ok(EndpointEvent::WorkspaceMessage { .. }) = event_rx.try_recv() {
                 saw_delta = true;
                 break;
             }

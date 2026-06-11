@@ -14,18 +14,18 @@ async fn no_persist_pane_does_not_write_scrollback_to_disk() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    // Create a persistent runtime.
+    // Create a persistent workspace.
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "no-persist-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Create a pane with no_persist = true.

@@ -22,9 +22,9 @@ fn v3_takeover_full_flow_wire_roundtrip() {
     let r = rt();
     let new_owner = client();
 
-    // 1. Client sends TakeoverRuntime request
-    let req = v3_takeover::build_takeover_runtime(r);
-    let req_env = v3_takeover::build_takeover_runtime_envelope(&id_gen, req);
+    // 1. Client sends TakeoverWorkspace request
+    let req = v3_takeover::build_takeover_workspace(r);
+    let req_env = v3_takeover::build_takeover_workspace_envelope(&id_gen, req);
     let mut buf = bytes::BytesMut::new();
     encode_frame(&req_env, &mut buf).unwrap();
     let decoded_req: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
@@ -56,20 +56,22 @@ fn v3_takeover_full_flow_wire_roundtrip() {
         panic!("expected TakeoverCompleted payload");
     };
     assert_eq!(tc.runtime_id, uuid_to_bytes(r));
-    assert_eq!(tc.runtime_revision, 51);
+    assert_eq!(tc.workspace_revision, 51);
 }
 
 #[test]
 fn v3_takeover_capability_gating_rejects_when_absent() {
-    let caps_without_takeover =
-        vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::CorePaneLifecycle as i32];
+    let caps_without_takeover = vec![
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::CorePaneLifecycle as i32,
+    ];
     assert!(!v3_takeover::is_supported(&caps_without_takeover));
 
     // Server returns OwnershipConflict error instead of allowing takeover
     let err = rttx_proto::v3_error::build_error(
         v3::ErrorKind::OwnershipConflict,
-        "runtime owned by another client; takeover not available",
-        "AttachRuntime",
+        "workspace owned by another client; takeover not available",
+        "AttachWorkspace",
     );
     let env = rttx_proto::v3_error::build_error_response(1, err);
     let mut buf = bytes::BytesMut::new();
@@ -98,7 +100,7 @@ fn v3_takeover_owner_disconnected_notifies_readers() {
         panic!("expected OwnerDisconnected payload");
     };
     assert_eq!(od.runtime_id, uuid_to_bytes(r));
-    assert_eq!(od.runtime_revision, 60);
+    assert_eq!(od.workspace_revision, 60);
 }
 
 #[test]
@@ -109,7 +111,7 @@ fn v3_takeover_attach_blocked_then_takeover_flow() {
     // 1. Attach is blocked
     let blocked = v3::AttachBlocked {
         runtime_id: uuid_to_bytes(r),
-        current_client_role: v3::RuntimeClientRole::Unattached as i32,
+        current_client_role: v3::WorkspaceClientRole::Unattached as i32,
         attached_client_count: 1,
         read_only_client_count: 0,
     };
@@ -124,13 +126,13 @@ fn v3_takeover_attach_blocked_then_takeover_flow() {
 
     // 2. Client has OPT_RUNTIME_TAKEOVER, sends takeover
     let caps = vec![
-        v3::Capability::CoreRuntimeLifecycle as i32,
-        v3::Capability::OptRuntimeTakeover as i32,
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::OptWorkspaceTakeover as i32,
     ];
     assert!(v3_takeover::is_supported(&caps));
 
-    let req = v3_takeover::build_takeover_runtime(r);
-    let req_env = v3_takeover::build_takeover_runtime_envelope(&id_gen, req);
+    let req = v3_takeover::build_takeover_workspace(r);
+    let req_env = v3_takeover::build_takeover_workspace_envelope(&id_gen, req);
 
     // 3. Server responds with TakeoverCompleted
     let completed = v3_takeover::build_takeover_completed(r, 70);

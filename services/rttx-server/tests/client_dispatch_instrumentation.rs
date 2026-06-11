@@ -78,7 +78,7 @@ async fn client_writer_delivers_output_after_instrumentation() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let sid = create_runtime(&mut client, "writer-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "writer-test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &sid).await;
     attach_rw(&mut client, &sid).await;
 
@@ -106,7 +106,7 @@ async fn client_writer_delivers_output_after_instrumentation() {
 }
 
 #[tokio::test]
-async fn dispatch_latency_recorded_for_create_runtime() {
+async fn dispatch_latency_recorded_for_create_workspace() {
     use rttx_server::flight::{RingReader, SpanKind};
     use rttx_server::metrics::DaemonMetrics;
     use rttx_server::profiling::ProfilingLayer;
@@ -127,7 +127,7 @@ async fn dispatch_latency_recorded_for_create_runtime() {
             "client.dispatch",
             span_kind = "client_dispatch",
             client_id = "test-client",
-            msg_type = "CreateRuntime",
+            msg_type = "CreateWorkspace",
         );
         let _guard = dispatch_span.enter();
         std::thread::sleep(std::time::Duration::from_micros(10));

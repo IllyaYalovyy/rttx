@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 /// Trait abstracting OS-level operations for testability.
 pub trait OsInterface: Send + Sync {
-    /// Return the runtime directory for the server socket.
+    /// Return the workspace directory for the server socket.
     fn runtime_dir(&self) -> PathBuf;
 
     /// Return the cache directory for persistent state and scrollback logs.

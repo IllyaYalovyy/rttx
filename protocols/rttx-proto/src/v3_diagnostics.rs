@@ -3,7 +3,7 @@
 //! Implements RFC-021 Section 3 (`OPT_DIAGNOSTICS`).
 //!
 //! `GetDiagnostics` is a request/response command (uses `request_id`).
-//! The server responds with a `DiagnosticsReport` containing per-runtime
+//! The server responds with a `DiagnosticsReport` containing per-workspace
 //! and per-pane memory and state metrics. Without `OPT_DIAGNOSTICS`, the
 //! client disables the diagnostics UI.
 
@@ -48,17 +48,17 @@ pub fn build_pane_diagnostics_info(
     }
 }
 
-/// Build a `RuntimeDiagnosticsInfo`.
+/// Build a `WorkspaceDiagnosticsInfo`.
 #[must_use]
-pub fn build_runtime_diagnostics_info(
+pub fn build_workspace_diagnostics_info(
     runtime_id: uuid::Uuid,
     name: String,
     active_pane_count: u32,
     exited_pane_count: u32,
     attached_client_count: u32,
     panes: Vec<v3::PaneDiagnosticsInfo>,
-) -> v3::RuntimeDiagnosticsInfo {
-    v3::RuntimeDiagnosticsInfo {
+) -> v3::WorkspaceDiagnosticsInfo {
+    v3::WorkspaceDiagnosticsInfo {
         id: crate::uuid_to_bytes(runtime_id),
         name,
         active_pane_count,
@@ -75,7 +75,7 @@ pub fn build_runtime_diagnostics_info(
 #[must_use]
 pub fn build_diagnostics_report(args: DiagnosticsReportArgs) -> v3::DiagnosticsReport {
     v3::DiagnosticsReport {
-        runtime_count: args.runtime_count,
+        workspace_count: args.workspace_count,
         total_pane_count: args.total_pane_count,
         total_active_panes: args.total_active_panes,
         total_exited_panes: args.total_exited_panes,
@@ -84,13 +84,13 @@ pub fn build_diagnostics_report(args: DiagnosticsReportArgs) -> v3::DiagnosticsR
         total_raw_bytes: args.total_raw_bytes,
         total_pending_flush: args.total_pending_flush,
         total_command_history: 0,
-        runtimes: args.runtimes,
+        workspaces: args.workspaces,
     }
 }
 
 /// Arguments for [`build_diagnostics_report`].
 pub struct DiagnosticsReportArgs {
-    pub runtime_count: u32,
+    pub workspace_count: u32,
     pub total_pane_count: u32,
     pub total_active_panes: u32,
     pub total_exited_panes: u32,
@@ -98,7 +98,7 @@ pub struct DiagnosticsReportArgs {
     pub pty_writer_count: u32,
     pub total_raw_bytes: u64,
     pub total_pending_flush: u64,
-    pub runtimes: Vec<v3::RuntimeDiagnosticsInfo>,
+    pub workspaces: Vec<v3::WorkspaceDiagnosticsInfo>,
 }
 
 /// Build a `ServerEnvelope` response containing a `DiagnosticsReport`.
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn supported_when_capability_present() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::OptDiagnostics as i32,
         ];
         assert!(is_supported(&caps));
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn not_supported_when_capability_absent() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::OptChunkedScrollback as i32,
         ];
         assert!(!is_supported(&caps));
@@ -216,14 +216,14 @@ mod tests {
         assert_eq!(info, decoded);
     }
 
-    // ── build_runtime_diagnostics_info ──
+    // ── build_workspace_diagnostics_info ──
 
     #[test]
-    fn runtime_diagnostics_info_populates_all_fields() {
+    fn workspace_diagnostics_info_populates_all_fields() {
         let r = rt();
         let p = pn();
         let pane = build_pane_diagnostics_info(p, 2048, 64, false);
-        let info = build_runtime_diagnostics_info(r, "dev".into(), 2, 1, 1, vec![pane.clone()]);
+        let info = build_workspace_diagnostics_info(r, "dev".into(), 2, 1, 1, vec![pane.clone()]);
         assert_eq!(info.id, uuid_to_bytes(r));
         assert_eq!(info.name, "dev");
         assert_eq!(info.active_pane_count, 2);
@@ -234,18 +234,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_diagnostics_info_empty_panes() {
-        let info = build_runtime_diagnostics_info(rt(), "empty".into(), 0, 0, 0, vec![]);
+    fn workspace_diagnostics_info_empty_panes() {
+        let info = build_workspace_diagnostics_info(rt(), "empty".into(), 0, 0, 0, vec![]);
         assert!(info.panes.is_empty());
     }
 
     #[test]
-    fn runtime_diagnostics_info_wire_roundtrip() {
+    fn workspace_diagnostics_info_wire_roundtrip() {
         let pane = build_pane_diagnostics_info(pn(), 8192, 256, true);
-        let info = build_runtime_diagnostics_info(rt(), "test-rt".into(), 3, 2, 2, vec![pane]);
+        let info = build_workspace_diagnostics_info(rt(), "test-rt".into(), 3, 2, 2, vec![pane]);
         let mut buf = BytesMut::new();
         encode_frame(&info, &mut buf).unwrap();
-        let decoded: v3::RuntimeDiagnosticsInfo = decode_frame(&mut buf).unwrap();
+        let decoded: v3::WorkspaceDiagnosticsInfo = decode_frame(&mut buf).unwrap();
         assert_eq!(info, decoded);
     }
 
@@ -254,9 +254,9 @@ mod tests {
     #[test]
     fn diagnostics_report_populates_all_fields() {
         let pane = build_pane_diagnostics_info(pn(), 4096, 128, false);
-        let runtime = build_runtime_diagnostics_info(rt(), "ws1".into(), 1, 0, 1, vec![pane]);
+        let workspace = build_workspace_diagnostics_info(rt(), "ws1".into(), 1, 0, 1, vec![pane]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 1,
+            workspace_count: 1,
             total_pane_count: 1,
             total_active_panes: 1,
             total_exited_panes: 0,
@@ -264,9 +264,9 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 4096,
             total_pending_flush: 128,
-            runtimes: vec![runtime],
+            workspaces: vec![workspace],
         });
-        assert_eq!(report.runtime_count, 1);
+        assert_eq!(report.workspace_count, 1);
         assert_eq!(report.total_pane_count, 1);
         assert_eq!(report.total_active_panes, 1);
         assert_eq!(report.total_exited_panes, 0);
@@ -274,13 +274,13 @@ mod tests {
         assert_eq!(report.pty_writer_count, 1);
         assert_eq!(report.total_raw_bytes, 4096);
         assert_eq!(report.total_pending_flush, 128);
-        assert_eq!(report.runtimes.len(), 1);
+        assert_eq!(report.workspaces.len(), 1);
     }
 
     #[test]
     fn diagnostics_report_empty_server() {
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 0,
+            workspace_count: 0,
             total_pane_count: 0,
             total_active_panes: 0,
             total_exited_panes: 0,
@@ -288,20 +288,26 @@ mod tests {
             pty_writer_count: 0,
             total_raw_bytes: 0,
             total_pending_flush: 0,
-            runtimes: vec![],
+            workspaces: vec![],
         });
-        assert_eq!(report.runtime_count, 0);
-        assert!(report.runtimes.is_empty());
+        assert_eq!(report.workspace_count, 0);
+        assert!(report.workspaces.is_empty());
     }
 
     #[test]
     fn diagnostics_report_wire_roundtrip() {
         let pane1 = build_pane_diagnostics_info(pn(), 1024, 0, false);
         let pane2 = build_pane_diagnostics_info(pn(), 2048, 512, true);
-        let runtime =
-            build_runtime_diagnostics_info(rt(), "multi-pane".into(), 1, 1, 2, vec![pane1, pane2]);
+        let workspace = build_workspace_diagnostics_info(
+            rt(),
+            "multi-pane".into(),
+            1,
+            1,
+            2,
+            vec![pane1, pane2],
+        );
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 1,
+            workspace_count: 1,
             total_pane_count: 2,
             total_active_panes: 1,
             total_exited_panes: 1,
@@ -309,7 +315,7 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 3072,
             total_pending_flush: 512,
-            runtimes: vec![runtime],
+            workspaces: vec![workspace],
         });
         let mut buf = BytesMut::new();
         encode_frame(&report, &mut buf).unwrap();
@@ -322,7 +328,7 @@ mod tests {
     #[test]
     fn report_response_echoes_request_id() {
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 0,
+            workspace_count: 0,
             total_pane_count: 0,
             total_active_panes: 0,
             total_exited_panes: 0,
@@ -330,7 +336,7 @@ mod tests {
             pty_writer_count: 0,
             total_raw_bytes: 0,
             total_pending_flush: 0,
-            runtimes: vec![],
+            workspaces: vec![],
         });
         let env = build_diagnostics_report_response(42, report);
         assert_eq!(env.request_id, 42);
@@ -339,7 +345,7 @@ mod tests {
     #[test]
     fn report_response_contains_correct_payload() {
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 2,
+            workspace_count: 2,
             total_pane_count: 5,
             total_active_panes: 3,
             total_exited_panes: 2,
@@ -347,7 +353,7 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 10000,
             total_pending_flush: 500,
-            runtimes: vec![],
+            workspaces: vec![],
         });
         let env = build_diagnostics_report_response(7, report.clone());
         match env.payload {
@@ -361,7 +367,7 @@ mod tests {
     #[test]
     fn report_response_is_not_push_event() {
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 0,
+            workspace_count: 0,
             total_pane_count: 0,
             total_active_panes: 0,
             total_exited_panes: 0,
@@ -369,7 +375,7 @@ mod tests {
             pty_writer_count: 0,
             total_raw_bytes: 0,
             total_pending_flush: 0,
-            runtimes: vec![],
+            workspaces: vec![],
         });
         let env = build_diagnostics_report_response(1, report);
         assert!(!crate::v3_envelope::is_push_event(&env));
@@ -378,9 +384,10 @@ mod tests {
     #[test]
     fn report_response_wire_roundtrip() {
         let pane = build_pane_diagnostics_info(pn(), 65536, 1024, false);
-        let runtime = build_runtime_diagnostics_info(rt(), "roundtrip".into(), 1, 0, 1, vec![pane]);
+        let workspace =
+            build_workspace_diagnostics_info(rt(), "roundtrip".into(), 1, 0, 1, vec![pane]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 1,
+            workspace_count: 1,
             total_pane_count: 1,
             total_active_panes: 1,
             total_exited_panes: 0,
@@ -388,7 +395,7 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: 65536,
             total_pending_flush: 1024,
-            runtimes: vec![runtime],
+            workspaces: vec![workspace],
         });
         let env = build_diagnostics_report_response(99, report);
         let mut buf = BytesMut::new();
@@ -431,11 +438,11 @@ mod tests {
         // Verify it's a request/response command
         assert!(matches!(req_env.command, Some(v3::client_envelope::Command::GetDiagnostics(_))));
 
-        // 2. Server builds a report with multiple runtimes and panes
+        // 2. Server builds a report with multiple workspaces and panes
         let p1 = build_pane_diagnostics_info(pn(), 4096, 128, false);
         let p2 = build_pane_diagnostics_info(pn(), 8192, 0, false);
         let p3 = build_pane_diagnostics_info(pn(), 0, 0, true);
-        let rt1 = build_runtime_diagnostics_info(
+        let rt1 = build_workspace_diagnostics_info(
             rt(),
             "workspace-1".into(),
             2,
@@ -444,9 +451,9 @@ mod tests {
             vec![p1.clone(), p2.clone()],
         );
         let rt2 =
-            build_runtime_diagnostics_info(rt(), "workspace-2".into(), 0, 1, 0, vec![p3.clone()]);
+            build_workspace_diagnostics_info(rt(), "workspace-2".into(), 0, 1, 0, vec![p3.clone()]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
-            runtime_count: 2,
+            workspace_count: 2,
             total_pane_count: 3,
             total_active_panes: 2,
             total_exited_panes: 1,
@@ -454,7 +461,7 @@ mod tests {
             pty_writer_count: 1,
             total_raw_bytes: p1.raw_bytes_len + p2.raw_bytes_len + p3.raw_bytes_len,
             total_pending_flush: p1.pending_flush_len + p2.pending_flush_len + p3.pending_flush_len,
-            runtimes: vec![rt1, rt2],
+            workspaces: vec![rt1, rt2],
         });
 
         // 3. Server responds with DiagnosticsReport
@@ -465,14 +472,14 @@ mod tests {
         // 4. Verify report contents
         match resp_env.payload {
             Some(v3::server_envelope::Payload::DiagnosticsReport(ref r)) => {
-                assert_eq!(r.runtime_count, 2);
+                assert_eq!(r.workspace_count, 2);
                 assert_eq!(r.total_pane_count, 3);
                 assert_eq!(r.total_active_panes, 2);
                 assert_eq!(r.total_exited_panes, 1);
-                assert_eq!(r.runtimes.len(), 2);
-                assert_eq!(r.runtimes[0].panes.len(), 2);
-                assert_eq!(r.runtimes[1].panes.len(), 1);
-                assert!(r.runtimes[1].panes[0].is_exited);
+                assert_eq!(r.workspaces.len(), 2);
+                assert_eq!(r.workspaces[0].panes.len(), 2);
+                assert_eq!(r.workspaces[1].panes.len(), 1);
+                assert!(r.workspaces[1].panes[0].is_exited);
             }
             _ => panic!("expected DiagnosticsReport"),
         }
@@ -483,7 +490,7 @@ mod tests {
     #[test]
     fn diagnostics_disabled_without_capability() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::CorePaneLifecycle as i32,
             v3::Capability::CoreTerminalIo as i32,
         ];
@@ -495,7 +502,7 @@ mod tests {
     #[test]
     fn diagnostics_enabled_with_full_capability_set() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::CorePaneLifecycle as i32,
             v3::Capability::CoreTerminalIo as i32,
             v3::Capability::CoreTerminalModes as i32,

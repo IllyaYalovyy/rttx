@@ -2,12 +2,12 @@
 //!
 //! Implements RFC-021 Sections 7–8 (Revision Semantics, Snapshots and Resync).
 //!
-//! `RuntimeSnapshot` is sent on successful attach and contains the full
-//! runtime state including per-pane scrollback tails. `OutputDelta` carries
+//! `WorkspaceSnapshot` is sent on successful attach and contains the full
+//! workspace state including per-pane scrollback tails. `OutputDelta` carries
 //! incremental terminal output with a per-pane monotonic `pane_output_seq`.
 //!
 //! Two revision spaces:
-//! - `runtime_revision` (structural): bumped by pane create/close/exit,
+//! - `workspace_revision` (structural): bumped by pane create/close/exit,
 //!   rename, mode change, client attach/detach.
 //! - `pane_output_seq` (output continuity): per-pane counter incremented
 //!   by 1 for every `OutputDelta`. Gaps indicate dropped messages.
@@ -53,20 +53,20 @@ pub fn build_pane_snapshot(params: PaneSnapshotParams) -> v3::PaneSnapshot {
     }
 }
 
-/// Build a `RuntimeSnapshot` response for a successful attach.
+/// Build a `WorkspaceSnapshot` response for a successful attach.
 ///
-/// The workspace tree is left empty; use [`build_runtime_snapshot_with_tree`]
+/// The workspace tree is left empty; use [`build_workspace_snapshot_with_tree`]
 /// to carry the authoritative structure (RFC-031).
 #[must_use]
-pub fn build_runtime_snapshot(
+pub fn build_workspace_snapshot(
     runtime_id: uuid::Uuid,
-    runtime_revision: u64,
-    client_role: v3::RuntimeClientRole,
+    workspace_revision: u64,
+    client_role: v3::WorkspaceClientRole,
     panes: Vec<v3::PaneSnapshot>,
-) -> v3::RuntimeSnapshot {
-    v3::RuntimeSnapshot {
+) -> v3::WorkspaceSnapshot {
+    v3::WorkspaceSnapshot {
         runtime_id: crate::uuid_to_bytes(runtime_id),
-        runtime_revision,
+        workspace_revision,
         client_role: client_role as i32,
         panes,
         tree: None,
@@ -74,20 +74,20 @@ pub fn build_runtime_snapshot(
     }
 }
 
-/// Build a `RuntimeSnapshot` carrying the authoritative workspace tree and
+/// Build a `WorkspaceSnapshot` carrying the authoritative workspace tree and
 /// fallback-focus pane (RFC-031 §5).
 #[must_use]
-pub fn build_runtime_snapshot_with_tree(
+pub fn build_workspace_snapshot_with_tree(
     runtime_id: uuid::Uuid,
-    runtime_revision: u64,
-    client_role: v3::RuntimeClientRole,
+    workspace_revision: u64,
+    client_role: v3::WorkspaceClientRole,
     panes: Vec<v3::PaneSnapshot>,
     tree: Option<v3::PaneTreeNode>,
     default_active_pane_id: Vec<u8>,
-) -> v3::RuntimeSnapshot {
-    v3::RuntimeSnapshot {
+) -> v3::WorkspaceSnapshot {
+    v3::WorkspaceSnapshot {
         runtime_id: crate::uuid_to_bytes(runtime_id),
-        runtime_revision,
+        workspace_revision,
         client_role: client_role as i32,
         panes,
         tree,
@@ -95,15 +95,15 @@ pub fn build_runtime_snapshot_with_tree(
     }
 }
 
-/// Build a `ServerEnvelope` response containing a `RuntimeSnapshot`.
+/// Build a `ServerEnvelope` response containing a `WorkspaceSnapshot`.
 #[must_use]
 pub fn build_snapshot_response(
     request_id: u64,
-    snapshot: v3::RuntimeSnapshot,
+    snapshot: v3::WorkspaceSnapshot,
 ) -> v3::ServerEnvelope {
     crate::v3_envelope::build_response_envelope(
         request_id,
-        v3::server_envelope::Payload::RuntimeSnapshot(snapshot),
+        v3::server_envelope::Payload::WorkspaceSnapshot(snapshot),
     )
 }
 
@@ -322,10 +322,10 @@ mod tests {
         assert_eq!(snap, decoded);
     }
 
-    // ── build_runtime_snapshot ──
+    // ── build_workspace_snapshot ──
 
     #[test]
-    fn runtime_snapshot_populates_all_fields() {
+    fn workspace_snapshot_populates_all_fields() {
         let r = rt();
         let p = pn();
         let pane = build_pane_snapshot(PaneSnapshotParams {
@@ -340,23 +340,23 @@ mod tests {
             scrollback_tail: bytes::Bytes::from_static(b"$ "),
             total_scrollback_bytes: 2,
         });
-        let snap = build_runtime_snapshot(r, 42, v3::RuntimeClientRole::Writer, vec![pane]);
+        let snap = build_workspace_snapshot(r, 42, v3::WorkspaceClientRole::Writer, vec![pane]);
         assert_eq!(snap.runtime_id, uuid_to_bytes(r));
-        assert_eq!(snap.runtime_revision, 42);
-        assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
+        assert_eq!(snap.workspace_revision, 42);
+        assert_eq!(snap.client_role, v3::WorkspaceClientRole::Writer as i32);
         assert_eq!(snap.panes.len(), 1);
         assert_eq!(snap.panes[0].pane_id, uuid_to_bytes(p));
     }
 
     #[test]
-    fn runtime_snapshot_empty_panes() {
-        let snap = build_runtime_snapshot(rt(), 1, v3::RuntimeClientRole::Reader, vec![]);
+    fn workspace_snapshot_empty_panes() {
+        let snap = build_workspace_snapshot(rt(), 1, v3::WorkspaceClientRole::Reader, vec![]);
         assert!(snap.panes.is_empty());
-        assert_eq!(snap.client_role, v3::RuntimeClientRole::Reader as i32);
+        assert_eq!(snap.client_role, v3::WorkspaceClientRole::Reader as i32);
     }
 
     #[test]
-    fn runtime_snapshot_multiple_panes() {
+    fn workspace_snapshot_multiple_panes() {
         let panes: Vec<v3::PaneSnapshot> = (0..3)
             .map(|i| {
                 build_pane_snapshot(PaneSnapshotParams {
@@ -373,12 +373,12 @@ mod tests {
                 })
             })
             .collect();
-        let snap = build_runtime_snapshot(rt(), 10, v3::RuntimeClientRole::Writer, panes);
+        let snap = build_workspace_snapshot(rt(), 10, v3::WorkspaceClientRole::Writer, panes);
         assert_eq!(snap.panes.len(), 3);
     }
 
     #[test]
-    fn runtime_snapshot_wire_roundtrip() {
+    fn workspace_snapshot_wire_roundtrip() {
         let pane = build_pane_snapshot(PaneSnapshotParams {
             pane_id: pn(),
             pane_output_seq: 50,
@@ -391,10 +391,10 @@ mod tests {
             scrollback_tail: bytes::Bytes::from_static(b"$ ls\nfile.txt\n"),
             total_scrollback_bytes: 4096,
         });
-        let snap = build_runtime_snapshot(rt(), 42, v3::RuntimeClientRole::Writer, vec![pane]);
+        let snap = build_workspace_snapshot(rt(), 42, v3::WorkspaceClientRole::Writer, vec![pane]);
         let mut buf = BytesMut::new();
         encode_frame(&snap, &mut buf).unwrap();
-        let decoded: v3::RuntimeSnapshot = decode_frame(&mut buf).unwrap();
+        let decoded: v3::WorkspaceSnapshot = decode_frame(&mut buf).unwrap();
         assert_eq!(snap, decoded);
     }
 
@@ -402,20 +402,20 @@ mod tests {
 
     #[test]
     fn snapshot_response_echoes_request_id() {
-        let snap = build_runtime_snapshot(rt(), 1, v3::RuntimeClientRole::Writer, vec![]);
+        let snap = build_workspace_snapshot(rt(), 1, v3::WorkspaceClientRole::Writer, vec![]);
         let env = build_snapshot_response(7, snap.clone());
         assert_eq!(env.request_id, 7);
         match env.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(ref s)) => {
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(ref s)) => {
                 assert_eq!(s, &snap);
             }
-            _ => panic!("expected RuntimeSnapshot payload"),
+            _ => panic!("expected WorkspaceSnapshot payload"),
         }
     }
 
     #[test]
     fn snapshot_response_is_not_push_event() {
-        let snap = build_runtime_snapshot(rt(), 1, v3::RuntimeClientRole::Writer, vec![]);
+        let snap = build_workspace_snapshot(rt(), 1, v3::WorkspaceClientRole::Writer, vec![]);
         let env = build_snapshot_response(42, snap);
         assert!(!crate::v3_envelope::is_push_event(&env));
     }
@@ -434,7 +434,7 @@ mod tests {
             scrollback_tail: bytes::Bytes::from_static(b"data"),
             total_scrollback_bytes: 100,
         });
-        let snap = build_runtime_snapshot(rt(), 5, v3::RuntimeClientRole::Reader, vec![pane]);
+        let snap = build_workspace_snapshot(rt(), 5, v3::WorkspaceClientRole::Reader, vec![pane]);
         let env = build_snapshot_response(99, snap);
         let mut buf = BytesMut::new();
         encode_frame(&env, &mut buf).unwrap();

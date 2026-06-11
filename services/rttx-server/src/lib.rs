@@ -1,4 +1,4 @@
-//! rttx-server: persistent runtime daemon for the rttx terminal emulator.
+//! rttx-server: persistent workspace daemon for the rttx terminal emulator.
 
 pub mod crash_report;
 pub mod diagnostics;
@@ -15,7 +15,6 @@ pub mod profile;
 pub mod profiling;
 pub mod protocol;
 pub mod pty;
-pub mod runtime;
 pub mod salvage;
 pub mod screen;
 pub mod server;
@@ -23,3 +22,4 @@ pub mod shell_init;
 pub mod single_instance;
 pub mod state;
 pub mod watchdog;
+pub mod workspace;

@@ -182,41 +182,42 @@ mod tests {
     }
 
     #[test]
-    fn create_runtime_is_not_fire_and_forget() {
-        let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+    fn create_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "test".into(),
-            policy: v3::RuntimePolicy::Ephemeral as i32,
+            policy: v3::WorkspacePolicy::Ephemeral as i32,
         });
         assert!(!is_fire_and_forget(&cmd));
     }
 
     #[test]
-    fn attach_runtime_is_not_fire_and_forget() {
-        let cmd = v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+    fn attach_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: rid(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         });
         assert!(!is_fire_and_forget(&cmd));
     }
 
     #[test]
-    fn detach_runtime_is_not_fire_and_forget() {
-        let cmd =
-            v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime { runtime_id: rid() });
-        assert!(!is_fire_and_forget(&cmd));
-    }
-
-    #[test]
-    fn terminate_runtime_is_not_fire_and_forget() {
-        let cmd = v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+    fn detach_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: rid(),
         });
         assert!(!is_fire_and_forget(&cmd));
     }
 
     #[test]
-    fn rename_runtime_is_not_fire_and_forget() {
-        let cmd = v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+    fn terminate_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
+            runtime_id: rid(),
+        });
+        assert!(!is_fire_and_forget(&cmd));
+    }
+
+    #[test]
+    fn rename_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: rid(),
             name: "new".into(),
         });
@@ -224,8 +225,8 @@ mod tests {
     }
 
     #[test]
-    fn list_runtimes_is_not_fire_and_forget() {
-        let cmd = v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {});
+    fn list_workspaces_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {});
         assert!(!is_fire_and_forget(&cmd));
     }
 
@@ -252,9 +253,10 @@ mod tests {
     }
 
     #[test]
-    fn resync_runtime_is_not_fire_and_forget() {
-        let cmd =
-            v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime { runtime_id: rid() });
+    fn resync_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::ResyncWorkspace(v3::ResyncWorkspace {
+            runtime_id: rid(),
+        });
         assert!(!is_fire_and_forget(&cmd));
     }
 
@@ -276,8 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn takeover_runtime_is_not_fire_and_forget() {
-        let cmd = v3::client_envelope::Command::TakeoverRuntime(v3::TakeoverRuntime {
+    fn takeover_workspace_is_not_fire_and_forget() {
+        let cmd = v3::client_envelope::Command::TakeoverWorkspace(v3::TakeoverWorkspace {
             runtime_id: rid(),
         });
         assert!(!is_fire_and_forget(&cmd));
@@ -365,7 +367,7 @@ mod tests {
                 runtime_id: rid(),
                 pane_id: pid(),
                 status: 0,
-                runtime_revision: 1,
+                workspace_revision: 1,
             })),
         };
         assert!(is_push_event(&env));
@@ -385,9 +387,9 @@ mod tests {
     #[test]
     fn client_envelope_roundtrip_through_frame() {
         let id_gen = RequestIdGenerator::new();
-        let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        let cmd = v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         });
         let env = build_client_envelope(&id_gen, cmd);
         assert_ne!(env.request_id, 0);
@@ -400,9 +402,9 @@ mod tests {
 
     #[test]
     fn server_response_roundtrip_through_frame() {
-        let payload = v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+        let payload = v3::server_envelope::Payload::WorkspaceCreated(v3::WorkspaceCreated {
             runtime_id: rid(),
-            runtime_revision: 1,
+            workspace_revision: 1,
         });
         let env = build_response_envelope(42, payload);
 

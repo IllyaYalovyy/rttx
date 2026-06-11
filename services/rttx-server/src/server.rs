@@ -1,6 +1,6 @@
 //! Top-level server loop.
 //!
-//! Accepts client connections, routes messages to runtimes/panes, runs the
+//! Accepts client connections, routes messages to workspaces/panes, runs the
 //! serialization loop, and manages the PTY read loops.
 
 use crate::engine::Engine;
@@ -10,11 +10,11 @@ use crate::ipc::{ClientConnection, ClientConnectionReader, ClientConnectionWrite
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
-use crate::runtime::{
-    AttachError, AttachMode, AttachOutcome, ClientRole, DetachOutcome, DetachReason, Runtime,
-    RuntimePolicy, TerminationReason,
-};
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
+use crate::workspace::{
+    AttachError, AttachMode, AttachOutcome, ClientRole, DetachOutcome, DetachReason,
+    TerminationReason, Workspace, WorkspacePolicy,
+};
 use rttx_proto::{bytes_to_uuid, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,8 +52,8 @@ const RESP_CHANNEL_BOUND: usize = 256;
 
 /// Send a message to previously collected sender handles.
 ///
-/// This is the lock-free counterpart of [`Server::broadcast_to_runtime`]:
-/// collect handles with [`Server::collect_runtime_senders`] while holding
+/// This is the lock-free counterpart of [`Server::broadcast_to_workspace`]:
+/// collect handles with [`Server::collect_workspace_senders`] while holding
 /// the mutex, then call this after releasing it.
 ///
 /// Returns the IDs of clients whose push channels overflowed. The caller
@@ -72,7 +72,7 @@ fn send_to_collected(
             crate::instrument::instrumented_try_send(sender, msg.clone(), metrics)
         {
             tracing::warn!(
-                "Client {} push channel full — dropping message (runtime={}, pane={})",
+                "Client {} push channel full — dropping message (workspace={}, pane={})",
                 short_id(*client_id),
                 short_id(runtime_id),
                 short_id(pane_id),
@@ -83,18 +83,18 @@ fn send_to_collected(
     overflowed
 }
 
-/// Per-runtime lock type used throughout the server.
-pub type RuntimeLock = Arc<Mutex<Runtime>>;
+/// Per-workspace lock type used throughout the server.
+pub type WorkspaceLock = Arc<Mutex<Workspace>>;
 
 /// Shared mutable server state.
 ///
-/// Runtimes are individually locked so independent workspaces never
+/// Workspaces are individually locked so independent workspaces never
 /// block each other.  The outer server mutex protects the registry
-/// (runtime map, client maps, PTY maps) and is held only briefly for
+/// (workspace map, client maps, PTY maps) and is held only briefly for
 /// lookups and structural changes.
 pub struct Server {
-    /// All active runtimes, each behind its own lock.
-    pub runtimes: HashMap<Uuid, RuntimeLock>,
+    /// All active workspaces, each behind its own lock.
+    pub workspaces: HashMap<Uuid, WorkspaceLock>,
     /// Server's own identity.
     pub server_id: Uuid,
     /// The engine used to spawn pane processes.
@@ -133,7 +133,7 @@ impl Server {
     ) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
         Self {
-            runtimes: HashMap::new(),
+            workspaces: HashMap::new(),
             server_id: Uuid::new_v4(),
             engine: Box::new(NativeEngine),
             os,
@@ -172,13 +172,13 @@ impl Server {
         self.pty_writers.len()
     }
 
-    /// Human-readable label for a runtime: `"name" (short_id)`.
+    /// Human-readable label for a workspace: `"name" (short_id)`.
     ///
-    /// Falls back to just the short ID when the runtime is not found or
+    /// Falls back to just the short ID when the workspace is not found or
     /// its lock cannot be acquired without blocking.
     #[must_use]
-    pub fn runtime_label(&self, runtime_id: Uuid) -> String {
-        self.runtimes.get(&runtime_id).map_or_else(
+    pub fn workspace_label(&self, runtime_id: Uuid) -> String {
+        self.workspaces.get(&runtime_id).map_or_else(
             || format!("({})", short_id(runtime_id)),
             |rt_lock| {
                 rt_lock.try_lock().map_or_else(
@@ -189,29 +189,29 @@ impl Server {
         )
     }
 
-    /// Load persisted state and resurrect runtimes.
+    /// Load persisted state and resurrect workspaces.
     ///
-    /// Reads v2 per-runtime files from `$XDG_STATE_HOME/rttx/daemon/`.
+    /// Reads v2 per-workspace files from `$XDG_STATE_HOME/rttx/daemon/`.
     /// If no v2 state exists, starts clean.
     pub fn load_persisted_state(&mut self) {
         let state_dir = self.os.state_dir();
 
         if let Some(result) = crate::state::persistence::load_all(&state_dir) {
-            let total = result.runtimes.len() + result.failed_ids.len() + result.reset_ids.len();
+            let total = result.workspaces.len() + result.failed_ids.len() + result.reset_ids.len();
             tracing::info!(
-                "Loaded {} persisted runtimes ({} failed, {} reset for old schema)",
-                result.runtimes.len(),
+                "Loaded {} persisted workspaces ({} failed, {} reset for old schema)",
+                result.workspaces.len(),
                 result.failed_ids.len(),
                 result.reset_ids.len()
             );
-            for rf in &result.runtimes {
-                let mut rt = Runtime::from_runtime_file(rf);
+            for rf in &result.workspaces {
+                let mut rt = Workspace::from_workspace_file(rf);
                 let runtime_id = rt.id;
                 for pane in rt.panes.values_mut() {
                     pane.scrollback_log_path =
                         Some(crate::state::layout::scrollback_log(&state_dir, runtime_id, pane.id));
                 }
-                self.runtimes.insert(rt.id, Arc::new(Mutex::new(rt)));
+                self.workspaces.insert(rt.id, Arc::new(Mutex::new(rt)));
             }
 
             if total > 0 || result.failed_ids.is_empty() {
@@ -226,13 +226,13 @@ impl Server {
         );
     }
 
-    /// Reconstruct resurrected runtimes: replay scrollback logs into pane
+    /// Reconstruct resurrected workspaces: replay scrollback logs into pane
     /// screens and spawn fresh shells in saved working directories.
     ///
     /// Called after `load_persisted_state` once the server is wrapped in
     /// `Arc<Mutex<>>` so we can spawn PTY read loops.
     #[allow(clippy::significant_drop_tightening)]
-    pub async fn reconstruct_runtimes(server: &Arc<Mutex<Self>>) {
+    pub async fn reconstruct_workspaces(server: &Arc<Mutex<Self>>) {
         enum ReplayData {
             Snapshot(crate::state::types::ScreenSnapshotV1),
             Scrollback { clean: Vec<u8>, rewrite: Option<(std::path::PathBuf, Vec<u8>)> },
@@ -249,8 +249,8 @@ impl Server {
             let s = crate::instrument::lock_server(server, &metrics).await;
             state_dir = s.os.state_dir();
             let mut targets = Vec::new();
-            for rt_lock in s.runtimes.values() {
-                let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+            for rt_lock in s.workspaces.values() {
+                let rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                 let label = format!("\"{}\" ({})", rt.name, short_id(rt.id));
                 for pane in rt.panes.values() {
                     targets.push((rt.id, pane.id, label.clone(), pane.scrollback_log_path.clone()));
@@ -269,7 +269,7 @@ impl Server {
                 crate::state::persistence::load_screen_snapshot(&state_dir, runtime_id, pane_id)
             {
                 tracing::info!(
-                    "Restoring pane {pane_short} in runtime {label} from screen snapshot ({} bytes, seq={})",
+                    "Restoring pane {pane_short} in workspace {label} from screen snapshot ({} bytes, seq={})",
                     snap.screen_bytes.len(),
                     snap.pane_output_seq,
                 );
@@ -285,7 +285,7 @@ impl Server {
                         let restart_safe = restart_safe_scrollback(&data);
                         let clean = strip_client_queries(restart_safe);
                         tracing::info!(
-                            "Replaying {} bytes of scrollback for pane {pane_short} in runtime {label} (no snapshot)",
+                            "Replaying {} bytes of scrollback for pane {pane_short} in workspace {label} (no snapshot)",
                             clean.len(),
                         );
                         let rewrite =
@@ -300,7 +300,7 @@ impl Server {
                     }
                     Err(e) => {
                         tracing::error!(
-                            "Failed to read scrollback log for pane {pane_short} in runtime {label}: {e}",
+                            "Failed to read scrollback log for pane {pane_short} in workspace {label}: {e}",
                         );
                     }
                 }
@@ -314,12 +314,12 @@ impl Server {
                 && let Err(e) = std::fs::write(path, clean)
             {
                 tracing::error!(
-                    "Failed to rewrite restart-safe scrollback in runtime {label}: {e}",
+                    "Failed to rewrite restart-safe scrollback in workspace {label}: {e}",
                 );
             }
         }
 
-        // Phase 3: feed replay data into pane screens using per-runtime locks.
+        // Phase 3: feed replay data into pane screens using per-workspace locks.
         #[allow(clippy::type_complexity)]
         let panes_to_reconstruct: Vec<(
             Uuid,
@@ -333,8 +333,8 @@ impl Server {
         {
             let s = crate::instrument::lock_server(server, &metrics).await;
             for (runtime_id, pane_id, _, data) in replay_results {
-                if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
-                    let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+                if let Some(rt_lock) = s.workspaces.get(&runtime_id) {
+                    let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                     if let Some(pane) = rt.panes.get_mut(&pane_id) {
                         match data {
                             ReplayData::Snapshot(snap) => pane.restore_from_snapshot(&snap),
@@ -346,8 +346,8 @@ impl Server {
             }
 
             let mut targets = Vec::new();
-            for rt_lock in s.runtimes.values() {
-                let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+            for rt_lock in s.workspaces.values() {
+                let rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                 let name = rt.name.clone();
                 for pane in rt.panes.values() {
                     targets.push((
@@ -370,9 +370,10 @@ impl Server {
 
         tracing::info!("Reconstructing {} panes", panes_to_reconstruct.len());
 
-        for (runtime_id, pane_id, runtime_name, cwd, cols, rows, no_persist) in panes_to_reconstruct
+        for (runtime_id, pane_id, workspace_name, cwd, cols, rows, no_persist) in
+            panes_to_reconstruct
         {
-            let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
+            let workspace_label = format!("\"{}\" ({})", workspace_name, short_id(runtime_id));
             let pane_short = short_id(pane_id);
             let pty_result = {
                 let s = crate::instrument::lock_server(server, &metrics).await;
@@ -391,8 +392,8 @@ impl Server {
                         let mut s = crate::instrument::lock_server(server, &metrics).await;
                         s.pty_writers.insert(pane_id, Arc::new(tokio::sync::Mutex::new(writer)));
                         s.pty_kill_senders.insert(pane_id, kill_tx);
-                        if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
-                            let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+                        if let Some(rt_lock) = s.workspaces.get(&runtime_id) {
+                            let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                             let _ = rt.set_pane_exit_status(pane_id, None);
                             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                 pane.child_pid = child_pid;
@@ -403,7 +404,7 @@ impl Server {
                         Arc::clone(server),
                         runtime_id,
                         pane_id,
-                        &runtime_name,
+                        &workspace_name,
                         reader,
                         child,
                         kill_rx,
@@ -413,15 +414,17 @@ impl Server {
                             Arc::clone(&s.ring)
                         },
                     );
-                    tracing::info!("Reconstructed pane {pane_short} in runtime {runtime_label}");
+                    tracing::info!(
+                        "Reconstructed pane {pane_short} in workspace {workspace_label}"
+                    );
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to reconstruct pane {pane_short} in runtime {runtime_label}: {e}"
+                        "Failed to reconstruct pane {pane_short} in workspace {workspace_label}: {e}"
                     );
                     let s = crate::instrument::lock_server(server, &metrics).await;
-                    if let Some(rt_lock) = s.runtimes.get(&runtime_id) {
-                        let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+                    if let Some(rt_lock) = s.workspaces.get(&runtime_id) {
+                        let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                         let _ = rt.set_pane_exit_status(pane_id, Some(-1));
                     }
                 }
@@ -466,11 +469,11 @@ impl Server {
         }
     }
 
-    /// Collect cloned sender handles for all clients attached to a runtime.
+    /// Collect cloned sender handles for all clients attached to a workspace.
     ///
-    /// `attached_client_ids` must be extracted from the runtime while its
+    /// `attached_client_ids` must be extracted from the workspace while its
     /// lock is held.  The returned senders can be used after releasing both
-    /// the server and runtime mutexes via [`send_to_collected`].
+    /// the server and workspace mutexes via [`send_to_collected`].
     fn collect_senders_for_clients(
         &self,
         attached_client_ids: &[Uuid],
@@ -509,15 +512,15 @@ impl Server {
     /// clients.
     pub fn handle_push_overflows(&mut self, overflowed: &[Uuid], runtime_id: Uuid) {
         for &client_id in overflowed {
-            self.handle_single_push_overflow_for_runtime(client_id, runtime_id);
+            self.handle_single_push_overflow_for_workspace(client_id, runtime_id);
         }
     }
 
-    /// Handle push overflow for a single client in a runtime context.
+    /// Handle push overflow for a single client in a workspace context.
     ///
     /// V3 + `OPT_RESYNC`: sends `StreamOverflow` via the response channel.
     /// Otherwise: removes the push sender to force disconnect.
-    fn handle_single_push_overflow_for_runtime(&mut self, client_id: Uuid, runtime_id: Uuid) {
+    fn handle_single_push_overflow_for_workspace(&mut self, client_id: Uuid, runtime_id: Uuid) {
         if let Some(ClientProtocol::V3 { effective_caps }) = self.client_protocols.get(&client_id)
             && rttx_proto::v3_resync::is_supported(effective_caps)
         {
@@ -537,15 +540,15 @@ impl Server {
         self.force_disconnect_client(client_id);
     }
 
-    /// Handle push overflow for a single client (no runtime context).
+    /// Handle push overflow for a single client (no workspace context).
     ///
     /// Used by `broadcast_to_clients` which may not have a specific `runtime_id`.
     fn handle_single_push_overflow(&mut self, client_id: Uuid) {
-        // Without a runtime context we cannot build a StreamOverflow event,
-        // so try to find the runtime this client is attached to.  Because
-        // per-runtime locks are held independently, we use try_lock to
+        // Without a workspace context we cannot build a StreamOverflow event,
+        // so try to find the workspace this client is attached to.  Because
+        // per-workspace locks are held independently, we use try_lock to
         // avoid blocking.
-        let runtime_id = self.runtimes.iter().find_map(|(&rid, rt_lock)| {
+        let runtime_id = self.workspaces.iter().find_map(|(&rid, rt_lock)| {
             rt_lock
                 .try_lock()
                 .ok()
@@ -554,7 +557,7 @@ impl Server {
         });
 
         if let Some(rid) = runtime_id {
-            self.handle_single_push_overflow_for_runtime(client_id, rid);
+            self.handle_single_push_overflow_for_workspace(client_id, rid);
         } else {
             self.force_disconnect_client(client_id);
         }
@@ -569,20 +572,20 @@ impl Server {
         self.client_senders.remove(&client_id);
     }
 
-    fn terminate_runtime(
+    fn terminate_workspace(
         &mut self,
         runtime_id: Uuid,
         final_revision: u64,
         reason: TerminationReason,
         exclude_client_id: Option<Uuid>,
     ) -> Option<ClientMsg> {
-        let rt_lock = self.runtimes.remove(&runtime_id)?;
+        let rt_lock = self.workspaces.remove(&runtime_id)?;
         let Ok(rt) = rt_lock.try_lock() else {
             tracing::warn!(
-                "Cannot terminate runtime {} — lock contended, re-inserting",
+                "Cannot terminate workspace {} — lock contended, re-inserting",
                 short_id(runtime_id)
             );
-            self.runtimes.insert(runtime_id, rt_lock);
+            self.workspaces.insert(runtime_id, rt_lock);
             return None;
         };
         let attached_client_ids: Vec<_> = rt.attached_clients.keys().copied().collect();
@@ -595,11 +598,11 @@ impl Server {
             }
         }
 
-        // Remove the runtime's on-disk directory in a background thread.
+        // Remove the workspace's on-disk directory in a background thread.
         let state_dir = self.os.state_dir();
         crate::state::cleanup::remove_runtime_dir_background(&state_dir, runtime_id);
 
-        let msg = protocol::v3_runtime_terminated(runtime_id, final_revision, reason);
+        let msg = protocol::v3_workspace_terminated(runtime_id, final_revision, reason);
         self.broadcast_to_clients(attached_client_ids, exclude_client_id, &msg);
         Some(msg)
     }
@@ -633,19 +636,21 @@ impl Server {
                 ))
             }
 
-            v3::client_envelope::Command::ListRuntimes(_) => {
+            v3::client_envelope::Command::ListWorkspaces(_) => {
                 let s = crate::instrument::lock_server(server, metrics).await;
                 let has_inventory_v2 = rttx_proto::v3_inventory::is_supported(effective_caps);
-                let mut infos = Vec::with_capacity(s.runtimes.len());
-                for rt_lock in s.runtimes.values() {
-                    let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
-                    infos.push(protocol::v3_runtime_info_for(client_id, &rt, has_inventory_v2));
+                let mut infos = Vec::with_capacity(s.workspaces.len());
+                for rt_lock in s.workspaces.values() {
+                    let rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
+                    infos.push(protocol::v3_workspace_info_for(client_id, &rt, has_inventory_v2));
                 }
                 drop(s);
                 infos.sort_by(|a, b| a.id.cmp(&b.id));
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
-                    v3::server_envelope::Payload::RuntimeList(v3::RuntimeList { runtimes: infos }),
+                    v3::server_envelope::Payload::WorkspaceList(v3::WorkspaceList {
+                        workspaces: infos,
+                    }),
                 ))
             }
 
@@ -669,39 +674,39 @@ impl Server {
                 ))
             }
 
-            v3::client_envelope::Command::CreateRuntime(req) => {
+            v3::client_envelope::Command::CreateWorkspace(req) => {
                 let mut s = crate::instrument::lock_server(server, metrics).await;
-                let rt = Runtime::new(req.name);
+                let rt = Workspace::new(req.name);
                 let runtime_id = rt.id;
-                let policy = RuntimePolicy::from_v3_proto(req.policy);
+                let policy = WorkspacePolicy::from_v3_proto(req.policy);
                 let mut rt = rt;
                 rt.policy = policy;
                 let label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 let policy_str = match policy {
-                    RuntimePolicy::Persistent => "persistent",
-                    RuntimePolicy::Ephemeral => "ephemeral",
+                    WorkspacePolicy::Persistent => "persistent",
+                    WorkspacePolicy::Ephemeral => "ephemeral",
                 };
                 let revision = rt.revision();
-                s.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
-                tracing::info!("Runtime created: {label}, policy={policy_str}");
+                s.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
+                tracing::info!("Workspace created: {label}, policy={policy_str}");
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
-                    v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+                    v3::server_envelope::Payload::WorkspaceCreated(v3::WorkspaceCreated {
                         runtime_id: uuid_to_bytes(runtime_id),
-                        runtime_revision: revision,
+                        workspace_revision: revision,
                     }),
                 ))
             }
 
-            v3::client_envelope::Command::AttachRuntime(req) => {
+            v3::client_envelope::Command::AttachWorkspace(req) => {
                 Self::handle_v3_attach(server, client_id, request_id, req, metrics).await
             }
 
-            v3::client_envelope::Command::DetachRuntime(req) => {
+            v3::client_envelope::Command::DetachWorkspace(req) => {
                 Self::handle_v3_detach(server, client_id, request_id, req, metrics).await
             }
 
-            v3::client_envelope::Command::TerminateRuntime(req) => {
+            v3::client_envelope::Command::TerminateWorkspace(req) => {
                 Self::handle_v3_terminate(server, client_id, request_id, req, metrics).await
             }
 
@@ -741,7 +746,7 @@ impl Server {
                 Self::handle_v3_report_client_size(server, client_id, req, metrics).await
             }
 
-            v3::client_envelope::Command::RenameRuntime(req) => {
+            v3::client_envelope::Command::RenameWorkspace(req) => {
                 let runtime_id = match bytes_to_uuid(&req.runtime_id) {
                     Ok(id) => id,
                     Err(e) => {
@@ -750,64 +755,64 @@ impl Server {
                             rttx_proto::v3_error::build_error(
                                 v3::ErrorKind::InvalidArgument,
                                 &e.to_string(),
-                                "RenameRuntime",
+                                "RenameWorkspace",
                             ),
                         ));
                     }
                 };
                 let rt_lock = {
                     let s = crate::instrument::lock_server(server, metrics).await;
-                    match s.runtimes.get(&runtime_id) {
+                    match s.workspaces.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
                             return Some(rttx_proto::v3_error::build_error_response(
                                 request_id,
                                 rttx_proto::v3_error::build_error(
-                                    v3::ErrorKind::RuntimeNotFound,
-                                    "runtime not found",
-                                    "RenameRuntime",
+                                    v3::ErrorKind::WorkspaceNotFound,
+                                    "workspace not found",
+                                    "RenameWorkspace",
                                 ),
                             ));
                         }
                     }
                 };
-                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 if !rt.client_has_write_access(client_id) {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
                         rttx_proto::v3_error::build_error(
                             v3::ErrorKind::OwnershipConflict,
-                            "runtime is currently owned by another client",
-                            "RenameRuntime",
+                            "workspace is currently owned by another client",
+                            "RenameWorkspace",
                         ),
                     ));
                 }
                 let old_name = rt.name.clone();
                 let revision = rt.rename(req.name.clone());
                 tracing::info!(
-                    "Runtime renamed: \"{}\" -> \"{}\" ({})",
+                    "Workspace renamed: \"{}\" -> \"{}\" ({})",
                     old_name,
                     req.name,
                     short_id(runtime_id),
                 );
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
-                    v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
+                    v3::server_envelope::Payload::WorkspaceRenamed(v3::WorkspaceRenamed {
                         runtime_id: uuid_to_bytes(runtime_id),
                         name: req.name,
-                        runtime_revision: revision,
+                        workspace_revision: revision,
                     }),
                 ))
             }
 
-            v3::client_envelope::Command::ResyncRuntime(req) => {
+            v3::client_envelope::Command::ResyncWorkspace(req) => {
                 if !rttx_proto::v3_resync::is_supported(effective_caps) {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
                         rttx_proto::v3_error::build_error(
                             v3::ErrorKind::UnsupportedCapability,
                             "OPT_RESYNC not negotiated",
-                            "ResyncRuntime",
+                            "ResyncWorkspace",
                         ),
                     ));
                 }
@@ -819,32 +824,32 @@ impl Server {
                             rttx_proto::v3_error::build_error(
                                 v3::ErrorKind::InvalidArgument,
                                 &e.to_string(),
-                                "ResyncRuntime",
+                                "ResyncWorkspace",
                             ),
                         ));
                     }
                 };
                 let rt_lock = {
                     let s = crate::instrument::lock_server(server, metrics).await;
-                    match s.runtimes.get(&runtime_id) {
+                    match s.workspaces.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
                             return Some(rttx_proto::v3_error::build_error_response(
                                 request_id,
                                 rttx_proto::v3_error::build_error(
-                                    v3::ErrorKind::RuntimeNotFound,
-                                    "runtime not found",
-                                    "ResyncRuntime",
+                                    v3::ErrorKind::WorkspaceNotFound,
+                                    "workspace not found",
+                                    "ResyncWorkspace",
                                 ),
                             ));
                         }
                     }
                 };
-                let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 let role = rt
                     .client_role(client_id)
-                    .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto);
-                let snapshot = protocol::build_v3_runtime_snapshot(&rt, runtime_id, role);
+                    .map_or(v3::WorkspaceClientRole::Unattached, ClientRole::as_v3_proto);
+                let snapshot = protocol::build_v3_workspace_snapshot(&rt, runtime_id, role);
                 Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
             }
 
@@ -887,21 +892,21 @@ impl Server {
                 };
                 let rt_lock = {
                     let s = crate::instrument::lock_server(server, metrics).await;
-                    match s.runtimes.get(&runtime_id) {
+                    match s.workspaces.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
                             return Some(rttx_proto::v3_error::build_error_response(
                                 request_id,
                                 rttx_proto::v3_error::build_error(
-                                    v3::ErrorKind::RuntimeNotFound,
-                                    "runtime not found",
+                                    v3::ErrorKind::WorkspaceNotFound,
+                                    "workspace not found",
                                     "GetScrollback",
                                 ),
                             ));
                         }
                     }
                 };
-                let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 let Some(pane) = rt.panes.get(&pane_id) else {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
@@ -928,14 +933,14 @@ impl Server {
                 Some(rttx_proto::v3_scrollback::build_scrollback_chunk_response(request_id, chunk))
             }
 
-            v3::client_envelope::Command::TakeoverRuntime(req) => {
+            v3::client_envelope::Command::TakeoverWorkspace(req) => {
                 if !rttx_proto::v3_takeover::is_supported(effective_caps) {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
                         rttx_proto::v3_error::build_error(
                             v3::ErrorKind::UnsupportedCapability,
                             "OPT_RUNTIME_TAKEOVER not negotiated",
-                            "TakeoverRuntime",
+                            "TakeoverWorkspace",
                         ),
                     ));
                 }
@@ -947,28 +952,28 @@ impl Server {
                             rttx_proto::v3_error::build_error(
                                 v3::ErrorKind::InvalidArgument,
                                 &e.to_string(),
-                                "TakeoverRuntime",
+                                "TakeoverWorkspace",
                             ),
                         ));
                     }
                 };
                 let rt_lock = {
                     let s = crate::instrument::lock_server(server, metrics).await;
-                    match s.runtimes.get(&runtime_id) {
+                    match s.workspaces.get(&runtime_id) {
                         Some(rt) => Arc::clone(rt),
                         None => {
                             return Some(rttx_proto::v3_error::build_error_response(
                                 request_id,
                                 rttx_proto::v3_error::build_error(
-                                    v3::ErrorKind::RuntimeNotFound,
-                                    "runtime not found",
-                                    "TakeoverRuntime",
+                                    v3::ErrorKind::WorkspaceNotFound,
+                                    "workspace not found",
+                                    "TakeoverWorkspace",
                                 ),
                             ));
                         }
                     }
                 };
-                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 match rt.attach_client(client_id, AttachMode::TakeOver) {
                     Ok(AttachOutcome::Attached { revision, .. }) => {
                         Some(rttx_proto::v3_takeover::build_takeover_completed_response(
@@ -982,7 +987,7 @@ impl Server {
                             rttx_proto::v3_error::build_error(
                                 v3::ErrorKind::OwnershipConflict,
                                 "takeover failed",
-                                "TakeoverRuntime",
+                                "TakeoverWorkspace",
                             ),
                         ))
                     }
@@ -996,17 +1001,17 @@ impl Server {
 
 /// Server capabilities advertised during v3 handshake.
 pub const SERVER_CAPABILITIES: &[v3::Capability] = &[
-    v3::Capability::CoreRuntimeLifecycle,
+    v3::Capability::CoreWorkspaceLifecycle,
     v3::Capability::CorePaneLifecycle,
     v3::Capability::CoreTerminalIo,
     v3::Capability::CoreTerminalModes,
     v3::Capability::CorePasteIntent,
     v3::Capability::CoreFocusEvents,
-    v3::Capability::OptRuntimeInventoryV2,
+    v3::Capability::OptWorkspaceInventoryV2,
     v3::Capability::OptResync,
     v3::Capability::OptChunkedScrollback,
     v3::Capability::OptDiagnostics,
-    v3::Capability::OptRuntimeTakeover,
+    v3::Capability::OptWorkspaceTakeover,
 ];
 
 // ── V3 dispatch helpers ─────────────────────────────────────────
@@ -1018,7 +1023,7 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         request_id: u64,
-        req: v3::AttachRuntime,
+        req: v3::AttachWorkspace,
         metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
@@ -1029,7 +1034,7 @@ impl Server {
                     rttx_proto::v3_error::build_error(
                         v3::ErrorKind::InvalidArgument,
                         &e.to_string(),
-                        "AttachRuntime",
+                        "AttachWorkspace",
                     ),
                 ));
             }
@@ -1037,21 +1042,21 @@ impl Server {
         let attach_mode = AttachMode::from_v3_proto(req.attach_mode);
         let rt_lock = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            match s.runtimes.get(&runtime_id) {
+            match s.workspaces.get(&runtime_id) {
                 Some(rt) => Arc::clone(rt),
                 None => {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
                         rttx_proto::v3_error::build_error(
-                            v3::ErrorKind::RuntimeNotFound,
-                            "runtime not found",
-                            "AttachRuntime",
+                            v3::ErrorKind::WorkspaceNotFound,
+                            "workspace not found",
+                            "AttachWorkspace",
                         ),
                     ));
                 }
             }
         };
-        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+        let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
         let attach_outcome = match rt.attach_client(client_id, attach_mode) {
             Ok(outcome) => outcome,
             Err(AttachError::UnsupportedTakeOver) => {
@@ -1059,8 +1064,8 @@ impl Server {
                     request_id,
                     rttx_proto::v3_error::build_error(
                         v3::ErrorKind::TakeoverRequired,
-                        "use TakeoverRuntime command",
-                        "AttachRuntime",
+                        "use TakeoverWorkspace command",
+                        "AttachWorkspace",
                     ),
                 ));
             }
@@ -1068,10 +1073,10 @@ impl Server {
         match attach_outcome {
             AttachOutcome::Attached { role, .. } => {
                 let v3_role = role.as_v3_proto();
-                let snapshot = protocol::build_v3_runtime_snapshot(&rt, runtime_id, v3_role);
-                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                let snapshot = protocol::build_v3_workspace_snapshot(&rt, runtime_id, v3_role);
+                let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
-                    "Client {} attached to runtime {runtime_label} as {role:?}",
+                    "Client {} attached to workspace {workspace_label} as {role:?}",
                     short_id(client_id)
                 );
                 Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
@@ -1082,7 +1087,7 @@ impl Server {
                     v3::server_envelope::Payload::AttachBlocked(v3::AttachBlocked {
                         runtime_id: uuid_to_bytes(runtime_id),
                         current_client_role: current_role
-                            .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto)
+                            .map_or(v3::WorkspaceClientRole::Unattached, ClientRole::as_v3_proto)
                             as i32,
                         attached_client_count: u32::try_from(rt.attached_client_count())
                             .unwrap_or(u32::MAX),
@@ -1098,7 +1103,7 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         request_id: u64,
-        req: v3::DetachRuntime,
+        req: v3::DetachWorkspace,
         metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
@@ -1109,55 +1114,55 @@ impl Server {
                     rttx_proto::v3_error::build_error(
                         v3::ErrorKind::InvalidArgument,
                         &e.to_string(),
-                        "DetachRuntime",
+                        "DetachWorkspace",
                     ),
                 ));
             }
         };
         let rt_lock = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            match s.runtimes.get(&runtime_id) {
+            match s.workspaces.get(&runtime_id) {
                 Some(rt) => Arc::clone(rt),
                 None => {
                     return Some(rttx_proto::v3_error::build_error_response(
                         request_id,
                         rttx_proto::v3_error::build_error(
-                            v3::ErrorKind::RuntimeNotFound,
-                            "runtime not found",
-                            "DetachRuntime",
+                            v3::ErrorKind::WorkspaceNotFound,
+                            "workspace not found",
+                            "DetachWorkspace",
                         ),
                     ));
                 }
             }
         };
-        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+        let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
         match rt.detach_client(client_id, DetachReason::ExplicitRequest) {
             DetachOutcome::Detached { revision } | DetachOutcome::NotAttached { revision } => {
-                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
-                    "Client {} detached from runtime {runtime_label}",
+                    "Client {} detached from workspace {workspace_label}",
                     short_id(client_id)
                 );
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
-                    v3::server_envelope::Payload::RuntimeDetached(v3::RuntimeDetached {
+                    v3::server_envelope::Payload::WorkspaceDetached(v3::WorkspaceDetached {
                         runtime_id: uuid_to_bytes(runtime_id),
-                        runtime_revision: revision,
+                        workspace_revision: revision,
                     }),
                 ))
             }
             DetachOutcome::Terminated { final_revision, reason } => {
-                let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
                 tracing::info!(
-                    "Client {} detached from runtime {runtime_label} (terminated: {reason:?})",
+                    "Client {} detached from workspace {workspace_label} (terminated: {reason:?})",
                     short_id(client_id)
                 );
                 drop(rt);
                 let mut s = crate::instrument::lock_server(server, metrics).await;
-                let _ = s.terminate_runtime(runtime_id, final_revision, reason, Some(client_id));
+                let _ = s.terminate_workspace(runtime_id, final_revision, reason, Some(client_id));
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
-                    v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
+                    v3::server_envelope::Payload::WorkspaceTerminated(v3::WorkspaceTerminated {
                         runtime_id: uuid_to_bytes(runtime_id),
                         final_revision,
                         reason: reason.as_v3_proto() as i32,
@@ -1171,7 +1176,7 @@ impl Server {
         server: &Arc<Mutex<Self>>,
         client_id: Uuid,
         request_id: u64,
-        req: v3::TerminateRuntime,
+        req: v3::TerminateWorkspace,
         metrics: &Arc<crate::metrics::DaemonMetrics>,
     ) -> Option<v3::ServerEnvelope> {
         let runtime_id = match bytes_to_uuid(&req.runtime_id) {
@@ -1182,49 +1187,49 @@ impl Server {
                     rttx_proto::v3_error::build_error(
                         v3::ErrorKind::InvalidArgument,
                         &e.to_string(),
-                        "TerminateRuntime",
+                        "TerminateWorkspace",
                     ),
                 ));
             }
         };
         let mut s = crate::instrument::lock_server(server, metrics).await;
-        let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
+        let Some(rt_lock) = s.workspaces.get(&runtime_id) else {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
                 rttx_proto::v3_error::build_error(
-                    v3::ErrorKind::RuntimeNotFound,
-                    "runtime not found",
-                    "TerminateRuntime",
+                    v3::ErrorKind::WorkspaceNotFound,
+                    "workspace not found",
+                    "TerminateWorkspace",
                 ),
             ));
         };
-        let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
+        let rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
         if rt.has_write_owner() && !rt.client_has_write_access(client_id) {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
                 rttx_proto::v3_error::build_error(
                     v3::ErrorKind::OwnershipConflict,
-                    "runtime is currently owned by another client",
-                    "TerminateRuntime",
+                    "workspace is currently owned by another client",
+                    "TerminateWorkspace",
                 ),
             ));
         }
         let final_revision = rt.revision().saturating_add(1);
-        let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+        let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
         drop(rt);
-        let _ = s.terminate_runtime(
+        let _ = s.terminate_workspace(
             runtime_id,
             final_revision,
             TerminationReason::Explicit,
             Some(client_id),
         );
-        tracing::info!("Runtime terminated: {runtime_label}");
+        tracing::info!("Workspace terminated: {workspace_label}");
         Some(rttx_proto::v3_envelope::build_response_envelope(
             request_id,
-            v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
+            v3::server_envelope::Payload::WorkspaceTerminated(v3::WorkspaceTerminated {
                 runtime_id: uuid_to_bytes(runtime_id),
                 final_revision,
-                reason: v3::RuntimeTerminationReason::Explicit as i32,
+                reason: v3::WorkspaceTerminationReason::Explicit as i32,
             }),
         ))
     }
@@ -1252,25 +1257,25 @@ impl Server {
         };
         let pane_id = Uuid::new_v4();
         let no_persist = req.no_persist.unwrap_or(false);
-        let (pty_result, runtime_label, cols, rows, initial_cwd) = {
+        let (pty_result, workspace_label, cols, rows, initial_cwd) = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
+            let Some(rt_lock) = s.workspaces.get(&runtime_id) else {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
                     rttx_proto::v3_error::build_error(
-                        v3::ErrorKind::RuntimeNotFound,
-                        "runtime not found",
+                        v3::ErrorKind::WorkspaceNotFound,
+                        "workspace not found",
                         "CreatePane",
                     ),
                 ));
             };
-            let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
+            let rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
             if !rt.client_has_write_access(client_id) {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
                     rttx_proto::v3_error::build_error(
                         v3::ErrorKind::OwnershipConflict,
-                        "runtime is currently owned by another client",
+                        "workspace is currently owned by another client",
                         "CreatePane",
                     ),
                 ));
@@ -1294,20 +1299,20 @@ impl Server {
                 let child_pid = pty.pid();
                 let (reader, writer, mut child) = pty.into_parts();
                 let (kill_tx, kill_rx) = oneshot::channel();
-                let (revision, runtime_name, metrics, ring) = {
+                let (revision, workspace_name, metrics, ring) = {
                     let mut s = crate::instrument::lock_server(server, metrics).await;
-                    let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
+                    let Some(rt_lock) = s.workspaces.get(&runtime_id) else {
                         let _ = child.start_kill();
                         return Some(rttx_proto::v3_error::build_error_response(
                             request_id,
                             rttx_proto::v3_error::build_error(
-                                v3::ErrorKind::RuntimeNotFound,
-                                "runtime not found",
+                                v3::ErrorKind::WorkspaceNotFound,
+                                "workspace not found",
                                 "CreatePane",
                             ),
                         ));
                     };
-                    let mut rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
+                    let mut rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
                     let mut pane = Pane::new(pane_id, cols, rows);
                     pane.child_pid = child_pid;
                     pane.no_persist = no_persist;
@@ -1326,7 +1331,7 @@ impl Server {
                     Arc::clone(server),
                     runtime_id,
                     pane_id,
-                    &runtime_name,
+                    &workspace_name,
                     reader,
                     child,
                     kill_rx,
@@ -1334,9 +1339,9 @@ impl Server {
                     ring,
                 );
                 tracing::info!(
-                    "Pane {} created in runtime \"{}\" ({})",
+                    "Pane {} created in workspace \"{}\" ({})",
                     short_id(pane_id),
-                    runtime_name,
+                    workspace_name,
                     short_id(runtime_id)
                 );
                 Some(rttx_proto::v3_envelope::build_response_envelope(
@@ -1344,13 +1349,13 @@ impl Server {
                     v3::server_envelope::Payload::PaneCreated(v3::PaneCreated {
                         runtime_id: uuid_to_bytes(runtime_id),
                         pane_id: uuid_to_bytes(pane_id),
-                        runtime_revision: revision,
+                        workspace_revision: revision,
                     }),
                 ))
             }
             Err(e) => {
                 tracing::error!(
-                    "Failed to spawn PTY for pane {} in runtime {runtime_label}: {e}",
+                    "Failed to spawn PTY for pane {} in workspace {workspace_label}: {e}",
                     short_id(pane_id)
                 );
                 Some(rttx_proto::v3_error::build_error_response(
@@ -1399,23 +1404,23 @@ impl Server {
             }
         };
         let mut s = crate::instrument::lock_server(server, metrics).await;
-        let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
+        let Some(rt_lock) = s.workspaces.get(&runtime_id) else {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
                 rttx_proto::v3_error::build_error(
-                    v3::ErrorKind::RuntimeNotFound,
-                    "runtime not found",
+                    v3::ErrorKind::WorkspaceNotFound,
+                    "workspace not found",
                     "ClosePane",
                 ),
             ));
         };
-        let mut rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
+        let mut rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
         if !rt.client_has_write_access(client_id) {
             return Some(rttx_proto::v3_error::build_error_response(
                 request_id,
                 rttx_proto::v3_error::build_error(
                     v3::ErrorKind::OwnershipConflict,
-                    "runtime is currently owned by another client",
+                    "workspace is currently owned by another client",
                     "ClosePane",
                 ),
             ));
@@ -1431,7 +1436,7 @@ impl Server {
             ));
         }
         let revision = rt.revision();
-        let runtime_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+        let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
         drop(rt);
         s.pty_writers.remove(&pane_id);
         if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
@@ -1439,13 +1444,13 @@ impl Server {
         }
         // The pane left the tree: sweep its durable artifacts (RFC-031 §8).
         crate::state::cleanup::remove_pane_state_background(&s.os.state_dir(), runtime_id, pane_id);
-        tracing::info!("Pane {} closed in runtime {runtime_label}", short_id(pane_id));
+        tracing::info!("Pane {} closed in workspace {workspace_label}", short_id(pane_id));
         Some(rttx_proto::v3_envelope::build_response_envelope(
             request_id,
             v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
                 runtime_id: uuid_to_bytes(runtime_id),
                 pane_id: uuid_to_bytes(pane_id),
-                runtime_revision: revision,
+                workspace_revision: revision,
             }),
         ))
     }
@@ -1460,10 +1465,10 @@ impl Server {
         let Ok(pane_id) = bytes_to_uuid(&input.pane_id) else { return None };
         let (writer, resolved_bytes) = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+            let rt_lock = s.workspaces.get(&runtime_id).cloned()?;
             let writer = s.pty_writers.get(&pane_id).cloned();
             drop(s);
-            let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+            let rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
             if !rt.panes.contains_key(&pane_id) {
                 return None;
             }
@@ -1503,12 +1508,12 @@ impl Server {
         let Ok(rows) = u16::try_from(req.rows) else { return None };
         let (writer, rt_lock) = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+            let rt_lock = s.workspaces.get(&runtime_id).cloned()?;
             let writer = s.pty_writers.get(&pane_id).cloned();
             (writer, rt_lock)
         };
         {
-            let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+            let rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
             if !rt.panes.contains_key(&pane_id) {
                 return None;
             }
@@ -1521,14 +1526,14 @@ impl Server {
             let w = writer.lock().await;
             if let Err(e) = w.resize(pty_process::Size::new(rows, cols)) {
                 tracing::error!(
-                    "Failed to resize PTY {} in runtime {}: {e}",
+                    "Failed to resize PTY {} in workspace {}: {e}",
                     short_id(pane_id),
                     short_id(runtime_id)
                 );
                 return None;
             }
         }
-        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+        let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
         rt.resize_pane(pane_id, cols, rows)?;
         None
     }
@@ -1543,9 +1548,9 @@ impl Server {
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
         let rt_lock = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            s.runtimes.get(&runtime_id)?.clone()
+            s.workspaces.get(&runtime_id)?.clone()
         };
-        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+        let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
         if !rt.client_has_write_access(client_id) {
             return None;
         }
@@ -1563,9 +1568,9 @@ impl Server {
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else { return None };
         let rt_lock = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            s.runtimes.get(&runtime_id)?.clone()
+            s.workspaces.get(&runtime_id)?.clone()
         };
-        let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+        let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
         if !rt.client_has_write_access(client_id) {
             return None;
         }
@@ -1592,7 +1597,7 @@ impl Server {
             ))
         };
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
-            return err(v3::ErrorKind::InvalidArgument, "invalid runtime id");
+            return err(v3::ErrorKind::InvalidArgument, "invalid workspace id");
         };
         let Ok(target_pane_id) = bytes_to_uuid(&req.target_pane_id) else {
             return err(v3::ErrorKind::InvalidArgument, "invalid target pane id");
@@ -1607,14 +1612,14 @@ impl Server {
 
         let (pty_result, cols, rows, initial_cwd) = {
             let s = crate::instrument::lock_server(server, metrics).await;
-            let Some(rt_lock) = s.runtimes.get(&runtime_id) else {
-                return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+            let Some(rt_lock) = s.workspaces.get(&runtime_id) else {
+                return err(v3::ErrorKind::WorkspaceNotFound, "workspace not found");
             };
-            let rt = crate::instrument::lock_runtime(rt_lock, metrics).await;
+            let rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
             if !rt.client_has_write_access(client_id) {
                 return err(
                     v3::ErrorKind::OwnershipConflict,
-                    "runtime is currently owned by another client",
+                    "workspace is currently owned by another client",
                 );
             }
             if !rt.tree.contains(crate::pane_tree::PaneId::from_uuid(target_pane_id)) {
@@ -1650,14 +1655,14 @@ impl Server {
         let (reader, writer, mut child) = pty.into_parts();
         let (kill_tx, kill_rx) = oneshot::channel();
 
-        let (revision, runtime_name, read_metrics, ring) = {
+        let (revision, workspace_name, read_metrics, ring) = {
             let mut s = crate::instrument::lock_server(server, metrics).await;
-            let Some(rt_lock) = s.runtimes.get(&runtime_id).cloned() else {
+            let Some(rt_lock) = s.workspaces.get(&runtime_id).cloned() else {
                 let _ = child.start_kill();
-                return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+                return err(v3::ErrorKind::WorkspaceNotFound, "workspace not found");
             };
             let split = {
-                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 let mut pane = Pane::new(pane_id, cols, rows);
                 pane.child_pid = child_pid;
                 pane.no_persist = no_persist;
@@ -1697,7 +1702,7 @@ impl Server {
             Arc::clone(server),
             runtime_id,
             pane_id,
-            &runtime_name,
+            &workspace_name,
             reader,
             child,
             kill_rx,
@@ -1705,10 +1710,10 @@ impl Server {
             ring,
         );
         tracing::info!(
-            "Pane {} split from {} in runtime \"{}\" ({})",
+            "Pane {} split from {} in workspace \"{}\" ({})",
             short_id(pane_id),
             short_id(target_pane_id),
-            runtime_name,
+            workspace_name,
             short_id(runtime_id),
         );
         Some(rttx_proto::v3_tree::build_pane_split_response(
@@ -1739,21 +1744,21 @@ impl Server {
             ))
         };
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
-            return err(v3::ErrorKind::InvalidArgument, "invalid runtime id");
+            return err(v3::ErrorKind::InvalidArgument, "invalid workspace id");
         };
         let Some(path) = protocol::decode_side_path(&req.path) else {
             return err(v3::ErrorKind::InvalidArgument, "invalid split path");
         };
         let mut s = crate::instrument::lock_server(server, metrics).await;
-        let Some(rt_lock) = s.runtimes.get(&runtime_id).cloned() else {
-            return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+        let Some(rt_lock) = s.workspaces.get(&runtime_id).cloned() else {
+            return err(v3::ErrorKind::WorkspaceNotFound, "workspace not found");
         };
         let result = {
-            let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+            let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
             if !rt.client_has_write_access(client_id) {
                 return err(
                     v3::ErrorKind::OwnershipConflict,
-                    "runtime is currently owned by another client",
+                    "workspace is currently owned by another client",
                 );
             }
             rt.resize_split(&path, req.ratio)
@@ -1788,21 +1793,21 @@ impl Server {
             ))
         };
         let Ok(runtime_id) = bytes_to_uuid(&req.runtime_id) else {
-            return err(v3::ErrorKind::InvalidArgument, "invalid runtime id");
+            return err(v3::ErrorKind::InvalidArgument, "invalid workspace id");
         };
         let Ok(pane_id) = bytes_to_uuid(&req.pane_id) else {
             return err(v3::ErrorKind::InvalidArgument, "invalid pane id");
         };
         let mut s = crate::instrument::lock_server(server, metrics).await;
-        let Some(rt_lock) = s.runtimes.get(&runtime_id).cloned() else {
-            return err(v3::ErrorKind::RuntimeNotFound, "runtime not found");
+        let Some(rt_lock) = s.workspaces.get(&runtime_id).cloned() else {
+            return err(v3::ErrorKind::WorkspaceNotFound, "workspace not found");
         };
         let result = {
-            let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+            let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
             if !rt.client_has_write_access(client_id) {
                 return err(
                     v3::ErrorKind::OwnershipConflict,
-                    "runtime is currently owned by another client",
+                    "workspace is currently owned by another client",
                 );
             }
             rt.set_default_active_pane(pane_id)
@@ -1850,9 +1855,9 @@ impl Server {
         )> = Vec::new();
         {
             let mut s = crate::instrument::lock_server(server, metrics).await;
-            let rt_lock = s.runtimes.get(&runtime_id).cloned()?;
+            let rt_lock = s.workspaces.get(&runtime_id).cloned()?;
             {
-                let rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 rt.client_role(client_id)?;
             }
             let entry = s.client_pane_sizes.entry(client_id).or_default();
@@ -1881,10 +1886,10 @@ impl Server {
             }
             let rt_lock = {
                 let s = crate::instrument::lock_server(server, metrics).await;
-                s.runtimes.get(&runtime_id).cloned()
+                s.workspaces.get(&runtime_id).cloned()
             };
             if let Some(rt_lock) = rt_lock {
-                let mut rt = crate::instrument::lock_runtime(&rt_lock, metrics).await;
+                let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 let _ = rt.resize_pane(id, cols, rows);
             }
         }
@@ -1939,24 +1944,24 @@ fn spawn_pty_read_loop(
     server: Arc<Mutex<Server>>,
     runtime_id: Uuid,
     pane_id: Uuid,
-    runtime_name: &str,
+    workspace_name: &str,
     mut reader: pty_process::OwnedReadPty,
     mut child: tokio::process::Child,
     mut kill_rx: oneshot::Receiver<()>,
     metrics: Arc<crate::metrics::DaemonMetrics>,
     ring: Arc<crate::flight::RingWriter>,
 ) {
-    let runtime_label = format!("\"{}\" ({})", runtime_name, short_id(runtime_id));
+    let workspace_label = format!("\"{}\" ({})", workspace_name, short_id(runtime_id));
     let pane_short = short_id(pane_id);
     tokio::spawn(async move {
-        // Grab the per-runtime lock once at startup so the hot path
-        // never touches the server mutex for runtime access.
-        let rt_lock: Option<RuntimeLock> = {
+        // Grab the per-workspace lock once at startup so the hot path
+        // never touches the server mutex for workspace access.
+        let rt_lock: Option<WorkspaceLock> = {
             let s = crate::instrument::lock_server(&server, &metrics).await;
-            s.runtimes.get(&runtime_id).cloned()
+            s.workspaces.get(&runtime_id).cloned()
         };
         let Some(rt_lock) = rt_lock else {
-            tracing::error!("Runtime {runtime_label} not found at PTY read loop start");
+            tracing::error!("Workspace {workspace_label} not found at PTY read loop start");
             return;
         };
 
@@ -1992,12 +1997,12 @@ fn spawn_pty_read_loop(
                             let mut pane_context = [0u8; 16];
                             pane_context[..16].copy_from_slice(pane_id.as_bytes());
 
-                            // Phase 1: accept raw bytes under the per-runtime lock
+                            // Phase 1: accept raw bytes under the per-workspace lock
                             // (fast memcpy, no VTE parsing).  The server mutex is
                             // only touched briefly to collect client senders.
                             let (mut taken_screen, senders, output_seq, contended) = {
                                 let lock_start = std::time::Instant::now();
-                                let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
+                                let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                                 let (screen, seq) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                     pane.accept_output(&data);
                                     (Some(pane.take_screen()), pane.output_seq)
@@ -2015,7 +2020,7 @@ fn spawn_pty_read_loop(
                                     tracing::warn!(
                                         hold_ms = hold.as_millis() as u64,
                                         pane = %pane_short,
-                                        runtime = %runtime_label,
+                                        workspace = %workspace_label,
                                         "mutex held too long in PTY read loop",
                                     );
                                 }
@@ -2041,10 +2046,10 @@ fn spawn_pty_read_loop(
                                 screen.parse(&data);
                             }
 
-                            // Phase 3: return parsed screen under per-runtime lock,
+                            // Phase 3: return parsed screen under per-workspace lock,
                             // collect PTY writer from server.
                             let (new_cwd, new_title, pending_replies, pty_writer) = {
-                                let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
+                                let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                                 if let Some(screen) = taken_screen
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
@@ -2077,13 +2082,13 @@ fn spawn_pty_read_loop(
                                 for reply in &pending_replies {
                                     if let Err(e) = w.write_all(reply).await {
                                         tracing::error!(
-                                            "Failed to write DSR reply to PTY {pane_short} in runtime {runtime_label}: {e}"
+                                            "Failed to write DSR reply to PTY {pane_short} in workspace {workspace_label}: {e}"
                                         );
                                     }
                                 }
                                 if let Err(e) = w.flush().await {
                                     tracing::error!(
-                                        "Failed to flush DSR reply to PTY {pane_short} in runtime {runtime_label}: {e}"
+                                        "Failed to flush DSR reply to PTY {pane_short} in workspace {workspace_label}: {e}"
                                     );
                                 }
                             }
@@ -2121,14 +2126,14 @@ fn spawn_pty_read_loop(
                             });
                         }
                         Err(e) => {
-                            tracing::error!("PTY read error for pane {pane_short} in runtime {runtime_label}: {e}");
+                            tracing::error!("PTY read error for pane {pane_short} in workspace {workspace_label}: {e}");
                             break;
                         }
                     }
                 }
                 _ = &mut kill_rx => {
                     let _ = child.start_kill();
-                    tracing::info!("PTY read loop cancelled for pane {pane_short} in runtime {runtime_label}");
+                    tracing::info!("PTY read loop cancelled for pane {pane_short} in workspace {workspace_label}");
                     return;
                 }
             }
@@ -2139,15 +2144,15 @@ fn spawn_pty_read_loop(
             Ok(s) => s.code().unwrap_or(-1),
             Err(e) => {
                 tracing::error!(
-                    "Failed to wait on child for pane {pane_short} in runtime {runtime_label}: {e}"
+                    "Failed to wait on child for pane {pane_short} in workspace {workspace_label}: {e}"
                 );
                 -1
             }
         };
 
-        // Feed terminal cleanup and broadcast exit under per-runtime lock.
+        // Feed terminal cleanup and broadcast exit under per-workspace lock.
         {
-            let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
+            let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                 pane.feed_cleanup();
             }
@@ -2169,7 +2174,7 @@ fn spawn_pty_read_loop(
         }
 
         {
-            let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
+            let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
             let exit_msg = {
                 let msg = rt.set_pane_exit_status(pane_id, Some(status)).map(|revision| {
                     protocol::v3_pane_exited(runtime_id, pane_id, status, revision)
@@ -2199,17 +2204,17 @@ fn spawn_pty_read_loop(
         }
 
         tracing::info!(
-            "PTY exited for pane {pane_short} in runtime {runtime_label}, status {status}"
+            "PTY exited for pane {pane_short} in workspace {workspace_label}, status {status}"
         );
     });
 }
 /// Run the serialization loop, writing state to disk every `interval`.
 ///
-/// Uses v2 per-runtime files with symlink-based backup.
+/// Uses v2 per-workspace files with symlink-based backup.
 ///
-/// Dirty-flag optimization (RFC-022 §5): only runtimes where
+/// Dirty-flag optimization (RFC-022 §5): only workspaces where
 /// `revision > persisted_revision` are written. The daemon index is
-/// rewritten only when the set of runtime IDs changes.
+/// rewritten only when the set of workspace IDs changes.
 ///
 /// Stops when the shutdown signal fires.
 pub async fn serialization_loop(
@@ -2237,14 +2242,14 @@ pub async fn serialization_loop(
         let s = crate::instrument::lock_server(&server, &metrics).await;
         let state_dir = s.os.state_dir();
 
-        // Phase 1: drain pending scrollback bytes using per-runtime locks.
+        // Phase 1: drain pending scrollback bytes using per-workspace locks.
         let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
-        let runtime_entries: Vec<(Uuid, RuntimeLock)> =
-            s.runtimes.iter().map(|(&id, rt)| (id, Arc::clone(rt))).collect();
+        let workspace_entries: Vec<(Uuid, WorkspaceLock)> =
+            s.workspaces.iter().map(|(&id, rt)| (id, Arc::clone(rt))).collect();
         drop(s);
 
-        for (runtime_id, rt_lock) in &runtime_entries {
-            let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+        for (runtime_id, rt_lock) in &workspace_entries {
+            let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
             for pane in rt.panes.values_mut() {
                 if !pane.has_pending_flush() || pane.no_persist {
                     if pane.no_persist {
@@ -2270,8 +2275,8 @@ pub async fn serialization_loop(
         // Detects CWD changes when OSC 7 is not emitted by the shell.
         if diagnostics_counter.is_multiple_of(CWD_POLL_INTERVAL_TICKS) {
             let mut cwd_changes: Vec<(Uuid, Uuid, String, u64, Vec<Uuid>)> = Vec::new();
-            for (runtime_id, rt_lock) in &runtime_entries {
-                let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+            for (runtime_id, rt_lock) in &workspace_entries {
+                let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                 let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
                 if client_ids.is_empty() {
                     continue;
@@ -2311,8 +2316,8 @@ pub async fn serialization_loop(
             }
         }
 
-        // Collect v2 runtime files only for dirty persistent runtimes.
-        // Screen snapshots are written for ALL persistent runtimes every 30
+        // Collect v2 workspace files only for dirty persistent workspaces.
+        // Screen snapshots are written for ALL persistent workspaces every 30
         // ticks (~30s) to ensure terminal state survives hard kills even when
         // no metadata changes (title/CWD/attach) bump the revision.
         let mut dirty_runtime_files = Vec::new();
@@ -2320,18 +2325,18 @@ pub async fn serialization_loop(
         let mut current_ids = Vec::new();
         let snapshot_due = diagnostics_counter.is_multiple_of(30);
 
-        for (runtime_id, rt_lock) in &runtime_entries {
-            let rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
-            if rt.policy == RuntimePolicy::Persistent {
+        for (runtime_id, rt_lock) in &workspace_entries {
+            let rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
+            if rt.policy == WorkspacePolicy::Persistent {
                 current_ids.push(*runtime_id);
                 if rt.is_dirty() {
-                    dirty_runtime_files.push(rt.to_runtime_file());
+                    dirty_runtime_files.push(rt.to_workspace_file());
                     for pane in rt.panes.values() {
                         screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
                     }
                 } else if snapshot_due {
                     // Periodic snapshot: capture screen state even when
-                    // runtime metadata hasn't changed.
+                    // workspace metadata hasn't changed.
                     for pane in rt.panes.values() {
                         screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
                     }
@@ -2356,7 +2361,7 @@ pub async fn serialization_loop(
             }
         }
 
-        // Write v2 daemon index only when runtime IDs changed.
+        // Write v2 daemon index only when workspace IDs changed.
         if index_changed {
             let _flush_span = tracing::info_span!(
                 target: "rttx_profile",
@@ -2372,46 +2377,46 @@ pub async fn serialization_loop(
             }
         }
 
-        // Write only dirty runtimes.
+        // Write only dirty workspaces.
         let written_ids: Vec<Uuid> = dirty_runtime_files.iter().map(|rf| rf.spec.id).collect();
         for rf in &dirty_runtime_files {
             let _flush_span = tracing::info_span!(
                 target: "rttx_profile",
                 "io.flush",
                 span_kind = "io_flush",
-                path = %state_dir.join("runtimes").join(rf.spec.id.to_string()).display(),
+                path = %state_dir.join("workspaces").join(rf.spec.id.to_string()).display(),
             )
             .entered();
-            if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
-                tracing::error!("Failed to write v2 runtime {}: {e}", short_id(rf.spec.id));
+            if let Err(e) = crate::state::persistence::save_workspace(&state_dir, rf) {
+                tracing::error!("Failed to write v2 workspace {}: {e}", short_id(rf.spec.id));
             }
         }
 
-        // Write screen snapshots for dirty runtimes.
+        // Write screen snapshots for dirty workspaces.
         for (runtime_id, snap) in &screen_snapshots {
             let _flush_span = tracing::info_span!(
                 target: "rttx_profile",
                 "io.flush",
                 span_kind = "io_flush",
-                path = %state_dir.join("runtimes").join(runtime_id.to_string()).join("screen").display(),
+                path = %state_dir.join("workspaces").join(runtime_id.to_string()).join("screen").display(),
             ).entered();
             if let Err(e) =
                 crate::state::persistence::save_screen_snapshot(&state_dir, *runtime_id, snap)
             {
                 tracing::error!(
-                    "Failed to write screen snapshot for pane {} in runtime {}: {e}",
+                    "Failed to write screen snapshot for pane {} in workspace {}: {e}",
                     short_id(snap.pane_id),
                     short_id(*runtime_id)
                 );
             }
         }
 
-        // Mark successfully written runtimes as persisted.
+        // Mark successfully written workspaces as persisted.
         if !written_ids.is_empty() {
             let s = crate::instrument::lock_server(&server, &metrics).await;
             for id in &written_ids {
-                if let Some(rt_lock) = s.runtimes.get(id) {
-                    let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+                if let Some(rt_lock) = s.workspaces.get(id) {
+                    let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                     rt.mark_persisted();
                 }
             }
@@ -2431,21 +2436,21 @@ pub async fn serialization_loop(
 
 /// Persist final state and flush all scrollback to disk.
 ///
-/// Writes all persistent runtimes unconditionally (ignoring dirty flags)
+/// Writes all persistent workspaces unconditionally (ignoring dirty flags)
 /// because this is the last chance before shutdown.
 pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     let metrics = { server.lock().await.metrics.clone() };
     let s = crate::instrument::lock_server(server, &metrics).await;
     let state_dir = s.os.state_dir();
 
-    // Collect runtime locks and drain pending scrollback.
-    let runtime_entries: Vec<(Uuid, RuntimeLock)> =
-        s.runtimes.iter().map(|(&id, rt)| (id, Arc::clone(rt))).collect();
+    // Collect workspace locks and drain pending scrollback.
+    let workspace_entries: Vec<(Uuid, WorkspaceLock)> =
+        s.workspaces.iter().map(|(&id, rt)| (id, Arc::clone(rt))).collect();
     drop(s);
 
     let mut flush_jobs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
-    for (runtime_id, rt_lock) in &runtime_entries {
-        let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
+    for (runtime_id, rt_lock) in &workspace_entries {
+        let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
         for pane in rt.panes.values_mut() {
             if !pane.has_pending_flush() || pane.no_persist {
                 if pane.no_persist {
@@ -2460,14 +2465,14 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         }
     }
 
-    // Collect v2 per-runtime files (all persistent, not just dirty).
+    // Collect v2 per-workspace files (all persistent, not just dirty).
     let mut runtime_files = Vec::new();
     let mut screen_snapshots = Vec::new();
 
-    for (runtime_id, rt_lock) in &runtime_entries {
-        let mut rt = crate::instrument::lock_runtime(rt_lock, &metrics).await;
-        if rt.policy == RuntimePolicy::Persistent {
-            runtime_files.push(rt.to_runtime_file());
+    for (runtime_id, rt_lock) in &workspace_entries {
+        let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
+        if rt.policy == WorkspacePolicy::Persistent {
+            runtime_files.push(rt.to_workspace_file());
             for pane in rt.panes.values() {
                 screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
             }
@@ -2486,8 +2491,11 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         tracing::error!("Failed to write v2 daemon index on shutdown: {e}");
     }
     for rf in &runtime_files {
-        if let Err(e) = crate::state::persistence::save_runtime(&state_dir, rf) {
-            tracing::error!("Failed to write v2 runtime {} on shutdown: {e}", short_id(rf.spec.id));
+        if let Err(e) = crate::state::persistence::save_workspace(&state_dir, rf) {
+            tracing::error!(
+                "Failed to write v2 workspace {} on shutdown: {e}",
+                short_id(rf.spec.id)
+            );
         }
     }
     for (runtime_id, snap) in &screen_snapshots {
@@ -2565,11 +2573,11 @@ pub async fn run(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
 const fn v3_msg_type(envelope: &v3::ClientEnvelope) -> &'static str {
     match &envelope.command {
         Some(v3::client_envelope::Command::Ping(_)) => "Ping",
-        Some(v3::client_envelope::Command::ListRuntimes(_)) => "ListRuntimes",
-        Some(v3::client_envelope::Command::CreateRuntime(_)) => "CreateRuntime",
-        Some(v3::client_envelope::Command::AttachRuntime(_)) => "AttachRuntime",
-        Some(v3::client_envelope::Command::DetachRuntime(_)) => "DetachRuntime",
-        Some(v3::client_envelope::Command::TerminateRuntime(_)) => "TerminateRuntime",
+        Some(v3::client_envelope::Command::ListWorkspaces(_)) => "ListWorkspaces",
+        Some(v3::client_envelope::Command::CreateWorkspace(_)) => "CreateWorkspace",
+        Some(v3::client_envelope::Command::AttachWorkspace(_)) => "AttachWorkspace",
+        Some(v3::client_envelope::Command::DetachWorkspace(_)) => "DetachWorkspace",
+        Some(v3::client_envelope::Command::TerminateWorkspace(_)) => "TerminateWorkspace",
         Some(v3::client_envelope::Command::CreatePane(_)) => "CreatePane",
         Some(v3::client_envelope::Command::ClosePane(_)) => "ClosePane",
         Some(v3::client_envelope::Command::TerminalInput(_)) => "TerminalInput",
@@ -2582,9 +2590,9 @@ const fn v3_msg_type(envelope: &v3::ClientEnvelope) -> &'static str {
         Some(v3::client_envelope::Command::ReportClientSize(_)) => "ReportClientSize",
         Some(v3::client_envelope::Command::Shutdown(_)) => "Shutdown",
         Some(v3::client_envelope::Command::GetDiagnostics(_)) => "GetDiagnostics",
-        Some(v3::client_envelope::Command::RenameRuntime(_)) => "RenameRuntime",
-        Some(v3::client_envelope::Command::TakeoverRuntime(_)) => "TakeoverRuntime",
-        Some(v3::client_envelope::Command::ResyncRuntime(_)) => "ResyncRuntime",
+        Some(v3::client_envelope::Command::RenameWorkspace(_)) => "RenameWorkspace",
+        Some(v3::client_envelope::Command::TakeoverWorkspace(_)) => "TakeoverWorkspace",
+        Some(v3::client_envelope::Command::ResyncWorkspace(_)) => "ResyncWorkspace",
         Some(v3::client_envelope::Command::GetScrollback(_)) => "GetScrollback",
         None => "Empty",
     }
@@ -2593,7 +2601,7 @@ const fn v3_msg_type(envelope: &v3::ClientEnvelope) -> &'static str {
 /// Handle a single stdio client (for `attach-stdio` SSH tunneling).
 ///
 /// Serves one client over stdin/stdout using the same protocol as the
-/// Unix socket path. The server must already be running (runtimes loaded,
+/// Unix socket path. The server must already be running (workspaces loaded,
 /// PTYs reconstructed).
 pub async fn handle_stdio_client(server: Arc<Mutex<Server>>) -> anyhow::Result<()> {
     let stream = crate::ipc::StdioStream::new();
@@ -2670,7 +2678,7 @@ where
         (Ok(()), false)
     };
 
-    // Cleanup: remove sender and detach from all runtimes.
+    // Cleanup: remove sender and detach from all workspaces.
     {
         let mut s = crate::instrument::lock_server(&server, &metrics).await;
         s.client_senders.remove(&client_id);
@@ -2678,10 +2686,10 @@ where
         s.client_protocols.remove(&client_id);
         s.client_pane_sizes.remove(&client_id);
         if handshake_completed {
-            let rt_locks: Vec<RuntimeLock> = s.runtimes.values().cloned().collect();
+            let rt_locks: Vec<WorkspaceLock> = s.workspaces.values().cloned().collect();
             drop(s);
             for rt_lock in rt_locks {
-                let mut rt = crate::instrument::lock_runtime(&rt_lock, &metrics).await;
+                let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                 let _ = rt.detach_client(client_id, DetachReason::Disconnect);
             }
         }

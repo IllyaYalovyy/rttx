@@ -13,7 +13,7 @@ use std::time::Duration;
 async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client.handshake().await;
     let runtime_id =
-        common::create_runtime(client, "vte-test", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(client, "vte-test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = common::create_pane(client, &runtime_id).await;
     common::attach_rw(client, &runtime_id).await;
     (runtime_id, pane_id)

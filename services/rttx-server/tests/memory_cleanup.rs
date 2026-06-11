@@ -22,10 +22,11 @@ async fn hashmap_cleanup_after_session_terminate() {
     // Create several sessions with panes, then terminate them all.
     for i in 0..5 {
         let sid =
-            create_runtime(&mut client, &format!("map-{i}"), v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, &format!("map-{i}"), v3::WorkspacePolicy::Persistent)
+                .await;
         attach_rw(&mut client, &sid).await;
         let _pane = create_pane(&mut client, &sid).await;
-        terminate_runtime(&mut client, &sid).await;
+        terminate_workspace(&mut client, &sid).await;
     }
 
     // Diagnostics should show zero sessions and zero panes.
@@ -43,7 +44,7 @@ async fn hashmap_cleanup_after_session_terminate() {
         }
     };
 
-    assert_eq!(report.runtime_count, 0, "sessions HashMap must be empty after terminate");
+    assert_eq!(report.workspace_count, 0, "sessions HashMap must be empty after terminate");
     assert_eq!(report.total_pane_count, 0, "no panes should remain");
     assert_eq!(report.pty_writer_count, 0, "pty_writers HashMap must be empty");
 }
@@ -58,7 +59,7 @@ async fn hashmap_cleanup_after_pane_close() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let sid = create_runtime(&mut client, "pane-cleanup", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "pane-cleanup", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     // Create and close several panes.
@@ -81,9 +82,9 @@ async fn hashmap_cleanup_after_pane_close() {
         }
     };
 
-    assert_eq!(report.runtime_count, 1);
-    assert_eq!(report.runtimes[0].active_pane_count, 0, "all panes must be cleaned up");
-    assert_eq!(report.runtimes[0].exited_pane_count, 0, "no exited panes should linger");
+    assert_eq!(report.workspace_count, 1);
+    assert_eq!(report.workspaces[0].active_pane_count, 0, "all panes must be cleaned up");
+    assert_eq!(report.workspaces[0].exited_pane_count, 0, "no exited panes should linger");
 }
 
 /// Ephemeral sessions must be fully cleaned up after the last client detaches.
@@ -97,9 +98,10 @@ async fn hashmap_cleanup_ephemeral_detach() {
 
     for i in 0..3 {
         let sid =
-            create_runtime(&mut client, &format!("eph-{i}"), v3::RuntimePolicy::Ephemeral).await;
+            create_workspace(&mut client, &format!("eph-{i}"), v3::WorkspacePolicy::Ephemeral)
+                .await;
         attach_rw(&mut client, &sid).await;
-        detach_runtime(&mut client, &sid).await;
+        detach_workspace(&mut client, &sid).await;
     }
 
     client
@@ -116,7 +118,7 @@ async fn hashmap_cleanup_ephemeral_detach() {
         }
     };
 
-    assert_eq!(report.runtime_count, 0, "ephemeral sessions must be cleaned up on detach");
+    assert_eq!(report.workspace_count, 0, "ephemeral sessions must be cleaned up on detach");
     assert_eq!(report.total_pane_count, 0);
 }
 

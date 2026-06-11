@@ -1,6 +1,6 @@
-//! Integration tests for v2 per-runtime serialization (RFC-022 Step 3).
+//! Integration tests for v2 per-workspace serialization (RFC-022 Step 3).
 //!
-//! Verifies that the daemon writes per-runtime files with symlink backup
+//! Verifies that the daemon writes per-workspace files with symlink backup
 //! and loads from v2 on restart.
 
 mod common;
@@ -10,7 +10,7 @@ use rttx_proto::v3;
 use rttx_server::state::{layout, persistence, types::RUNTIME_FILE_SCHEMA_VERSION};
 use std::time::Duration;
 
-/// After creating a persistent runtime, the daemon writes v2 per-runtime files.
+/// After creating a persistent workspace, the daemon writes v2 per-workspace files.
 #[tokio::test]
 async fn serialization_writes_v2_runtime_files() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -21,15 +21,15 @@ async fn serialization_writes_v2_runtime_files() {
 
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "v2-write-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     })
     .await;
     let _runtime_id = match c.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Wait for serialization tick to write state.
@@ -42,13 +42,13 @@ async fn serialization_writes_v2_runtime_files() {
 
     // Verify daemon index content.
     let result = persistence::load_all(&state_dir).expect("v2 state should be loadable");
-    assert_eq!(result.runtimes.len(), 1);
-    assert_eq!(result.runtimes[0].spec.name, "v2-write-test");
-    assert_eq!(result.runtimes[0].schema_version, RUNTIME_FILE_SCHEMA_VERSION);
+    assert_eq!(result.workspaces.len(), 1);
+    assert_eq!(result.workspaces[0].spec.name, "v2-write-test");
+    assert_eq!(result.workspaces[0].schema_version, RUNTIME_FILE_SCHEMA_VERSION);
     assert!(result.failed_ids.is_empty());
 }
 
-/// After two daemon index writes (triggered by runtime ID changes), the
+/// After two daemon index writes (triggered by workspace ID changes), the
 /// .bak symlink and .prev file exist.
 #[tokio::test]
 async fn serialization_creates_backup_symlink() {
@@ -58,33 +58,33 @@ async fn serialization_creates_backup_symlink() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    // First runtime — triggers first daemon index write.
+    // First workspace — triggers first daemon index write.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "bak-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     })
     .await;
     let _runtime_id = match c.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Wait for first serialization tick.
     wait_for_state_containing(tmp.path(), "bak-test", Duration::from_secs(10)).await;
 
-    // Second runtime — changes runtime IDs, triggers second daemon index write.
+    // Second workspace — changes workspace IDs, triggers second daemon index write.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "bak-test-2".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     })
     .await;
-    let _ = c.recv().await; // RuntimeCreated
+    let _ = c.recv().await; // WorkspaceCreated
 
     // Wait for second serialization tick to write the updated index.
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -103,7 +103,7 @@ async fn serialization_creates_backup_symlink() {
 async fn restart_prefers_v2_over_v1() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create runtime, let serialization write v2 state.
+    // Phase 1: create workspace, let serialization write v2 state.
     let runtime_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
@@ -112,15 +112,15 @@ async fn restart_prefers_v2_over_v1() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "v2-preferred".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
         runtime_id = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         wait_for_state_containing(tmp.path(), "v2-preferred", Duration::from_secs(10)).await;
@@ -136,16 +136,16 @@ async fn restart_prefers_v2_over_v1() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1);
-        assert_eq!(runtimes[0].id, runtime_id);
-        assert_eq!(runtimes[0].name, "v2-preferred");
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].id, runtime_id);
+        assert_eq!(workspaces[0].name, "v2-preferred");
     }
 }
 
@@ -160,22 +160,22 @@ async fn fresh_start_when_no_state() {
 
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
     })
     .await;
-    let runtimes = match c.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-        other => panic!("expected RuntimeList, got {other:?}"),
+    let workspaces = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+        other => panic!("expected WorkspaceList, got {other:?}"),
     };
-    assert!(runtimes.is_empty(), "fresh start should have no runtimes");
+    assert!(workspaces.is_empty(), "fresh start should have no workspaces");
 }
 
-/// Corrupt v2 runtime file is skipped; other runtimes still load.
+/// Corrupt v2 workspace file is skipped; other workspaces still load.
 #[tokio::test]
-async fn corrupt_v2_runtime_skipped_not_fatal() {
+async fn corrupt_v2_workspace_skipped_not_fatal() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create two runtimes.
+    // Phase 1: create two workspaces.
     let rt1_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
@@ -184,42 +184,42 @@ async fn corrupt_v2_runtime_skipped_not_fatal() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
-                name: "good-runtime".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+                name: "good-workspace".into(),
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
         rt1_id = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
-                name: "bad-runtime".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+                name: "bad-workspace".into(),
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
-        let _ = c.recv().await; // RuntimeCreated
+        let _ = c.recv().await; // WorkspaceCreated
 
-        wait_for_state_containing(tmp.path(), "bad-runtime", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), "bad-workspace", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Corrupt the second runtime's file.
+    // Corrupt the second workspace's file.
     let state_dir = tmp.path().join("state/rttx/daemon");
     let result = persistence::load_all(&state_dir).unwrap();
-    let bad_rt = result.runtimes.iter().find(|r| r.spec.name == "bad-runtime").unwrap();
+    let bad_rt = result.workspaces.iter().find(|r| r.spec.name == "bad-workspace").unwrap();
     let bad_path = layout::runtime_file(&state_dir, bad_rt.spec.id);
     std::fs::write(&bad_path, "not valid json").unwrap();
     // Also remove .prev so backup can't save it
     let _ = std::fs::remove_file(bad_path.with_extension("prev"));
 
-    // Phase 2: restart — good runtime should survive.
+    // Phase 2: restart — good workspace should survive.
     {
         let (sock, _handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
@@ -227,15 +227,15 @@ async fn corrupt_v2_runtime_skipped_not_fatal() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1, "only the good runtime should survive");
-        assert_eq!(runtimes[0].id, rt1_id);
-        assert_eq!(runtimes[0].name, "good-runtime");
+        assert_eq!(workspaces.len(), 1, "only the good workspace should survive");
+        assert_eq!(workspaces[0].id, rt1_id);
+        assert_eq!(workspaces[0].name, "good-workspace");
     }
 }

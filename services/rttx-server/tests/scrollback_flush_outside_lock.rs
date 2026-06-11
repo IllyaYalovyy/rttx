@@ -23,18 +23,18 @@ async fn scrollback_flushed_via_out_of_lock_path() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    // Create a persistent runtime with a pane.
+    // Create a persistent workspace with a pane.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "flush-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     })
     .await;
     let runtime_id = match c.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     c.send(&v3::ClientEnvelope {
@@ -57,14 +57,14 @@ async fn scrollback_flushed_via_out_of_lock_path() {
     // Attach to receive output.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     })
     .await;
     match c.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
     c.drain(Duration::from_millis(500)).await;

@@ -18,7 +18,7 @@ async fn ping_latency_stays_low_under_multi_pane_output() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let sid = create_runtime(&mut client, "throttle-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "throttle-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
 
     // Create 4 panes producing heavy output simultaneously.

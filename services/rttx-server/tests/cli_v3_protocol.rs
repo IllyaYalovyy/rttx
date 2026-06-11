@@ -18,7 +18,7 @@ async fn cli_v3_handshake(stream: &mut UnixStream) {
         "rttx-server-cli",
         "0.0.0-test",
         &[
-            v3::Capability::CoreRuntimeLifecycle,
+            v3::Capability::CoreWorkspaceLifecycle,
             v3::Capability::CorePaneLifecycle,
             v3::Capability::CoreTerminalIo,
             v3::Capability::CoreTerminalModes,
@@ -63,7 +63,7 @@ async fn send_and_recv(stream: &mut UnixStream, env: &v3::ClientEnvelope) -> v3:
 }
 
 #[tokio::test]
-async fn cli_status_via_v3_list_runtimes() {
+async fn cli_status_via_v3_list_workspaces() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -73,13 +73,13 @@ async fn cli_status_via_v3_list_runtimes() {
     let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
     let env = rttx_proto::v3_envelope::build_client_envelope(
         &id_gen,
-        v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+        v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}),
     );
 
     let resp = send_and_recv(&mut stream, &env).await;
     assert!(
-        matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeList(_))),
-        "expected RuntimeList, got {:?}",
+        matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceList(_))),
+        "expected WorkspaceList, got {:?}",
         resp.payload
     );
 }
@@ -101,7 +101,7 @@ async fn cli_diagnostics_via_v3() {
     let resp = send_and_recv(&mut stream, &env).await;
     match resp.payload {
         Some(v3::server_envelope::Payload::DiagnosticsReport(report)) => {
-            assert_eq!(report.runtime_count, 0);
+            assert_eq!(report.workspace_count, 0);
             assert_eq!(report.total_pane_count, 0);
             assert_eq!(report.client_count, 1); // this test client
         }
@@ -110,17 +110,17 @@ async fn cli_diagnostics_via_v3() {
 }
 
 #[tokio::test]
-async fn cli_kill_via_v3_terminate_runtime() {
+async fn cli_kill_via_v3_terminate_workspace() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
-    // Create a runtime via v3 first.
+    // Create a workspace via v3 first.
     let mut v3_client = common::TestV3Client::connect(&sock).await;
     v3_client.handshake().await;
-    let runtime_id = common::create_runtime(
+    let runtime_id = common::create_workspace(
         &mut v3_client,
         "kill-target",
-        rttx_proto::v3::RuntimePolicy::Persistent,
+        rttx_proto::v3::WorkspacePolicy::Persistent,
     )
     .await;
 
@@ -131,15 +131,15 @@ async fn cli_kill_via_v3_terminate_runtime() {
     let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
     let env = rttx_proto::v3_envelope::build_client_envelope(
         &id_gen,
-        v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: runtime_id.clone(),
         }),
     );
 
     let resp = send_and_recv(&mut stream, &env).await;
     assert!(
-        matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))),
-        "expected RuntimeTerminated, got {:?}",
+        matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceTerminated(_))),
+        "expected WorkspaceTerminated, got {:?}",
         resp.payload
     );
 }
@@ -155,7 +155,7 @@ async fn cli_kill_nonexistent_returns_error() {
     let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
     let env = rttx_proto::v3_envelope::build_client_envelope(
         &id_gen,
-        v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
         }),
     );
@@ -163,7 +163,7 @@ async fn cli_kill_nonexistent_returns_error() {
     let resp = send_and_recv(&mut stream, &env).await;
     match resp.payload {
         Some(v3::server_envelope::Payload::Error(e)) => {
-            assert_eq!(e.kind, v3::ErrorKind::RuntimeNotFound as i32);
+            assert_eq!(e.kind, v3::ErrorKind::WorkspaceNotFound as i32);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -174,13 +174,13 @@ async fn cli_clean_via_v3_list_and_terminate() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
-    // Create a runtime (no clients attached after creation without attach).
+    // Create a workspace (no clients attached after creation without attach).
     let mut v3_client = common::TestV3Client::connect(&sock).await;
     v3_client.handshake().await;
-    let runtime_id = common::create_runtime(
+    let runtime_id = common::create_workspace(
         &mut v3_client,
         "clean-target",
-        rttx_proto::v3::RuntimePolicy::Persistent,
+        rttx_proto::v3::WorkspacePolicy::Persistent,
     )
     .await;
     drop(v3_client);
@@ -188,46 +188,46 @@ async fn cli_clean_via_v3_list_and_terminate() {
     // Small delay for disconnect to propagate.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Simulate CLI clean: list runtimes, find unused, terminate.
+    // Simulate CLI clean: list workspaces, find unused, terminate.
     let mut stream = UnixStream::connect(&sock).await.unwrap();
     cli_v3_handshake(&mut stream).await;
 
     let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
-    // List runtimes.
+    // List workspaces.
     let list_env = rttx_proto::v3_envelope::build_client_envelope(
         &id_gen,
-        v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+        v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}),
     );
     let resp = send_and_recv(&mut stream, &list_env).await;
-    let runtimes = match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-        other => panic!("expected RuntimeList, got {other:?}"),
+    let workspaces = match resp.payload {
+        Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+        other => panic!("expected WorkspaceList, got {other:?}"),
     };
 
     // Find unused (no write owner, no readers).
     let unused: Vec<_> =
-        runtimes.iter().filter(|r| !r.has_write_owner && r.read_only_client_count == 0).collect();
+        workspaces.iter().filter(|r| !r.has_write_owner && r.read_only_client_count == 0).collect();
     assert_eq!(unused.len(), 1);
     assert_eq!(unused[0].id, runtime_id);
 
     // Terminate unused.
     let term_env = rttx_proto::v3_envelope::build_client_envelope(
         &id_gen,
-        v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: runtime_id.clone(),
         }),
     );
     let resp = send_and_recv(&mut stream, &term_env).await;
-    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))));
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceTerminated(_))));
 
     // Verify it's gone.
     let resp = send_and_recv(&mut stream, &list_env).await;
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeList(sl)) => {
-            assert!(sl.runtimes.is_empty());
+        Some(v3::server_envelope::Payload::WorkspaceList(sl)) => {
+            assert!(sl.workspaces.is_empty());
         }
-        other => panic!("expected empty RuntimeList, got {other:?}"),
+        other => panic!("expected empty WorkspaceList, got {other:?}"),
     }
 }
 

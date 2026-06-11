@@ -11,7 +11,7 @@ pub const V3_PROTOCOL_VERSION: u32 = 3;
 
 /// All core capabilities that every v3 implementation must support.
 pub const CORE_CAPABILITIES: &[v3::Capability] = &[
-    v3::Capability::CoreRuntimeLifecycle,
+    v3::Capability::CoreWorkspaceLifecycle,
     v3::Capability::CorePaneLifecycle,
     v3::Capability::CoreTerminalIo,
     v3::Capability::CoreTerminalModes,
@@ -107,7 +107,7 @@ pub fn missing_capabilities_error(missing: &[v3::Capability]) -> v3::ProtocolErr
     let names: Vec<&str> = missing
         .iter()
         .map(|c| match c {
-            v3::Capability::CoreRuntimeLifecycle => "CORE_RUNTIME_LIFECYCLE",
+            v3::Capability::CoreWorkspaceLifecycle => "CORE_RUNTIME_LIFECYCLE",
             v3::Capability::CorePaneLifecycle => "CORE_PANE_LIFECYCLE",
             v3::Capability::CoreTerminalIo => "CORE_TERMINAL_IO",
             v3::Capability::CoreTerminalModes => "CORE_TERMINAL_MODES",
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn validate_missing_multiple_core() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::CoreTerminalIo as i32,
         ];
         let missing = validate_server_capabilities(&caps).unwrap_err();
@@ -213,12 +213,12 @@ mod tests {
     #[test]
     fn effective_capabilities_intersection() {
         let client = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::CorePaneLifecycle as i32,
             v3::Capability::OptDiagnostics as i32,
         ];
         let server = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::CorePaneLifecycle as i32,
         ];
         let effective = effective_capabilities(&client, &server);

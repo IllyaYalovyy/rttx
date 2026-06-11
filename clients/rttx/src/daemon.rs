@@ -104,23 +104,23 @@ pub enum DaemonError {
 /// Successful detach outcome from the daemon.
 #[derive(Debug, Clone)]
 pub enum DetachResponse {
-    Detached(v3::RuntimeDetached),
-    Terminated(v3::RuntimeTerminated),
+    Detached(v3::WorkspaceDetached),
+    Terminated(v3::WorkspaceTerminated),
 }
 
 /// Client capabilities advertised during v3 handshake.
 const CLIENT_CAPABILITIES: &[v3::Capability] = &[
-    v3::Capability::CoreRuntimeLifecycle,
+    v3::Capability::CoreWorkspaceLifecycle,
     v3::Capability::CorePaneLifecycle,
     v3::Capability::CoreTerminalIo,
     v3::Capability::CoreTerminalModes,
     v3::Capability::CorePasteIntent,
     v3::Capability::CoreFocusEvents,
-    v3::Capability::OptRuntimeInventoryV2,
+    v3::Capability::OptWorkspaceInventoryV2,
     v3::Capability::OptResync,
     v3::Capability::OptChunkedScrollback,
     v3::Capability::OptDiagnostics,
-    v3::Capability::OptRuntimeTakeover,
+    v3::Capability::OptWorkspaceTakeover,
 ];
 
 /// A connection to a running `rttx-server` instance (pre-split).
@@ -401,12 +401,13 @@ impl DaemonConnection {
         }
     }
 
-    /// List all runtimes on the daemon.
-    pub async fn list_runtimes(&mut self) -> Result<Vec<v3::RuntimeInfo>, DaemonError> {
-        let response =
-            self.request(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})).await?;
+    /// List all workspaces on the daemon.
+    pub async fn list_workspaces(&mut self) -> Result<Vec<v3::WorkspaceInfo>, DaemonError> {
+        let response = self
+            .request(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}))
+            .await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(list)) => Ok(list.runtimes),
+            Some(v3::server_envelope::Payload::WorkspaceList(list)) => Ok(list.workspaces),
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
@@ -419,13 +420,13 @@ impl DaemonConnection {
         policy: WorkspacePolicy,
     ) -> Result<Uuid, DaemonError> {
         let response = self
-            .request(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            .request(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: name.to_string(),
                 policy: policy.as_v3_proto(),
             }))
             .await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => {
+            Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => {
                 bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
@@ -437,16 +438,16 @@ impl DaemonConnection {
     pub async fn attach_runtime(
         &mut self,
         runtime_id: Uuid,
-        attach_mode: v3::RuntimeAttachMode,
-    ) -> Result<v3::RuntimeSnapshot, DaemonError> {
+        attach_mode: v3::WorkspaceAttachMode,
+    ) -> Result<v3::WorkspaceSnapshot, DaemonError> {
         let response = self
-            .request(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            .request(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: uuid_to_bytes(runtime_id),
                 attach_mode: attach_mode as i32,
             }))
             .await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => Ok(snapshot),
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => Ok(snapshot),
             Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
                 Err(DaemonError::AttachBlocked(blocked))
             }
@@ -509,15 +510,15 @@ impl DaemonConnection {
         runtime_id: Uuid,
     ) -> Result<DetachResponse, DaemonError> {
         let response = self
-            .request(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            .request(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                 runtime_id: uuid_to_bytes(runtime_id),
             }))
             .await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeDetached(detached)) => {
+            Some(v3::server_envelope::Payload::WorkspaceDetached(detached)) => {
                 Ok(DetachResponse::Detached(detached))
             }
-            Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => {
+            Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) => {
                 Ok(DetachResponse::Terminated(terminated))
             }
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
@@ -529,14 +530,14 @@ impl DaemonConnection {
     pub async fn terminate_runtime(
         &mut self,
         runtime_id: Uuid,
-    ) -> Result<v3::RuntimeTerminated, DaemonError> {
+    ) -> Result<v3::WorkspaceTerminated, DaemonError> {
         let response = self
-            .request(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+            .request(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
                 runtime_id: uuid_to_bytes(runtime_id),
             }))
             .await?;
         match response.payload {
-            Some(v3::server_envelope::Payload::RuntimeTerminated(terminated)) => Ok(terminated),
+            Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) => Ok(terminated),
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
@@ -646,7 +647,7 @@ impl DaemonWriter {
     pub async fn detach_runtime(&mut self, runtime_id: Uuid) -> Result<(), DaemonError> {
         let env = v3::ClientEnvelope {
             request_id: self.id_gen.next_id(),
-            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                 runtime_id: uuid_to_bytes(runtime_id),
             })),
         };
@@ -726,13 +727,13 @@ pub fn extract_pane_id(env: &v3::ServerEnvelope) -> Option<Uuid> {
         Payload::PaneSplit(m) => &m.new_pane_id,
         Payload::FocusChanged(m) => &m.pane_id,
         Payload::Pong(_)
-        | Payload::RuntimeList(_)
-        | Payload::RuntimeCreated(_)
-        | Payload::RuntimeSnapshot(_)
+        | Payload::WorkspaceList(_)
+        | Payload::WorkspaceCreated(_)
+        | Payload::WorkspaceSnapshot(_)
         | Payload::AttachBlocked(_)
-        | Payload::RuntimeDetached(_)
-        | Payload::RuntimeTerminated(_)
-        | Payload::RuntimeRenamed(_)
+        | Payload::WorkspaceDetached(_)
+        | Payload::WorkspaceTerminated(_)
+        | Payload::WorkspaceRenamed(_)
         | Payload::Error(_)
         | Payload::DiagnosticsReport(_)
         | Payload::StreamOverflow(_)
@@ -1097,16 +1098,16 @@ mod tests {
     #[test]
     fn protocol_error_conversion_preserves_kind_and_retryable() {
         let err = protocol_error(v3::ProtocolError {
-            kind: v3::ErrorKind::RuntimeNotFound as i32,
+            kind: v3::ErrorKind::WorkspaceNotFound as i32,
             message: "runtime gone".into(),
-            operation: "AttachRuntime".into(),
+            operation: "AttachWorkspace".into(),
             retryable: false,
             user_action_required: false,
             retry_after_seconds: 0,
         });
         match err {
             DaemonError::ProtocolError { kind, message, retryable } => {
-                assert_eq!(kind, v3::ErrorKind::RuntimeNotFound);
+                assert_eq!(kind, v3::ErrorKind::WorkspaceNotFound);
                 assert_eq!(message, "runtime gone");
                 assert!(!retryable);
             }
@@ -1123,7 +1124,7 @@ mod tests {
                 v3::TerminalModeChanged {
                     runtime_id: uuid_to_bytes(Uuid::new_v4()),
                     pane_id: uuid_to_bytes(pane_id),
-                    runtime_revision: 1,
+                    workspace_revision: 1,
                     modes: None,
                 },
             )),

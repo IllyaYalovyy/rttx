@@ -10,7 +10,7 @@
 mod common;
 
 use common::{
-    TestClient, attach_ro, attach_rw, create_pane, create_runtime, report_client_size,
+    TestClient, attach_ro, attach_rw, create_pane, create_workspace, report_client_size,
     resize_split, resync, set_focus, split_pane, start_test_server,
 };
 use rttx_proto::v3;
@@ -38,7 +38,7 @@ fn collect(node: &v3::PaneTreeNode, out: &mut Vec<Vec<u8>>) {
     }
 }
 
-fn root_split(snapshot: &v3::RuntimeSnapshot) -> v3::PaneTreeSplit {
+fn root_split(snapshot: &v3::WorkspaceSnapshot) -> v3::PaneTreeSplit {
     let node = snapshot.tree.as_ref().expect("snapshot must carry a tree");
     match node.node.as_ref() {
         Some(v3::pane_tree_node::Node::Split(split)) => (**split).clone(),
@@ -53,7 +53,7 @@ async fn attach_snapshot_carries_authoritative_tree() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "tree", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "tree", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
     let split =
@@ -78,7 +78,7 @@ async fn split_assigns_stable_server_pane_id_and_delta() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "split", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "split", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
 
@@ -90,7 +90,7 @@ async fn split_assigns_stable_server_pane_id_and_delta() {
     assert!((split.ratio - 0.3).abs() < f32::EPSILON);
     assert_ne!(split.new_pane_id, pane_a, "server mints a fresh pane id");
     assert_eq!(split.new_pane_id.len(), 16, "pane id is a 16-byte uuid");
-    assert!(split.runtime_revision > 0);
+    assert!(split.workspace_revision > 0);
 
     // The server-assigned id is stable: it is exactly what the tree reports.
     let snapshot = resync(&mut client, &runtime_id).await;
@@ -105,7 +105,7 @@ async fn close_pane_collapses_the_tree() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "close", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "close", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
     let split =
@@ -132,7 +132,7 @@ async fn resize_split_updates_logical_ratio() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "resize", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "resize", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
     split_pane(&mut client, &runtime_id, &pane_a, v3::PaneSplitAxis::Horizontal, 0.5).await;
@@ -140,7 +140,7 @@ async fn resize_split_updates_logical_ratio() {
     // The root split is addressed by the empty path.
     let resized = resize_split(&mut client, &runtime_id, &[], 0.2).await;
     assert!((resized.ratio - 0.2).abs() < f32::EPSILON);
-    assert!(resized.runtime_revision > 0);
+    assert!(resized.workspace_revision > 0);
 
     let snapshot = resync(&mut client, &runtime_id).await;
     let split = root_split(&snapshot);
@@ -154,7 +154,8 @@ async fn resize_split_rejects_unaddressable_path() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "resize-bad", v3::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "resize-bad", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
     split_pane(&mut client, &runtime_id, &pane_a, v3::PaneSplitAxis::Horizontal, 0.5).await;
@@ -181,7 +182,7 @@ async fn set_focus_updates_default_active() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "focus", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "focus", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
     let split =
@@ -200,10 +201,11 @@ async fn multi_client_pty_size_is_the_minimum_across_clients() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
-    // Writer creates the runtime and a pane.
+    // Writer creates the workspace and a pane.
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_runtime(&mut writer, "min-size", v3::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "min-size", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
     let pane = create_pane(&mut writer, &runtime_id).await;
 
@@ -231,7 +233,8 @@ async fn single_client_pty_tracks_that_client_size() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_runtime(&mut client, "solo-size", v3::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "solo-size", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane = create_pane(&mut client, &runtime_id).await;
 

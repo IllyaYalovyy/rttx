@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestClient, attach_rw, create_runtime, start_test_server};
+use common::{TestClient, attach_rw, create_workspace, start_test_server};
 use rttx_proto::v3;
 
 #[test]
@@ -36,7 +36,8 @@ fn ping_roundtrip_still_works_for_attached_clients() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "heartbeat-attach", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, "heartbeat-attach", v3::WorkspacePolicy::Persistent)
+                .await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         client
@@ -66,7 +67,7 @@ fn ping_answered_while_mutex_held() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "mutex-held", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, "mutex-held", v3::WorkspacePolicy::Persistent).await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane and trigger continuous output to keep the mutex busy.
@@ -129,7 +130,8 @@ fn ping_answered_during_pty_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "ping-during-output", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, "ping-during-output", v3::WorkspacePolicy::Persistent)
+                .await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
 
         // Create a pane that will produce output.
@@ -215,7 +217,8 @@ fn sustained_pings_answered_during_continuous_output() {
         client.handshake().await;
 
         let runtime_id =
-            create_runtime(&mut client, "sustained-heartbeat", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut client, "sustained-heartbeat", v3::WorkspacePolicy::Persistent)
+                .await;
         let _snapshot = attach_rw(&mut client, &runtime_id).await;
         let pane_id = common::create_pane(&mut client, &runtime_id).await;
 

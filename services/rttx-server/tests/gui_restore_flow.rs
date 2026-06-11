@@ -1,10 +1,10 @@
 //! Tests that simulate the GUI's restore flow using `DaemonBridge`.
 //!
 //! These verify the exact sequence the GUI performs:
-//! 1. connect + `list_runtimes`
-//! 2. `attach_runtime` for each → get snapshot with scrollback
+//! 1. connect + `list_workspaces`
+//! 2. `attach_workspace` for each → get snapshot with scrollback
 //! 3. disconnect
-//! 4. reconnect + `list_runtimes` → same count, same IDs
+//! 4. reconnect + `list_workspaces` → same count, same IDs
 
 mod common;
 
@@ -29,15 +29,15 @@ async fn gui_restore_flow_no_duplicates() {
         for i in 1..=2 {
             c.send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                     name: format!("Session {i}"),
-                    policy: v3::RuntimePolicy::Persistent as i32,
+                    policy: v3::WorkspacePolicy::Persistent as i32,
                 })),
             })
             .await;
             let sid = match c.recv().await.payload {
-                Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-                other => panic!("expected RuntimeCreated, got {other:?}"),
+                Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+                other => panic!("expected WorkspaceCreated, got {other:?}"),
             };
 
             c.send(&v3::ClientEnvelope {
@@ -63,16 +63,16 @@ async fn gui_restore_flow_no_duplicates() {
 
             c.send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                     runtime_id: sid.clone(),
-                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
             // Drain deltas to find Snapshot.
             loop {
                 match c.recv().await.payload {
-                    Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+                    Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
                     Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
                     other => panic!("expected Snapshot or Delta, got {other:?}"),
                 }
@@ -105,35 +105,35 @@ async fn gui_restore_flow_no_duplicates() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 2, "should have exactly 2 sessions");
+        assert_eq!(workspaces.len(), 2, "should have exactly 2 sessions");
 
         // Sort by name for deterministic comparison.
-        let mut sorted_runtimes = runtimes.clone();
-        sorted_runtimes.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut sorted_workspaces = workspaces.clone();
+        sorted_workspaces.sort_by(|a, b| a.name.cmp(&b.name));
         let sorted_ids = session_ids.clone();
         // session_ids[0] is "Session 1", session_ids[1] is "Session 2" — already sorted.
 
-        for (i, info) in sorted_runtimes.iter().enumerate() {
+        for (i, info) in sorted_workspaces.iter().enumerate() {
             assert_eq!(info.id, sorted_ids[i]);
 
             c.send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                     runtime_id: info.id.clone(),
-                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
             let snapshot = loop {
                 match c.recv().await.payload {
-                    Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => break s,
+                    Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => break s,
                     Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
                     other => panic!("expected Snapshot or Delta, got {other:?}"),
                 }
@@ -153,15 +153,15 @@ async fn gui_restore_flow_no_duplicates() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
         assert_eq!(
-            runtimes.len(),
+            workspaces.len(),
             2,
             "second restore should still see exactly 2 sessions, not more"
         );

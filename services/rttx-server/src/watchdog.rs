@@ -489,7 +489,7 @@ mod tests {
         struct TestOs;
         impl OsInterface for TestOs {
             fn runtime_dir(&self) -> PathBuf {
-                PathBuf::from("/tmp/test-runtime")
+                PathBuf::from("/tmp/test-workspace")
             }
             fn cache_dir(&self) -> PathBuf {
                 PathBuf::from("/tmp/test-cache")

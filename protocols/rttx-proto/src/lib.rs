@@ -42,10 +42,10 @@ pub mod v3_scrollback;
 /// V3 resync: capability gating, builders, and overflow handling (RFC-021 Section 8, `OPT_RESYNC`).
 pub mod v3_resync;
 
-/// V3 runtime inventory: capability gating, builders, and field stripping (RFC-021 Section 9, `OPT_RUNTIME_INVENTORY_V2`).
+/// V3 workspace inventory: capability gating, builders, and field stripping (RFC-021 Section 9, `OPT_RUNTIME_INVENTORY_V2`).
 pub mod v3_inventory;
 
-/// V3 runtime takeover: capability gating, builders, and lease events (RFC-021 Section 10, `OPT_RUNTIME_TAKEOVER`).
+/// V3 workspace takeover: capability gating, builders, and lease events (RFC-021 Section 10, `OPT_RUNTIME_TAKEOVER`).
 pub mod v3_takeover;
 
 /// V3 diagnostics: capability gating, builders, and report construction (RFC-021 Section 3, `OPT_DIAGNOSTICS`).
@@ -146,6 +146,44 @@ mod tests {
     fn uuid_invalid_length() {
         assert!(bytes_to_uuid(&[0; 5]).is_err());
     }
+
+    // RFC-031 Step 6 renamed the v3 `Runtime*` types/enums to `Workspace*`.
+    // The rename must be wire-compatible: protobuf serializes enums by their
+    // integer value, so the renamed variants must keep their original numbers
+    // or a renamed daemon would silently misread a peer built before the
+    // rename (and persisted snapshots would decode wrong). Pin the values.
+    #[test]
+    fn renamed_workspace_enums_preserve_wire_values() {
+        assert_eq!(v3::WorkspacePolicy::Persistent as i32, 1);
+        assert_eq!(v3::WorkspacePolicy::Ephemeral as i32, 2);
+        assert_eq!(v3::WorkspaceAttachMode::ReadWrite as i32, 1);
+        assert_eq!(v3::WorkspaceAttachMode::ReadOnly as i32, 2);
+        assert_eq!(v3::WorkspaceClientRole::Writer as i32, 2);
+        assert_eq!(v3::WorkspaceClientRole::Reader as i32, 3);
+        assert_eq!(v3::WorkspaceTerminationReason::Explicit as i32, 1);
+        assert_eq!(v3::WorkspaceTerminationReason::EphemeralDetach as i32, 2);
+        assert_eq!(v3::Capability::CoreWorkspaceLifecycle as i32, 1);
+        assert_eq!(v3::Capability::OptWorkspaceInventoryV2 as i32, 100);
+        assert_eq!(v3::Capability::OptWorkspaceTakeover as i32, 101);
+        assert_eq!(v3::ErrorKind::WorkspaceNotFound as i32, 4);
+    }
+
+    // A renamed lifecycle command must still occupy its original envelope
+    // field tag so it round-trips on the wire unchanged.
+    #[test]
+    fn renamed_create_workspace_command_roundtrips_on_wire() {
+        let msg = v3::ClientEnvelope {
+            request_id: 7,
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+                name: "alpha".into(),
+                policy: v3::WorkspacePolicy::Persistent as i32,
+            })),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
 }
 
 #[cfg(test)]
@@ -171,7 +209,7 @@ mod v3_tests {
             client_name: "rttx".into(),
             client_version: "0.4.0".into(),
             capabilities: vec![
-                v3::Capability::CoreRuntimeLifecycle as i32,
+                v3::Capability::CoreWorkspaceLifecycle as i32,
                 v3::Capability::CorePaneLifecycle as i32,
                 v3::Capability::CoreTerminalIo as i32,
                 v3::Capability::CoreTerminalModes as i32,
@@ -193,7 +231,7 @@ mod v3_tests {
             server_id: rid(),
             server_version: "0.4.0".into(),
             capabilities: vec![
-                v3::Capability::CoreRuntimeLifecycle as i32,
+                v3::Capability::CoreWorkspaceLifecycle as i32,
                 v3::Capability::CorePaneLifecycle as i32,
             ],
         };
@@ -208,14 +246,14 @@ mod v3_tests {
     #[test]
     fn v3_capability_enum_values() {
         assert_eq!(v3::Capability::Unspecified as i32, 0);
-        assert_eq!(v3::Capability::CoreRuntimeLifecycle as i32, 1);
+        assert_eq!(v3::Capability::CoreWorkspaceLifecycle as i32, 1);
         assert_eq!(v3::Capability::CorePaneLifecycle as i32, 2);
         assert_eq!(v3::Capability::CoreTerminalIo as i32, 3);
         assert_eq!(v3::Capability::CoreTerminalModes as i32, 4);
         assert_eq!(v3::Capability::CorePasteIntent as i32, 5);
         assert_eq!(v3::Capability::CoreFocusEvents as i32, 6);
-        assert_eq!(v3::Capability::OptRuntimeInventoryV2 as i32, 100);
-        assert_eq!(v3::Capability::OptRuntimeTakeover as i32, 101);
+        assert_eq!(v3::Capability::OptWorkspaceInventoryV2 as i32, 100);
+        assert_eq!(v3::Capability::OptWorkspaceTakeover as i32, 101);
         assert_eq!(v3::Capability::OptResync as i32, 102);
         assert_eq!(v3::Capability::OptChunkedScrollback as i32, 103);
         assert_eq!(v3::Capability::OptDiagnostics as i32, 104);
@@ -225,10 +263,10 @@ mod v3_tests {
 
     #[test]
     fn v3_enum_zero_values() {
-        assert_eq!(v3::RuntimePolicy::Unspecified as i32, 0);
-        assert_eq!(v3::RuntimeAttachMode::Unspecified as i32, 0);
-        assert_eq!(v3::RuntimeClientRole::Unspecified as i32, 0);
-        assert_eq!(v3::RuntimeTerminationReason::Unspecified as i32, 0);
+        assert_eq!(v3::WorkspacePolicy::Unspecified as i32, 0);
+        assert_eq!(v3::WorkspaceAttachMode::Unspecified as i32, 0);
+        assert_eq!(v3::WorkspaceClientRole::Unspecified as i32, 0);
+        assert_eq!(v3::WorkspaceTerminationReason::Unspecified as i32, 0);
         assert_eq!(v3::MouseMode::None as i32, 0);
         assert_eq!(v3::ErrorKind::Unspecified as i32, 0);
     }
@@ -240,7 +278,7 @@ mod v3_tests {
         assert_eq!(v3::ErrorKind::ProtocolMismatch as i32, 1);
         assert_eq!(v3::ErrorKind::UnsupportedCapability as i32, 2);
         assert_eq!(v3::ErrorKind::InvalidArgument as i32, 3);
-        assert_eq!(v3::ErrorKind::RuntimeNotFound as i32, 4);
+        assert_eq!(v3::ErrorKind::WorkspaceNotFound as i32, 4);
         assert_eq!(v3::ErrorKind::PaneNotFound as i32, 5);
         assert_eq!(v3::ErrorKind::OwnershipConflict as i32, 6);
         assert_eq!(v3::ErrorKind::TakeoverRequired as i32, 7);
@@ -318,9 +356,9 @@ mod v3_tests {
     #[test]
     fn v3_protocol_error_roundtrip() {
         let msg = v3::ProtocolError {
-            kind: v3::ErrorKind::RuntimeNotFound as i32,
-            message: "runtime abc not found".into(),
-            operation: "AttachRuntime".into(),
+            kind: v3::ErrorKind::WorkspaceNotFound as i32,
+            message: "workspace abc not found".into(),
+            operation: "AttachWorkspace".into(),
             retryable: false,
             user_action_required: true,
             retry_after_seconds: 0,
@@ -334,11 +372,11 @@ mod v3_tests {
     // ── Snapshot roundtrip ──
 
     #[test]
-    fn v3_runtime_snapshot_roundtrip() {
-        let msg = v3::RuntimeSnapshot {
+    fn v3_workspace_snapshot_roundtrip() {
+        let msg = v3::WorkspaceSnapshot {
             runtime_id: rid(),
-            runtime_revision: 42,
-            client_role: v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 42,
+            client_role: v3::WorkspaceClientRole::Writer as i32,
             panes: vec![v3::PaneSnapshot {
                 pane_id: pid(),
                 pane_output_seq: 100,
@@ -366,7 +404,7 @@ mod v3_tests {
         };
         let mut buf = BytesMut::new();
         encode_frame(&msg, &mut buf).unwrap();
-        let decoded: v3::RuntimeSnapshot = decode_frame(&mut buf).unwrap();
+        let decoded: v3::WorkspaceSnapshot = decode_frame(&mut buf).unwrap();
         assert_eq!(msg, decoded);
     }
 
@@ -452,43 +490,43 @@ mod v3_envelope_tests {
                 request_id: 0,
                 command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
             },
-            // Runtime lifecycle
+            // Workspace lifecycle
             v3::ClientEnvelope {
                 request_id: 2,
-                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                     name: "dev".into(),
-                    policy: v3::RuntimePolicy::Persistent as i32,
+                    policy: v3::WorkspacePolicy::Persistent as i32,
                 })),
             },
             v3::ClientEnvelope {
                 request_id: 3,
-                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                     runtime_id: rt.clone(),
-                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
                 })),
             },
             v3::ClientEnvelope {
                 request_id: 4,
-                command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+                command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                     runtime_id: rt.clone(),
                 })),
             },
             v3::ClientEnvelope {
                 request_id: 5,
-                command: Some(v3::client_envelope::Command::TerminateRuntime(
-                    v3::TerminateRuntime { runtime_id: rt.clone() },
+                command: Some(v3::client_envelope::Command::TerminateWorkspace(
+                    v3::TerminateWorkspace { runtime_id: rt.clone() },
                 )),
             },
             v3::ClientEnvelope {
                 request_id: 6,
-                command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+                command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                     runtime_id: rt.clone(),
                     name: "prod".into(),
                 })),
             },
             v3::ClientEnvelope {
                 request_id: 7,
-                command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+                command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
             },
             // Pane lifecycle
             v3::ClientEnvelope {
@@ -529,7 +567,7 @@ mod v3_envelope_tests {
             // Recovery
             v3::ClientEnvelope {
                 request_id: 10,
-                command: Some(v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+                command: Some(v3::client_envelope::Command::ResyncWorkspace(v3::ResyncWorkspace {
                     runtime_id: rt.clone(),
                 })),
             },
@@ -551,9 +589,9 @@ mod v3_envelope_tests {
             // Takeover (OPT_RUNTIME_TAKEOVER)
             v3::ClientEnvelope {
                 request_id: 13,
-                command: Some(v3::client_envelope::Command::TakeoverRuntime(v3::TakeoverRuntime {
-                    runtime_id: rt.clone(),
-                })),
+                command: Some(v3::client_envelope::Command::TakeoverWorkspace(
+                    v3::TakeoverWorkspace { runtime_id: rt.clone() },
+                )),
             },
         ];
 
@@ -587,7 +625,7 @@ mod v3_envelope_tests {
                     v3::TerminalModeChanged {
                         runtime_id: rt.clone(),
                         pane_id: pn.clone(),
-                        runtime_revision: 5,
+                        workspace_revision: 5,
                         modes: Some(v3::TerminalModeState {
                             bracketed_paste: true,
                             ..Default::default()
@@ -600,61 +638,63 @@ mod v3_envelope_tests {
                 request_id: 1,
                 payload: Some(v3::server_envelope::Payload::Pong(v3::Pong { nonce: 7 })),
             },
-            // Runtime lifecycle
+            // Workspace lifecycle
             v3::ServerEnvelope {
                 request_id: 2,
-                payload: Some(v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
-                    runtime_id: rt.clone(),
-                    runtime_revision: 1,
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceCreated(
+                    v3::WorkspaceCreated { runtime_id: rt.clone(), workspace_revision: 1 },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 3,
-                payload: Some(v3::server_envelope::Payload::RuntimeSnapshot(v3::RuntimeSnapshot {
-                    runtime_id: rt.clone(),
-                    runtime_revision: 10,
-                    client_role: v3::RuntimeClientRole::Writer as i32,
-                    panes: vec![],
-                    tree: None,
-                    default_active_pane_id: Vec::new(),
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceSnapshot(
+                    v3::WorkspaceSnapshot {
+                        runtime_id: rt.clone(),
+                        workspace_revision: 10,
+                        client_role: v3::WorkspaceClientRole::Writer as i32,
+                        panes: vec![],
+                        tree: None,
+                        default_active_pane_id: Vec::new(),
+                    },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 4,
-                payload: Some(v3::server_envelope::Payload::RuntimeDetached(v3::RuntimeDetached {
-                    runtime_id: rt.clone(),
-                    runtime_revision: 11,
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceDetached(
+                    v3::WorkspaceDetached { runtime_id: rt.clone(), workspace_revision: 11 },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 5,
-                payload: Some(v3::server_envelope::Payload::RuntimeTerminated(
-                    v3::RuntimeTerminated {
+                payload: Some(v3::server_envelope::Payload::WorkspaceTerminated(
+                    v3::WorkspaceTerminated {
                         runtime_id: rt.clone(),
                         final_revision: 12,
-                        reason: v3::RuntimeTerminationReason::Explicit as i32,
+                        reason: v3::WorkspaceTerminationReason::Explicit as i32,
                     },
                 )),
             },
             v3::ServerEnvelope {
                 request_id: 6,
-                payload: Some(v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
-                    runtime_id: rt.clone(),
-                    name: "renamed".into(),
-                    runtime_revision: 13,
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceRenamed(
+                    v3::WorkspaceRenamed {
+                        runtime_id: rt.clone(),
+                        name: "renamed".into(),
+                        workspace_revision: 13,
+                    },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 7,
-                payload: Some(v3::server_envelope::Payload::RuntimeList(v3::RuntimeList {
-                    runtimes: vec![],
+                payload: Some(v3::server_envelope::Payload::WorkspaceList(v3::WorkspaceList {
+                    workspaces: vec![],
                 })),
             },
             v3::ServerEnvelope {
                 request_id: 0,
                 payload: Some(v3::server_envelope::Payload::AttachBlocked(v3::AttachBlocked {
                     runtime_id: rt.clone(),
-                    current_client_role: v3::RuntimeClientRole::Unattached as i32,
+                    current_client_role: v3::WorkspaceClientRole::Unattached as i32,
                     attached_client_count: 1,
                     read_only_client_count: 0,
                 })),
@@ -665,7 +705,7 @@ mod v3_envelope_tests {
                 payload: Some(v3::server_envelope::Payload::PaneCreated(v3::PaneCreated {
                     runtime_id: rt.clone(),
                     pane_id: pn.clone(),
-                    runtime_revision: 14,
+                    workspace_revision: 14,
                 })),
             },
             v3::ServerEnvelope {
@@ -673,7 +713,7 @@ mod v3_envelope_tests {
                 payload: Some(v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
                     runtime_id: rt.clone(),
                     pane_id: pn.clone(),
-                    runtime_revision: 15,
+                    workspace_revision: 15,
                 })),
             },
             v3::ServerEnvelope {
@@ -683,7 +723,7 @@ mod v3_envelope_tests {
                     pane_id: pn.clone(),
                     cols: 100,
                     rows: 30,
-                    runtime_revision: 16,
+                    workspace_revision: 16,
                 })),
             },
             v3::ServerEnvelope {
@@ -692,7 +732,7 @@ mod v3_envelope_tests {
                     runtime_id: rt.clone(),
                     pane_id: pn.clone(),
                     status: 0,
-                    runtime_revision: 17,
+                    workspace_revision: 17,
                 })),
             },
             v3::ServerEnvelope {
@@ -701,7 +741,7 @@ mod v3_envelope_tests {
                     runtime_id: rt.clone(),
                     pane_id: pn.clone(),
                     title: "new title".into(),
-                    runtime_revision: 18,
+                    workspace_revision: 18,
                 })),
             },
             v3::ServerEnvelope {
@@ -710,7 +750,7 @@ mod v3_envelope_tests {
                     runtime_id: rt.clone(),
                     pane_id: pn.clone(),
                     cwd: "/home".into(),
-                    runtime_revision: 19,
+                    workspace_revision: 19,
                 })),
             },
             v3::ServerEnvelope {
@@ -745,7 +785,7 @@ mod v3_envelope_tests {
                 request_id: 12,
                 payload: Some(v3::server_envelope::Payload::DiagnosticsReport(
                     v3::DiagnosticsReport {
-                        runtime_count: 1,
+                        workspace_count: 1,
                         total_pane_count: 2,
                         total_active_panes: 2,
                         total_exited_panes: 0,
@@ -754,7 +794,7 @@ mod v3_envelope_tests {
                         total_raw_bytes: 1024,
                         total_pending_flush: 0,
                         total_command_history: 0,
-                        runtimes: vec![],
+                        workspaces: vec![],
                     },
                 )),
             },
@@ -762,9 +802,9 @@ mod v3_envelope_tests {
             v3::ServerEnvelope {
                 request_id: 99,
                 payload: Some(v3::server_envelope::Payload::Error(v3::ProtocolError {
-                    kind: v3::ErrorKind::RuntimeNotFound as i32,
+                    kind: v3::ErrorKind::WorkspaceNotFound as i32,
                     message: "not found".into(),
-                    operation: "AttachRuntime".into(),
+                    operation: "AttachWorkspace".into(),
                     retryable: false,
                     user_action_required: false,
                     retry_after_seconds: 0,
@@ -774,21 +814,21 @@ mod v3_envelope_tests {
             v3::ServerEnvelope {
                 request_id: 13,
                 payload: Some(v3::server_envelope::Payload::TakeoverCompleted(
-                    v3::TakeoverCompleted { runtime_id: rt.clone(), runtime_revision: 50 },
+                    v3::TakeoverCompleted { runtime_id: rt.clone(), workspace_revision: 50 },
                 )),
             },
             v3::ServerEnvelope {
                 request_id: 0,
                 payload: Some(v3::server_envelope::Payload::LeaseLost(v3::LeaseLost {
                     runtime_id: rt.clone(),
-                    runtime_revision: 51,
+                    workspace_revision: 51,
                     new_owner_id: rid(),
                 })),
             },
             v3::ServerEnvelope {
                 request_id: 0,
                 payload: Some(v3::server_envelope::Payload::OwnerDisconnected(
-                    v3::OwnerDisconnected { runtime_id: rt.clone(), runtime_revision: 52 },
+                    v3::OwnerDisconnected { runtime_id: rt.clone(), workspace_revision: 52 },
                 )),
             },
         ];
@@ -837,16 +877,16 @@ mod v3_envelope_tests {
     }
 
     #[test]
-    fn v3_runtime_info_inventory_fields() {
-        let msg = v3::RuntimeInfo {
+    fn v3_workspace_info_inventory_fields() {
+        let msg = v3::WorkspaceInfo {
             id: rid(),
             name: "dev-workspace".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
             pane_count: 3,
             has_write_owner: true,
             read_only_client_count: 1,
-            current_client_role: v3::RuntimeClientRole::Writer as i32,
-            runtime_revision: 42,
+            current_client_role: v3::WorkspaceClientRole::Writer as i32,
+            workspace_revision: 42,
             reconstructed: false,
             active_pane_summary: "bash, vim, htop".into(),
             takeover_eligible: true,
@@ -864,20 +904,20 @@ mod v3_envelope_tests {
         };
         let mut buf = BytesMut::new();
         encode_frame(&msg, &mut buf).unwrap();
-        let decoded: v3::RuntimeInfo = decode_frame(&mut buf).unwrap();
+        let decoded: v3::WorkspaceInfo = decode_frame(&mut buf).unwrap();
         assert_eq!(msg, decoded);
     }
 
     #[test]
-    fn v3_runtime_termination_ephemeral_detach() {
-        let msg = v3::RuntimeTerminated {
+    fn v3_workspace_termination_ephemeral_detach() {
+        let msg = v3::WorkspaceTerminated {
             runtime_id: rid(),
             final_revision: 99,
-            reason: v3::RuntimeTerminationReason::EphemeralDetach as i32,
+            reason: v3::WorkspaceTerminationReason::EphemeralDetach as i32,
         };
         let mut buf = BytesMut::new();
         encode_frame(&msg, &mut buf).unwrap();
-        let decoded: v3::RuntimeTerminated = decode_frame(&mut buf).unwrap();
+        let decoded: v3::WorkspaceTerminated = decode_frame(&mut buf).unwrap();
         assert_eq!(msg, decoded);
     }
 

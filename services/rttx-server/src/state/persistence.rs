@@ -1,10 +1,10 @@
 //! High-level persistence operations for per-workspace state (RFC-031 §6).
 //!
-//! Provides `load_all` and `save_runtime` / `save_daemon_index` that use
+//! Provides `load_all` and `save_workspace` / `save_daemon_index` that use
 //! the layout paths, typed structs, and atomic I/O.
 //!
 //! Loading is a **clean break** (RFC-031 NG1): only the current schema version
-//! is read. Older-schema runtime files are detected, ignored, and removed —
+//! is read. Older-schema workspace files are detected, ignored, and removed —
 //! there is no migration path.
 
 use crate::state::io::write_with_backup;
@@ -22,10 +22,10 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub struct LoadResult {
     /// Successfully loaded workspace files.
-    pub runtimes: Vec<WorkspaceFileV2>,
-    /// Runtime IDs that failed to load (corrupt or unreadable).
+    pub workspaces: Vec<WorkspaceFileV2>,
+    /// Workspace IDs that failed to load (corrupt or unreadable).
     pub failed_ids: Vec<Uuid>,
-    /// Runtime IDs whose old-schema state was detected, ignored, and removed
+    /// Workspace IDs whose old-schema state was detected, ignored, and removed
     /// on load (RFC-031 clean break).
     pub reset_ids: Vec<Uuid>,
 }
@@ -33,7 +33,7 @@ pub struct LoadResult {
 /// Load all persisted state from the daemon state directory.
 ///
 /// Returns `None` if no `daemon.json` exists (first startup). Old-schema
-/// runtimes are reset (removed); corrupt runtimes are skipped — neither is
+/// workspaces are reset (removed); corrupt workspaces are skipped — neither is
 /// fatal.
 pub fn load_all(state_dir: &Path) -> Option<LoadResult> {
     let index_path = layout::daemon_index(state_dir);
@@ -41,35 +41,35 @@ pub fn load_all(state_dir: &Path) -> Option<LoadResult> {
     // Try primary, then backup on parse failure.
     let index = load_daemon_index_with_fallback(&index_path)?;
 
-    let mut runtimes = Vec::new();
+    let mut workspaces = Vec::new();
     let mut failed_ids = Vec::new();
     let mut reset_ids = Vec::new();
 
     for &runtime_id in &index.runtime_ids {
         let short = &runtime_id.to_string()[..8];
-        match load_runtime(state_dir, runtime_id) {
-            RuntimeLoad::Loaded(wf) => runtimes.push(*wf),
-            RuntimeLoad::OldSchema(version) => {
+        match load_workspace(state_dir, runtime_id) {
+            WorkspaceLoad::Loaded(wf) => workspaces.push(*wf),
+            WorkspaceLoad::OldSchema(version) => {
                 tracing::warn!(
-                    "Runtime {short} uses old schema v{version}; resetting state (RFC-031 clean break)"
+                    "Workspace {short} uses old schema v{version}; resetting state (RFC-031 clean break)"
                 );
                 if let Err(e) = remove_runtime_dir(state_dir, runtime_id) {
-                    tracing::error!("Failed to remove old-schema runtime {short}: {e}");
+                    tracing::error!("Failed to remove old-schema workspace {short}: {e}");
                 }
                 reset_ids.push(runtime_id);
             }
-            RuntimeLoad::Corrupt => {
-                tracing::error!("Failed to load runtime {short} — skipping");
+            WorkspaceLoad::Corrupt => {
+                tracing::error!("Failed to load workspace {short} — skipping");
                 failed_ids.push(runtime_id);
             }
-            RuntimeLoad::NotFound => {
-                tracing::error!("Runtime file not found for {short} — skipping");
+            WorkspaceLoad::NotFound => {
+                tracing::error!("Workspace file not found for {short} — skipping");
                 failed_ids.push(runtime_id);
             }
         }
     }
 
-    Some(LoadResult { runtimes, failed_ids, reset_ids })
+    Some(LoadResult { workspaces, failed_ids, reset_ids })
 }
 
 /// Load daemon index, trying backup on parse failure.
@@ -106,43 +106,43 @@ fn load_daemon_index_with_fallback(path: &Path) -> Option<DaemonIndexV1> {
     None
 }
 
-/// Outcome of attempting to load a single runtime file from disk.
-enum RuntimeLoad {
+/// Outcome of attempting to load a single workspace file from disk.
+enum WorkspaceLoad {
     /// A current-schema workspace file loaded successfully.
     Loaded(Box<WorkspaceFileV2>),
     /// A recognized older schema; ignore and remove (RFC-031 clean break).
     OldSchema(u32),
     /// Unreadable, unparseable, or an unsupported future version; skip.
     Corrupt,
-    /// No runtime file present at primary or backup.
+    /// No workspace file present at primary or backup.
     NotFound,
 }
 
-/// Classify a runtime JSON document by its schema version.
-fn classify_runtime_json(json: &str) -> RuntimeLoad {
+/// Classify a workspace JSON document by its schema version.
+fn classify_workspace_json(json: &str) -> WorkspaceLoad {
     use std::cmp::Ordering;
 
     let Ok(version) = peek_schema_version(json) else {
-        return RuntimeLoad::Corrupt;
+        return WorkspaceLoad::Corrupt;
     };
     match version.cmp(&RUNTIME_FILE_SCHEMA_VERSION) {
         Ordering::Equal => serde_json::from_str::<WorkspaceFileV2>(json)
-            .map_or(RuntimeLoad::Corrupt, |wf| RuntimeLoad::Loaded(Box::new(wf))),
-        Ordering::Less => RuntimeLoad::OldSchema(version),
+            .map_or(WorkspaceLoad::Corrupt, |wf| WorkspaceLoad::Loaded(Box::new(wf))),
+        Ordering::Less => WorkspaceLoad::OldSchema(version),
         // Unsupported future version: refuse to touch data we do not understand.
-        Ordering::Greater => RuntimeLoad::Corrupt,
+        Ordering::Greater => WorkspaceLoad::Corrupt,
     }
 }
 
-/// Load a single runtime file, trying backup when the primary is corrupt.
-fn load_runtime(state_dir: &Path, runtime_id: Uuid) -> RuntimeLoad {
+/// Load a single workspace file, trying backup when the primary is corrupt.
+fn load_workspace(state_dir: &Path, runtime_id: Uuid) -> WorkspaceLoad {
     let path = layout::runtime_file(state_dir, runtime_id);
 
     if let Some(json) = crate::state::io::read_primary(&path) {
-        match classify_runtime_json(&json) {
-            RuntimeLoad::Corrupt => {
+        match classify_workspace_json(&json) {
+            WorkspaceLoad::Corrupt => {
                 tracing::warn!(
-                    "Primary runtime file corrupt for {} — trying backup",
+                    "Primary workspace file corrupt for {} — trying backup",
                     &runtime_id.to_string()[..8]
                 );
             }
@@ -151,14 +151,14 @@ fn load_runtime(state_dir: &Path, runtime_id: Uuid) -> RuntimeLoad {
     }
 
     if let Some(json) = crate::state::io::read_backup(&path) {
-        let outcome = classify_runtime_json(&json);
-        if matches!(outcome, RuntimeLoad::Loaded(_)) {
-            tracing::info!("Recovered runtime {} from backup", &runtime_id.to_string()[..8]);
+        let outcome = classify_workspace_json(&json);
+        if matches!(outcome, WorkspaceLoad::Loaded(_)) {
+            tracing::info!("Recovered workspace {} from backup", &runtime_id.to_string()[..8]);
         }
         return outcome;
     }
 
-    RuntimeLoad::NotFound
+    WorkspaceLoad::NotFound
 }
 
 /// Save the daemon index to disk with backup.
@@ -174,8 +174,8 @@ pub fn save_daemon_index(state_dir: &Path, runtime_ids: &[Uuid]) -> std::io::Res
     write_with_backup(&layout::daemon_index(state_dir), &json)
 }
 
-/// Save a single runtime file to disk with backup.
-pub fn save_runtime(state_dir: &Path, runtime_file: &WorkspaceFileV2) -> std::io::Result<()> {
+/// Save a single workspace file to disk with backup.
+pub fn save_workspace(state_dir: &Path, runtime_file: &WorkspaceFileV2) -> std::io::Result<()> {
     let path = layout::runtime_file(state_dir, runtime_file.spec.id);
     let json = serde_json::to_string_pretty(runtime_file).map_err(std::io::Error::other)?;
     write_with_backup(&path, &json)
@@ -223,7 +223,7 @@ pub fn load_screen_snapshot(
     }
 }
 
-/// Remove a runtime's directory from disk.
+/// Remove a workspace's directory from disk.
 pub fn remove_runtime_dir(state_dir: &Path, runtime_id: Uuid) -> std::io::Result<()> {
     let dir = layout::runtime_dir(state_dir, runtime_id);
     if dir.exists() {
@@ -236,11 +236,11 @@ pub fn remove_runtime_dir(state_dir: &Path, runtime_id: Uuid) -> std::io::Result
 mod tests {
     use super::*;
     use crate::pane_tree::{PaneId, SplitAxis, WorkspaceTree};
-    use crate::runtime::RuntimePolicy;
     use crate::state::types::{
-        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, RuntimeInstanceV1, SCREEN_SNAPSHOT_SCHEMA_VERSION,
-        ScreenSnapshotV1, TerminalModeSnapshot, WorkspaceFileV2, WorkspaceSpecV2,
+        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1,
+        TerminalModeSnapshot, WorkspaceFileV2, WorkspaceInstanceV1, WorkspaceSpecV2,
     };
+    use crate::workspace::WorkspacePolicy;
     use tempfile::TempDir;
 
     fn sample_runtime_file(id: Uuid) -> WorkspaceFileV2 {
@@ -252,7 +252,7 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id,
                 name: "test-rt".into(),
-                policy: RuntimePolicy::Persistent,
+                policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree,
                 panes: vec![PaneSpecV2 {
@@ -265,7 +265,7 @@ mod tests {
                     no_persist: false,
                 }],
             },
-            instance: RuntimeInstanceV1 {
+            instance: WorkspaceInstanceV1 {
                 revision: 5,
                 last_active_at: SystemTime::now(),
                 last_snapshot_at: SystemTime::now(),
@@ -281,14 +281,14 @@ mod tests {
         let rf = sample_runtime_file(rt_id);
 
         save_daemon_index(state_dir, &[rt_id]).unwrap();
-        save_runtime(state_dir, &rf).unwrap();
+        save_workspace(state_dir, &rf).unwrap();
 
         let result = load_all(state_dir).unwrap();
         assert!(result.failed_ids.is_empty());
         assert!(result.reset_ids.is_empty());
-        assert_eq!(result.runtimes.len(), 1);
-        assert_eq!(result.runtimes[0].spec.id, rt_id);
-        assert_eq!(result.runtimes[0].spec.name, "test-rt");
+        assert_eq!(result.workspaces.len(), 1);
+        assert_eq!(result.workspaces[0].spec.id, rt_id);
+        assert_eq!(result.workspaces[0].spec.name, "test-rt");
     }
 
     /// A multi-pane tree (structure + ratios + default-active) survives a
@@ -321,12 +321,12 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id: rt_id,
                 name: "tree-ws".into(),
-                policy: RuntimePolicy::Persistent,
+                policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree,
                 panes: vec![mk(a), mk(b), mk(c)],
             },
-            instance: RuntimeInstanceV1 {
+            instance: WorkspaceInstanceV1 {
                 revision: 9,
                 last_active_at: SystemTime::now(),
                 last_snapshot_at: SystemTime::now(),
@@ -334,25 +334,25 @@ mod tests {
         };
 
         save_daemon_index(state_dir, &[rt_id]).unwrap();
-        save_runtime(state_dir, &rf).unwrap();
+        save_workspace(state_dir, &rf).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert_eq!(result.runtimes.len(), 1);
-        let loaded = &result.runtimes[0];
+        assert_eq!(result.workspaces.len(), 1);
+        let loaded = &result.workspaces[0];
         assert_eq!(loaded.spec.tree, expected_tree, "tree must round-trip exactly");
         assert_eq!(loaded.spec.tree.default_active(), Some(c));
         assert_eq!(loaded.spec.panes.len(), 3);
     }
 
-    /// Old-schema (v1) runtime state is detected, ignored, and removed from
+    /// Old-schema (v1) workspace state is detected, ignored, and removed from
     /// disk on load — no migration (RFC-031 clean break).
     #[test]
-    fn old_schema_runtime_is_reset_and_removed() {
+    fn old_schema_workspace_is_reset_and_removed() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let old_id = Uuid::new_v4();
 
-        // Write a genuine v1-format runtime.json: flat panes, active_pane_id,
+        // Write a genuine v1-format workspace.json: flat panes, active_pane_id,
         // command_history, and no durable tree.
         let old_dir = layout::runtime_dir(state_dir, old_id);
         std::fs::create_dir_all(&old_dir).unwrap();
@@ -379,21 +379,21 @@ mod tests {
         save_daemon_index(state_dir, &[old_id]).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert!(result.runtimes.is_empty(), "old-schema runtime must not load");
+        assert!(result.workspaces.is_empty(), "old-schema workspace must not load");
         assert!(result.failed_ids.is_empty(), "old schema is a reset, not a failure");
         assert_eq!(result.reset_ids, vec![old_id]);
-        assert!(!old_dir.exists(), "old-schema runtime directory must be removed");
+        assert!(!old_dir.exists(), "old-schema workspace directory must be removed");
     }
 
-    /// A good v2 runtime survives even when a sibling is reset for old schema.
+    /// A good v2 workspace survives even when a sibling is reset for old schema.
     #[test]
-    fn old_schema_reset_does_not_drop_current_runtimes() {
+    fn old_schema_reset_does_not_drop_current_workspaces() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let good_id = Uuid::new_v4();
         let old_id = Uuid::new_v4();
 
-        save_runtime(state_dir, &sample_runtime_file(good_id)).unwrap();
+        save_workspace(state_dir, &sample_runtime_file(good_id)).unwrap();
 
         let old_dir = layout::runtime_dir(state_dir, old_id);
         std::fs::create_dir_all(&old_dir).unwrap();
@@ -406,8 +406,8 @@ mod tests {
         save_daemon_index(state_dir, &[good_id, old_id]).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert_eq!(result.runtimes.len(), 1);
-        assert_eq!(result.runtimes[0].spec.id, good_id);
+        assert_eq!(result.workspaces.len(), 1);
+        assert_eq!(result.workspaces[0].spec.id, good_id);
         assert_eq!(result.reset_ids, vec![old_id]);
         assert!(!old_dir.exists());
     }
@@ -420,17 +420,17 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_runtime_is_skipped_not_fatal() {
+    fn corrupt_workspace_is_skipped_not_fatal() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let good_id = Uuid::new_v4();
         let bad_id = Uuid::new_v4();
 
-        // Save good runtime
+        // Save good workspace
         let rf = sample_runtime_file(good_id);
-        save_runtime(state_dir, &rf).unwrap();
+        save_workspace(state_dir, &rf).unwrap();
 
-        // Write corrupt runtime file
+        // Write corrupt workspace file
         let bad_dir = layout::runtime_dir(state_dir, bad_id);
         std::fs::create_dir_all(&bad_dir).unwrap();
         std::fs::write(layout::runtime_file(state_dir, bad_id), "not valid json").unwrap();
@@ -439,24 +439,24 @@ mod tests {
         save_daemon_index(state_dir, &[good_id, bad_id]).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert_eq!(result.runtimes.len(), 1);
-        assert_eq!(result.runtimes[0].spec.id, good_id);
+        assert_eq!(result.workspaces.len(), 1);
+        assert_eq!(result.workspaces[0].spec.id, good_id);
         assert_eq!(result.failed_ids, vec![bad_id]);
     }
 
     #[test]
-    fn multiple_runtimes_round_trip() {
+    fn multiple_workspaces_round_trip() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
 
         for &id in &ids {
-            save_runtime(state_dir, &sample_runtime_file(id)).unwrap();
+            save_workspace(state_dir, &sample_runtime_file(id)).unwrap();
         }
         save_daemon_index(state_dir, &ids).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert_eq!(result.runtimes.len(), 3);
+        assert_eq!(result.workspaces.len(), 3);
         assert!(result.failed_ids.is_empty());
     }
 
@@ -466,7 +466,7 @@ mod tests {
         let state_dir = tmp.path();
         let rt_id = Uuid::new_v4();
 
-        save_runtime(state_dir, &sample_runtime_file(rt_id)).unwrap();
+        save_workspace(state_dir, &sample_runtime_file(rt_id)).unwrap();
         let dir = layout::runtime_dir(state_dir, rt_id);
         assert!(dir.exists());
 
@@ -482,17 +482,17 @@ mod tests {
     }
 
     #[test]
-    fn save_runtime_overwrites_with_backup() {
+    fn save_workspace_overwrites_with_backup() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let rt_id = Uuid::new_v4();
 
         let mut rf = sample_runtime_file(rt_id);
         rf.spec.name = "version-1".into();
-        save_runtime(state_dir, &rf).unwrap();
+        save_workspace(state_dir, &rf).unwrap();
 
         rf.spec.name = "version-2".into();
-        save_runtime(state_dir, &rf).unwrap();
+        save_workspace(state_dir, &rf).unwrap();
 
         // Primary has v2
         let path = layout::runtime_file(state_dir, rt_id);
@@ -513,7 +513,7 @@ mod tests {
 
         // Write a good version first
         let rf = sample_runtime_file(rt_id);
-        save_runtime(state_dir, &rf).unwrap();
+        save_workspace(state_dir, &rf).unwrap();
 
         // Corrupt the primary
         let path = layout::runtime_file(state_dir, rt_id);
@@ -523,15 +523,15 @@ mod tests {
         // Copy good to prev, corrupt primary
         std::fs::copy(&path, &prev).unwrap();
         let _ = std::fs::remove_file(&bak);
-        std::os::unix::fs::symlink("runtime.prev", &bak).unwrap();
+        std::os::unix::fs::symlink("workspace.prev", &bak).unwrap();
         std::fs::write(&path, "corrupted!").unwrap();
 
         // Save index
         save_daemon_index(state_dir, &[rt_id]).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert_eq!(result.runtimes.len(), 1);
-        assert_eq!(result.runtimes[0].spec.id, rt_id);
+        assert_eq!(result.workspaces.len(), 1);
+        assert_eq!(result.workspaces[0].spec.id, rt_id);
     }
 
     fn sample_screen_snapshot(pane_id: Uuid) -> ScreenSnapshotV1 {

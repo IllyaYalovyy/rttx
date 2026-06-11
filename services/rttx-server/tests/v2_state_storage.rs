@@ -1,43 +1,44 @@
 //! Gating integration tests for v2 state storage (RFC-022 Step 8, issue #724).
 //!
 //! Covers the five areas required before v1 removal:
-//! 1. Corrupt `runtime.json` does not kill the daemon
+//! 1. Corrupt `workspace.json` does not kill the daemon
 //! 2. Dirty-flag skips writes
 //! 3. Scrollback rotation keeps N segments
-//! 4. Terminated runtimes are cleaned up, never quarantined (RFC-031 §8)
+//! 4. Terminated workspaces are cleaned up, never quarantined (RFC-031 §8)
 //! 5. `ScreenSnapshotV1` round-trip through server restart
 
 mod common;
 
 use common::{
-    TestClient, attach_rw, create_pane, create_runtime, list_runtimes, send_input,
-    start_test_server, terminate_runtime, wait_for_state_containing,
+    TestClient, attach_rw, create_pane, create_workspace, list_workspaces, send_input,
+    start_test_server, terminate_workspace, wait_for_state_containing,
 };
 use rttx_proto::{bytes_to_uuid, v3};
 use rttx_server::state::{layout, persistence, types::SCREEN_SNAPSHOT_SCHEMA_VERSION};
 use std::time::Duration;
 
-// ── 1. Corrupt runtime.json containment ─────────────────────────
+// ── 1. Corrupt workspace.json containment ─────────────────────────
 
-/// Corrupt daemon.json primary falls back to .bak and loads runtimes.
+/// Corrupt daemon.json primary falls back to .bak and loads workspaces.
 #[tokio::test]
 async fn corrupt_daemon_index_falls_back_to_backup() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create a runtime so both v1 and v2 state are written.
+    // Phase 1: create a workspace so both v1 and v2 state are written.
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let _rt_id = create_runtime(&mut c, "index-fallback", v3::RuntimePolicy::Persistent).await;
+        let _rt_id =
+            create_workspace(&mut c, "index-fallback", v3::WorkspacePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "index-fallback", Duration::from_secs(10)).await;
 
-        // Create a second runtime to trigger a second daemon index write,
+        // Create a second workspace to trigger a second daemon index write,
         // which produces the .prev backup.
         let _rt2_id =
-            create_runtime(&mut c, "index-fallback-2", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut c, "index-fallback-2", v3::WorkspacePolicy::Persistent).await;
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         handle.abort();
@@ -56,13 +57,13 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let runtimes = list_runtimes(&mut c).await;
-        // The backup was written before the second runtime was added,
-        // so it may contain 1 runtime (from the first index write).
-        assert!(!runtimes.is_empty(), "daemon should recover runtimes from backup index");
+        let workspaces = list_workspaces(&mut c).await;
+        // The backup was written before the second workspace was added,
+        // so it may contain 1 workspace (from the first index write).
+        assert!(!workspaces.is_empty(), "daemon should recover workspaces from backup index");
         assert!(
-            runtimes.iter().any(|r| r.name == "index-fallback"),
-            "first runtime should survive via backup"
+            workspaces.iter().any(|r| r.name == "index-fallback"),
+            "first workspace should survive via backup"
         );
     }
 }
@@ -72,15 +73,16 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
 async fn both_daemon_index_copies_corrupt_starts_fresh() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create a runtime.
+    // Phase 1: create a workspace.
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let _rt_id = create_runtime(&mut c, "doomed-runtime", v3::RuntimePolicy::Persistent).await;
+        let _rt_id =
+            create_workspace(&mut c, "doomed-workspace", v3::WorkspacePolicy::Persistent).await;
 
-        wait_for_state_containing(tmp.path(), "doomed-runtime", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), "doomed-workspace", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -92,26 +94,26 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
     let prev_path = index_path.with_extension("prev");
     std::fs::write(&prev_path, "corrupted backup").unwrap();
 
-    // Phase 2: restart — should start fresh (0 runtimes), not crash.
+    // Phase 2: restart — should start fresh (0 workspaces), not crash.
     {
         let (sock, _handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let runtimes = list_runtimes(&mut c).await;
+        let workspaces = list_workspaces(&mut c).await;
         assert!(
-            runtimes.is_empty(),
+            workspaces.is_empty(),
             "daemon should start fresh when both index copies are corrupt"
         );
     }
 }
 
-/// Corrupt runtime.json with valid backup recovers from .prev.
+/// Corrupt workspace.json with valid backup recovers from .prev.
 #[tokio::test]
 async fn corrupt_runtime_file_recovers_from_backup() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create a runtime and write state twice to produce .prev.
+    // Phase 1: create a workspace and write state twice to produce .prev.
     let runtime_id;
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
@@ -119,7 +121,7 @@ async fn corrupt_runtime_file_recovers_from_backup() {
         c.handshake().await;
 
         let rt_id_bytes =
-            create_runtime(&mut c, "backup-recovery", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut c, "backup-recovery", v3::WorkspacePolicy::Persistent).await;
         runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
         // Wait for first write.
@@ -134,7 +136,7 @@ async fn corrupt_runtime_file_recovers_from_backup() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Corrupt the primary runtime.json but leave .prev intact.
+    // Corrupt the primary workspace.json but leave .prev intact.
     let state_dir = tmp.path().join("state/rttx/daemon");
     let rt_path = layout::runtime_file(&state_dir, runtime_id);
     let prev_path = rt_path.with_extension("prev");
@@ -147,39 +149,39 @@ async fn corrupt_runtime_file_recovers_from_backup() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let runtimes = list_runtimes(&mut c).await;
-        assert_eq!(runtimes.len(), 1);
-        assert_eq!(runtimes[0].name, "backup-recovery");
+        let workspaces = list_workspaces(&mut c).await;
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].name, "backup-recovery");
     }
 }
 
 // ── 2. Dirty-flag skips writes ──────────────────────────────────
 
-/// After restart, a loaded runtime is not dirty (`persisted_revision` matches
+/// After restart, a loaded workspace is not dirty (`persisted_revision` matches
 /// `revision`), so it should not be rewritten on subsequent ticks.
 #[tokio::test]
-async fn loaded_runtime_is_clean_after_restart() {
+async fn loaded_workspace_is_clean_after_restart() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create a runtime.
+    // Phase 1: create a workspace.
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
         let _rt_id =
-            create_runtime(&mut c, "clean-after-restart", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut c, "clean-after-restart", v3::WorkspacePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "clean-after-restart", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Phase 2: restart and verify the runtime file is not rewritten.
+    // Phase 2: restart and verify the workspace file is not rewritten.
     {
         let state_dir = tmp.path().join("state/rttx/daemon");
         let result = persistence::load_all(&state_dir).unwrap();
-        let rt_id = result.runtimes[0].spec.id;
+        let rt_id = result.workspaces[0].spec.id;
         let rt_path = layout::runtime_file(&state_dir, rt_id);
 
         let (sock, _handle) = start_test_server(tmp.path()).await;
@@ -197,7 +199,7 @@ async fn loaded_runtime_is_clean_after_restart() {
         let mtime_later = std::fs::metadata(&rt_path).unwrap().modified().unwrap();
         assert_eq!(
             mtime_after_restart, mtime_later,
-            "loaded runtime should not be rewritten when clean"
+            "loaded workspace should not be rewritten when clean"
         );
     }
 }
@@ -211,7 +213,8 @@ async fn multiple_mutations_coalesce_into_single_write() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes = create_runtime(&mut c, "coalesce-test", v3::RuntimePolicy::Persistent).await;
+    let rt_id_bytes =
+        create_workspace(&mut c, "coalesce-test", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for initial write.
@@ -228,13 +231,13 @@ async fn multiple_mutations_coalesce_into_single_write() {
     for i in 0..5 {
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+            command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                 runtime_id: rt_id_bytes.clone(),
                 name: format!("renamed-{i}"),
             })),
         })
         .await;
-        let _ = c.recv().await; // RuntimeRenamed
+        let _ = c.recv().await; // WorkspaceRenamed
     }
 
     // Wait for the next serialization tick.
@@ -242,17 +245,17 @@ async fn multiple_mutations_coalesce_into_single_write() {
 
     // The file should have been written with the final name.
     let result = persistence::load_all(&state_dir).unwrap();
-    let rt = result.runtimes.iter().find(|r| r.spec.id == runtime_id).unwrap();
+    let rt = result.workspaces.iter().find(|r| r.spec.id == runtime_id).unwrap();
     assert_eq!(rt.spec.name, "renamed-4", "final rename should be persisted");
 
     // Verify the file was rewritten (mtime changed).
     let mtime_after = std::fs::metadata(&rt_path).unwrap().modified().unwrap();
-    assert!(mtime_after > mtime_before, "dirty runtime should be rewritten");
+    assert!(mtime_after > mtime_before, "dirty workspace should be rewritten");
 
     // Now wait for more ticks — file should NOT change again.
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mtime_stable = std::fs::metadata(&rt_path).unwrap().modified().unwrap();
-    assert_eq!(mtime_after, mtime_stable, "clean runtime should not be rewritten");
+    assert_eq!(mtime_after, mtime_stable, "clean workspace should not be rewritten");
 }
 
 // ── 3. Scrollback rotation keeps N segments ─────────────────────
@@ -267,7 +270,8 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes = create_runtime(&mut c, "rotation-test", v3::RuntimePolicy::Persistent).await;
+    let rt_id_bytes =
+        create_workspace(&mut c, "rotation-test", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     attach_rw(&mut c, &rt_id_bytes).await;
@@ -308,32 +312,32 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
     }
 
     // The key invariant: the pane should still be functional after rotation.
-    let runtimes = list_runtimes(&mut c).await;
-    assert_eq!(runtimes.len(), 1, "runtime should still be alive after rotation");
+    let workspaces = list_workspaces(&mut c).await;
+    assert_eq!(workspaces.len(), 1, "workspace should still be alive after rotation");
 }
 
-// ── 4. Terminated runtimes are cleaned up, never quarantined ────
+// ── 4. Terminated workspaces are cleaned up, never quarantined ────
 
-/// Terminated runtime's directory is cleaned up and does not become an orphan.
+/// Terminated workspace's directory is cleaned up and does not become an orphan.
 #[tokio::test]
-async fn terminated_runtime_does_not_become_orphan_on_restart() {
+async fn terminated_workspace_does_not_become_orphan_on_restart() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Phase 1: create and terminate a runtime.
+    // Phase 1: create and terminate a workspace.
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
         let rt_id_bytes =
-            create_runtime(&mut c, "terminated-rt", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut c, "terminated-rt", v3::WorkspacePolicy::Persistent).await;
 
         // Wait for serialization.
         wait_for_state_containing(tmp.path(), "terminated-rt", Duration::from_secs(10)).await;
 
         // Attach and terminate.
         attach_rw(&mut c, &rt_id_bytes).await;
-        terminate_runtime(&mut c, &rt_id_bytes).await;
+        terminate_workspace(&mut c, &rt_id_bytes).await;
 
         // Wait for cleanup.
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -347,13 +351,13 @@ async fn terminated_runtime_does_not_become_orphan_on_restart() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let runtimes = list_runtimes(&mut c).await;
-        assert!(runtimes.is_empty(), "terminated runtime should not reappear");
+        let workspaces = list_workspaces(&mut c).await;
+        assert!(workspaces.is_empty(), "terminated workspace should not reappear");
 
         // The sweep is gone (RFC-031 §8): no `.orphans/` quarantine is ever
-        // created. A terminated runtime is simply removed.
+        // created. A terminated workspace is simply removed.
         let state_dir = tmp.path().join("state/rttx/daemon");
-        let orphans = state_dir.join("runtimes/.orphans");
+        let orphans = state_dir.join("workspaces/.orphans");
         assert!(!orphans.exists(), "the removed orphan sweep must never create .orphans/");
     }
 }
@@ -368,14 +372,14 @@ async fn screen_snapshot_survives_restart() {
     let runtime_id;
     let pane_id;
 
-    // Phase 1: create runtime with pane, feed some output, let serialization write.
+    // Phase 1: create workspace with pane, feed some output, let serialization write.
     {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
         let rt_id_bytes =
-            create_runtime(&mut c, "snap-restart", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut c, "snap-restart", v3::WorkspacePolicy::Persistent).await;
         runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
         attach_rw(&mut c, &rt_id_bytes).await;
@@ -422,7 +426,7 @@ async fn no_persist_pane_snapshot_is_confidential_via_server() {
     c.handshake().await;
 
     let rt_id_bytes =
-        create_runtime(&mut c, "confidential-snap", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut c, "confidential-snap", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     attach_rw(&mut c, &rt_id_bytes).await;

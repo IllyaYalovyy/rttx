@@ -5,7 +5,7 @@
 
 use rttx_proto::v3;
 use rttx_proto::v3_envelope::RequestIdGenerator;
-use rttx_proto::v3_inventory::{self, PaneInfoParams, RuntimeInfoParams, RuntimeInfoV2Fields};
+use rttx_proto::v3_inventory::{self, PaneInfoParams, WorkspaceInfoParams, WorkspaceInfoV2Fields};
 use rttx_proto::{decode_frame, encode_frame};
 
 fn rt() -> uuid::Uuid {
@@ -33,8 +33,8 @@ fn test_pane(title: &str, cwd: &str, exit_status: Option<i32>) -> v3::PaneInfo {
 fn v3_inventory_list_roundtrip_with_v2_fields() {
     let id_gen = RequestIdGenerator::new();
 
-    // Client sends ListRuntimes request
-    let req_env = v3_inventory::build_list_runtimes_envelope(&id_gen);
+    // Client sends ListWorkspaces request
+    let req_env = v3_inventory::build_list_workspaces_envelope(&id_gen);
     let mut buf = bytes::BytesMut::new();
     encode_frame(&req_env, &mut buf).unwrap();
     let decoded_req: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
@@ -49,19 +49,19 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
     let summary = v3_inventory::build_active_pane_summary(&panes);
     assert_eq!(summary, "bash, vim");
 
-    let info = v3_inventory::build_runtime_info_v2(
-        RuntimeInfoParams {
+    let info = v3_inventory::build_workspace_info_v2(
+        WorkspaceInfoParams {
             id: rt(),
             name: "integration-test".into(),
-            policy: v3::RuntimePolicy::Persistent,
+            policy: v3::WorkspacePolicy::Persistent,
             pane_count: 3,
             has_write_owner: true,
             read_only_client_count: 1,
-            current_client_role: v3::RuntimeClientRole::Writer,
-            runtime_revision: 42,
+            current_client_role: v3::WorkspaceClientRole::Writer,
+            workspace_revision: 42,
             reconstructed: false,
         },
-        RuntimeInfoV2Fields {
+        WorkspaceInfoV2Fields {
             active_pane_summary: summary,
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -69,8 +69,8 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
         },
     );
 
-    let list = v3_inventory::build_runtime_list(vec![info]);
-    let resp_env = v3_inventory::build_runtime_list_response(decoded_req.request_id, list);
+    let list = v3_inventory::build_workspace_list(vec![info]);
+    let resp_env = v3_inventory::build_workspace_list_response(decoded_req.request_id, list);
 
     // Wire roundtrip
     let mut buf = bytes::BytesMut::new();
@@ -79,35 +79,37 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
     assert_eq!(resp_env, decoded_resp);
 
     // Verify payload
-    let v3::server_envelope::Payload::RuntimeList(ref rl) = decoded_resp.payload.unwrap() else {
-        panic!("expected RuntimeList payload");
+    let v3::server_envelope::Payload::WorkspaceList(ref rl) = decoded_resp.payload.unwrap() else {
+        panic!("expected WorkspaceList payload");
     };
-    assert_eq!(rl.runtimes.len(), 1);
-    assert_eq!(rl.runtimes[0].active_pane_summary, "bash, vim");
-    assert_eq!(rl.runtimes[0].panes.len(), 3);
-    assert!(!rl.runtimes[0].takeover_eligible);
+    assert_eq!(rl.workspaces.len(), 1);
+    assert_eq!(rl.workspaces[0].active_pane_summary, "bash, vim");
+    assert_eq!(rl.workspaces[0].panes.len(), 3);
+    assert!(!rl.workspaces[0].takeover_eligible);
 }
 
 #[test]
 fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
-    let caps_without_v2 =
-        vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::CorePaneLifecycle as i32];
+    let caps_without_v2 = vec![
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::CorePaneLifecycle as i32,
+    ];
     assert!(!v3_inventory::is_supported(&caps_without_v2));
 
     let pane = test_pane("bash", "/home", None);
-    let mut info = v3_inventory::build_runtime_info_v2(
-        RuntimeInfoParams {
+    let mut info = v3_inventory::build_workspace_info_v2(
+        WorkspaceInfoParams {
             id: rt(),
             name: "gated".into(),
-            policy: v3::RuntimePolicy::Persistent,
+            policy: v3::WorkspacePolicy::Persistent,
             pane_count: 1,
             has_write_owner: true,
             read_only_client_count: 0,
-            current_client_role: v3::RuntimeClientRole::Writer,
-            runtime_revision: 5,
+            current_client_role: v3::WorkspaceClientRole::Writer,
+            workspace_revision: 5,
             reconstructed: false,
         },
-        RuntimeInfoV2Fields {
+        WorkspaceInfoV2Fields {
             active_pane_summary: "bash".into(),
             takeover_eligible: true,
             disabled_reason: String::new(),
@@ -128,8 +130,8 @@ fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
     assert!(info.has_write_owner);
 
     // Wire roundtrip after stripping
-    let list = v3_inventory::build_runtime_list(vec![info]);
-    let env = v3_inventory::build_runtime_list_response(1, list);
+    let list = v3_inventory::build_workspace_list(vec![info]);
+    let env = v3_inventory::build_workspace_list_response(1, list);
     let mut buf = bytes::BytesMut::new();
     encode_frame(&env, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
@@ -137,26 +139,26 @@ fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
 }
 
 #[test]
-fn v3_inventory_disabled_runtime_visible_with_explanation() {
+fn v3_inventory_disabled_workspace_visible_with_explanation() {
     let caps_with_v2 = vec![
-        v3::Capability::CoreRuntimeLifecycle as i32,
-        v3::Capability::OptRuntimeInventoryV2 as i32,
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::OptWorkspaceInventoryV2 as i32,
     ];
     assert!(v3_inventory::is_supported(&caps_with_v2));
 
-    let info = v3_inventory::build_runtime_info_v2(
-        RuntimeInfoParams {
+    let info = v3_inventory::build_workspace_info_v2(
+        WorkspaceInfoParams {
             id: rt(),
-            name: "busy-runtime".into(),
-            policy: v3::RuntimePolicy::Persistent,
+            name: "busy-workspace".into(),
+            policy: v3::WorkspacePolicy::Persistent,
             pane_count: 2,
             has_write_owner: true,
             read_only_client_count: 0,
-            current_client_role: v3::RuntimeClientRole::Unattached,
-            runtime_revision: 10,
+            current_client_role: v3::WorkspaceClientRole::Unattached,
+            workspace_revision: 10,
             reconstructed: false,
         },
-        RuntimeInfoV2Fields {
+        WorkspaceInfoV2Fields {
             active_pane_summary: "vim".into(),
             takeover_eligible: false,
             disabled_reason: "owned by another client".into(),

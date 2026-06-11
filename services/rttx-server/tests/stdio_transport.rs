@@ -60,10 +60,10 @@ async fn read_response(
 
 /// Spawn `rttx-server attach-stdio` against a running daemon and speak the protocol.
 #[tokio::test]
-async fn attach_stdio_hello_and_create_runtime() {
+async fn attach_stdio_hello_and_create_workspace() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     let cache_dir = tmp.path().join("cache");
     let state_dir = tmp.path().join("state");
     tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
@@ -119,9 +119,9 @@ async fn attach_stdio_hello_and_create_runtime() {
     // Create session.
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "stdio-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     buf.clear();
@@ -131,17 +131,17 @@ async fn attach_stdio_hello_and_create_runtime() {
 
     let resp = read_response(&mut stdout, &mut read_buf).await;
     let runtime_id = match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => {
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => {
             bytes_to_uuid(&sc.runtime_id).unwrap()
         }
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
     assert!(!runtime_id.is_nil());
 
-    // List runtimes.
+    // List workspaces.
     let list = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
     };
     buf.clear();
     encode_frame(&list, &mut buf).unwrap();
@@ -150,11 +150,11 @@ async fn attach_stdio_hello_and_create_runtime() {
 
     let resp = read_response(&mut stdout, &mut read_buf).await;
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeList(sl)) => {
-            assert_eq!(sl.runtimes.len(), 1);
-            assert_eq!(sl.runtimes[0].name, "stdio-test");
+        Some(v3::server_envelope::Payload::WorkspaceList(sl)) => {
+            assert_eq!(sl.workspaces.len(), 1);
+            assert_eq!(sl.workspaces[0].name, "stdio-test");
         }
-        other => panic!("expected RuntimeList, got {other:?}"),
+        other => panic!("expected WorkspaceList, got {other:?}"),
     }
 
     // Disconnect — process should exit.
@@ -173,7 +173,7 @@ async fn attach_stdio_hello_and_create_runtime() {
 fn attach_stdio_requires_running_daemon() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = tempfile::TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     let cache_dir = tmp.path().join("cache");
     std::fs::create_dir_all(&runtime_dir).unwrap();
     std::fs::create_dir_all(&cache_dir).unwrap();
@@ -203,7 +203,7 @@ fn attach_stdio_requires_running_daemon() {
 fn status_command_shows_not_running_when_no_daemon() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = tempfile::TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     std::fs::create_dir_all(&runtime_dir).unwrap();
 
     let output = std::process::Command::new(bin)

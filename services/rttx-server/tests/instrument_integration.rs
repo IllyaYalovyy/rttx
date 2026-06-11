@@ -18,7 +18,7 @@ async fn channel_overflow_metric_increments_on_full_push_channel() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let sid = create_runtime(&mut client, "overflow-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "overflow-test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &sid).await;
     attach_rw(&mut client, &sid).await;
 
@@ -43,13 +43,13 @@ async fn instrumented_locks_do_not_affect_message_handling() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    // Create runtime — exercises instrumented server lock in the v3 dispatcher.
-    let sid = create_runtime(&mut client, "lock-test", v3::RuntimePolicy::Persistent).await;
+    // Create workspace — exercises instrumented server lock in the v3 dispatcher.
+    let sid = create_workspace(&mut client, "lock-test", v3::WorkspacePolicy::Persistent).await;
 
-    // Attach — exercises instrumented runtime lock.
+    // Attach — exercises instrumented workspace lock.
     attach_rw(&mut client, &sid).await;
 
-    // Create pane — exercises instrumented server + runtime locks.
+    // Create pane — exercises instrumented server + workspace locks.
     let pane_id = create_pane(&mut client, &sid).await;
     client.drain(Duration::from_millis(500)).await;
 

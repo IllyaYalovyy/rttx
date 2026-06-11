@@ -1,13 +1,13 @@
-//! Integration tests for runtime revisions and mutation acknowledgements.
+//! Integration tests for workspace revisions and mutation acknowledgements.
 
 mod common;
 
-use common::{TestClient, list_runtimes, start_test_server, wait_for_state_containing};
+use common::{TestClient, list_workspaces, start_test_server, wait_for_state_containing};
 use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
-async fn mutation_acks_return_monotonic_runtime_revisions() {
+async fn mutation_acks_return_monotonic_workspace_revisions() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -17,34 +17,34 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "revision-acks".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     let runtime_id = match client.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => {
-            assert_eq!(created.runtime_revision, 1);
+        Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => {
+            assert_eq!(created.workspace_revision, 1);
             created.runtime_id
         }
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     let snapshot = match client.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => snapshot,
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => snapshot,
         other => panic!("expected Snapshot, got {other:?}"),
     };
-    assert_eq!(snapshot.runtime_revision, 2);
+    assert_eq!(snapshot.workspace_revision, 2);
 
     client
         .send(&v3::ClientEnvelope {
@@ -61,14 +61,14 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
         .await;
     let pane_id = match client.recv().await.payload {
         Some(v3::server_envelope::Payload::PaneCreated(created)) => {
-            assert_eq!(created.runtime_revision, 3);
+            assert_eq!(created.workspace_revision, 3);
             created.pane_id
         }
         other => panic!("expected PaneCreated, got {other:?}"),
     };
 
     // ResizePane is fire-and-forget in v3 (no ack), but it still bumps the
-    // runtime revision to 4. Flush it with a Ping/Pong barrier; the bump is
+    // workspace revision to 4. Flush it with a Ping/Pong barrier; the bump is
     // observed later via the ClosePane ack.
     client
         .send(&v3::ClientEnvelope {
@@ -110,7 +110,7 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     while tokio::time::Instant::now() < deadline {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::PaneClosed(closed)) => {
-                assert_eq!(closed.runtime_revision, 6);
+                assert_eq!(closed.workspace_revision, 6);
                 assert_eq!(closed.pane_id, pane_id);
                 saw_close = true;
                 break;
@@ -124,17 +124,17 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                 runtime_id: runtime_id.clone(),
             })),
         })
         .await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for WorkspaceDetached");
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeDetached(detached)) => {
-                assert_eq!(detached.runtime_revision, 7);
+            Some(v3::server_envelope::Payload::WorkspaceDetached(detached)) => {
+                assert_eq!(detached.workspace_revision, 7);
                 assert_eq!(detached.runtime_id, runtime_id);
                 break;
             }
@@ -142,13 +142,13 @@ async fn mutation_acks_return_monotonic_runtime_revisions() {
                 v3::server_envelope::Payload::OutputDelta(_)
                 | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}"),
+            other => panic!("expected WorkspaceDetached, got {other:?}"),
         }
     }
 }
 
 #[tokio::test]
-async fn runtime_revision_survives_restart_and_attach_advances_it() {
+async fn workspace_revision_survives_restart_and_attach_advances_it() {
     let tmp = tempfile::TempDir::new().unwrap();
     let runtime_id;
 
@@ -160,18 +160,18 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                     name: "restart-revision".into(),
-                    policy: v3::RuntimePolicy::Persistent as i32,
+                    policy: v3::WorkspacePolicy::Persistent as i32,
                 })),
             })
             .await;
         runtime_id = match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => {
-                assert_eq!(created.runtime_revision, 1);
+            Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => {
+                assert_eq!(created.workspace_revision, 1);
                 created.runtime_id
             }
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         client
@@ -189,7 +189,7 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
             .await;
         let pane_id = match client.recv().await.payload {
             Some(v3::server_envelope::Payload::PaneCreated(created)) => {
-                assert_eq!(created.runtime_revision, 2);
+                assert_eq!(created.workspace_revision, 2);
                 created.pane_id
             }
             other => panic!("expected PaneCreated, got {other:?}"),
@@ -221,11 +221,11 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let runtimes = list_runtimes(&mut client).await;
-        assert_eq!(runtimes.len(), 1);
+        let workspaces = list_workspaces(&mut client).await;
+        assert_eq!(workspaces.len(), 1);
         // Revision is at least 3 (persisted). Login shells may emit OSC 7
         // on startup which bumps it further — that's expected behavior.
-        let pre_attach_revision = runtimes[0].runtime_revision;
+        let pre_attach_revision = workspaces[0].workspace_revision;
         assert!(
             pre_attach_revision >= 3,
             "revision after restart should be >= 3, got {pre_attach_revision}"
@@ -234,15 +234,15 @@ async fn runtime_revision_survives_restart_and_attach_advances_it() {
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                     runtime_id: runtime_id.clone(),
-                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
         match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => {
-                assert_eq!(snapshot.runtime_revision, pre_attach_revision + 1);
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => {
+                assert_eq!(snapshot.workspace_revision, pre_attach_revision + 1);
                 assert_eq!(snapshot.runtime_id, runtime_id);
             }
             other => panic!("expected Snapshot, got {other:?}"),
@@ -261,15 +261,15 @@ async fn failed_close_pane_returns_error_without_revision_change() {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "revision-error".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     let runtime_id = match client.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => created.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     client
@@ -287,7 +287,7 @@ async fn failed_close_pane_returns_error_without_revision_change() {
         .await;
     match client.recv().await.payload {
         Some(v3::server_envelope::Payload::PaneCreated(created)) => {
-            assert_eq!(created.runtime_revision, 2);
+            assert_eq!(created.workspace_revision, 2);
         }
         other => panic!("expected PaneCreated, got {other:?}"),
     }
@@ -309,8 +309,8 @@ async fn failed_close_pane_returns_error_without_revision_change() {
         other => panic!("expected Error, got {other:?}"),
     }
 
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].runtime_revision, 2);
-    assert_eq!(runtimes[0].pane_count, 1);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].workspace_revision, 2);
+    assert_eq!(workspaces[0].pane_count, 1);
 }

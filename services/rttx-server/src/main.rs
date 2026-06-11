@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 #[command(
     name = "rttx-server",
     version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"),
-    about = "Daemon runtime service for the rttx terminal emulator"
+    about = "Daemon workspace service for the rttx terminal emulator"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -33,20 +33,20 @@ enum Command {
     },
     /// Stop the running daemon
     Stop,
-    /// Show daemon status and active runtimes
+    /// Show daemon status and active workspaces
     Status,
-    /// Remove all runtimes with no connected clients
+    /// Remove all workspaces with no connected clients
     Clean,
-    /// Terminate a specific runtime by ID
+    /// Terminate a specific workspace by ID
     Kill {
-        /// Runtime ID (UUID) to terminate
+        /// Workspace ID (UUID) to terminate
         runtime_id: String,
     },
     /// Serve one client over stdin/stdout (for SSH)
     AttachStdio,
     /// Show the path to the daemon log file
     Logs,
-    /// Show runtime memory diagnostics
+    /// Show workspace memory diagnostics
     Diagnostics,
     /// Show resolved paths and configuration
     Config,
@@ -54,7 +54,7 @@ enum Command {
     ///
     /// One-time, opt-in utility. Scans the daemon state directory read-only for
     /// history files no longer referenced by any current pane and copies them
-    /// into a recovery directory. Never modifies live runtime state.
+    /// into a recovery directory. Never modifies live workspace state.
     SalvageHistory {
         /// Recovery directory to copy salvaged history into
         /// (default: <cache>/salvaged-history)
@@ -224,8 +224,8 @@ fn start(foreground: bool) -> anyhow::Result<()> {
             s.load_persisted_state();
         }
 
-        // Reconstruct runtimes: replay scrollback, spawn fresh shells.
-        Server::reconstruct_runtimes(&server).await;
+        // Reconstruct workspaces: replay scrollback, spawn fresh shells.
+        Server::reconstruct_workspaces(&server).await;
 
         // Start watchdog for hang detection.
         {
@@ -273,7 +273,7 @@ fn config() {
     let mode = if dev_mode { "development" } else { "production" };
     let socket = os.runtime_dir().join("rttx-server.sock");
     let state = os.state_dir();
-    let scrollback = os.state_dir().join("runtimes");
+    let scrollback = os.state_dir().join("workspaces");
     let log_dir = os.cache_dir();
 
     println!("Mode: {mode}");
@@ -288,7 +288,7 @@ fn config() {
 ///
 /// Read-only scan of the daemon state directory; copies unreferenced history
 /// into a recovery directory. Safe to run while the daemon is up — it never
-/// touches live runtime files.
+/// touches live workspace files.
 fn salvage_history(dest: Option<std::path::PathBuf>, dry_run: bool) -> anyhow::Result<()> {
     let os = UnixOs;
     let state_dir = os.state_dir();
@@ -302,7 +302,7 @@ fn salvage_history(dest: Option<std::path::PathBuf>, dry_run: bool) -> anyhow::R
     println!("Found {} orphaned history file(s):", orphans.len());
     for orphan in &orphans {
         println!(
-            "  runtime {} pane {} ({} bytes)",
+            "  workspace {} pane {} ({} bytes)",
             &orphan.runtime_id.to_string()[..8],
             &orphan.pane_id.to_string()[..8],
             orphan.bytes,
@@ -337,7 +337,7 @@ async fn v3_connect(
         "rttx-server-cli",
         env!("CARGO_PKG_VERSION"),
         &[
-            v3::Capability::CoreRuntimeLifecycle,
+            v3::Capability::CoreWorkspaceLifecycle,
             v3::Capability::CorePaneLifecycle,
             v3::Capability::CoreTerminalIo,
             v3::Capability::CoreTerminalModes,
@@ -456,7 +456,7 @@ fn diagnostics() -> anyhow::Result<()> {
 
         let resp = recv_v3_response(&mut conn).await?;
         if let Some(v3::server_envelope::Payload::DiagnosticsReport(report)) = resp.payload {
-            println!("Runtimes: {}", report.runtime_count);
+            println!("Workspaces: {}", report.workspace_count);
             println!(
                 "Panes: {} ({} active, {} exited)",
                 report.total_pane_count, report.total_active_panes, report.total_exited_panes
@@ -466,12 +466,12 @@ fn diagnostics() -> anyhow::Result<()> {
             println!("Total raw_bytes: {} bytes", report.total_raw_bytes);
             println!("Total pending_flush: {} bytes", report.total_pending_flush);
 
-            if !report.runtimes.is_empty() {
+            if !report.workspaces.is_empty() {
                 println!();
-                for rt_info in &report.runtimes {
+                for rt_info in &report.workspaces {
                     let id = rttx_proto::bytes_to_uuid(&rt_info.id)
                         .map_or_else(|_| "?".into(), |u| u.to_string());
-                    println!("  Runtime \"{}\" ({}):", rt_info.name, &id[..8.min(id.len())]);
+                    println!("  Workspace \"{}\" ({}):", rt_info.name, &id[..8.min(id.len())]);
                     println!(
                         "    Panes: {} active, {} exited",
                         rt_info.active_pane_count, rt_info.exited_pane_count
@@ -499,7 +499,7 @@ fn diagnostics() -> anyhow::Result<()> {
     })
 }
 
-/// SSH connection drops, so PTYs and runtimes survive GUI restarts.
+/// SSH connection drops, so PTYs and workspaces survive GUI restarts.
 fn attach_stdio() -> anyhow::Result<()> {
     let dev_mode = rttx_server::os::unix::dev_mode_enabled();
     let os = UnixOs;
@@ -571,39 +571,39 @@ fn status() -> anyhow::Result<()> {
         let mut conn = v3_connect(&socket_path).await?;
         let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
-        // ListRuntimes.
+        // ListWorkspaces.
         let env = rttx_proto::v3_envelope::build_client_envelope(
             &id_gen,
-            v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+            v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}),
         );
         conn.send_v3_envelope(&env).await?;
 
         let resp = recv_v3_response(&mut conn).await?;
-        if let Some(v3::server_envelope::Payload::RuntimeList(sl)) = resp.payload {
+        if let Some(v3::server_envelope::Payload::WorkspaceList(sl)) = resp.payload {
             println!("Status: running");
-            println!("Runtimes: {}", sl.runtimes.len());
+            println!("Workspaces: {}", sl.workspaces.len());
 
-            let total_panes: u32 = sl.runtimes.iter().map(|s| s.pane_count).sum();
+            let total_panes: u32 = sl.workspaces.iter().map(|s| s.pane_count).sum();
             let total_clients: u32 = sl
-                .runtimes
+                .workspaces
                 .iter()
                 .map(|s| u32::from(s.has_write_owner) + s.read_only_client_count)
                 .sum();
             println!("Panes: {total_panes}");
             println!("Connected clients: {total_clients}");
 
-            if !sl.runtimes.is_empty() {
+            if !sl.workspaces.is_empty() {
                 println!();
                 println!(
                     "{:<38} {:<20} {:<12} {:<6} {:<8}",
                     "ID", "NAME", "POLICY", "PANES", "CLIENTS"
                 );
-                for rt_info in &sl.runtimes {
+                for rt_info in &sl.workspaces {
                     let id = rttx_proto::bytes_to_uuid(&rt_info.id)
                         .map_or_else(|_| "?".into(), |u| u.to_string());
-                    let policy = match v3::RuntimePolicy::try_from(rt_info.policy) {
-                        Ok(v3::RuntimePolicy::Persistent) => "persistent",
-                        Ok(v3::RuntimePolicy::Ephemeral) => "ephemeral",
+                    let policy = match v3::WorkspacePolicy::try_from(rt_info.policy) {
+                        Ok(v3::WorkspacePolicy::Persistent) => "persistent",
+                        Ok(v3::WorkspacePolicy::Ephemeral) => "ephemeral",
                         _ => "unknown",
                     };
                     let clients =
@@ -638,26 +638,26 @@ fn clean() -> anyhow::Result<()> {
         let mut conn = v3_connect(&socket_path).await?;
         let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
-        // ListRuntimes.
+        // ListWorkspaces.
         let env = rttx_proto::v3_envelope::build_client_envelope(
             &id_gen,
-            v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+            v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}),
         );
         conn.send_v3_envelope(&env).await?;
 
         let resp = recv_v3_response(&mut conn).await?;
-        let runtimes = match resp.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
+        let workspaces = match resp.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
             _ => anyhow::bail!("unexpected response"),
         };
 
-        let unused: Vec<_> = runtimes
+        let unused: Vec<_> = workspaces
             .iter()
             .filter(|s| !s.has_write_owner && s.read_only_client_count == 0)
             .collect();
 
         if unused.is_empty() {
-            println!("No unused runtimes");
+            println!("No unused workspaces");
             return Ok(());
         }
 
@@ -665,17 +665,17 @@ fn clean() -> anyhow::Result<()> {
         for rt_info in &unused {
             let env = rttx_proto::v3_envelope::build_client_envelope(
                 &id_gen,
-                v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+                v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
                     runtime_id: rt_info.id.clone(),
                 }),
             );
             conn.send_v3_envelope(&env).await?;
 
-            // Wait for RuntimeTerminated.
+            // Wait for WorkspaceTerminated.
             loop {
                 let resp = recv_v3_response(&mut conn).await?;
                 match resp.payload {
-                    Some(v3::server_envelope::Payload::RuntimeTerminated(_)) => {
+                    Some(v3::server_envelope::Payload::WorkspaceTerminated(_)) => {
                         let name = truncate(&rt_info.name, 40);
                         println!("Removed: {name}");
                         cleaned += 1;
@@ -687,7 +687,7 @@ fn clean() -> anyhow::Result<()> {
             }
         }
 
-        println!("Cleaned {cleaned} runtime{}", if cleaned == 1 { "" } else { "s" });
+        println!("Cleaned {cleaned} workspace{}", if cleaned == 1 { "" } else { "s" });
         Ok(())
     })
 }
@@ -695,7 +695,7 @@ fn clean() -> anyhow::Result<()> {
 fn kill(runtime_id_str: &str) -> anyhow::Result<()> {
     let runtime_id: uuid::Uuid = runtime_id_str
         .parse()
-        .map_err(|_| anyhow::anyhow!("invalid runtime ID: not a valid UUID"))?;
+        .map_err(|_| anyhow::anyhow!("invalid workspace ID: not a valid UUID"))?;
 
     let os = UnixOs;
     let socket_path = os.runtime_dir().join("rttx-server.sock");
@@ -710,20 +710,20 @@ fn kill(runtime_id_str: &str) -> anyhow::Result<()> {
         let mut conn = v3_connect(&socket_path).await?;
         let id_gen = rttx_proto::v3_envelope::RequestIdGenerator::new();
 
-        // TerminateRuntime.
+        // TerminateWorkspace.
         let env = rttx_proto::v3_envelope::build_client_envelope(
             &id_gen,
-            v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+            v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
                 runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
             }),
         );
         conn.send_v3_envelope(&env).await?;
 
-        // Wait for RuntimeTerminated or Error.
+        // Wait for WorkspaceTerminated or Error.
         let resp = recv_v3_response(&mut conn).await?;
         match resp.payload {
-            Some(v3::server_envelope::Payload::RuntimeTerminated(_)) => {
-                println!("Runtime terminated.");
+            Some(v3::server_envelope::Payload::WorkspaceTerminated(_)) => {
+                println!("Workspace terminated.");
             }
             Some(v3::server_envelope::Payload::Error(e)) => {
                 eprintln!("Error: {}", e.message);
@@ -926,7 +926,7 @@ mod tests {
     #[test]
     fn global_allocator_is_mimalloc() {
         // Confirm the binary's global allocator is mimalloc. The type assertion
-        // is a compile-time guarantee; the allocation exercises it at runtime.
+        // is a compile-time guarantee; the allocation exercises it at workspace.
         fn assert_mimalloc(_: &mimalloc::MiMalloc) {}
         assert_mimalloc(&GLOBAL);
         let v: Vec<u8> = vec![0u8; 4096];
@@ -942,7 +942,7 @@ mod tests {
             "rttx-server-cli",
             env!("CARGO_PKG_VERSION"),
             &[
-                v3::Capability::CoreRuntimeLifecycle,
+                v3::Capability::CoreWorkspaceLifecycle,
                 v3::Capability::CorePaneLifecycle,
                 v3::Capability::CoreTerminalIo,
                 v3::Capability::CoreTerminalModes,

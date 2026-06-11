@@ -41,13 +41,13 @@ pub fn tracking_value_from_mouse_mode(mode: v3::MouseMode) -> u16 {
 pub fn build_terminal_mode_changed(
     runtime_id: uuid::Uuid,
     pane_id: uuid::Uuid,
-    runtime_revision: u64,
+    workspace_revision: u64,
     modes: v3::TerminalModeState,
 ) -> v3::TerminalModeChanged {
     v3::TerminalModeChanged {
         runtime_id: crate::uuid_to_bytes(runtime_id),
         pane_id: crate::uuid_to_bytes(pane_id),
-        runtime_revision,
+        workspace_revision,
         modes: Some(modes),
     }
 }
@@ -57,11 +57,11 @@ pub fn build_terminal_mode_changed(
 pub fn build_mode_changed_envelope(
     runtime_id: uuid::Uuid,
     pane_id: uuid::Uuid,
-    runtime_revision: u64,
+    workspace_revision: u64,
     modes: v3::TerminalModeState,
 ) -> v3::ServerEnvelope {
     crate::v3_envelope::build_push_envelope(v3::server_envelope::Payload::TerminalModeChanged(
-        build_terminal_mode_changed(runtime_id, pane_id, runtime_revision, modes),
+        build_terminal_mode_changed(runtime_id, pane_id, workspace_revision, modes),
     ))
 }
 
@@ -193,7 +193,7 @@ mod tests {
         let msg = build_terminal_mode_changed(rt, pn, 42, modes);
         assert_eq!(msg.runtime_id, uuid_to_bytes(rt));
         assert_eq!(msg.pane_id, uuid_to_bytes(pn));
-        assert_eq!(msg.runtime_revision, 42);
+        assert_eq!(msg.workspace_revision, 42);
         assert_eq!(msg.modes, Some(modes));
     }
 
@@ -267,7 +267,7 @@ mod tests {
             Some(v3::server_envelope::Payload::TerminalModeChanged(ref changed)) => {
                 assert_eq!(changed.runtime_id, uuid_to_bytes(rt));
                 assert_eq!(changed.pane_id, uuid_to_bytes(pn));
-                assert_eq!(changed.runtime_revision, 7);
+                assert_eq!(changed.workspace_revision, 7);
                 assert_eq!(changed.modes, Some(modes));
             }
             _ => panic!("expected TerminalModeChanged payload"),

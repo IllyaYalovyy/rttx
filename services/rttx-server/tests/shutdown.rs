@@ -19,16 +19,16 @@ async fn shutdown_stops_server_and_persists_state() {
     // Create a persistent session so there is state worth persisting.
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "persist-me".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let resp = client.recv().await;
     assert!(
-        matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeCreated(_))),
-        "expected RuntimeCreated, got {resp:?}"
+        matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceCreated(_))),
+        "expected WorkspaceCreated, got {resp:?}"
     );
 
     // Send shutdown.
@@ -46,18 +46,18 @@ async fn shutdown_stops_server_and_persists_state() {
 
     assert!(result.is_ok(), "server returned error: {result:?}");
 
-    // Verify state was persisted to disk (v2 per-runtime files).
+    // Verify state was persisted to disk (v2 per-workspace files).
     let state_dir = tmp.path().join("state/rttx/daemon");
     let index_path = state_dir.join("daemon.json");
     assert!(index_path.exists(), "v2 daemon index was not written on shutdown");
 
-    let runtimes_dir = state_dir.join("runtimes");
+    let runtimes_dir = state_dir.join("workspaces");
     let mut found = false;
     if runtimes_dir.exists() {
         for entry in std::fs::read_dir(&runtimes_dir).unwrap().flatten() {
-            let runtime_json = entry.path().join("runtime.json");
-            if runtime_json.exists() {
-                let contents = std::fs::read_to_string(&runtime_json).unwrap();
+            let workspace_json = entry.path().join("workspace.json");
+            if workspace_json.exists() {
+                let contents = std::fs::read_to_string(&workspace_json).unwrap();
                 if contents.contains("persist-me") {
                     found = true;
                     break;
@@ -65,7 +65,7 @@ async fn shutdown_stops_server_and_persists_state() {
             }
         }
     }
-    assert!(found, "persisted v2 state does not contain the runtime we created");
+    assert!(found, "persisted v2 state does not contain the workspace we created");
 }
 
 #[tokio::test]

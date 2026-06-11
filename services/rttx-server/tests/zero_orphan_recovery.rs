@@ -12,7 +12,7 @@
 //!
 //! 1. every pane keeps its `PaneId` (the reattach snapshot tree is identical);
 //! 2. each pane's history, scrollback, and screen snapshot survive on disk;
-//! 3. **no orphaned state is ever produced** — exactly one runtime directory
+//! 3. **no orphaned state is ever produced** — exactly one workspace directory
 //!    exists and the `.orphans/` sweep target is never populated, because
 //!    nothing is ever left unreferenced.
 
@@ -45,12 +45,12 @@ fn leaf_ids(node: &v3::PaneTreeNode) -> Vec<Vec<u8>> {
     out
 }
 
-/// Names of the runtime directories under `runtimes/`, excluding the
+/// Names of the workspace directories under `workspaces/`, excluding the
 /// `.orphans/` sweep target, which is reported separately.
 fn runtime_dir_names(state_dir: &Path) -> Vec<String> {
-    let runtimes = state_dir.join("runtimes");
+    let workspaces = state_dir.join("workspaces");
     let mut names = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&runtimes) else { return names };
+    let Ok(entries) = std::fs::read_dir(&workspaces) else { return names };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name != ".orphans" {
@@ -63,7 +63,7 @@ fn runtime_dir_names(state_dir: &Path) -> Vec<String> {
 /// Number of entries currently parked in the `.orphans/` sweep target. Zero
 /// proves nothing was ever left unreferenced for the sweep to relocate.
 fn orphan_count(state_dir: &Path) -> usize {
-    let orphans = state_dir.join("runtimes/.orphans");
+    let orphans = state_dir.join("workspaces/.orphans");
     std::fs::read_dir(&orphans).map_or(0, |d| d.flatten().count())
 }
 
@@ -78,12 +78,12 @@ async fn poll_until(deadline: tokio::time::Instant, mut cond: impl FnMut() -> bo
 }
 
 /// Create N panes (1 + splits), run a unique marker command in each, and return
-/// the runtime id plus the per-pane (`pane_id`, marker) pairs.
+/// the workspace id plus the per-pane (`pane_id`, marker) pairs.
 async fn build_workspace_with_markers(
     client: &mut TestClient,
     pane_count: usize,
 ) -> (Vec<u8>, Vec<(Vec<u8>, String)>) {
-    let runtime_id = create_runtime(client, "zero-orphan", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(client, "zero-orphan", v3::WorkspacePolicy::Persistent).await;
     attach_rw(client, &runtime_id).await;
 
     let first = create_pane(client, &runtime_id).await;
@@ -135,11 +135,11 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
         (runtime_id, markers) = build_workspace_with_markers(&mut client, PANE_COUNT).await;
         original_ids = markers.iter().map(|(id, _)| id.clone()).collect();
 
-        let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+        let workspace_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
 
         // Wait for the metadata + per-pane durable artifacts to land. The
-        // runtime is dirty after creation/splits/input, so the next
-        // persistence tick writes runtime.json, screen snapshots, and
+        // workspace is dirty after creation/splits/input, so the next
+        // persistence tick writes workspace.json, screen snapshots, and
         // scrollback for every pane.
         wait_for_state_containing(tmp.path(), "zero-orphan", Duration::from_secs(10)).await;
 
@@ -148,14 +148,17 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
             markers.iter().all(|(pane, marker)| {
                 let pane_uuid = rttx_proto::bytes_to_uuid(pane).unwrap();
                 let hist =
-                    rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+                    rttx_server::state::layout::history_file(&state_dir, workspace_uuid, pane_uuid);
                 let screen = rttx_server::state::layout::screen_snapshot(
                     &state_dir,
-                    runtime_uuid,
+                    workspace_uuid,
                     pane_uuid,
                 );
-                let scroll =
-                    rttx_server::state::layout::scrollback_log(&state_dir, runtime_uuid, pane_uuid);
+                let scroll = rttx_server::state::layout::scrollback_log(
+                    &state_dir,
+                    workspace_uuid,
+                    pane_uuid,
+                );
                 std::fs::read_to_string(&hist).unwrap_or_default().contains(marker)
                     && screen.exists()
                     && scroll.exists()
@@ -169,7 +172,7 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 
-    let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+    let workspace_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
 
     // Phase 2: repeated crash/restart cycles. Each cycle must restore identity
     // and durable state and must never create an orphan.
@@ -178,14 +181,18 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        // (c) No orphaned state: exactly one runtime dir, empty `.orphans/`.
+        // (c) No orphaned state: exactly one workspace dir, empty `.orphans/`.
         let dirs = runtime_dir_names(&state_dir);
         assert_eq!(
             dirs.len(),
             1,
-            "cycle {cycle}: exactly one runtime directory must exist, found {dirs:?}"
+            "cycle {cycle}: exactly one workspace directory must exist, found {dirs:?}"
         );
-        assert_eq!(dirs[0], runtime_uuid.to_string(), "cycle {cycle}: runtime dir id is stable");
+        assert_eq!(
+            dirs[0],
+            workspace_uuid.to_string(),
+            "cycle {cycle}: workspace dir id is stable"
+        );
         assert_eq!(
             orphan_count(&state_dir),
             0,
@@ -206,11 +213,11 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
         for (pane, marker) in &markers {
             let pane_uuid = rttx_proto::bytes_to_uuid(pane).unwrap();
             let hist =
-                rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+                rttx_server::state::layout::history_file(&state_dir, workspace_uuid, pane_uuid);
             let screen =
-                rttx_server::state::layout::screen_snapshot(&state_dir, runtime_uuid, pane_uuid);
+                rttx_server::state::layout::screen_snapshot(&state_dir, workspace_uuid, pane_uuid);
             let scroll =
-                rttx_server::state::layout::scrollback_log(&state_dir, runtime_uuid, pane_uuid);
+                rttx_server::state::layout::scrollback_log(&state_dir, workspace_uuid, pane_uuid);
             assert!(
                 std::fs::read_to_string(&hist).unwrap_or_default().contains(marker),
                 "cycle {cycle}: history for pane must survive, expected {marker} in {}",
@@ -228,7 +235,7 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
             );
         }
 
-        // Let the reconstructed runtime re-persist (it is dirty after reattach)
+        // Let the reconstructed workspace re-persist (it is dirty after reattach)
         // so the next cycle observes a fully written state dir, then crash.
         wait_for_state_containing(tmp.path(), "zero-orphan", Duration::from_secs(10)).await;
         handle.abort();

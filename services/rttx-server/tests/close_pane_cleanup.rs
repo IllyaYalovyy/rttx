@@ -48,7 +48,7 @@ async fn closing_a_pane_removes_only_its_durable_state() {
     client.handshake().await;
 
     let runtime_id =
-        create_runtime(&mut client, "close-cleanup", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut client, "close-cleanup", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
 
     let keep = create_pane(&mut client, &runtime_id).await;
@@ -65,7 +65,7 @@ async fn closing_a_pane_removes_only_its_durable_state() {
         send_input(&mut client, &runtime_id, pane, b"true\n").await;
     }
 
-    let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+    let workspace_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
     let keep_uuid = rttx_proto::bytes_to_uuid(&keep).unwrap();
     let close_uuid = rttx_proto::bytes_to_uuid(&close).unwrap();
 
@@ -73,8 +73,8 @@ async fn closing_a_pane_removes_only_its_durable_state() {
     wait_for_state_containing(tmp.path(), "close-cleanup", Duration::from_secs(10)).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let both_durable = poll_until(deadline, || {
-        pane_artifacts_present(&state_dir, runtime_uuid, keep_uuid)
-            && pane_artifacts_present(&state_dir, runtime_uuid, close_uuid)
+        pane_artifacts_present(&state_dir, workspace_uuid, keep_uuid)
+            && pane_artifacts_present(&state_dir, workspace_uuid, close_uuid)
     })
     .await;
     assert!(both_durable, "both panes' artifacts must reach disk before close");
@@ -84,7 +84,8 @@ async fn closing_a_pane_removes_only_its_durable_state() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let closed_cleaned =
-        poll_until(deadline, || pane_artifacts_absent(&state_dir, runtime_uuid, close_uuid)).await;
+        poll_until(deadline, || pane_artifacts_absent(&state_dir, workspace_uuid, close_uuid))
+            .await;
     assert!(
         closed_cleaned,
         "closed pane's history/scrollback/screen must be removed by close-driven cleanup"
@@ -92,7 +93,7 @@ async fn closing_a_pane_removes_only_its_durable_state() {
 
     // The surviving pane keeps every durable artifact.
     assert!(
-        pane_artifacts_present(&state_dir, runtime_uuid, keep_uuid),
+        pane_artifacts_present(&state_dir, workspace_uuid, keep_uuid),
         "surviving pane's durable state must be untouched by closing a sibling"
     );
 }

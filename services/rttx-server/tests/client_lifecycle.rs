@@ -28,15 +28,15 @@ async fn reconnect_restores_scrollback() {
         // Create session.
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "lifecycle-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
         runtime_id = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         // Create pane (spawns PTY).
@@ -60,9 +60,9 @@ async fn reconnect_restores_scrollback() {
         // Attach to receive deltas.
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -98,28 +98,28 @@ async fn reconnect_restores_scrollback() {
         // List sessions — should find our session.
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1, "should have exactly 1 session");
-        assert_eq!(runtimes[0].name, "lifecycle-test");
-        assert_eq!(runtimes[0].id, runtime_id, "session ID should match");
+        assert_eq!(workspaces.len(), 1, "should have exactly 1 session");
+        assert_eq!(workspaces[0].name, "lifecycle-test");
+        assert_eq!(workspaces[0].id, runtime_id, "session ID should match");
 
         // Attach — should get snapshot with scrollback.
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
         let snapshot = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => s,
             other => panic!("expected Snapshot, got {other:?}"),
         };
 
@@ -143,7 +143,7 @@ async fn reconnect_restores_scrollback() {
 /// Verify that listing sessions after disconnect shows the correct count
 /// and that creating a second session doesn't duplicate the first.
 #[tokio::test]
-async fn runtime_count_stable_across_reconnects() {
+async fn workspace_count_stable_across_reconnects() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -153,13 +153,13 @@ async fn runtime_count_stable_across_reconnects() {
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "stable-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
-        let _ = c.recv().await; // RuntimeCreated
+        let _ = c.recv().await; // WorkspaceCreated
     }
 
     // Second client: list — should see exactly 1.
@@ -168,15 +168,15 @@ async fn runtime_count_stable_across_reconnects() {
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1, "should still have exactly 1 session");
-        assert_eq!(runtimes[0].name, "stable-test");
+        assert_eq!(workspaces.len(), 1, "should still have exactly 1 session");
+        assert_eq!(workspaces[0].name, "stable-test");
     }
 
     // Third client: list again — still 1.
@@ -185,21 +185,21 @@ async fn runtime_count_stable_across_reconnects() {
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1, "reconnecting should not create new sessions");
+        assert_eq!(workspaces.len(), 1, "reconnecting should not create new sessions");
     }
 }
 
 /// Full restart cycle: create session, kill server, restart, verify
 /// session count is stable and scrollback is present.
 #[tokio::test]
-async fn restart_preserves_runtime_count_and_scrollback() {
+async fn restart_preserves_workspace_count_and_scrollback() {
     let tmp = tempfile::TempDir::new().unwrap();
 
     let runtime_id;
@@ -212,15 +212,15 @@ async fn restart_preserves_runtime_count_and_scrollback() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "restart-stable".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
         runtime_id = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         c.send(&v3::ClientEnvelope {
@@ -242,9 +242,9 @@ async fn restart_preserves_runtime_count_and_scrollback() {
 
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -277,27 +277,27 @@ async fn restart_preserves_runtime_count_and_scrollback() {
         // List — should have exactly 1 session.
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         })
         .await;
-        let runtimes = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1, "restart should preserve exactly 1 session");
-        assert_eq!(runtimes[0].id, runtime_id, "session ID should survive restart");
+        assert_eq!(workspaces.len(), 1, "restart should preserve exactly 1 session");
+        assert_eq!(workspaces[0].id, runtime_id, "session ID should survive restart");
 
         // Attach and check scrollback.
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
         let snapshot = match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => s,
             other => panic!("expected Snapshot, got {other:?}"),
         };
         assert!(!snapshot.panes.is_empty(), "should have panes after restart");
