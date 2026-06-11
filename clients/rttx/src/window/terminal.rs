@@ -1,5 +1,17 @@
 use super::*;
 
+/// Map a client split orientation to the wire split axis (RFC-031 §5).
+///
+/// This is the inverse of the daemon-tree consumer's `orientation_from_axis`,
+/// so a split sent to the daemon round-trips through the authoritative tree
+/// with its orientation preserved when the client later adopts that tree.
+const fn orientation_to_axis(orientation: SplitOrientation) -> i32 {
+    match orientation {
+        SplitOrientation::Vertical => rttx_proto::v3::PaneSplitAxis::Vertical as i32,
+        SplitOrientation::Horizontal => rttx_proto::v3::PaneSplitAxis::Horizontal as i32,
+    }
+}
+
 impl Window {
     pub(super) fn materialize_terminal(
         &self,
@@ -327,11 +339,20 @@ impl Window {
                     && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
                 {
                     let size = self.persistent_terminal_size(terminal_uuid);
-                    manager.create_pane(
+                    let target_pane_id = session_state
+                        .runtime
+                        .pane_bindings
+                        .get(terminal_uuid)
+                        .cloned()
+                        .unwrap_or_else(|| terminal_uuid.to_string());
+                    manager.split_pane(
                         &session_uuid,
                         &session_state.runtime.endpoint,
                         runtime_id,
+                        &target_pane_id,
                         &new_terminal_uuid,
+                        orientation_to_axis(orientation),
+                        0.5,
                         source_cwd,
                         adw::StyleManager::default().is_dark(),
                         size,
@@ -419,11 +440,20 @@ impl Window {
             && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
         {
             let size = self.persistent_terminal_size(terminal_uuid);
-            manager.create_pane(
+            let target_pane_id = session_state
+                .runtime
+                .pane_bindings
+                .get(terminal_uuid)
+                .cloned()
+                .unwrap_or_else(|| terminal_uuid.to_string());
+            manager.split_pane(
                 &session_uuid,
                 &session_state.runtime.endpoint,
                 runtime_id,
+                &target_pane_id,
                 &new_terminal_uuid,
+                orientation_to_axis(orientation),
+                0.5,
                 source_cwd,
                 adw::StyleManager::default().is_dark(),
                 size,
@@ -462,12 +492,8 @@ impl Window {
                 state.workspaces.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
             let Some(idx) = workspace_idx else { return };
 
-            if state.workspaces[idx].uses_managed_runtime()
-                && state.workspaces[idx].layout.terminal_count() > 1
-                && let Some(runtime_id) = state.workspaces[idx].runtime.runtime_id.clone()
-                && let Some(runtime_pane_id) =
-                    state.workspaces[idx].runtime.pane_bindings.get(terminal_uuid).cloned()
-                && runtime_pane_id != terminal_uuid
+            if let Some((runtime_id, runtime_pane_id)) =
+                state.workspaces[idx].managed_close_target(terminal_uuid)
             {
                 let workspace_id = state.workspaces[idx].uuid.clone();
                 let endpoint = state.workspaces[idx].runtime.endpoint.clone();

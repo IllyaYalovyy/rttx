@@ -191,3 +191,77 @@ fn attach_adopts_server_tree_through_the_window_state_flow() {
     assert_eq!(transition.pane_snapshot_restores.len(), 2);
     assert_eq!(rebuilt.active_terminal_uuid.as_deref(), Some(pane_b.to_string().as_str()));
 }
+
+/// Reproduces the CI count-drift scenario at the state-machine level: adopt a
+/// 2-pane split, close one pane, then reconnect to a 1-pane daemon tree. The
+/// visible pane count must stay at one (no drift).
+#[test]
+fn close_after_adopt_then_reconnect_keeps_single_pane() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::{WorkspacePolicy, WorkspaceRuntime};
+    use rttx::workspace::{WindowState, WorkspaceState};
+
+    let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+    let mut session =
+        WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
+    session.uuid = "ws-1".into();
+    session.runtime = WorkspaceRuntime::managed_local(
+        WorkspacePolicy::Persistent,
+        &session.layout.terminal_uuids(),
+    );
+    session.runtime.runtime_id = Some(runtime_id.into());
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
+
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    let rt_bytes = rttx_proto::uuid_to_bytes(Uuid::parse_str(runtime_id).unwrap());
+
+    // First reconnect after a split: adopt H(A, B) -> two panes.
+    let mut snap = snapshot_with_tree(Some(pane_tree_split(
+        v3::PaneSplitAxis::Horizontal,
+        0.5,
+        pane_tree_leaf(a),
+        pane_tree_leaf(b),
+    )));
+    snap.runtime_id = rt_bytes.clone();
+    snap.default_active_pane_id = rttx_proto::uuid_to_bytes(a);
+    let _ = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+        workspace_id: "ws-1".into(),
+        runtime_id: runtime_id.into(),
+        snapshot: snap,
+    });
+    assert_eq!(
+        state.workspaces[0].layout.terminal_uuids().len(),
+        2,
+        "two panes after adopting split"
+    );
+
+    // Close pane A.
+    let _ = state.reconcile_endpoint_event(&EndpointEvent::PaneClosed {
+        workspace_id: "ws-1".into(),
+        layout_terminal_uuid: a.to_string(),
+        runtime_id: runtime_id.into(),
+        runtime_pane_id: a.to_string(),
+    });
+    assert_eq!(
+        state.workspaces[0].layout.terminal_uuids(),
+        vec![b.to_string()],
+        "one pane after close"
+    );
+
+    // Second reconnect: the daemon tree is now just [B]. Adopting it must not
+    // resurrect the closed pane.
+    let mut snap2 = snapshot_with_tree(Some(pane_tree_leaf(b)));
+    snap2.runtime_id = rt_bytes;
+    snap2.default_active_pane_id = rttx_proto::uuid_to_bytes(b);
+    let _ = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+        workspace_id: "ws-1".into(),
+        runtime_id: runtime_id.into(),
+        snapshot: snap2,
+    });
+    assert_eq!(
+        state.workspaces[0].layout.terminal_uuids(),
+        vec![b.to_string()],
+        "still one pane after the second reconnect"
+    );
+}
