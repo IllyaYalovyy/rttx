@@ -1437,6 +1437,10 @@ impl Server {
         }
         let revision = rt.revision();
         let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+        // Capture the fan-out set before releasing the workspace lock so the
+        // close delta can reach every *other* attached client (RFC-031 §5):
+        // their view must collapse the tree when a peer closes a pane.
+        let attached = rt.attached_clients.keys().copied().collect::<Vec<_>>();
         drop(rt);
         s.pty_writers.remove(&pane_id);
         if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
@@ -1445,14 +1449,13 @@ impl Server {
         // The pane left the tree: sweep its durable artifacts (RFC-031 §8).
         crate::state::cleanup::remove_pane_state_background(&s.os.state_dir(), runtime_id, pane_id);
         tracing::info!("Pane {} closed in workspace {workspace_label}", short_id(pane_id));
-        Some(rttx_proto::v3_envelope::build_response_envelope(
-            request_id,
-            v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
-                runtime_id: uuid_to_bytes(runtime_id),
-                pane_id: uuid_to_bytes(pane_id),
-                workspace_revision: revision,
-            }),
-        ))
+        let closed = rttx_proto::v3_tree::build_pane_closed(runtime_id, pane_id, revision);
+        s.broadcast_to_clients(
+            attached.iter().copied(),
+            Some(client_id),
+            &rttx_proto::v3_tree::build_pane_closed_push(closed.clone()),
+        );
+        Some(rttx_proto::v3_tree::build_pane_closed_response(request_id, closed))
     }
 
     async fn handle_v3_terminal_input(

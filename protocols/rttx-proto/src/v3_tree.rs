@@ -137,6 +137,35 @@ pub fn build_focus_changed_push(changed: v3::FocusChanged) -> v3::ServerEnvelope
     crate::v3_envelope::build_push_envelope(v3::server_envelope::Payload::FocusChanged(changed))
 }
 
+/// Build a `PaneClosed` tree-delta event.
+#[must_use]
+pub fn build_pane_closed(
+    runtime_id: uuid::Uuid,
+    pane_id: uuid::Uuid,
+    workspace_revision: u64,
+) -> v3::PaneClosed {
+    v3::PaneClosed {
+        runtime_id: crate::uuid_to_bytes(runtime_id),
+        pane_id: crate::uuid_to_bytes(pane_id),
+        workspace_revision,
+    }
+}
+
+/// Build a `ServerEnvelope` response carrying a `PaneClosed`.
+#[must_use]
+pub fn build_pane_closed_response(request_id: u64, closed: v3::PaneClosed) -> v3::ServerEnvelope {
+    crate::v3_envelope::build_response_envelope(
+        request_id,
+        v3::server_envelope::Payload::PaneClosed(closed),
+    )
+}
+
+/// Build a `ServerEnvelope` push event carrying a `PaneClosed`.
+#[must_use]
+pub fn build_pane_closed_push(closed: v3::PaneClosed) -> v3::ServerEnvelope {
+    crate::v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneClosed(closed))
+}
+
 /// Decode a repeated `PaneTreeSide` path into a typed list, dropping any
 /// `UNSPECIFIED` or out-of-range entries (which never address a real split
 /// branch).
@@ -257,6 +286,26 @@ mod tests {
         };
         assert_eq!(f.pane_id, uuid_to_bytes(p));
         assert_eq!(f.workspace_revision, 5);
+    }
+
+    #[test]
+    fn pane_closed_response_is_addressed_not_a_push() {
+        let p = pid();
+        let env = build_pane_closed_response(7, build_pane_closed(pid(), p, 4));
+        assert_eq!(env.request_id, 7);
+        assert!(!crate::v3_envelope::is_push_event(&env));
+        let Some(v3::server_envelope::Payload::PaneClosed(c)) = env.payload else {
+            panic!("expected PaneClosed");
+        };
+        assert_eq!(c.pane_id, uuid_to_bytes(p));
+        assert_eq!(c.workspace_revision, 4);
+    }
+
+    #[test]
+    fn pane_closed_push_has_zero_request_id() {
+        let env = build_pane_closed_push(build_pane_closed(pid(), pid(), 9));
+        assert_eq!(env.request_id, 0);
+        assert!(crate::v3_envelope::is_push_event(&env));
     }
 
     #[test]
