@@ -61,7 +61,7 @@ impl Pty {
             // Spawn as a login shell (argv[0] = "-shell") so that
             // /etc/profile.d/ scripts are sourced. This is critical for
             // OSC 7 (CWD reporting) which is set up by vte-2.91.sh.
-            cmd = cmd.arg0(format!("-{}", basename(&config.command[0])));
+            cmd = cmd.arg0(login_shell_arg0(&config.command[0]));
         }
         let effective_cwd =
             config.cwd.as_ref().map(resolve_cwd).or_else(home_dir).filter(|p| p.is_dir());
@@ -142,6 +142,15 @@ fn default_shell() -> String {
 /// Extract the filename from a path (e.g., "/bin/bash" → "bash").
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Build the `argv[0]` rttx passes to spawn a shell as a login shell.
+///
+/// A leading `-` is the POSIX convention that tells the shell to source its
+/// login profile scripts (e.g. `/etc/profile.d/`), which rttx relies on for
+/// OSC 7 CWD reporting via `vte-2.91.sh`.
+fn login_shell_arg0(shell_path: &str) -> String {
+    format!("-{}", basename(shell_path))
 }
 
 /// Resolve the user's home directory from the environment.
@@ -306,16 +315,48 @@ mod tests {
             let config = PtyConfig::default();
             let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
             let pid = pty.pid().expect("child must be running");
-            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))
-                .expect("read /proc cmdline");
-            let argv0 = cmdline.split(|&b| b == 0).next().unwrap_or(&[]);
-            let argv0_str = std::str::from_utf8(argv0).expect("valid utf8");
+            // Reading /proc/<pid>/cmdline immediately after spawn is racy: the
+            // child may not have finished exec'ing, so cmdline can still show
+            // this test harness's argv[0]. Poll with a bounded deadline until
+            // the post-exec login-shell argv[0] (a leading '-') appears.
+            let argv0 = read_login_shell_argv0(pid).await;
             assert!(
-                argv0_str.starts_with('-'),
-                "default shell must be spawned as login shell (argv[0] starts with '-'), got: {argv0_str}"
+                argv0.starts_with('-'),
+                "default shell must be spawned as login shell (argv[0] starts with '-'), got: {argv0}"
             );
             pty.kill().expect("kill must succeed");
         });
+    }
+
+    /// Poll `/proc/<pid>/cmdline` until the child's post-exec `argv[0]` is
+    /// available (a leading `-` for a login shell), or a deadline elapses.
+    ///
+    /// This is a bounded deterministic wait: it returns as soon as the exec
+    /// completes rather than racing a fixed delay, and on the deadline it
+    /// returns the last value read so the caller's assertion reports it.
+    async fn read_login_shell_argv0(pid: u32) -> String {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = String::new();
+        loop {
+            if let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+                let argv0 = cmdline.split(|&b| b == 0).next().unwrap_or(&[]);
+                last = String::from_utf8_lossy(argv0).into_owned();
+                if last.starts_with('-') {
+                    return last;
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return last;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
+    fn login_shell_arg0_prefixes_basename_with_dash() {
+        assert_eq!(login_shell_arg0("/bin/bash"), "-bash");
+        assert_eq!(login_shell_arg0("/usr/local/bin/zsh"), "-zsh");
+        assert_eq!(login_shell_arg0("sh"), "-sh");
     }
 
     #[test]
