@@ -1073,6 +1073,55 @@ async fn terminate_runtime_removes_state_directory() {
     assert!(!dir.exists());
 }
 
+#[tokio::test]
+#[traced_test]
+async fn close_pane_removes_its_durable_state() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let os = temp_os(tmp.path());
+    let state_dir = os.state_dir();
+    let metrics = test_metrics();
+    let mut server = Server::new(Box::new(os), metrics.clone(), test_ring());
+
+    // Runtime with a single pane, owned by a read-write client.
+    let mut rt = Runtime::new("close-cleanup".into());
+    let runtime_id = rt.id;
+    let pane = Pane::new(Uuid::new_v4(), 80, 24);
+    let pane_id = pane.id;
+    rt.add_pane(pane);
+    let client_id = Uuid::new_v4();
+    let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
+    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
+
+    // Seed the pane's durable artifacts on disk.
+    let screen = crate::state::layout::screen_snapshot(&state_dir, runtime_id, pane_id);
+    let scroll = crate::state::layout::scrollback_log(&state_dir, runtime_id, pane_id);
+    let hist = crate::state::layout::history_file(&state_dir, runtime_id, pane_id);
+    for f in [&screen, &scroll, &hist] {
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, b"x").unwrap();
+    }
+
+    let server = Arc::new(Mutex::new(server));
+    let req = rttx_proto::v3::ClosePane {
+        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+        pane_id: rttx_proto::uuid_to_bytes(pane_id),
+    };
+    let resp = Server::handle_v3_close_pane(&server, client_id, 1, req, &metrics).await;
+    assert!(
+        matches!(
+            resp.and_then(|e| e.payload),
+            Some(rttx_proto::v3::server_envelope::Payload::PaneClosed(_))
+        ),
+        "ClosePane must succeed for the owning client"
+    );
+
+    // The close-driven cleanup runs in the background.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!screen.exists(), "screen snapshot must be removed when the pane is closed");
+    assert!(!scroll.exists(), "scrollback log must be removed when the pane is closed");
+    assert!(!hist.exists(), "history file must be removed when the pane is closed");
+}
+
 #[test]
 #[traced_test]
 fn fresh_start_log_includes_state_directory_path() {

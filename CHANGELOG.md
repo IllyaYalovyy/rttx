@@ -41,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   migration path. The obsolete `command_history` field is gone.
 - Replaced the bash-only `PROMPT_COMMAND=history -a` environment hack with
   shell-aware history initialization (see Added, RFC-031 Step 5).
+- Removed the startup orphan-sweep that masked the history-loss bug by
+  relocating unreferenced runtime directories into `runtimes/.orphans/`.
+  Cleanup is now explicit and close-driven, keyed on pane-tree membership: when
+  a pane is closed it leaves the tree and its durable artifacts (screen
+  snapshot, scrollback log, history file, shell-init dir) are removed
+  (RFC-031 Step 6).
 
 ## [0.9.0] - 2026-05-26
 
