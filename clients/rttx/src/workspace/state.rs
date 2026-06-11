@@ -191,6 +191,31 @@ impl WorkspaceState {
         self.active_terminal_uuid = self.layout.terminal_uuids().into_iter().next();
     }
 
+    /// Resolve where closing `terminal_uuid` must take effect.
+    ///
+    /// Returns `Some((runtime_id, runtime_pane_id))` when the close must be sent
+    /// to the daemon — a managed workspace with more than one pane whose target
+    /// is bound to a real daemon pane. Returns `None` when the close stays
+    /// client-local: an unmanaged workspace, the final pane (which closes the
+    /// whole workspace), or a pane still pending its daemon assignment.
+    ///
+    /// Critically this keys on pending state, **not** on whether the binding is
+    /// an identity map: once the client adopts the server tree (RFC-031), every
+    /// layout uuid equals its server pane id, so an identity binding is the
+    /// normal case for a live daemon pane and must still be closed remotely.
+    #[must_use]
+    pub fn managed_close_target(&self, terminal_uuid: &str) -> Option<(String, String)> {
+        if !self.uses_managed_runtime() || self.layout.terminal_count() <= 1 {
+            return None;
+        }
+        if self.runtime.is_layout_pane_pending(terminal_uuid) {
+            return None;
+        }
+        let runtime_id = self.runtime.runtime_id.clone()?;
+        let runtime_pane_id = self.runtime.pane_bindings.get(terminal_uuid).cloned()?;
+        Some((runtime_id, runtime_pane_id))
+    }
+
     pub fn replace_terminal_uuid(&mut self, old_uuid: &str, new_uuid: &str) -> bool {
         if old_uuid == new_uuid || !self.layout.replace_terminal_uuid(old_uuid, new_uuid) {
             return false;

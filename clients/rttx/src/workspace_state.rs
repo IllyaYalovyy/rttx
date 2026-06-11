@@ -877,6 +877,67 @@ mod tests {
         assert!(!session.runtime.is_layout_pane_pending(&left.to_string()));
     }
 
+    #[test]
+    fn adopted_pane_close_targets_the_daemon_not_local_only() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
+        // Regression for the close/reconnect drift: after adopting the server
+        // tree, layout uuids equal their server pane ids (identity bindings).
+        // Closing such a pane must still be sent to the daemon, otherwise the
+        // daemon keeps the pane and it resurrects on the next restart.
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let session = managed_session_with_runtime(
+            "ws-1",
+            "Workspace",
+            term("stale"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        let mut state = window_state(vec![session]);
+
+        let left = uuid::Uuid::new_v4();
+        let right = uuid::Uuid::new_v4();
+        let mut snap = snapshot(
+            runtime_id,
+            vec![
+                pane_snapshot(&left.to_string(), "l", "", b""),
+                pane_snapshot(&right.to_string(), "r", "", b""),
+            ],
+        );
+        snap.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(left),
+            pane_tree_leaf(right),
+        ));
+        state.apply_managed_workspace_opened("ws-1", runtime_id, &snap).expect("adopts tree");
+
+        let session = &state.workspaces[0];
+        assert_eq!(
+            session.managed_close_target(&left.to_string()),
+            Some((runtime_id.to_string(), left.to_string())),
+            "an adopted (identity-bound) pane must close on the daemon",
+        );
+    }
+
+    #[test]
+    fn pending_or_single_pane_close_stays_local() {
+        // A fresh managed workspace has placeholder (pending) bindings and no
+        // daemon runtime id yet: closes stay client-local.
+        let state =
+            window_state(vec![managed_session("ws-1", "Workspace", hsplit(term("a"), term("b")))]);
+        assert_eq!(
+            state.workspaces[0].managed_close_target("a"),
+            None,
+            "a pending/unbound pane closes locally",
+        );
+
+        // A single-pane workspace closes the whole workspace, not one pane.
+        let single = window_state(vec![managed_session("ws-2", "Workspace", term("only"))]);
+        assert_eq!(single.workspaces[0].managed_close_target("only"), None);
+    }
+
     fn pane_info(pane_id: &str, title: &str, cwd: &str) -> v3::PaneInfo {
         v3::PaneInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(pane_id).unwrap()),

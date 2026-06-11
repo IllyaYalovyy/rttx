@@ -492,12 +492,8 @@ impl Window {
                 state.workspaces.iter().position(|s| s.layout.contains_terminal(terminal_uuid));
             let Some(idx) = workspace_idx else { return };
 
-            if state.workspaces[idx].uses_managed_runtime()
-                && state.workspaces[idx].layout.terminal_count() > 1
-                && let Some(runtime_id) = state.workspaces[idx].runtime.runtime_id.clone()
-                && let Some(runtime_pane_id) =
-                    state.workspaces[idx].runtime.pane_bindings.get(terminal_uuid).cloned()
-                && runtime_pane_id != terminal_uuid
+            if let Some((runtime_id, runtime_pane_id)) =
+                state.workspaces[idx].managed_close_target(terminal_uuid)
             {
                 let workspace_id = state.workspaces[idx].uuid.clone();
                 let endpoint = state.workspaces[idx].runtime.endpoint.clone();
