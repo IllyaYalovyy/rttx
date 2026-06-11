@@ -1,5 +1,17 @@
 use super::*;
 
+/// Map a client split orientation to the wire split axis (RFC-031 §5).
+///
+/// This is the inverse of the daemon-tree consumer's `orientation_from_axis`,
+/// so a split sent to the daemon round-trips through the authoritative tree
+/// with its orientation preserved when the client later adopts that tree.
+const fn orientation_to_axis(orientation: SplitOrientation) -> i32 {
+    match orientation {
+        SplitOrientation::Vertical => rttx_proto::v3::PaneSplitAxis::Vertical as i32,
+        SplitOrientation::Horizontal => rttx_proto::v3::PaneSplitAxis::Horizontal as i32,
+    }
+}
+
 impl Window {
     pub(super) fn materialize_terminal(
         &self,
@@ -327,11 +339,20 @@ impl Window {
                     && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
                 {
                     let size = self.persistent_terminal_size(terminal_uuid);
-                    manager.create_pane(
+                    let target_pane_id = session_state
+                        .runtime
+                        .pane_bindings
+                        .get(terminal_uuid)
+                        .cloned()
+                        .unwrap_or_else(|| terminal_uuid.to_string());
+                    manager.split_pane(
                         &session_uuid,
                         &session_state.runtime.endpoint,
                         runtime_id,
+                        &target_pane_id,
                         &new_terminal_uuid,
+                        orientation_to_axis(orientation),
+                        0.5,
                         source_cwd,
                         adw::StyleManager::default().is_dark(),
                         size,
@@ -419,11 +440,20 @@ impl Window {
             && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
         {
             let size = self.persistent_terminal_size(terminal_uuid);
-            manager.create_pane(
+            let target_pane_id = session_state
+                .runtime
+                .pane_bindings
+                .get(terminal_uuid)
+                .cloned()
+                .unwrap_or_else(|| terminal_uuid.to_string());
+            manager.split_pane(
                 &session_uuid,
                 &session_state.runtime.endpoint,
                 runtime_id,
+                &target_pane_id,
                 &new_terminal_uuid,
+                orientation_to_axis(orientation),
+                0.5,
                 source_cwd,
                 adw::StyleManager::default().is_dark(),
                 size,

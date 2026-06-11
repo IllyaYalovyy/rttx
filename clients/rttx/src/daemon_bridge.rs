@@ -140,6 +140,22 @@ enum EndpointCommand {
         rows: u32,
         no_persist: bool,
     },
+    SplitPane {
+        workspace_id: String,
+        runtime_id: String,
+        /// Server pane id of the pane being split (the split target).
+        target_pane_id: String,
+        /// Client layout uuid of the new pane, bound to the server-minted id
+        /// once the daemon replies with the `PaneSplit` delta.
+        layout_terminal_uuid: String,
+        axis: i32,
+        ratio: f32,
+        cwd: Option<String>,
+        dark_background: bool,
+        cols: u32,
+        rows: u32,
+        no_persist: bool,
+    },
     ClosePane {
         workspace_id: String,
         runtime_id: String,
@@ -317,6 +333,43 @@ impl EndpointConnectionManager {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             layout_terminal_uuid: layout_terminal_uuid.to_string(),
+            cwd,
+            dark_background,
+            cols: initial_size.0,
+            rows: initial_size.1,
+            no_persist,
+        });
+    }
+
+    /// Split an existing pane inside an attached runtime (RFC-031 §5).
+    ///
+    /// Unlike [`create_pane`](Self::create_pane), this records the real split
+    /// structure in the daemon's authoritative tree: `target_pane_id` is the
+    /// server pane being split and `axis` is its orientation. The daemon mints
+    /// the new pane id and returns it in the `PaneSplit` delta, which binds the
+    /// `layout_terminal_uuid` exactly like a created pane.
+    #[allow(clippy::too_many_arguments)]
+    pub fn split_pane(
+        &self,
+        workspace_id: &str,
+        endpoint: &RuntimeEndpoint,
+        runtime_id: &str,
+        target_pane_id: &str,
+        layout_terminal_uuid: &str,
+        axis: i32,
+        ratio: f32,
+        cwd: Option<String>,
+        dark_background: bool,
+        initial_size: (u32, u32),
+        no_persist: bool,
+    ) {
+        let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::SplitPane {
+            workspace_id: workspace_id.to_string(),
+            runtime_id: runtime_id.to_string(),
+            target_pane_id: target_pane_id.to_string(),
+            layout_terminal_uuid: layout_terminal_uuid.to_string(),
+            axis,
+            ratio,
             cwd,
             dark_background,
             cols: initial_size.0,
@@ -815,6 +868,95 @@ impl EndpointActor {
                     Ok(response) => match response.payload {
                         Some(v3::server_envelope::Payload::PaneCreated(created)) => {
                             if let Ok(pane_id) = rttx_proto::bytes_to_uuid(&created.pane_id) {
+                                let _ = self.event_tx.try_send(EndpointEvent::PaneCreated {
+                                    workspace_id: workspace_id.clone(),
+                                    layout_terminal_uuid,
+                                    runtime_id,
+                                    runtime_pane_id: pane_id.to_string(),
+                                });
+                                self.emit_status(&workspace_id, ConnectionStatus::Connected);
+                            }
+                        }
+                        Some(v3::server_envelope::Payload::Error(e)) => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::CreatePane,
+                                &protocol_error_to_daemon(e),
+                            );
+                        }
+                        _ => {
+                            self.handle_command_error(
+                                &workspace_id,
+                                ManagerOperation::CreatePane,
+                                &DaemonError::UnexpectedMessage,
+                            );
+                        }
+                    },
+                    Err(error) => {
+                        self.handle_command_error(
+                            &workspace_id,
+                            ManagerOperation::CreatePane,
+                            &error,
+                        );
+                    }
+                }
+            }
+            EndpointCommand::SplitPane {
+                workspace_id,
+                runtime_id,
+                target_pane_id,
+                layout_terminal_uuid,
+                axis,
+                ratio,
+                cwd,
+                dark_background,
+                cols,
+                rows,
+                no_persist,
+            } => {
+                if let Err(problem) = self.ensure_connected(&workspace_id).await {
+                    if !problem.is_transient() {
+                        self.emit_error(
+                            &workspace_id,
+                            ManagerOperation::CreatePane,
+                            problem.clone(),
+                            problem.label(),
+                        );
+                    }
+                    return;
+                }
+
+                let Some(runtime_uuid) = parse_uuid(
+                    &workspace_id,
+                    ManagerOperation::CreatePane,
+                    &runtime_id,
+                    &self.event_tx,
+                ) else {
+                    return;
+                };
+                let Some(target_uuid) = parse_uuid(
+                    &workspace_id,
+                    ManagerOperation::CreatePane,
+                    &target_pane_id,
+                    &self.event_tx,
+                ) else {
+                    return;
+                };
+                let msg = v3::client_envelope::Command::SplitPane(build_split_pane_request(
+                    runtime_uuid,
+                    target_uuid,
+                    axis,
+                    ratio,
+                    cwd,
+                    dark_background,
+                    cols,
+                    rows,
+                    no_persist,
+                ));
+                match self.send_and_read(msg, false).await {
+                    Ok(response) => match response.payload {
+                        Some(v3::server_envelope::Payload::PaneSplit(split)) => {
+                            if let Ok(pane_id) = rttx_proto::bytes_to_uuid(&split.new_pane_id) {
                                 let _ = self.event_tx.try_send(EndpointEvent::PaneCreated {
                                     workspace_id: workspace_id.clone(),
                                     layout_terminal_uuid,
@@ -1871,6 +2013,35 @@ impl EndpointActor {
     }
 }
 
+/// Build the wire `SplitPane` request for a managed split (RFC-031 §5).
+///
+/// Pure mapping kept separate from the async command handler so the
+/// target/axis/ratio/no-persist encoding can be unit-tested.
+#[allow(clippy::too_many_arguments)]
+fn build_split_pane_request(
+    runtime_uuid: Uuid,
+    target_uuid: Uuid,
+    axis: i32,
+    ratio: f32,
+    cwd: Option<String>,
+    dark_background: bool,
+    cols: u32,
+    rows: u32,
+    no_persist: bool,
+) -> v3::SplitPane {
+    v3::SplitPane {
+        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+        target_pane_id: rttx_proto::uuid_to_bytes(target_uuid),
+        axis,
+        ratio,
+        cwd,
+        dark_background: Some(dark_background),
+        cols,
+        rows,
+        no_persist: if no_persist { Some(true) } else { None },
+    }
+}
+
 fn parse_uuid(
     workspace_id: &str,
     operation: ManagerOperation,
@@ -1905,6 +2076,47 @@ mod tests {
     use bytes::BytesMut;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::mpsc::error::TryRecvError;
+
+    #[test]
+    fn split_pane_request_carries_target_axis_ratio_and_persistence() {
+        let runtime = Uuid::new_v4();
+        let target = Uuid::new_v4();
+        let req = build_split_pane_request(
+            runtime,
+            target,
+            v3::PaneSplitAxis::Vertical as i32,
+            0.5,
+            None,
+            true,
+            80,
+            24,
+            false,
+        );
+        assert_eq!(req.runtime_id, rttx_proto::uuid_to_bytes(runtime));
+        // The split must target the server pane being split, not mint a fresh
+        // pane out of structure — this is the whole point of SplitPane vs
+        // CreatePane (RFC-031 §5).
+        assert_eq!(req.target_pane_id, rttx_proto::uuid_to_bytes(target));
+        assert_eq!(req.axis, v3::PaneSplitAxis::Vertical as i32);
+        assert!((req.ratio - 0.5).abs() < f32::EPSILON);
+        assert_eq!(req.dark_background, Some(true));
+        // A persistent pane omits the flag; a non-persistent one sets it.
+        assert_eq!(req.no_persist, None);
+
+        let ephemeral = build_split_pane_request(
+            runtime,
+            target,
+            v3::PaneSplitAxis::Horizontal as i32,
+            0.3,
+            None,
+            false,
+            0,
+            0,
+            true,
+        );
+        assert_eq!(ephemeral.axis, v3::PaneSplitAxis::Horizontal as i32);
+        assert_eq!(ephemeral.no_persist, Some(true));
+    }
 
     fn split_duplex_connection() -> ((DaemonReader, DaemonWriter), tokio::io::DuplexStream) {
         let (client, server) = tokio::io::duplex(4096);

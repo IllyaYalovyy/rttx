@@ -245,3 +245,67 @@ async fn single_client_pty_tracks_that_client_size() {
     let pane_snap = snapshot.panes.iter().find(|p| p.pane_id == pane).expect("pane present");
     assert_eq!((pane_snap.cols, pane_snap.rows), (100, 40));
 }
+
+/// Mirrors the GUI repro that exposed the client-as-view bug: split a pane,
+/// then split the *same* pane again on a different axis. The daemon tree must
+/// stay correctly nested — `outer(inner(a, c), b)` — instead of flattening into
+/// a row of three. (The client regression was sending `CreatePane` instead of
+/// `SplitPane`, so the daemon never learned the structure; this guards the
+/// daemon contract the pure-view client now depends on.)
+#[tokio::test]
+async fn nested_splits_keep_a_correctly_structured_tree() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    client.handshake().await;
+    let runtime_id = create_workspace(&mut client, "nested", v3::WorkspacePolicy::Persistent).await;
+    attach_rw(&mut client, &runtime_id).await;
+    let pane_a = create_pane(&mut client, &runtime_id).await;
+
+    // Split A horizontally -> B. Tree: H(A, B).
+    let pane_b = split_pane(&mut client, &runtime_id, &pane_a, v3::PaneSplitAxis::Horizontal, 0.5)
+        .await
+        .new_pane_id;
+    // Split A again, vertically -> C. Tree must nest: H(V(A, C), B).
+    let pane_c = split_pane(&mut client, &runtime_id, &pane_a, v3::PaneSplitAxis::Vertical, 0.5)
+        .await
+        .new_pane_id;
+
+    let snapshot = resync(&mut client, &runtime_id).await;
+    assert_eq!(
+        leaf_ids(snapshot.tree.as_ref().unwrap()).len(),
+        3,
+        "all three panes are present in the tree"
+    );
+
+    let root = root_split(&snapshot);
+    assert_eq!(
+        root.axis,
+        v3::PaneSplitAxis::Horizontal as i32,
+        "the outer split keeps the original horizontal axis, not a flattened row"
+    );
+
+    let first = root.first.expect("outer split has a first child");
+    let second = root.second.expect("outer split has a second child");
+
+    // One child is the lone leaf B; the other is the vertical split over {A, C}.
+    let first_is_split = matches!(first.node, Some(v3::pane_tree_node::Node::Split(_)));
+    let (nested, lone) = if first_is_split { (first, second) } else { (second, first) };
+
+    assert_eq!(leaf_ids(&lone), vec![pane_b.clone()], "the un-split branch is pane B");
+
+    let Some(v3::pane_tree_node::Node::Split(nested_split)) = nested.node.as_ref() else {
+        panic!("one child of the outer split must itself be a split, not a flat row");
+    };
+    assert_eq!(
+        nested_split.axis,
+        v3::PaneSplitAxis::Vertical as i32,
+        "the inner split keeps the vertical axis"
+    );
+    let mut nested_leaves = leaf_ids(&nested);
+    nested_leaves.sort();
+    let mut expected = vec![pane_a.clone(), pane_c.clone()];
+    expected.sort();
+    assert_eq!(nested_leaves, expected, "the inner split holds exactly A and C");
+}
