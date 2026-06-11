@@ -103,3 +103,91 @@ fn snapshot_with_tree_renders_full_layout() {
     expected.sort();
     assert_eq!(ids, expected);
 }
+
+fn pane_snapshot(pane_id: Uuid, title: &str) -> v3::PaneSnapshot {
+    v3::PaneSnapshot {
+        pane_id: rttx_proto::uuid_to_bytes(pane_id),
+        pane_output_seq: 0,
+        title: title.to_string(),
+        cwd: String::new(),
+        cols: 80,
+        rows: 24,
+        exit_status: None,
+        terminal_modes: None,
+        scrollback_tail: bytes::Bytes::new(),
+        total_scrollback_bytes: 0,
+        scrollback_complete: true,
+    }
+}
+
+/// The attach path (`reconcile_endpoint_event` → `WorkspaceOpened`) adopts the
+/// server tree wholesale: the client discards its own stale layout, renders the
+/// server pane ids, reports the discarded terminal for teardown, and — as a
+/// pure view — never asks the daemon to create panes to "match".
+#[test]
+fn attach_adopts_server_tree_through_the_window_state_flow() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::{WorkspacePolicy, WorkspaceRuntime};
+    use rttx::workspace::{WindowState, WorkspaceState};
+
+    let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+
+    // The client holds a stale single-pane layout with a client-minted id.
+    let mut session =
+        WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
+    session.uuid = "ws-1".into();
+    session.layout = LayoutNode::Terminal {
+        uuid: "stale-client-pane".into(),
+        profile: None,
+        cwd: None,
+        custom_title: None,
+    };
+    session.runtime = WorkspaceRuntime::managed_local(
+        WorkspacePolicy::Persistent,
+        &session.layout.terminal_uuids(),
+    );
+    session.runtime.runtime_id = Some(runtime_id.into());
+
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
+
+    // The daemon's authoritative tree: a horizontal split of two server panes.
+    let pane_a = Uuid::new_v4();
+    let pane_b = Uuid::new_v4();
+    let mut snapshot = snapshot_with_tree(Some(pane_tree_split(
+        v3::PaneSplitAxis::Horizontal,
+        0.5,
+        pane_tree_leaf(pane_a),
+        pane_tree_leaf(pane_b),
+    )));
+    snapshot.runtime_id = rttx_proto::uuid_to_bytes(Uuid::parse_str(runtime_id).unwrap());
+    snapshot.default_active_pane_id = rttx_proto::uuid_to_bytes(pane_b);
+    snapshot.panes = vec![pane_snapshot(pane_a, "Shell"), pane_snapshot(pane_b, "Logs")];
+
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
+        workspace_id: "ws-1".into(),
+        runtime_id: runtime_id.into(),
+        snapshot,
+    });
+
+    // The workspace is rebuilt with the server tree's structure.
+    assert_eq!(transition.rebuilt_workspaces.len(), 1);
+    let rebuilt = &transition.rebuilt_workspaces[0].session_state;
+    let mut ids = rebuilt.layout.terminal_uuids();
+    ids.sort();
+    let mut expected = vec![pane_a.to_string(), pane_b.to_string()];
+    expected.sort();
+    assert_eq!(ids, expected, "the layout adopts the server tree's pane ids");
+
+    // The stale client-owned pane is discarded and reported for widget teardown.
+    assert!(
+        transition.removed_layout_terminals.contains(&"stale-client-pane".to_string()),
+        "the stale client layout terminal is torn down",
+    );
+    // A pure view never asks the daemon to create panes to match.
+    assert!(transition.pane_create_requests.is_empty(), "pure view requests no pane creation");
+    assert!(transition.skipped_runtime_panes.is_empty());
+    // Pane content restores are addressed by the durable server pane id, and the
+    // active pane follows the server's fallback focus.
+    assert_eq!(transition.pane_snapshot_restores.len(), 2);
+    assert_eq!(rebuilt.active_terminal_uuid.as_deref(), Some(pane_b.to_string().as_str()));
+}
