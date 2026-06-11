@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use uuid::Uuid;
 
 use crate::pane_tree::{PaneId, WorkspaceTree};
-use crate::runtime::RuntimePolicy;
+use crate::workspace::WorkspacePolicy;
 
 // ── Schema version constants ────────────────────────────────────────
 
@@ -29,17 +29,17 @@ pub const SCREEN_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 
 // ── Top-level daemon index ──────────────────────────────────────────
 
-/// Server-level index listing all known runtime IDs (RFC-022 §1–§2).
+/// Server-level index listing all known workspace IDs (RFC-022 §1–§2).
 ///
 /// Stored at `<state_dir>/daemon.json`. Rewritten only when the set of
-/// runtime IDs changes, not on every serialization tick.
+/// workspace IDs changes, not on every serialization tick.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DaemonIndexV1 {
     /// Must be [`DAEMON_INDEX_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Informational server version that last wrote this file.
     pub server_version: String,
-    /// IDs of all runtimes managed by this daemon.
+    /// IDs of all workspaces managed by this daemon.
     pub runtime_ids: Vec<Uuid>,
     /// When this daemon index was first created.
     pub created_at: SystemTime,
@@ -49,7 +49,7 @@ pub struct DaemonIndexV1 {
 
 // ── Per-workspace file ──────────────────────────────────────────────
 
-/// Top-level wrapper stored in `<runtime_dir>/runtime.json` (RFC-031 §6).
+/// Top-level wrapper stored in `<runtime_dir>/workspace.json` (RFC-031 §6).
 ///
 /// Combines the durable spec — including the authoritative pane tree — with
 /// the semi-durable instance data.
@@ -60,7 +60,7 @@ pub struct WorkspaceFileV2 {
     /// Durable workspace specification.
     pub spec: WorkspaceSpecV2,
     /// Semi-durable instance data (bounded age, rebuilt on restart).
-    pub instance: RuntimeInstanceV1,
+    pub instance: WorkspaceInstanceV1,
 }
 
 /// Durable workspace specification — identity, policy, pane tree, and panes.
@@ -75,7 +75,7 @@ pub struct WorkspaceSpecV2 {
     /// Human-readable workspace name.
     pub name: String,
     /// Retention policy.
-    pub policy: RuntimePolicy,
+    pub policy: WorkspacePolicy,
     /// When this workspace was created.
     pub created_at: SystemTime,
     /// Authoritative pane-arrangement tree: structure, logical ratios, and the
@@ -91,10 +91,10 @@ pub struct WorkspaceSpecV2 {
 /// Written alongside the spec but considered bounded-age: the daemon
 /// rebuilds these on restart from the live process state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeInstanceV1 {
+pub struct WorkspaceInstanceV1 {
     /// Monotonic mutation counter.
     pub revision: u64,
-    /// When the runtime was last active (had attached clients or I/O).
+    /// When the workspace was last active (had attached clients or I/O).
     pub last_active_at: SystemTime,
     /// When screen snapshots were last flushed to disk.
     pub last_snapshot_at: SystemTime,
@@ -226,20 +226,20 @@ mod tests {
         (tree, vec![a, b])
     }
 
-    fn sample_runtime_spec() -> WorkspaceSpecV2 {
+    fn sample_workspace_spec() -> WorkspaceSpecV2 {
         let (tree, panes) = sample_tree_and_panes();
         WorkspaceSpecV2 {
             id: Uuid::new_v4(),
             name: "dev".into(),
-            policy: RuntimePolicy::Persistent,
+            policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
             panes,
         }
     }
 
-    fn sample_runtime_instance() -> RuntimeInstanceV1 {
-        RuntimeInstanceV1 {
+    fn sample_workspace_instance() -> WorkspaceInstanceV1 {
+        WorkspaceInstanceV1 {
             revision: 42,
             last_active_at: SystemTime::now(),
             last_snapshot_at: SystemTime::now(),
@@ -259,8 +259,8 @@ mod tests {
     fn sample_runtime_file() -> WorkspaceFileV2 {
         WorkspaceFileV2 {
             schema_version: RUNTIME_FILE_SCHEMA_VERSION,
-            spec: sample_runtime_spec(),
-            instance: sample_runtime_instance(),
+            spec: sample_workspace_spec(),
+            instance: sample_workspace_instance(),
         }
     }
 
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn workspace_spec_persists_tree_structure_and_ratios() {
-        let original = sample_runtime_spec();
+        let original = sample_workspace_spec();
         let json = serde_json::to_string_pretty(&original).unwrap();
         let recovered: WorkspaceSpecV2 = serde_json::from_str(&json).unwrap();
         // The durable tree — structure, ratios, and default-active — round-trips
@@ -389,7 +389,7 @@ mod tests {
     // ── Edge cases ──────────────────────────────────────────────────
 
     #[test]
-    fn daemon_index_with_no_runtimes() {
+    fn daemon_index_with_no_workspaces() {
         let index = DaemonIndexV1 {
             schema_version: DAEMON_INDEX_SCHEMA_VERSION,
             server_version: "0.4.0".into(),
@@ -403,11 +403,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_spec_with_no_panes() {
+    fn workspace_spec_with_no_panes() {
         let spec = WorkspaceSpecV2 {
             id: Uuid::new_v4(),
             name: "empty".into(),
-            policy: RuntimePolicy::Ephemeral,
+            policy: WorkspacePolicy::Ephemeral,
             created_at: SystemTime::now(),
             tree: WorkspaceTree::new(),
             panes: vec![],
@@ -416,7 +416,7 @@ mod tests {
         let recovered: WorkspaceSpecV2 = serde_json::from_str(&json).unwrap();
         assert!(recovered.panes.is_empty());
         assert!(recovered.tree.is_empty());
-        assert_eq!(recovered.policy, RuntimePolicy::Ephemeral);
+        assert_eq!(recovered.policy, WorkspacePolicy::Ephemeral);
     }
 
     #[test]
@@ -542,7 +542,7 @@ mod tests {
     fn workspace_spec_serialization_drops_legacy_fields() {
         // The clean break (RFC-031) removes `command_history` and the standalone
         // `active_pane_id`; the latter is subsumed by the tree's default-active.
-        let spec = sample_runtime_spec();
+        let spec = sample_workspace_spec();
         let json = serde_json::to_string(&spec).unwrap();
         assert!(!json.contains("command_history"), "command_history must be gone");
         assert!(!json.contains("active_pane_id"), "active_pane_id must be gone");

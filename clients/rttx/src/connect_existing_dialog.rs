@@ -31,15 +31,15 @@ pub struct RuntimeEntry {
     pub status_label: String,
 }
 
-/// Classify daemon runtimes into available/busy entries.
+/// Classify daemon workspaces into available/busy entries.
 ///
 /// `open_runtime_ids` contains runtime IDs already attached by this client.
 #[must_use]
-pub fn classify_runtimes(
-    runtimes: &[v3::RuntimeInfo],
+pub fn classify_workspaces(
+    workspaces: &[v3::WorkspaceInfo],
     open_runtime_ids: &[String],
 ) -> Vec<RuntimeEntry> {
-    runtimes
+    workspaces
         .iter()
         .filter_map(|info| {
             let id = rttx_proto::bytes_to_uuid(&info.id).ok()?.to_string();
@@ -81,7 +81,7 @@ pub fn matches_query(entry: &RuntimeEntry, query: &str) -> bool {
 }
 
 /// Show the Connect to Existing dialog for a specific host.
-pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
+pub fn show(window: &Window, host: &Host, workspaces: &[v3::WorkspaceInfo]) {
     let title = format!("Connect to Existing: {}", host.name);
     let dialog = adw::Dialog::builder()
         .title(&title)
@@ -92,7 +92,7 @@ pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
     let header = adw::HeaderBar::new();
 
     let search_entry = gtk4::SearchEntry::new();
-    search_entry.set_placeholder_text(Some("Search runtimes…"));
+    search_entry.set_placeholder_text(Some("Search workspaces…"));
     search_entry.set_margin_start(18);
     search_entry.set_margin_end(18);
     search_entry.set_margin_top(12);
@@ -121,16 +121,16 @@ pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
     dialog.set_child(Some(&toolbar_view));
 
     let open_runtime_ids = window.open_runtime_ids_for_endpoint(host);
-    let entries = classify_runtimes(runtimes, &open_runtime_ids);
+    let entries = classify_workspaces(workspaces, &open_runtime_ids);
 
-    populate_runtimes(&list_box, &entries, "", window, host, &dialog);
+    populate_workspaces(&list_box, &entries, "", window, host, &dialog);
 
     let win_for_search = window.clone();
     let host_for_search = host.clone();
     let dialog_for_search = dialog.clone();
     search_entry.connect_changed(move |entry| {
         let query = entry.text().to_string();
-        populate_runtimes(
+        populate_workspaces(
             &list_box,
             &entries,
             &query,
@@ -144,7 +144,7 @@ pub fn show(window: &Window, host: &Host, runtimes: &[v3::RuntimeInfo]) {
     search_entry.grab_focus();
 }
 
-fn populate_runtimes(
+fn populate_workspaces(
     container: &gtk4::Box,
     entries: &[RuntimeEntry],
     query: &str,
@@ -252,8 +252,8 @@ mod tests {
         name: &str,
         pane_count: u32,
         has_write_owner: bool,
-    ) -> v3::RuntimeInfo {
-        v3::RuntimeInfo {
+    ) -> v3::WorkspaceInfo {
+        v3::WorkspaceInfo {
             id: rttx_proto::uuid_to_bytes(id),
             name: name.into(),
             pane_count,
@@ -261,7 +261,7 @@ mod tests {
             policy: 0,
             read_only_client_count: 0,
             current_client_role: 0,
-            runtime_revision: 1,
+            workspace_revision: 1,
             reconstructed: false,
             active_pane_summary: String::new(),
             takeover_eligible: false,
@@ -274,7 +274,7 @@ mod tests {
     fn classify_available_session() {
         let id = uuid::Uuid::new_v4();
         let workspaces = vec![make_session_info(id, "workspace-1", 2, false)];
-        let entries = classify_runtimes(&workspaces, &[]);
+        let entries = classify_workspaces(&workspaces, &[]);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].availability, RuntimeAvailability::Available);
@@ -287,7 +287,7 @@ mod tests {
     fn classify_busy_session_with_write_owner() {
         let id = uuid::Uuid::new_v4();
         let workspaces = vec![make_session_info(id, "busy-ws", 1, true)];
-        let entries = classify_runtimes(&workspaces, &[]);
+        let entries = classify_workspaces(&workspaces, &[]);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].availability, RuntimeAvailability::BusyElsewhere);
@@ -298,7 +298,7 @@ mod tests {
     fn classify_already_open_session() {
         let id = uuid::Uuid::new_v4();
         let workspaces = vec![make_session_info(id, "open-ws", 3, false)];
-        let entries = classify_runtimes(&workspaces, &[id.to_string()]);
+        let entries = classify_workspaces(&workspaces, &[id.to_string()]);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].availability, RuntimeAvailability::AlreadyOpen);
@@ -309,7 +309,7 @@ mod tests {
     fn classify_already_open_takes_precedence_over_busy() {
         let id = uuid::Uuid::new_v4();
         let workspaces = vec![make_session_info(id, "mine", 1, true)];
-        let entries = classify_runtimes(&workspaces, &[id.to_string()]);
+        let entries = classify_workspaces(&workspaces, &[id.to_string()]);
 
         assert_eq!(entries[0].availability, RuntimeAvailability::AlreadyOpen);
     }
@@ -324,7 +324,7 @@ mod tests {
             make_session_info(busy_id, "busy", 2, true),
             make_session_info(open_id, "open", 1, false),
         ];
-        let entries = classify_runtimes(&workspaces, &[open_id.to_string()]);
+        let entries = classify_workspaces(&workspaces, &[open_id.to_string()]);
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].availability, RuntimeAvailability::Available);
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn classify_empty_sessions() {
-        let entries = classify_runtimes(&[], &[]);
+        let entries = classify_workspaces(&[], &[]);
         assert!(entries.is_empty());
     }
 
@@ -342,7 +342,7 @@ mod tests {
     fn single_pane_label_is_singular() {
         let id = uuid::Uuid::new_v4();
         let workspaces = vec![make_session_info(id, "ws", 1, false)];
-        let entries = classify_runtimes(&workspaces, &[]);
+        let entries = classify_workspaces(&workspaces, &[]);
         assert_eq!(entries[0].status_label, "1 pane");
     }
 

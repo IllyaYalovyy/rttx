@@ -1,9 +1,9 @@
-//! V3 runtime takeover: capability gating, builders, and lease events.
+//! V3 workspace takeover: capability gating, builders, and lease events.
 //!
 //! Implements RFC-021 Section 10 (`OPT_RUNTIME_TAKEOVER`).
 //!
 //! Takeover is an explicit command, not a side effect of attach. One writer
-//! lease per runtime, zero or more readers. Without `OPT_RUNTIME_TAKEOVER`,
+//! lease per workspace, zero or more readers. Without `OPT_RUNTIME_TAKEOVER`,
 //! the client shows "session busy" without a takeover option.
 //!
 //! Lease events:
@@ -16,24 +16,24 @@ use crate::v3;
 /// Check whether `OPT_RUNTIME_TAKEOVER` is in the effective capability set.
 #[must_use]
 pub fn is_supported(effective_caps: &[i32]) -> bool {
-    effective_caps.contains(&(v3::Capability::OptRuntimeTakeover as i32))
+    effective_caps.contains(&(v3::Capability::OptWorkspaceTakeover as i32))
 }
 
-/// Build a `TakeoverRuntime` request.
+/// Build a `TakeoverWorkspace` request.
 #[must_use]
-pub fn build_takeover_runtime(runtime_id: uuid::Uuid) -> v3::TakeoverRuntime {
-    v3::TakeoverRuntime { runtime_id: crate::uuid_to_bytes(runtime_id) }
+pub fn build_takeover_workspace(runtime_id: uuid::Uuid) -> v3::TakeoverWorkspace {
+    v3::TakeoverWorkspace { runtime_id: crate::uuid_to_bytes(runtime_id) }
 }
 
-/// Build a `ClientEnvelope` for a `TakeoverRuntime` request.
+/// Build a `ClientEnvelope` for a `TakeoverWorkspace` request.
 #[must_use]
-pub fn build_takeover_runtime_envelope(
+pub fn build_takeover_workspace_envelope(
     id_gen: &crate::v3_envelope::RequestIdGenerator,
-    request: v3::TakeoverRuntime,
+    request: v3::TakeoverWorkspace,
 ) -> v3::ClientEnvelope {
     crate::v3_envelope::build_client_envelope(
         id_gen,
-        v3::client_envelope::Command::TakeoverRuntime(request),
+        v3::client_envelope::Command::TakeoverWorkspace(request),
     )
 }
 
@@ -41,9 +41,9 @@ pub fn build_takeover_runtime_envelope(
 #[must_use]
 pub fn build_takeover_completed(
     runtime_id: uuid::Uuid,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::TakeoverCompleted {
-    v3::TakeoverCompleted { runtime_id: crate::uuid_to_bytes(runtime_id), runtime_revision }
+    v3::TakeoverCompleted { runtime_id: crate::uuid_to_bytes(runtime_id), workspace_revision }
 }
 
 /// Build a `ServerEnvelope` response containing a `TakeoverCompleted`.
@@ -62,12 +62,12 @@ pub fn build_takeover_completed_response(
 #[must_use]
 pub fn build_lease_lost(
     runtime_id: uuid::Uuid,
-    runtime_revision: u64,
+    workspace_revision: u64,
     new_owner_id: uuid::Uuid,
 ) -> v3::LeaseLost {
     v3::LeaseLost {
         runtime_id: crate::uuid_to_bytes(runtime_id),
-        runtime_revision,
+        workspace_revision,
         new_owner_id: crate::uuid_to_bytes(new_owner_id),
     }
 }
@@ -82,9 +82,9 @@ pub fn build_lease_lost_envelope(lease_lost: v3::LeaseLost) -> v3::ServerEnvelop
 #[must_use]
 pub fn build_owner_disconnected(
     runtime_id: uuid::Uuid,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::OwnerDisconnected {
-    v3::OwnerDisconnected { runtime_id: crate::uuid_to_bytes(runtime_id), runtime_revision }
+    v3::OwnerDisconnected { runtime_id: crate::uuid_to_bytes(runtime_id), workspace_revision }
 }
 
 /// Build a `ServerEnvelope` push event containing an `OwnerDisconnected`.
@@ -116,8 +116,8 @@ mod tests {
     #[test]
     fn supported_when_capability_present() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
-            v3::Capability::OptRuntimeTakeover as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
+            v3::Capability::OptWorkspaceTakeover as i32,
         ];
         assert!(is_supported(&caps));
     }
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn not_supported_when_capability_absent() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::OptDiagnostics as i32,
         ];
         assert!(!is_supported(&caps));
@@ -136,31 +136,31 @@ mod tests {
         assert!(!is_supported(&[]));
     }
 
-    // ── build_takeover_runtime ──
+    // ── build_takeover_workspace ──
 
     #[test]
-    fn takeover_runtime_populates_runtime_id() {
+    fn takeover_workspace_populates_runtime_id() {
         let r = rt();
-        let req = build_takeover_runtime(r);
+        let req = build_takeover_workspace(r);
         assert_eq!(req.runtime_id, uuid_to_bytes(r));
     }
 
     #[test]
-    fn takeover_runtime_wire_roundtrip() {
-        let req = build_takeover_runtime(rt());
+    fn takeover_workspace_wire_roundtrip() {
+        let req = build_takeover_workspace(rt());
         let mut buf = BytesMut::new();
         encode_frame(&req, &mut buf).unwrap();
-        let decoded: v3::TakeoverRuntime = decode_frame(&mut buf).unwrap();
+        let decoded: v3::TakeoverWorkspace = decode_frame(&mut buf).unwrap();
         assert_eq!(req, decoded);
     }
 
-    // ── build_takeover_runtime_envelope ──
+    // ── build_takeover_workspace_envelope ──
 
     #[test]
     fn takeover_envelope_has_nonzero_request_id() {
         let id_gen = RequestIdGenerator::new();
-        let req = build_takeover_runtime(rt());
-        let env = build_takeover_runtime_envelope(&id_gen, req);
+        let req = build_takeover_workspace(rt());
+        let env = build_takeover_workspace_envelope(&id_gen, req);
         assert_ne!(env.request_id, 0);
     }
 
@@ -168,21 +168,21 @@ mod tests {
     fn takeover_envelope_contains_correct_command() {
         let id_gen = RequestIdGenerator::new();
         let r = rt();
-        let req = build_takeover_runtime(r);
-        let env = build_takeover_runtime_envelope(&id_gen, req);
+        let req = build_takeover_workspace(r);
+        let env = build_takeover_workspace_envelope(&id_gen, req);
         match env.command {
-            Some(v3::client_envelope::Command::TakeoverRuntime(ref tr)) => {
+            Some(v3::client_envelope::Command::TakeoverWorkspace(ref tr)) => {
                 assert_eq!(tr.runtime_id, uuid_to_bytes(r));
             }
-            _ => panic!("expected TakeoverRuntime command"),
+            _ => panic!("expected TakeoverWorkspace command"),
         }
     }
 
     #[test]
     fn takeover_envelope_wire_roundtrip() {
         let id_gen = RequestIdGenerator::new();
-        let req = build_takeover_runtime(rt());
-        let env = build_takeover_runtime_envelope(&id_gen, req);
+        let req = build_takeover_workspace(rt());
+        let env = build_takeover_workspace_envelope(&id_gen, req);
         let mut buf = BytesMut::new();
         encode_frame(&env, &mut buf).unwrap();
         let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
@@ -196,7 +196,7 @@ mod tests {
         let r = rt();
         let completed = build_takeover_completed(r, 42);
         assert_eq!(completed.runtime_id, uuid_to_bytes(r));
-        assert_eq!(completed.runtime_revision, 42);
+        assert_eq!(completed.workspace_revision, 42);
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
         match env.payload {
             Some(v3::server_envelope::Payload::TakeoverCompleted(ref tc)) => {
                 assert_eq!(tc.runtime_id, uuid_to_bytes(r));
-                assert_eq!(tc.runtime_revision, 20);
+                assert_eq!(tc.workspace_revision, 20);
             }
             _ => panic!("expected TakeoverCompleted payload"),
         }
@@ -256,7 +256,7 @@ mod tests {
         let new_owner = client();
         let lost = build_lease_lost(r, 30, new_owner);
         assert_eq!(lost.runtime_id, uuid_to_bytes(r));
-        assert_eq!(lost.runtime_revision, 30);
+        assert_eq!(lost.workspace_revision, 30);
         assert_eq!(lost.new_owner_id, uuid_to_bytes(new_owner));
     }
 
@@ -288,7 +288,7 @@ mod tests {
         match env.payload {
             Some(v3::server_envelope::Payload::LeaseLost(ref ll)) => {
                 assert_eq!(ll.runtime_id, uuid_to_bytes(r));
-                assert_eq!(ll.runtime_revision, 15);
+                assert_eq!(ll.workspace_revision, 15);
                 assert_eq!(ll.new_owner_id, uuid_to_bytes(new_owner));
             }
             _ => panic!("expected LeaseLost payload"),
@@ -312,7 +312,7 @@ mod tests {
         let r = rt();
         let disconnected = build_owner_disconnected(r, 25);
         assert_eq!(disconnected.runtime_id, uuid_to_bytes(r));
-        assert_eq!(disconnected.runtime_revision, 25);
+        assert_eq!(disconnected.workspace_revision, 25);
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
         match env.payload {
             Some(v3::server_envelope::Payload::OwnerDisconnected(ref od)) => {
                 assert_eq!(od.runtime_id, uuid_to_bytes(r));
-                assert_eq!(od.runtime_revision, 33);
+                assert_eq!(od.workspace_revision, 33);
             }
             _ => panic!("expected OwnerDisconnected payload"),
         }
@@ -365,14 +365,14 @@ mod tests {
         let err = crate::v3_error::build_error(
             v3::ErrorKind::UnsupportedCapability,
             "OPT_RUNTIME_TAKEOVER not negotiated",
-            "TakeoverRuntime",
+            "TakeoverWorkspace",
         );
         let env = crate::v3_error::build_error_response(42, err);
         assert_eq!(env.request_id, 42);
         match env.payload {
             Some(v3::server_envelope::Payload::Error(ref e)) => {
                 assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
-                assert_eq!(e.operation, "TakeoverRuntime");
+                assert_eq!(e.operation, "TakeoverWorkspace");
             }
             _ => panic!("expected Error payload"),
         }
@@ -382,13 +382,13 @@ mod tests {
 
     #[test]
     fn ownership_conflict_without_takeover() {
-        let caps = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+        let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
         assert!(!is_supported(&caps));
 
         let err = crate::v3_error::build_error(
             v3::ErrorKind::OwnershipConflict,
-            "runtime owned by another client; takeover not available",
-            "AttachRuntime",
+            "workspace owned by another client; takeover not available",
+            "AttachWorkspace",
         );
         let env = crate::v3_error::build_error_response(10, err);
         match env.payload {
@@ -406,8 +406,8 @@ mod tests {
     fn takeover_required_error() {
         let err = crate::v3_error::build_error(
             v3::ErrorKind::TakeoverRequired,
-            "runtime has an active writer; use TakeoverRuntime to claim it",
-            "AttachRuntime",
+            "workspace has an active writer; use TakeoverWorkspace to claim it",
+            "AttachWorkspace",
         );
         assert!(!err.retryable);
         assert!(err.user_action_required);
@@ -422,9 +422,9 @@ mod tests {
         let old_owner = client();
         let new_owner = client();
 
-        // 1. Client sends TakeoverRuntime request
-        let req = build_takeover_runtime(r);
-        let req_env = build_takeover_runtime_envelope(&id_gen, req);
+        // 1. Client sends TakeoverWorkspace request
+        let req = build_takeover_workspace(r);
+        let req_env = build_takeover_workspace_envelope(&id_gen, req);
         let saved_request_id = req_env.request_id;
         assert_ne!(saved_request_id, 0);
 
@@ -449,7 +449,7 @@ mod tests {
         match completed_env.payload {
             Some(v3::server_envelope::Payload::TakeoverCompleted(ref tc)) => {
                 assert_eq!(tc.runtime_id, uuid_to_bytes(r));
-                assert_eq!(tc.runtime_revision, 51);
+                assert_eq!(tc.workspace_revision, 51);
             }
             _ => panic!("expected TakeoverCompleted"),
         }
@@ -471,7 +471,7 @@ mod tests {
         match env.payload {
             Some(v3::server_envelope::Payload::OwnerDisconnected(ref od)) => {
                 assert_eq!(od.runtime_id, uuid_to_bytes(r));
-                assert_eq!(od.runtime_revision, 60);
+                assert_eq!(od.workspace_revision, 60);
             }
             _ => panic!("expected OwnerDisconnected"),
         }
@@ -487,7 +487,7 @@ mod tests {
         // 1. Client tries read-write attach, gets AttachBlocked
         let blocked = v3::AttachBlocked {
             runtime_id: uuid_to_bytes(r),
-            current_client_role: v3::RuntimeClientRole::Unattached as i32,
+            current_client_role: v3::WorkspaceClientRole::Unattached as i32,
             attached_client_count: 1,
             read_only_client_count: 0,
         };
@@ -502,15 +502,15 @@ mod tests {
             _ => panic!("expected AttachBlocked"),
         }
 
-        // 2. Client has OPT_RUNTIME_TAKEOVER, so it sends TakeoverRuntime
+        // 2. Client has OPT_RUNTIME_TAKEOVER, so it sends TakeoverWorkspace
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
-            v3::Capability::OptRuntimeTakeover as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
+            v3::Capability::OptWorkspaceTakeover as i32,
         ];
         assert!(is_supported(&caps));
 
-        let req = build_takeover_runtime(r);
-        let env = build_takeover_runtime_envelope(&id_gen, req);
+        let req = build_takeover_workspace(r);
+        let env = build_takeover_workspace_envelope(&id_gen, req);
         assert_ne!(env.request_id, 0);
 
         // 3. Server responds with TakeoverCompleted

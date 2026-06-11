@@ -33,36 +33,36 @@ async fn create_pane_with_size(
 }
 
 /// Helper: create a session and return its id.
-async fn create_runtime(client: &mut TestClient, name: &str) -> Vec<u8> {
+async fn create_workspace(client: &mut TestClient, name: &str) -> Vec<u8> {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: name.into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     }
 }
 
 /// Helper: attach and return the snapshot.
-async fn attach_and_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
+async fn attach_and_snapshot(client: &mut TestClient, runtime_id: &[u8]) -> v3::WorkspaceSnapshot {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => return s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => return s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -77,7 +77,7 @@ async fn create_pane_uses_requested_dimensions() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "size-test").await;
+    let runtime_id = create_workspace(&mut client, "size-test").await;
     let pane_id = create_pane_with_size(&mut client, &runtime_id, 132, 43).await;
     let snapshot = attach_and_snapshot(&mut client, &runtime_id).await;
 
@@ -98,7 +98,7 @@ async fn create_pane_zero_size_falls_back_to_default() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "zero-size").await;
+    let runtime_id = create_workspace(&mut client, "zero-size").await;
     let pane_id = create_pane_with_size(&mut client, &runtime_id, 0, 0).await;
     let snapshot = attach_and_snapshot(&mut client, &runtime_id).await;
 

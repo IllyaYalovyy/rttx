@@ -352,7 +352,7 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
     let pane_id = uuid::Uuid::new_v4().to_string();
     let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::v3::RuntimeInfo {
+        workspaces: vec![rttx_proto::v3::WorkspaceInfo {
             id: uuid::Uuid::parse_str(&runtime_id).unwrap().as_bytes().to_vec(),
             name: "Should Not Resurrect".into(),
             pane_count: 1,
@@ -369,9 +369,9 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
                 reconstructed: false,
                 no_persist: false,
             }],
-            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
+            policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: false,
-            runtime_revision: 1,
+            workspace_revision: 1,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -385,9 +385,9 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
 }
 
 /// New Workspace must create exactly one workspace — it must not trigger
-/// inventory recovery that surfaces unrelated daemon runtimes.
+/// inventory recovery that surfaces unrelated daemon workspaces.
 #[test]
-fn new_workspace_does_not_resurrect_unrelated_runtimes() {
+fn new_workspace_does_not_resurrect_unrelated_workspaces() {
     use rttx::daemon_bridge::EndpointEvent;
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
 
@@ -416,7 +416,7 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
     let pane_id = uuid::Uuid::new_v4().to_string();
     let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::v3::RuntimeInfo {
+        workspaces: vec![rttx_proto::v3::WorkspaceInfo {
             id: uuid::Uuid::parse_str(&unrelated_runtime_id).unwrap().as_bytes().to_vec(),
             name: "Unrelated Runtime".into(),
             pane_count: 1,
@@ -433,9 +433,9 @@ fn new_workspace_does_not_resurrect_unrelated_runtimes() {
                 reconstructed: false,
                 no_persist: false,
             }],
-            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
+            policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: false,
-            runtime_revision: 1,
+            workspace_revision: 1,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -932,7 +932,7 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
         workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: runtime_id.clone(),
-        snapshot: rttx_proto::v3::RuntimeSnapshot {
+        snapshot: rttx_proto::v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
@@ -949,7 +949,7 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
                 total_scrollback_bytes: 0,
                 scrollback_complete: true,
             }],
-            runtime_revision: 0,
+            workspace_revision: 0,
             client_role: 0,
         },
     });
@@ -1091,7 +1091,7 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
         workspace_id: state.workspaces[0].uuid.clone(),
         runtime_id: new_runtime.to_string(),
-        snapshot: rttx_proto::v3::RuntimeSnapshot {
+        snapshot: rttx_proto::v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(new_runtime),
@@ -1108,8 +1108,8 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
                 total_scrollback_bytes: 0,
                 scrollback_complete: true,
             }],
-            runtime_revision: 1,
-            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 1,
+            client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
         },
     });
 
@@ -1255,13 +1255,13 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
     // Inventory contains only `live` — `stale` was already cleaned up by daemon.
     let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::v3::RuntimeInfo {
+        workspaces: vec![rttx_proto::v3::WorkspaceInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&live).unwrap()),
             name: "Live".into(),
             pane_count: 1,
             has_write_owner: false,
             read_only_client_count: 0,
-            current_client_role: rttx_proto::v3::RuntimeClientRole::Unattached as i32,
+            current_client_role: rttx_proto::v3::WorkspaceClientRole::Unattached as i32,
             panes: vec![rttx_proto::v3::PaneInfo {
                 id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane).unwrap()),
                 title: "bash".into(),
@@ -1272,9 +1272,9 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
                 reconstructed: false,
                 no_persist: false,
             }],
-            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
+            policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: false,
-            runtime_revision: 1,
+            workspace_revision: 1,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -1312,7 +1312,7 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
     };
     let ws_id = state.workspaces[0].uuid.clone();
 
-    let snapshot = rttx_proto::v3::RuntimeSnapshot {
+    let snapshot = rttx_proto::v3::WorkspaceSnapshot {
         tree: None,
         default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
@@ -1338,8 +1338,8 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
             total_scrollback_bytes: 15,
             scrollback_complete: true,
         }],
-        runtime_revision: 5,
-        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+        workspace_revision: 5,
+        client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
     };
 
     let transition =
@@ -1381,7 +1381,7 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
     };
     let ws_id = state.workspaces[0].uuid.clone();
 
-    let snapshot = rttx_proto::v3::RuntimeSnapshot {
+    let snapshot = rttx_proto::v3::WorkspaceSnapshot {
         tree: None,
         default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
@@ -1407,8 +1407,8 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
             total_scrollback_bytes: 10,
             scrollback_complete: true,
         }],
-        runtime_revision: 1,
-        client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+        workspace_revision: 1,
+        client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
     };
 
     let transition =

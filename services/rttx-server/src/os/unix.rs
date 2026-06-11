@@ -15,10 +15,10 @@ const DEV_STATE_DIR: &str = "rttx-devel";
 /// Subdirectory owned by the daemon (RFC-022).
 const DAEMON_SUBDIR: &str = "daemon";
 
-/// Production directory name for cache and runtime.
+/// Production directory name for cache and workspace.
 const PROD_DIR: &str = "rttx-server";
 
-/// Development directory name for cache and runtime.
+/// Development directory name for cache and workspace.
 const DEV_DIR: &str = "rttx-server-devel";
 
 /// Check if dev mode is enabled via the environment variable.
@@ -118,14 +118,14 @@ mod tests {
 
     #[test]
     fn runtime_dir_for_production_uses_production_daemon_dir() {
-        let path = runtime_dir_for(std::path::Path::new("/tmp/runtime"), false);
-        assert_eq!(path, std::path::Path::new("/tmp/runtime/rttx-server/v1"));
+        let path = runtime_dir_for(std::path::Path::new("/tmp/workspace"), false);
+        assert_eq!(path, std::path::Path::new("/tmp/workspace/rttx-server/v1"));
     }
 
     #[test]
     fn runtime_dir_for_dev_uses_development_daemon_dir() {
-        let path = runtime_dir_for(std::path::Path::new("/tmp/runtime"), true);
-        assert_eq!(path, std::path::Path::new("/tmp/runtime/rttx-server-devel/v1"));
+        let path = runtime_dir_for(std::path::Path::new("/tmp/workspace"), true);
+        assert_eq!(path, std::path::Path::new("/tmp/workspace/rttx-server-devel/v1"));
     }
 
     #[test]

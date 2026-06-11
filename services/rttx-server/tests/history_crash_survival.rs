@@ -28,7 +28,7 @@ async fn history_survives_hard_restart() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        runtime_id = create_runtime(&mut client, "crash-hist", v3::RuntimePolicy::Persistent).await;
+        runtime_id = create_workspace(&mut client, "crash-hist", v3::WorkspacePolicy::Persistent).await;
         pane_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
 
@@ -56,9 +56,9 @@ async fn history_survives_hard_restart() {
         // load.
         let state_dir = tmp.path().join("state/rttx/daemon");
         let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
-        let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+        let workspace_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
         let hist_path =
-            rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+            rttx_server::state::layout::history_file(&state_dir, workspace_uuid, pane_uuid);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
             if std::fs::read_to_string(&hist_path)
@@ -77,8 +77,8 @@ async fn history_survives_hard_restart() {
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
-    let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
-    let hist_path = rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+    let workspace_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+    let hist_path = rttx_server::state::layout::history_file(&state_dir, workspace_uuid, pane_uuid);
 
     let hist_content = std::fs::read_to_string(&hist_path).unwrap_or_default();
     assert!(
@@ -98,7 +98,7 @@ async fn ephemeral_pane_does_not_write_persistent_history() {
     client.handshake().await;
 
     let runtime_id =
-        create_runtime(&mut client, "ephemeral-hist", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut client, "ephemeral-hist", v3::WorkspacePolicy::Persistent).await;
 
     client
         .send(&v3::ClientEnvelope {
@@ -123,7 +123,7 @@ async fn ephemeral_pane_does_not_write_persistent_history() {
     attach_rw(&mut client, &runtime_id).await;
 
     // The shell reports its HISTFILE; for an ephemeral pane it must be
-    // /dev/null, not a path under the runtime's history dir.
+    // /dev/null, not a path under the workspace's history dir.
     send_input(&mut client, &runtime_id, &pane_id, b"echo RTTX_HF=$HISTFILE\n").await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut output = Vec::new();
@@ -148,8 +148,8 @@ async fn ephemeral_pane_does_not_write_persistent_history() {
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let pane_uuid = rttx_proto::bytes_to_uuid(&pane_id).unwrap();
-    let runtime_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
-    let hist_path = rttx_server::state::layout::history_file(&state_dir, runtime_uuid, pane_uuid);
+    let workspace_uuid = rttx_proto::bytes_to_uuid(&runtime_id).unwrap();
+    let hist_path = rttx_server::state::layout::history_file(&state_dir, workspace_uuid, pane_uuid);
     assert!(
         !hist_path.exists(),
         "ephemeral pane must not create a persistent history file at {}",

@@ -8,8 +8,8 @@
 mod common;
 
 use common::{
-    TestClient, attach_ro, attach_rw, create_pane, create_runtime, detach_runtime, list_runtimes,
-    send_input, start_test_server, terminate_runtime,
+    TestClient, attach_ro, attach_rw, create_pane, create_workspace, detach_workspace, list_workspaces,
+    send_input, start_test_server, terminate_workspace,
 };
 use rttx_proto::v3;
 use std::time::Duration;
@@ -22,15 +22,15 @@ async fn reconnect_after_disconnect() {
     let runtime_id = {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
-        create_runtime(&mut client, "reconnect-test", v3::RuntimePolicy::Persistent).await
+        create_workspace(&mut client, "reconnect-test", v3::WorkspacePolicy::Persistent).await
     };
 
     let mut client2 = TestClient::connect(&sock).await;
     client2.handshake().await;
-    let runtimes = list_runtimes(&mut client2).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].name, "reconnect-test");
-    assert_eq!(runtimes[0].id, runtime_id);
+    let workspaces = list_workspaces(&mut client2).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].name, "reconnect-test");
+    assert_eq!(workspaces[0].id, runtime_id);
 }
 
 /// Five clients connect, attach, detach, and disconnect in rapid succession.
@@ -43,10 +43,10 @@ async fn rapid_reconnect_storm() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "storm", v3::RuntimePolicy::Persistent).await;
+        let sid = create_workspace(&mut c, "storm", v3::WorkspacePolicy::Persistent).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
-        detach_runtime(&mut c, &sid).await;
+        detach_workspace(&mut c, &sid).await;
         sid
     };
 
@@ -55,14 +55,14 @@ async fn rapid_reconnect_storm() {
         c.handshake().await;
         let snap = attach_rw(&mut c, &runtime_id).await;
         assert!(!snap.panes.is_empty(), "reconnect {i}: session should have panes");
-        detach_runtime(&mut c, &runtime_id).await;
+        detach_workspace(&mut c, &runtime_id).await;
     }
 
     let mut final_client = TestClient::connect(&sock).await;
     final_client.handshake().await;
-    let runtimes = list_runtimes(&mut final_client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].pane_count, 1);
+    let workspaces = list_workspaces(&mut final_client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].pane_count, 1);
 }
 
 /// Client disconnects while PTY is producing output. A new client reattaches
@@ -75,7 +75,7 @@ async fn reconnect_during_active_pty_output() {
     let (runtime_id, pane_id) = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "active-output", v3::RuntimePolicy::Persistent).await;
+        let sid = create_workspace(&mut c, "active-output", v3::WorkspacePolicy::Persistent).await;
         attach_rw(&mut c, &sid).await;
         let pid = create_pane(&mut c, &sid).await;
         // Send a command that produces output.
@@ -109,14 +109,14 @@ async fn reconnect_to_terminated_session_returns_error() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        create_runtime(&mut c, "doomed", v3::RuntimePolicy::Persistent).await
+        create_workspace(&mut c, "doomed", v3::WorkspacePolicy::Persistent).await
     };
 
     // Another client terminates the session.
     {
         let mut c2 = TestClient::connect(&sock).await;
         c2.handshake().await;
-        terminate_runtime(&mut c2, &runtime_id).await;
+        terminate_workspace(&mut c2, &runtime_id).await;
     }
 
     // Original client reconnects and tries to attach.
@@ -124,9 +124,9 @@ async fn reconnect_to_terminated_session_returns_error() {
     c3.handshake().await;
     c3.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     })
     .await;
@@ -147,11 +147,11 @@ async fn reconnect_sees_panes_added_by_other_client() {
 
     let mut client_a = TestClient::connect(&sock).await;
     client_a.handshake().await;
-    let sid = create_runtime(&mut client_a, "multi-pane", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client_a, "multi-pane", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client_a, &sid).await;
     let pane1 = create_pane(&mut client_a, &sid).await;
     let pane2 = create_pane(&mut client_a, &sid).await;
-    detach_runtime(&mut client_a, &sid).await;
+    detach_workspace(&mut client_a, &sid).await;
 
     // Client B reconnects and should see both panes.
     let mut client_b = TestClient::connect(&sock).await;
@@ -173,18 +173,18 @@ async fn revision_increases_across_reconnect_cycles() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let sid = create_runtime(&mut c, "rev-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut c, "rev-test", v3::WorkspacePolicy::Persistent).await;
     let snap1 = attach_rw(&mut c, &sid).await;
-    let rev_after_attach = snap1.runtime_revision;
+    let rev_after_attach = snap1.workspace_revision;
 
     create_pane(&mut c, &sid).await;
-    detach_runtime(&mut c, &sid).await;
+    detach_workspace(&mut c, &sid).await;
 
     // Reconnect.
     let mut c2 = TestClient::connect(&sock).await;
     c2.handshake().await;
     let snap2 = attach_rw(&mut c2, &sid).await;
-    let rev_after_reattach = snap2.runtime_revision;
+    let rev_after_reattach = snap2.workspace_revision;
 
     assert!(
         rev_after_reattach > rev_after_attach,
@@ -192,15 +192,15 @@ async fn revision_increases_across_reconnect_cycles() {
     );
 
     create_pane(&mut c2, &sid).await;
-    detach_runtime(&mut c2, &sid).await;
+    detach_workspace(&mut c2, &sid).await;
 
     let mut c3 = TestClient::connect(&sock).await;
     c3.handshake().await;
     let snap3 = attach_rw(&mut c3, &sid).await;
     assert!(
-        snap3.runtime_revision > rev_after_reattach,
+        snap3.workspace_revision > rev_after_reattach,
         "revision should keep increasing: {rev_after_reattach} -> {}",
-        snap3.runtime_revision
+        snap3.workspace_revision
     );
 }
 
@@ -213,10 +213,10 @@ async fn operations_after_detach_blocked_by_other_writer() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let sid = create_runtime(&mut c1, "detach-ops", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut c1, "detach-ops", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut c1, &sid).await;
     let pane_id = create_pane(&mut c1, &sid).await;
-    detach_runtime(&mut c1, &sid).await;
+    detach_workspace(&mut c1, &sid).await;
 
     // Another client takes ownership.
     let mut c2 = TestClient::connect(&sock).await;
@@ -274,10 +274,10 @@ async fn reconnect_receives_delta_stream_from_active_panes() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let sid = create_runtime(&mut c1, "delta-stream", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut c1, "delta-stream", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut c1, &sid).await;
     let pane_id = create_pane(&mut c1, &sid).await;
-    detach_runtime(&mut c1, &sid).await;
+    detach_workspace(&mut c1, &sid).await;
     drop(c1);
 
     // Reconnect.
@@ -316,7 +316,7 @@ async fn concurrent_reconnect_two_clients_same_session() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let sid = create_runtime(&mut c1, "concurrent", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut c1, "concurrent", v3::WorkspacePolicy::Persistent).await;
     let _snap = attach_rw(&mut c1, &sid).await;
 
     // Second client tries to attach as writer — should be blocked.
@@ -324,9 +324,9 @@ async fn concurrent_reconnect_two_clients_same_session() {
     c2.handshake().await;
     c2.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: sid.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     })
     .await;

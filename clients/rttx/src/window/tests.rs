@@ -2524,7 +2524,7 @@ fn inventory_loaded_recovers_missing_managed_workspace() {
 
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::v3::RuntimeInfo {
+        workspaces: vec![rttx_proto::v3::WorkspaceInfo {
             id: rttx_proto::uuid_to_bytes(runtime_id),
             name: "Recovered Workspace".into(),
             pane_count: 1,
@@ -2533,7 +2533,7 @@ fn inventory_loaded_recovers_missing_managed_workspace() {
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
-            current_client_role: rttx_proto::v3::RuntimeClientRole::Unattached as i32,
+            current_client_role: rttx_proto::v3::WorkspaceClientRole::Unattached as i32,
             panes: vec![rttx_proto::v3::PaneInfo {
                 id: rttx_proto::uuid_to_bytes(pane_id),
                 title: "Shell".into(),
@@ -2544,9 +2544,9 @@ fn inventory_loaded_recovers_missing_managed_workspace() {
                 reconstructed: false,
                 no_persist: false,
             }],
-            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
+            policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: true,
-            runtime_revision: 7,
+            workspace_revision: 7,
         }],
     });
 
@@ -2618,7 +2618,7 @@ fn inventory_loaded_skips_workspace_for_known_runtime() {
 
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::InventoryLoaded {
         endpoint: RuntimeEndpoint::Local,
-        runtimes: vec![rttx_proto::v3::RuntimeInfo {
+        workspaces: vec![rttx_proto::v3::WorkspaceInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
             name: "Recovered Workspace".into(),
             pane_count: 1,
@@ -2627,7 +2627,7 @@ fn inventory_loaded_skips_workspace_for_known_runtime() {
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
-            current_client_role: rttx_proto::v3::RuntimeClientRole::Unattached as i32,
+            current_client_role: rttx_proto::v3::WorkspaceClientRole::Unattached as i32,
             panes: vec![rttx_proto::v3::PaneInfo {
                 id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
                 title: "Shell".into(),
@@ -2638,9 +2638,9 @@ fn inventory_loaded_skips_workspace_for_known_runtime() {
                 reconstructed: false,
                 no_persist: false,
             }],
-            policy: rttx_proto::v3::RuntimePolicy::Persistent as i32,
+            policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: true,
-            runtime_revision: 7,
+            workspace_revision: 7,
         }],
     });
 
@@ -2702,12 +2702,12 @@ fn managed_workspace_recovery_does_not_steal_visible_session_from_selected_row()
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
         workspace_id: recovered_session.uuid.clone(),
         runtime_id: runtime_id.to_string(),
-        snapshot: rttx_proto::v3::RuntimeSnapshot {
+        snapshot: rttx_proto::v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-            runtime_revision: 7,
-            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 7,
+            client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
             panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
                 pane_output_seq: 0,
@@ -2979,10 +2979,10 @@ fn runtime_terminated_event_clears_runtime_id_but_keeps_workspace() {
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
 
-    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::RuntimeTerminated {
+    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceTerminated {
         workspace_id: session_state.uuid.clone(),
         runtime_id,
-        reason: rttx_proto::v3::RuntimeTerminationReason::Explicit,
+        reason: rttx_proto::v3::WorkspaceTerminationReason::Explicit,
     });
 
     let state = window.imp().state.borrow();
@@ -3030,10 +3030,10 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
 
-    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::RuntimeTerminated {
+    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceTerminated {
         workspace_id: session_state.uuid.clone(),
         runtime_id,
-        reason: rttx_proto::v3::RuntimeTerminationReason::Explicit,
+        reason: rttx_proto::v3::WorkspaceTerminationReason::Explicit,
     });
     window.save_state();
 
@@ -3267,12 +3267,12 @@ fn retry_workspace_connection_sets_connecting_and_rebuilds_on_open() {
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
-        snapshot: rttx_proto::v3::RuntimeSnapshot {
+        snapshot: rttx_proto::v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-            runtime_revision: 5,
-            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 5,
+            client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
             panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
                 pane_output_seq: 0,
@@ -3394,7 +3394,7 @@ fn cwd_changed_updates_layout_node() {
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
                 pane_id: rttx_proto::uuid_to_bytes(runtime_pane_id),
                 cwd: "/tmp/updated".into(),
-                runtime_revision: 1,
+                workspace_revision: 1,
             },
         )),
     };
@@ -3465,7 +3465,7 @@ fn managed_pane_exit_marks_visible_pane_exited() {
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
                 pane_id: rttx_proto::uuid_to_bytes(runtime_pane_id),
                 status: 0,
-                runtime_revision: 2,
+                workspace_revision: 2,
             },
         )),
     };
@@ -7259,12 +7259,12 @@ fn workspace_resynced_event_restores_pane_content() {
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceOpened {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
-        snapshot: rttx_proto::v3::RuntimeSnapshot {
+        snapshot: rttx_proto::v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-            runtime_revision: 7,
-            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 7,
+            client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
             panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
                 pane_output_seq: 10,
@@ -7286,12 +7286,12 @@ fn workspace_resynced_event_restores_pane_content() {
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceResynced {
         workspace_id: session_state.uuid.clone(),
         runtime_id: runtime_id.to_string(),
-        snapshot: rttx_proto::v3::RuntimeSnapshot {
+        snapshot: rttx_proto::v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
-            runtime_revision: 8,
-            client_role: rttx_proto::v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 8,
+            client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
             panes: vec![rttx_proto::v3::PaneSnapshot {
                 pane_id: rttx_proto::uuid_to_bytes(pane_id),
                 pane_output_seq: 50,

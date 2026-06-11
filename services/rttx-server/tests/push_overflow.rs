@@ -7,7 +7,7 @@
 mod common;
 
 use common::TestClient;
-use common::{attach_rw, create_runtime, start_test_server};
+use common::{attach_rw, create_workspace, start_test_server};
 use rttx_proto::v3;
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
     fast.handshake().await;
 
     let runtime_id =
-        create_runtime(&mut fast, "overflow-test", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut fast, "overflow-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut fast, &runtime_id).await;
 
     fast.send(&v3::ClientEnvelope {
@@ -50,9 +50,9 @@ async fn v2_slow_client_gets_disconnected_on_overflow() {
     slow.handshake().await;
     slow.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadOnly as i32,
         })),
     })
     .await;

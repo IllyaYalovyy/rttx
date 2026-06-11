@@ -4,10 +4,10 @@
 //! pre-RFC-031 random-pane-id bug, where durable state keyed on a
 //! process-ephemeral pane id was silently orphaned when the id changed.
 //!
-//! This is **not** a daemon runtime code path. It is invoked only by the
+//! This is **not** a daemon workspace code path. It is invoked only by the
 //! `rttx-server salvage-history` subcommand. It performs a read-only scan of the
 //! daemon state directory and copies orphaned history into a *separate* recovery
-//! directory. It never mutates, removes, or reconciles live runtime state, so it
+//! directory. It never mutates, removes, or reconciles live workspace state, so it
 //! cannot interfere with a running daemon and reintroduces no compatibility code
 //! into normal operation.
 
@@ -19,11 +19,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-/// An orphaned per-pane shell-history file: present on disk under a runtime's
-/// `history/` directory but not referenced by that runtime's current pane tree.
+/// An orphaned per-pane shell-history file: present on disk under a workspace's
+/// `history/` directory but not referenced by that workspace's current pane tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrphanHistfile {
-    /// Runtime directory the file was found under.
+    /// Workspace directory the file was found under.
     pub runtime_id: Uuid,
     /// Pane id encoded in the file name (`<pane_id>.hist`).
     pub pane_id: Uuid,
@@ -47,12 +47,12 @@ pub struct SalvageReport {
 /// Scan the daemon state directory for orphaned history files.
 ///
 /// A `history/<pane_id>.hist` file is orphaned when its `<pane_id>` is not
-/// referenced by the runtime's current-schema pane tree. Runtimes whose
-/// `runtime.json` is old-schema, corrupt, or missing reference no panes, so all
+/// referenced by the workspace's current-schema pane tree. Workspaces whose
+/// `workspace.json` is old-schema, corrupt, or missing reference no panes, so all
 /// of their history files are reported. Empty files are skipped — there is
 /// nothing to recover.
 ///
-/// The scan is strictly read-only: it never removes old-schema runtimes the way
+/// The scan is strictly read-only: it never removes old-schema workspaces the way
 /// the daemon's clean-break loader does.
 #[must_use]
 pub fn scan_orphans(state_dir: &Path) -> Vec<OrphanHistfile> {
@@ -68,7 +68,7 @@ pub fn scan_orphans(state_dir: &Path) -> Vec<OrphanHistfile> {
         let Ok(runtime_id) = Uuid::parse_str(name) else { continue };
 
         let referenced = referenced_pane_ids(state_dir, runtime_id);
-        collect_runtime_orphans(state_dir, runtime_id, &referenced, &mut orphans);
+        collect_workspace_orphans(state_dir, runtime_id, &referenced, &mut orphans);
     }
 
     orphans.sort_by_key(|o| (o.runtime_id, o.pane_id));
@@ -78,8 +78,8 @@ pub fn scan_orphans(state_dir: &Path) -> Vec<OrphanHistfile> {
 /// Copy orphaned history files into a recovery directory, preserving provenance
 /// as `<dest>/<runtime_id>/<pane_id>.hist`.
 ///
-/// The destination is expected to live outside the daemon's `runtimes/` tree so
-/// the live runtime path is never touched.
+/// The destination is expected to live outside the daemon's `workspaces/` tree so
+/// the live workspace path is never touched.
 ///
 /// # Errors
 ///
@@ -103,9 +103,9 @@ pub fn export_orphans(
     Ok(SalvageReport { exported, dest: dest_dir.to_path_buf(), total_bytes })
 }
 
-/// Pane ids referenced by a runtime's current-schema tree. Empty when the
-/// runtime file is absent, corrupt, or an older schema (clean-break) — in which
-/// case every history file under that runtime is considered orphaned.
+/// Pane ids referenced by a workspace's current-schema tree. Empty when the
+/// workspace file is absent, corrupt, or an older schema (clean-break) — in which
+/// case every history file under that workspace is considered orphaned.
 fn referenced_pane_ids(state_dir: &Path, runtime_id: Uuid) -> BTreeSet<Uuid> {
     let path = layout::runtime_file(state_dir, runtime_id);
     let Ok(json) = std::fs::read_to_string(&path) else {
@@ -127,8 +127,8 @@ fn referenced_pane_ids(state_dir: &Path, runtime_id: Uuid) -> BTreeSet<Uuid> {
         .collect()
 }
 
-/// Append every non-empty, unreferenced `*.hist` file under one runtime to `out`.
-fn collect_runtime_orphans(
+/// Append every non-empty, unreferenced `*.hist` file under one workspace to `out`.
+fn collect_workspace_orphans(
     state_dir: &Path,
     runtime_id: Uuid,
     referenced: &BTreeSet<Uuid>,
@@ -159,17 +159,17 @@ fn collect_runtime_orphans(
 mod tests {
     use super::*;
     use crate::pane_tree::WorkspaceTree;
-    use crate::runtime::RuntimePolicy;
-    use crate::state::persistence::{save_daemon_index, save_runtime};
+    use crate::workspace::WorkspacePolicy;
+    use crate::state::persistence::{save_daemon_index, save_workspace};
     use crate::state::types::{
-        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, RuntimeInstanceV1, WorkspaceFileV2,
+        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, WorkspaceFileV2,
         WorkspaceSpecV2,
     };
     use std::time::SystemTime;
     use tempfile::TempDir;
 
-    /// Write a current-schema single-pane runtime referencing `pane_id`.
-    fn persist_runtime(state_dir: &Path, runtime_id: Uuid, pane_id: PaneId) {
+    /// Write a current-schema single-pane workspace referencing `pane_id`.
+    fn persist_workspace(state_dir: &Path, runtime_id: Uuid, pane_id: PaneId) {
         let mut tree = WorkspaceTree::new();
         tree.insert_root(pane_id);
         let workspace = WorkspaceFileV2 {
@@ -177,7 +177,7 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id: runtime_id,
                 name: "ws".into(),
-                policy: RuntimePolicy::Persistent,
+                policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree,
                 panes: vec![PaneSpecV2 {
@@ -190,14 +190,14 @@ mod tests {
                     no_persist: false,
                 }],
             },
-            instance: RuntimeInstanceV1 {
+            instance: WorkspaceInstanceV1 {
                 revision: 1,
                 last_active_at: SystemTime::now(),
                 last_snapshot_at: SystemTime::now(),
             },
         };
         save_daemon_index(state_dir, &[runtime_id]).unwrap();
-        save_runtime(state_dir, &workspace).unwrap();
+        save_workspace(state_dir, &workspace).unwrap();
     }
 
     fn write_hist(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid, contents: &str) -> PathBuf {
@@ -213,19 +213,19 @@ mod tests {
         let state = tmp.path();
         let rt = Uuid::new_v4();
         let live = PaneId::new();
-        persist_runtime(state, rt, live);
+        persist_workspace(state, rt, live);
         write_hist(state, rt, live.uuid(), "echo live\n");
 
         assert!(scan_orphans(state).is_empty(), "a referenced pane's history is not an orphan");
     }
 
     #[test]
-    fn unreferenced_histfile_in_live_runtime_is_orphaned() {
+    fn unreferenced_histfile_in_live_workspace_is_orphaned() {
         let tmp = TempDir::new().unwrap();
         let state = tmp.path();
         let rt = Uuid::new_v4();
         let live = PaneId::new();
-        persist_runtime(state, rt, live);
+        persist_workspace(state, rt, live);
         write_hist(state, rt, live.uuid(), "echo live\n");
         // A leftover history file from an old random pane id under the same dir.
         let stale = Uuid::new_v4();
@@ -238,11 +238,11 @@ mod tests {
     }
 
     #[test]
-    fn old_schema_runtime_orphans_all_history() {
+    fn old_schema_workspace_orphans_all_history() {
         let tmp = TempDir::new().unwrap();
         let state = tmp.path();
         let rt = Uuid::new_v4();
-        // A v1 (old-schema) runtime.json: clean-break, references no panes.
+        // A v1 (old-schema) workspace.json: clean-break, references no panes.
         let path = layout::runtime_file(state, rt);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, r#"{"schema_version":1,"spec":{},"instance":{}}"#).unwrap();
@@ -255,7 +255,7 @@ mod tests {
         ids.sort();
         let mut expected = vec![p1, p2];
         expected.sort();
-        assert_eq!(ids, expected, "every history file under an old-schema runtime is orphaned");
+        assert_eq!(ids, expected, "every history file under an old-schema workspace is orphaned");
     }
 
     #[test]
@@ -263,7 +263,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let state = tmp.path();
         let rt = Uuid::new_v4();
-        persist_runtime(state, rt, PaneId::new());
+        persist_workspace(state, rt, PaneId::new());
         write_hist(state, rt, Uuid::new_v4(), "");
 
         assert!(scan_orphans(state).is_empty(), "empty history files carry nothing to recover");
@@ -274,7 +274,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let state = tmp.path();
         let rt = Uuid::new_v4();
-        persist_runtime(state, rt, PaneId::new());
+        persist_workspace(state, rt, PaneId::new());
         let hist_dir = layout::runtime_dir(state, rt).join("history");
         std::fs::create_dir_all(&hist_dir).unwrap();
         std::fs::write(hist_dir.join("notes.txt"), "not history\n").unwrap();
@@ -294,7 +294,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let state = tmp.path().join("state");
         let rt = Uuid::new_v4();
-        persist_runtime(&state, rt, PaneId::new());
+        persist_workspace(&state, rt, PaneId::new());
         let stale = Uuid::new_v4();
         write_hist(&state, rt, stale, "echo recover me\n");
 
@@ -305,7 +305,7 @@ mod tests {
         let report = export_orphans(&orphans, &dest).unwrap();
 
         let copied = dest.join(rt.to_string()).join(format!("{stale}.hist"));
-        assert!(copied.exists(), "orphan must be copied under <dest>/<runtime>/<pane>.hist");
+        assert!(copied.exists(), "orphan must be copied under <dest>/<workspace>/<pane>.hist");
         assert_eq!(std::fs::read_to_string(&copied).unwrap(), "echo recover me\n");
         assert_eq!(report.exported.len(), 1);
         assert_eq!(report.total_bytes, "echo recover me\n".len() as u64);
@@ -318,7 +318,7 @@ mod tests {
         let state = tmp.path().join("state");
         let rt = Uuid::new_v4();
         let live = PaneId::new();
-        persist_runtime(&state, rt, live);
+        persist_workspace(&state, rt, live);
         let live_hist = write_hist(&state, rt, live.uuid(), "echo live\n");
         let stale = Uuid::new_v4();
         let stale_hist = write_hist(&state, rt, stale, "echo stale\n");

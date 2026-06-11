@@ -29,12 +29,12 @@ fn v2_layout_rooted_at_state_dir() {
     let idx = layout::daemon_index(&state);
     assert_eq!(idx, PathBuf::from("/home/user/.local/state/rttx/daemon/daemon.json"));
 
-    let runtimes = layout::runtimes_dir(&state);
-    assert_eq!(runtimes, PathBuf::from("/home/user/.local/state/rttx/daemon/runtimes"));
+    let workspaces = layout::runtimes_dir(&state);
+    assert_eq!(workspaces, PathBuf::from("/home/user/.local/state/rttx/daemon/workspaces"));
 }
 
 #[test]
-fn v2_runtime_tree_is_self_contained() {
+fn v2_workspace_tree_is_self_contained() {
     let os = FakeOs(PathBuf::from("/state/rttx/daemon"));
     let state = os.state_dir();
     let rt = Uuid::new_v4();
@@ -42,7 +42,7 @@ fn v2_runtime_tree_is_self_contained() {
 
     let rt_dir = layout::runtime_dir(&state, rt);
 
-    // Every artifact lives under the runtime directory.
+    // Every artifact lives under the workspace directory.
     assert!(layout::runtime_file(&state, rt).starts_with(&rt_dir));
     assert!(layout::screen_snapshot(&state, rt, pane).starts_with(&rt_dir));
     assert!(layout::scrollback_log(&state, rt, pane).starts_with(&rt_dir));

@@ -14,36 +14,36 @@ async fn clean_removes_only_detached_sessions() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    // Create two runtimes.
+    // Create two workspaces.
     let attached_id =
-        common::create_runtime(&mut client, "attached", v3::RuntimePolicy::Persistent).await;
-    common::create_runtime(&mut client, "detached", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "attached", v3::WorkspacePolicy::Persistent).await;
+    common::create_workspace(&mut client, "detached", v3::WorkspacePolicy::Persistent).await;
 
     // Attach to the first session only.
     common::attach_rw(&mut client, &attached_id).await;
 
     // Verify both exist.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 2);
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 2);
 
     // Connect a second client to perform the clean operation.
     let mut cleaner = TestClient::connect(&sock).await;
     cleaner.handshake().await;
 
     // List sessions from the cleaner's perspective.
-    let runtimes = common::list_runtimes(&mut cleaner).await;
+    let workspaces = common::list_workspaces(&mut cleaner).await;
     let to_clean: Vec<_> =
-        runtimes.iter().filter(|s| s.read_only_client_count == 0 && !s.has_write_owner).collect();
+        workspaces.iter().filter(|s| s.read_only_client_count == 0 && !s.has_write_owner).collect();
     assert_eq!(to_clean.len(), 1, "exactly one session should have no clients");
     assert_eq!(to_clean[0].name, "detached");
 
     // Terminate the detached session.
-    common::terminate_runtime(&mut cleaner, &to_clean[0].id).await;
+    common::terminate_workspace(&mut cleaner, &to_clean[0].id).await;
 
     // Verify only the attached session remains.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].name, "attached");
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].name, "attached");
 }
 
 #[tokio::test]
@@ -55,16 +55,16 @@ async fn clean_with_no_detached_sessions_is_noop() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "active", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "active", v3::WorkspacePolicy::Persistent).await;
     common::attach_rw(&mut client, &runtime_id).await;
 
     // All sessions are attached — nothing to clean.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert!(!runtimes.iter().any(|s| s.read_only_client_count == 0 && !s.has_write_owner));
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert!(!workspaces.iter().any(|s| s.read_only_client_count == 0 && !s.has_write_owner));
 
     // Session still exists.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
 }
 
 #[tokio::test]
@@ -76,26 +76,26 @@ async fn clean_removes_all_detached_sessions() {
     client.handshake().await;
 
     // Create three sessions, none attached.
-    common::create_runtime(&mut client, "orphan-1", v3::RuntimePolicy::Persistent).await;
-    common::create_runtime(&mut client, "orphan-2", v3::RuntimePolicy::Persistent).await;
-    common::create_runtime(&mut client, "orphan-3", v3::RuntimePolicy::Ephemeral).await;
+    common::create_workspace(&mut client, "orphan-1", v3::WorkspacePolicy::Persistent).await;
+    common::create_workspace(&mut client, "orphan-2", v3::WorkspacePolicy::Persistent).await;
+    common::create_workspace(&mut client, "orphan-3", v3::WorkspacePolicy::Ephemeral).await;
 
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 3);
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 3);
 
     // All have zero attached clients.
     let to_clean: Vec<_> =
-        runtimes.iter().filter(|s| s.read_only_client_count == 0 && !s.has_write_owner).collect();
+        workspaces.iter().filter(|s| s.read_only_client_count == 0 && !s.has_write_owner).collect();
     assert_eq!(to_clean.len(), 3);
 
     // Terminate all.
     for s in &to_clean {
-        common::terminate_runtime(&mut client, &s.id).await;
+        common::terminate_workspace(&mut client, &s.id).await;
     }
 
     // Verify all removed.
-    let runtimes = common::list_runtimes(&mut client).await;
-    assert!(runtimes.is_empty());
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert!(workspaces.is_empty());
 }
 
 /// Binary-level test: `rttx-server clean` reports "not running" when no daemon.
@@ -103,7 +103,7 @@ async fn clean_removes_all_detached_sessions() {
 fn clean_reports_not_running_without_daemon() {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
     let tmp = tempfile::TempDir::new().unwrap();
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     std::fs::create_dir_all(&runtime_dir).unwrap();
 
     let output = std::process::Command::new(bin)

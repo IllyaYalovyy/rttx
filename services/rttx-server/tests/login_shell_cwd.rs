@@ -15,7 +15,7 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "login-shell-test", v3::RuntimePolicy::Persistent)
+        common::create_workspace(&mut client, "login-shell-test", v3::WorkspacePolicy::Persistent)
             .await;
 
     let create_pane = v3::ClientEnvelope {
@@ -37,14 +37,14 @@ async fn spawned_shell_is_login_shell_and_reports_cwd_via_osc7() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
@@ -83,7 +83,7 @@ async fn spawned_shell_reports_login_argv0() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "login-argv0-test", v3::RuntimePolicy::Persistent)
+        common::create_workspace(&mut client, "login-argv0-test", v3::WorkspacePolicy::Persistent)
             .await;
 
     let create_pane = v3::ClientEnvelope {
@@ -105,14 +105,14 @@ async fn spawned_shell_reports_login_argv0() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 

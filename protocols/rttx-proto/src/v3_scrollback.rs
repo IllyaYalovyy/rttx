@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn supported_when_capability_present() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::OptChunkedScrollback as i32,
         ];
         assert!(is_supported(&caps));
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn not_supported_when_capability_absent() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::OptDiagnostics as i32,
         ];
         assert!(!is_supported(&caps));

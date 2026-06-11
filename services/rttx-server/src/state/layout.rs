@@ -1,4 +1,4 @@
-//! V2 per-runtime directory layout path helpers (RFC-022 §1).
+//! V2 per-workspace directory layout path helpers (RFC-022 §1).
 //!
 //! All paths are relative to the daemon state directory returned by
 //! [`OsInterface::state_dir`](crate::os::OsInterface::state_dir).
@@ -6,9 +6,9 @@
 //! ```text
 //! $XDG_STATE_HOME/rttx/daemon/          ← state_dir()
 //! ├── daemon.json
-//! └── runtimes/
+//! └── workspaces/
 //!     └── <runtime_id>/
-//!         ├── runtime.json
+//!         ├── workspace.json
 //!         ├── screen/<pane_id>.snap
 //!         ├── scrollback/<pane_id>.log
 //!         └── history/<pane_id>.hist
@@ -20,11 +20,11 @@ use uuid::Uuid;
 /// Filename for the top-level daemon index.
 const DAEMON_INDEX_FILE: &str = "daemon.json";
 
-/// Directory containing per-runtime subdirectories.
-const RUNTIMES_DIR: &str = "runtimes";
+/// Directory containing per-workspace subdirectories.
+const RUNTIMES_DIR: &str = "workspaces";
 
-/// Filename for a runtime's metadata inside its directory.
-const RUNTIME_FILE: &str = "runtime.json";
+/// Filename for a workspace's metadata inside its directory.
+const RUNTIME_FILE: &str = "workspace.json";
 
 /// Subdirectory for deterministic screen snapshots.
 const SCREEN_DIR: &str = "screen";
@@ -45,19 +45,19 @@ pub fn daemon_index(state_dir: &Path) -> PathBuf {
     state_dir.join(DAEMON_INDEX_FILE)
 }
 
-/// Path to the `runtimes/` directory.
+/// Path to the `workspaces/` directory.
 #[must_use]
 pub fn runtimes_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(RUNTIMES_DIR)
 }
 
-/// Path to a specific runtime's directory.
+/// Path to a specific workspace's directory.
 #[must_use]
 pub fn runtime_dir(state_dir: &Path, runtime_id: Uuid) -> PathBuf {
     runtimes_dir(state_dir).join(runtime_id.to_string())
 }
 
-/// Path to a runtime's metadata file (`runtime.json`).
+/// Path to a workspace's metadata file (`workspace.json`).
 #[must_use]
 pub fn runtime_file(state_dir: &Path, runtime_id: Uuid) -> PathBuf {
     runtime_dir(state_dir, runtime_id).join(RUNTIME_FILE)
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn runtimes_dir_path() {
         let p = runtimes_dir(Path::new(STATE));
-        assert_eq!(p, Path::new("/xdg/state/rttx/daemon/runtimes"));
+        assert_eq!(p, Path::new("/xdg/state/rttx/daemon/workspaces"));
     }
 
     #[test]
@@ -120,7 +120,7 @@ mod tests {
         let p = runtime_dir(Path::new(STATE), rt);
         assert_eq!(
             p,
-            Path::new("/xdg/state/rttx/daemon/runtimes/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            Path::new("/xdg/state/rttx/daemon/workspaces/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         );
     }
 
@@ -128,7 +128,7 @@ mod tests {
     fn runtime_file_path() {
         let (rt, _) = ids();
         let p = runtime_file(Path::new(STATE), rt);
-        assert!(p.ends_with("runtime.json"));
+        assert!(p.ends_with("workspace.json"));
         assert!(p.starts_with(runtime_dir(Path::new(STATE), rt)));
     }
 
@@ -181,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn different_runtimes_produce_different_paths() {
+    fn different_workspaces_produce_different_paths() {
         let r1 = Uuid::new_v4();
         let r2 = Uuid::new_v4();
         let pane = Uuid::new_v4();

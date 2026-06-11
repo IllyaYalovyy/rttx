@@ -2,19 +2,19 @@
 //! (RFC-031 §9 / Step 7, issue #1004).
 //!
 //! Builds a synthetic daemon state directory that mirrors a real upgrade: one
-//! current-schema runtime that still has a live pane plus a stale history file
-//! left by the pre-RFC-031 random-pane-id bug, and one old-schema runtime whose
-//! `runtime.json` references no current panes. The salvage scan must find every
+//! current-schema workspace that still has a live pane plus a stale history file
+//! left by the pre-RFC-031 random-pane-id bug, and one old-schema workspace whose
+//! `workspace.json` references no current panes. The salvage scan must find every
 //! orphan, ignore the live pane's history, and export recovered files into a
 //! separate recovery directory without disturbing the source state.
 
 use rttx_server::pane_tree::{PaneId, WorkspaceTree};
-use rttx_server::runtime::RuntimePolicy;
+use rttx_server::workspace::WorkspacePolicy;
 use rttx_server::salvage::{export_orphans, scan_orphans};
 use rttx_server::state::layout;
-use rttx_server::state::persistence::{save_daemon_index, save_runtime};
+use rttx_server::state::persistence::{save_daemon_index, save_workspace};
 use rttx_server::state::types::{
-    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, RuntimeInstanceV1, WorkspaceFileV2, WorkspaceSpecV2,
+    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, WorkspaceFileV2, WorkspaceSpecV2,
 };
 use std::path::Path;
 use std::time::SystemTime;
@@ -26,8 +26,8 @@ fn write_hist(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid, contents: &str)
     std::fs::write(&path, contents).unwrap();
 }
 
-/// Persist a current-schema runtime with a single live pane.
-fn persist_current_runtime(state_dir: &Path, runtime_id: Uuid, live: PaneId) {
+/// Persist a current-schema workspace with a single live pane.
+fn persist_current_workspace(state_dir: &Path, runtime_id: Uuid, live: PaneId) {
     let mut tree = WorkspaceTree::new();
     tree.insert_root(live);
     let workspace = WorkspaceFileV2 {
@@ -35,7 +35,7 @@ fn persist_current_runtime(state_dir: &Path, runtime_id: Uuid, live: PaneId) {
         spec: WorkspaceSpecV2 {
             id: runtime_id,
             name: "upgraded".into(),
-            policy: RuntimePolicy::Persistent,
+            policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
             panes: vec![PaneSpecV2 {
@@ -48,13 +48,13 @@ fn persist_current_runtime(state_dir: &Path, runtime_id: Uuid, live: PaneId) {
                 no_persist: false,
             }],
         },
-        instance: RuntimeInstanceV1 {
+        instance: WorkspaceInstanceV1 {
             revision: 1,
             last_active_at: SystemTime::now(),
             last_snapshot_at: SystemTime::now(),
         },
     };
-    save_runtime(state_dir, &workspace).unwrap();
+    save_workspace(state_dir, &workspace).unwrap();
 }
 
 #[test]
@@ -62,16 +62,16 @@ fn salvage_recovers_every_orphan_without_touching_live_state() {
     let tmp = tempfile::TempDir::new().unwrap();
     let state_dir = tmp.path().join("state/rttx/daemon");
 
-    // Runtime A: current schema, one live pane plus one stale orphan from the
+    // Workspace A: current schema, one live pane plus one stale orphan from the
     // pre-refactor random-id bug.
     let rt_a = Uuid::new_v4();
     let live = PaneId::new();
-    persist_current_runtime(&state_dir, rt_a, live);
+    persist_current_workspace(&state_dir, rt_a, live);
     write_hist(&state_dir, rt_a, live.uuid(), "echo still here\n");
     let stale = Uuid::new_v4();
     write_hist(&state_dir, rt_a, stale, "echo orphaned by reconnect\n");
 
-    // Runtime B: old-schema runtime.json (clean-break) with two history files
+    // Workspace B: old-schema workspace.json (clean-break) with two history files
     // that the daemon would otherwise discard on first start.
     let rt_b = Uuid::new_v4();
     let rt_b_file = layout::runtime_file(&state_dir, rt_b);
@@ -94,7 +94,7 @@ fn salvage_recovers_every_orphan_without_touching_live_state() {
     assert!(recovered.contains(&old2));
     assert!(!recovered.contains(&live.uuid()), "the live pane's history must not be salvaged");
 
-    // Export into a recovery directory outside runtimes/.
+    // Export into a recovery directory outside workspaces/.
     let dest = tmp.path().join("recovery");
     let report = export_orphans(&orphans, &dest).unwrap();
     assert_eq!(report.exported.len(), 3);
@@ -120,7 +120,7 @@ fn salvage_reports_nothing_for_a_clean_install() {
     let state_dir = tmp.path().join("state/rttx/daemon");
     let rt = Uuid::new_v4();
     let live = PaneId::new();
-    persist_current_runtime(&state_dir, rt, live);
+    persist_current_workspace(&state_dir, rt, live);
     write_hist(&state_dir, rt, live.uuid(), "echo hello\n");
     save_daemon_index(&state_dir, &[rt]).unwrap();
 

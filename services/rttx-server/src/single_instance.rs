@@ -1,6 +1,6 @@
 //! Flock-based single-instance enforcement for `rttx-server`.
 //!
-//! Acquires an exclusive advisory lock on a lock file in the runtime directory.
+//! Acquires an exclusive advisory lock on a lock file in the workspace directory.
 //! The lock is held for the process lifetime and released automatically on drop
 //! (or process exit/crash). A second instance attempting to acquire the lock
 //! fails immediately with [`AlreadyRunning`].

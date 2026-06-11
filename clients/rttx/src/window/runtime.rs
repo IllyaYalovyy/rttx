@@ -32,7 +32,7 @@ pub(super) fn coalesce_event_batch(
 
     for event in events {
         match event {
-            crate::daemon_bridge::EndpointEvent::RuntimeMessage { ref endpoint, ref message }
+            crate::daemon_bridge::EndpointEvent::WorkspaceMessage { ref endpoint, ref message }
                 if matches!(
                     message.payload,
                     Some(v3::server_envelope::Payload::OutputDelta(_))
@@ -122,7 +122,7 @@ impl Window {
         dialog.present(Some(self));
     }
 
-    pub(super) fn show_browse_remote_runtimes_dialog(&self) {
+    pub(super) fn show_browse_remote_workspaces_dialog(&self) {
         let dialog = adw::Dialog::builder().title("Connect to Existing").content_width(440).build();
         let header = adw::HeaderBar::new();
         let connect_button = gtk4::Button::with_label("Connect");
@@ -685,7 +685,7 @@ impl Window {
         use crate::daemon_bridge::EndpointEvent;
 
         match event {
-            EndpointEvent::RuntimeMessage { endpoint, message } => {
+            EndpointEvent::WorkspaceMessage { endpoint, message } => {
                 self.dispatch_managed_runtime_message(&endpoint, &message);
             }
             EndpointEvent::WorkspaceError { workspace_id, detail, .. } => {
@@ -694,7 +694,7 @@ impl Window {
                     self.show_toast(&detail);
                 }
             }
-            EndpointEvent::InventoryLoaded { endpoint, runtimes }
+            EndpointEvent::InventoryLoaded { endpoint, workspaces }
                 if self.imp().pending_connect_existing.borrow().is_some() =>
             {
                 let host = self.imp().pending_connect_existing.take().unwrap();
@@ -707,7 +707,7 @@ impl Window {
                     )
                 };
                 if endpoint == expected_endpoint {
-                    crate::connect_existing_dialog::show(self, &host, &runtimes);
+                    crate::connect_existing_dialog::show(self, &host, &workspaces);
                 } else {
                     // Wrong endpoint — put the pending request back and
                     // let the event go through normal reconciliation.
@@ -716,7 +716,7 @@ impl Window {
                         let mut state = self.imp().state.borrow_mut();
                         state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
                             endpoint,
-                            runtimes,
+                            workspaces,
                         })
                     };
                     self.apply_endpoint_event_transition(&transition);
@@ -1024,7 +1024,7 @@ impl Window {
             return;
         }
 
-        if let Payload::RuntimeTerminated(terminated) = inner {
+        if let Payload::WorkspaceTerminated(terminated) = inner {
             let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id) else {
                 return;
             };
@@ -1115,13 +1115,13 @@ impl Window {
             | Payload::PaneSplit(_)
             | Payload::SplitResized(_)
             | Payload::FocusChanged(_)
-            | Payload::RuntimeList(_)
-            | Payload::RuntimeCreated(_)
-            | Payload::RuntimeSnapshot(_)
+            | Payload::WorkspaceList(_)
+            | Payload::WorkspaceCreated(_)
+            | Payload::WorkspaceSnapshot(_)
             | Payload::AttachBlocked(_)
-            | Payload::RuntimeDetached(_)
-            | Payload::RuntimeTerminated(_)
-            | Payload::RuntimeRenamed(_)
+            | Payload::WorkspaceDetached(_)
+            | Payload::WorkspaceTerminated(_)
+            | Payload::WorkspaceRenamed(_)
             | Payload::Pong(_)
             | Payload::Error(_)
             | Payload::DiagnosticsReport(_)
@@ -1280,7 +1280,7 @@ mod tests {
         data: &[u8],
         seq: u64,
     ) -> EndpointEvent {
-        EndpointEvent::RuntimeMessage {
+        EndpointEvent::WorkspaceMessage {
             endpoint,
             message: build_output_delta_envelope(
                 Uuid::nil(),
@@ -1293,14 +1293,14 @@ mod tests {
 
     fn title_event(endpoint: RuntimeEndpoint, pane_id: Uuid, title: &str) -> EndpointEvent {
         use rttx_proto::v3_envelope::build_push_envelope;
-        EndpointEvent::RuntimeMessage {
+        EndpointEvent::WorkspaceMessage {
             endpoint,
             message: build_push_envelope(v3::server_envelope::Payload::TitleChanged(
                 v3::TitleChanged {
                     runtime_id: vec![],
                     pane_id: uuid_to_bytes(pane_id),
                     title: title.to_string(),
-                    runtime_revision: 0,
+                    workspace_revision: 0,
                 },
             )),
         }
@@ -1308,14 +1308,14 @@ mod tests {
 
     fn cwd_event(endpoint: RuntimeEndpoint, pane_id: Uuid, cwd: &str) -> EndpointEvent {
         use rttx_proto::v3_envelope::build_push_envelope;
-        EndpointEvent::RuntimeMessage {
+        EndpointEvent::WorkspaceMessage {
             endpoint,
             message: build_push_envelope(v3::server_envelope::Payload::CwdChanged(
                 v3::CwdChanged {
                     runtime_id: vec![],
                     pane_id: uuid_to_bytes(pane_id),
                     cwd: cwd.to_string(),
-                    runtime_revision: 0,
+                    workspace_revision: 0,
                 },
             )),
         }
@@ -1428,7 +1428,7 @@ mod tests {
         assert_eq!(batch.other_events.len(), 4);
         // Verify order by checking the payloads
         for (i, event) in batch.other_events.iter().enumerate() {
-            if let EndpointEvent::RuntimeMessage { message, .. } = event {
+            if let EndpointEvent::WorkspaceMessage { message, .. } = event {
                 match (i, message.payload.as_ref().unwrap()) {
                     (0, v3::server_envelope::Payload::CwdChanged(c)) => {
                         assert_eq!(c.cwd, "/a");

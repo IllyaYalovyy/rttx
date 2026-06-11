@@ -21,15 +21,15 @@ async fn normal_clients_unaffected_by_connection_limit() {
         clients.push(c);
     }
 
-    // Each client can create a runtime.
+    // Each client can create a workspace.
     for (i, client) in clients.iter_mut().enumerate() {
         let name = format!("ws-{i}");
-        common::create_runtime(client, &name, v3::RuntimePolicy::Ephemeral).await;
+        common::create_workspace(client, &name, v3::WorkspacePolicy::Ephemeral).await;
     }
 
-    // Verify all runtimes are visible.
-    let runtimes = common::list_runtimes(&mut clients[0]).await;
-    assert_eq!(runtimes.len(), 5, "all 5 runtimes should be listed");
+    // Verify all workspaces are visible.
+    let workspaces = common::list_workspaces(&mut clients[0]).await;
+    assert_eq!(workspaces.len(), 5, "all 5 workspaces should be listed");
 }
 
 /// `MAX_CONCURRENT_CLIENTS` is exported and has a sane value.

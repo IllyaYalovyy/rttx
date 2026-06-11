@@ -14,15 +14,15 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "cwd-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let target_dir = std::env::temp_dir();
@@ -35,9 +35,9 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     // Attach to receive output.
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
@@ -45,7 +45,7 @@ async fn create_pane_with_cwd_spawns_in_target_directory() {
     // Drain the snapshot.
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -92,15 +92,15 @@ async fn create_pane_without_cwd_uses_default() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "no-cwd-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Should not panic — None CWD is valid.
@@ -118,30 +118,30 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "home-cwd-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, None).await;
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -177,7 +177,7 @@ async fn create_pane_without_cwd_starts_in_home_directory() {
 
 /// When a second pane is created without an explicit CWD, the daemon
 /// falls back to the effective CWD of an existing pane in the same
-/// runtime. Regression test for #773.
+/// workspace. Regression test for #773.
 #[tokio::test]
 async fn create_pane_without_cwd_inherits_sibling_cwd() {
     let tmp = tempfile::tempdir().unwrap();
@@ -187,15 +187,15 @@ async fn create_pane_without_cwd_inherits_sibling_cwd() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "sibling-cwd-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let target_dir = std::env::temp_dir();
@@ -212,15 +212,15 @@ async fn create_pane_without_cwd_inherits_sibling_cwd() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -266,30 +266,30 @@ async fn create_pane_with_tilde_cwd_expands_to_home() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "tilde-cwd-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some("~".into())).await;
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -343,30 +343,30 @@ async fn create_pane_with_tilde_prefix_cwd_expands_correctly() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "tilde-prefix-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let pane_id = create_pane_with_cwd(&mut client, &runtime_id, Some(tilde_path)).await;
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }

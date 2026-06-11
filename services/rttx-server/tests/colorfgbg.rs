@@ -54,15 +54,15 @@ async fn attach_and_send(client: &mut TestClient, runtime_id: &[u8], pane_id: &[
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -90,7 +90,7 @@ async fn create_pane_dark_sets_colorfgbg() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "dark-test", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "dark-test", v3::WorkspacePolicy::Persistent).await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, Some(true)).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
@@ -108,7 +108,7 @@ async fn create_pane_light_sets_colorfgbg() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "light-test", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "light-test", v3::WorkspacePolicy::Persistent).await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, Some(false)).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;
@@ -126,7 +126,7 @@ async fn create_pane_default_assumes_dark() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_runtime(&mut client, "default-test", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "default-test", v3::WorkspacePolicy::Persistent).await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, None).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;

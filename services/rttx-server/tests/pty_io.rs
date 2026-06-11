@@ -13,15 +13,15 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     // Create session.
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "io-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Create pane (spawns PTY).
@@ -45,14 +45,14 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     // Attach to receive Deltas.
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
@@ -162,21 +162,21 @@ async fn resize_updates_pane_dimensions() {
     // Verify by detaching and re-attaching: snapshot should show new dimensions.
     let detach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: runtime_id.clone(),
         })),
     };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for WorkspaceDetached");
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceDetached(_)) => break,
             Some(
                 v3::server_envelope::Payload::OutputDelta(_)
                 | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}"),
+            other => panic!("expected WorkspaceDetached, got {other:?}"),
         }
     }
 
@@ -185,15 +185,15 @@ async fn resize_updates_pane_dimensions() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     let resp = client.recv_or_timeout().await;
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => {
             let pane_snap =
                 snap.panes.iter().find(|p| p.pane_id == pane_id).expect("pane not in snapshot");
             assert_eq!(pane_snap.cols, 120, "expected cols=120");
@@ -237,21 +237,21 @@ async fn close_pane_kills_pty() {
     // Verify pane is gone: re-attach and check snapshot has no panes.
     let detach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: runtime_id.clone(),
         })),
     };
     client.send(&detach).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for WorkspaceDetached");
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceDetached(_)) => break,
             Some(
                 v3::server_envelope::Payload::OutputDelta(_)
                 | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}"),
+            other => panic!("expected WorkspaceDetached, got {other:?}"),
         }
     }
 
@@ -259,15 +259,15 @@ async fn close_pane_kills_pty() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     let resp = client.recv_or_timeout().await;
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => {
             assert!(snap.panes.is_empty(), "expected no panes after close, got: {:?}", snap.panes);
         }
         other => panic!("expected Snapshot, got {other:?}"),
@@ -393,15 +393,15 @@ async fn multi_client_delta_broadcast_delivers_identical_data() {
     client_b
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadOnly as i32,
             })),
         })
         .await;
     loop {
         match client_b.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }

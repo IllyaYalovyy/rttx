@@ -3,8 +3,8 @@
 //! Implements RFC-021 Section 8 (`OPT_RESYNC`).
 //!
 //! When the server's bounded push channel drops messages for a client, it
-//! sends `StreamOverflow`. The client requests `ResyncRuntime`, and the
-//! server responds with a fresh `RuntimeSnapshot`.
+//! sends `StreamOverflow`. The client requests `ResyncWorkspace`, and the
+//! server responds with a fresh `WorkspaceSnapshot`.
 //!
 //! Without `OPT_RESYNC`, the server forcibly disconnects the client on
 //! overflow. The client's connection state machine reconnects and receives
@@ -20,7 +20,7 @@ pub fn is_supported(effective_caps: &[i32]) -> bool {
 
 /// Build a `StreamOverflow` push event.
 ///
-/// `pane_id` is `Some` for pane-level overflow, `None` for runtime-level.
+/// `pane_id` is `Some` for pane-level overflow, `None` for workspace-level.
 #[must_use]
 pub fn build_stream_overflow(
     runtime_id: uuid::Uuid,
@@ -40,30 +40,30 @@ pub fn build_stream_overflow_envelope(overflow: v3::StreamOverflow) -> v3::Serve
     crate::v3_envelope::build_push_envelope(v3::server_envelope::Payload::StreamOverflow(overflow))
 }
 
-/// Build a `ResyncRuntime` request.
+/// Build a `ResyncWorkspace` request.
 #[must_use]
-pub fn build_resync_runtime(runtime_id: uuid::Uuid) -> v3::ResyncRuntime {
-    v3::ResyncRuntime { runtime_id: crate::uuid_to_bytes(runtime_id) }
+pub fn build_resync_workspace(runtime_id: uuid::Uuid) -> v3::ResyncWorkspace {
+    v3::ResyncWorkspace { runtime_id: crate::uuid_to_bytes(runtime_id) }
 }
 
-/// Build a `ClientEnvelope` for a `ResyncRuntime` request.
+/// Build a `ClientEnvelope` for a `ResyncWorkspace` request.
 #[must_use]
-pub fn build_resync_runtime_envelope(
+pub fn build_resync_workspace_envelope(
     id_gen: &crate::v3_envelope::RequestIdGenerator,
-    request: v3::ResyncRuntime,
+    request: v3::ResyncWorkspace,
 ) -> v3::ClientEnvelope {
     crate::v3_envelope::build_client_envelope(
         id_gen,
-        v3::client_envelope::Command::ResyncRuntime(request),
+        v3::client_envelope::Command::ResyncWorkspace(request),
     )
 }
 
-/// Build a `ServerEnvelope` response containing a `RuntimeSnapshot` for resync.
+/// Build a `ServerEnvelope` response containing a `WorkspaceSnapshot` for resync.
 ///
 /// This reuses the snapshot response builder — the wire format is identical
 /// to an attach snapshot response.
 #[must_use]
-pub fn build_resync_response(request_id: u64, snapshot: v3::RuntimeSnapshot) -> v3::ServerEnvelope {
+pub fn build_resync_response(request_id: u64, snapshot: v3::WorkspaceSnapshot) -> v3::ServerEnvelope {
     crate::v3_snapshot::build_snapshot_response(request_id, snapshot)
 }
 
@@ -86,14 +86,14 @@ mod tests {
     #[test]
     fn supported_when_capability_present() {
         let caps =
-            vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::OptResync as i32];
+            vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::OptResync as i32];
         assert!(is_supported(&caps));
     }
 
     #[test]
     fn not_supported_when_capability_absent() {
         let caps = vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::OptDiagnostics as i32,
         ];
         assert!(!is_supported(&caps));
@@ -178,31 +178,31 @@ mod tests {
         assert_eq!(env, decoded);
     }
 
-    // ── build_resync_runtime ──
+    // ── build_resync_workspace ──
 
     #[test]
-    fn resync_runtime_populates_runtime_id() {
+    fn resync_workspace_populates_runtime_id() {
         let r = rt();
-        let req = build_resync_runtime(r);
+        let req = build_resync_workspace(r);
         assert_eq!(req.runtime_id, uuid_to_bytes(r));
     }
 
     #[test]
-    fn resync_runtime_wire_roundtrip() {
-        let req = build_resync_runtime(rt());
+    fn resync_workspace_wire_roundtrip() {
+        let req = build_resync_workspace(rt());
         let mut buf = BytesMut::new();
         encode_frame(&req, &mut buf).unwrap();
-        let decoded: v3::ResyncRuntime = decode_frame(&mut buf).unwrap();
+        let decoded: v3::ResyncWorkspace = decode_frame(&mut buf).unwrap();
         assert_eq!(req, decoded);
     }
 
-    // ── build_resync_runtime_envelope ──
+    // ── build_resync_workspace_envelope ──
 
     #[test]
     fn resync_envelope_has_nonzero_request_id() {
         let id_gen = RequestIdGenerator::new();
-        let req = build_resync_runtime(rt());
-        let env = build_resync_runtime_envelope(&id_gen, req);
+        let req = build_resync_workspace(rt());
+        let env = build_resync_workspace_envelope(&id_gen, req);
         assert_ne!(env.request_id, 0);
     }
 
@@ -210,21 +210,21 @@ mod tests {
     fn resync_envelope_contains_correct_command() {
         let id_gen = RequestIdGenerator::new();
         let r = rt();
-        let req = build_resync_runtime(r);
-        let env = build_resync_runtime_envelope(&id_gen, req);
+        let req = build_resync_workspace(r);
+        let env = build_resync_workspace_envelope(&id_gen, req);
         match env.command {
-            Some(v3::client_envelope::Command::ResyncRuntime(ref rs)) => {
+            Some(v3::client_envelope::Command::ResyncWorkspace(ref rs)) => {
                 assert_eq!(rs.runtime_id, uuid_to_bytes(r));
             }
-            _ => panic!("expected ResyncRuntime command"),
+            _ => panic!("expected ResyncWorkspace command"),
         }
     }
 
     #[test]
     fn resync_envelope_wire_roundtrip() {
         let id_gen = RequestIdGenerator::new();
-        let req = build_resync_runtime(rt());
-        let env = build_resync_runtime_envelope(&id_gen, req);
+        let req = build_resync_workspace(rt());
+        let env = build_resync_workspace_envelope(&id_gen, req);
         let mut buf = BytesMut::new();
         encode_frame(&env, &mut buf).unwrap();
         let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
@@ -235,28 +235,28 @@ mod tests {
 
     #[test]
     fn resync_response_echoes_request_id() {
-        let snap = crate::v3_snapshot::build_runtime_snapshot(
+        let snap = crate::v3_snapshot::build_workspace_snapshot(
             rt(),
             42,
-            v3::RuntimeClientRole::Writer,
+            v3::WorkspaceClientRole::Writer,
             vec![],
         );
         let env = build_resync_response(7, snap.clone());
         assert_eq!(env.request_id, 7);
         match env.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(ref s)) => {
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(ref s)) => {
                 assert_eq!(s, &snap);
             }
-            _ => panic!("expected RuntimeSnapshot payload"),
+            _ => panic!("expected WorkspaceSnapshot payload"),
         }
     }
 
     #[test]
     fn resync_response_is_not_push_event() {
-        let snap = crate::v3_snapshot::build_runtime_snapshot(
+        let snap = crate::v3_snapshot::build_workspace_snapshot(
             rt(),
             1,
-            v3::RuntimeClientRole::Writer,
+            v3::WorkspaceClientRole::Writer,
             vec![],
         );
         let env = build_resync_response(42, snap);
@@ -278,10 +278,10 @@ mod tests {
                 scrollback_tail: bytes::Bytes::from_static(b"$ "),
                 total_scrollback_bytes: 2,
             });
-        let snap = crate::v3_snapshot::build_runtime_snapshot(
+        let snap = crate::v3_snapshot::build_workspace_snapshot(
             rt(),
             99,
-            v3::RuntimeClientRole::Writer,
+            v3::WorkspaceClientRole::Writer,
             vec![pane],
         );
         let env = build_resync_response(55, snap);
@@ -298,14 +298,14 @@ mod tests {
         let err = crate::v3_error::build_error(
             v3::ErrorKind::UnsupportedCapability,
             "OPT_RESYNC not negotiated",
-            "ResyncRuntime",
+            "ResyncWorkspace",
         );
         let env = crate::v3_error::build_error_response(42, err);
         assert_eq!(env.request_id, 42);
         match env.payload {
             Some(v3::server_envelope::Payload::Error(ref e)) => {
                 assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
-                assert_eq!(e.operation, "ResyncRuntime");
+                assert_eq!(e.operation, "ResyncWorkspace");
             }
             _ => panic!("expected Error payload"),
         }
@@ -324,13 +324,13 @@ mod tests {
         let overflow_env = build_stream_overflow_envelope(overflow);
         assert!(crate::v3_envelope::is_push_event(&overflow_env));
 
-        // 2. Client receives overflow and sends ResyncRuntime request
-        let resync_req = build_resync_runtime(r);
-        let resync_env = build_resync_runtime_envelope(&id_gen, resync_req);
+        // 2. Client receives overflow and sends ResyncWorkspace request
+        let resync_req = build_resync_workspace(r);
+        let resync_env = build_resync_workspace_envelope(&id_gen, resync_req);
         let saved_request_id = resync_env.request_id;
         assert_ne!(saved_request_id, 0);
 
-        // 3. Server responds with fresh RuntimeSnapshot
+        // 3. Server responds with fresh WorkspaceSnapshot
         let pane =
             crate::v3_snapshot::build_pane_snapshot(crate::v3_snapshot::PaneSnapshotParams {
                 pane_id: p,
@@ -344,10 +344,10 @@ mod tests {
                 scrollback_tail: bytes::Bytes::from_static(b"$ "),
                 total_scrollback_bytes: 2,
             });
-        let snap = crate::v3_snapshot::build_runtime_snapshot(
+        let snap = crate::v3_snapshot::build_workspace_snapshot(
             r,
             50,
-            v3::RuntimeClientRole::Writer,
+            v3::WorkspaceClientRole::Writer,
             vec![pane],
         );
         let snap_env = build_resync_response(saved_request_id, snap);
@@ -366,19 +366,19 @@ mod tests {
         let gap = crate::v3_snapshot::detect_output_seq_gap(5, 8);
         assert_eq!(gap, Some(3));
 
-        // Client has OPT_RESYNC, so it sends ResyncRuntime
+        // Client has OPT_RESYNC, so it sends ResyncWorkspace
         let caps =
-            vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::OptResync as i32];
+            vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::OptResync as i32];
         assert!(is_supported(&caps));
 
-        let req = build_resync_runtime(r);
-        let env = build_resync_runtime_envelope(&id_gen, req);
+        let req = build_resync_workspace(r);
+        let env = build_resync_workspace_envelope(&id_gen, req);
         assert_ne!(env.request_id, 0);
         match env.command {
-            Some(v3::client_envelope::Command::ResyncRuntime(ref rs)) => {
+            Some(v3::client_envelope::Command::ResyncWorkspace(ref rs)) => {
                 assert_eq!(rs.runtime_id, uuid_to_bytes(r));
             }
-            _ => panic!("expected ResyncRuntime command"),
+            _ => panic!("expected ResyncWorkspace command"),
         }
     }
 
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn without_resync_server_disconnects_on_overflow() {
-        let caps = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+        let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
         assert!(!is_supported(&caps));
 
         // Server builds a stream overflow error to disconnect the client

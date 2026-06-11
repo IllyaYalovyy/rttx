@@ -4,7 +4,7 @@
 mod common;
 
 use common::{
-    attach_rw, create_pane, create_runtime, send_input, start_test_server,
+    attach_rw, create_pane, create_workspace, send_input, start_test_server,
     wait_for_state_containing,
 };
 use rttx_proto::{bytes_to_uuid, v3};
@@ -26,7 +26,7 @@ async fn restart_restores_terminal_modes_from_snapshot_metadata() {
         c.handshake().await;
 
         runtime_id_bytes =
-            create_runtime(&mut c, "mode-restore", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut c, "mode-restore", v3::WorkspacePolicy::Persistent).await;
         let pane_id_bytes = create_pane(&mut c, &runtime_id_bytes).await;
         pane_id = bytes_to_uuid(&pane_id_bytes).unwrap();
         attach_rw(&mut c, &runtime_id_bytes).await;

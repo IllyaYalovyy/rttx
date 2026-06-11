@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestClient, attach_rw, create_pane, create_runtime, send_input, start_test_server};
+use common::{TestClient, attach_rw, create_pane, create_workspace, send_input, start_test_server};
 use rttx_proto::v3;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ async fn pty_output_is_delivered_as_v3_output_delta() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
     let runtime_id =
-        create_runtime(&mut client, "v3-broadcast", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut client, "v3-broadcast", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
 
@@ -47,10 +47,10 @@ async fn output_delta_is_broadcast_to_multiple_clients() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
-    // Writer creates the runtime and a pane.
+    // Writer creates the workspace and a pane.
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_runtime(&mut writer, "v3-fanout", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut writer, "v3-fanout", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
     let pane_id = create_pane(&mut writer, &runtime_id).await;
 

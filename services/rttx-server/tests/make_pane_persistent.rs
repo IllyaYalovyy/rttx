@@ -19,30 +19,30 @@ async fn make_pane_persistent_flow() {
     // 1. Create session.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "pane-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     })
     .await;
     let runtime_id = match c.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
     let _session_uuid = bytes_to_uuid(&runtime_id).unwrap();
 
     // 2. Attach session.
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     })
     .await;
     let snapshot = loop {
         match c.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => break s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => break s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -124,28 +124,28 @@ async fn make_pane_persistent_flow() {
 
     c2.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
     })
     .await;
-    let runtimes = match c2.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-        other => panic!("expected RuntimeList, got {other:?}"),
+    let workspaces = match c2.recv().await.payload {
+        Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+        other => panic!("expected WorkspaceList, got {other:?}"),
     };
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].pane_count, 1);
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].pane_count, 1);
 
     // 8. Re-attach and verify scrollback.
     c2.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     })
     .await;
     let snapshot = loop {
         match c2.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => break s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => break s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }

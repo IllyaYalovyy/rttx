@@ -22,9 +22,9 @@ use crate::v3;
 pub enum ErrorClassification {
     /// Version or capability mismatch — not retryable, user must update.
     IncompatibleVersion,
-    /// The target resource (runtime or pane) does not exist.
+    /// The target resource (workspace or pane) does not exist.
     ResourceNotFound,
-    /// Another client owns the runtime — user must decide (takeover or wait).
+    /// Another client owns the workspace — user must decide (takeover or wait).
     OwnershipConflict,
     /// The server's push channel overflowed — retryable via resync.
     StreamOverflow,
@@ -46,7 +46,7 @@ pub fn classify_error_kind(kind: v3::ErrorKind) -> ErrorClassification {
         v3::ErrorKind::ProtocolMismatch | v3::ErrorKind::UnsupportedCapability => {
             ErrorClassification::IncompatibleVersion
         }
-        v3::ErrorKind::RuntimeNotFound | v3::ErrorKind::PaneNotFound => {
+        v3::ErrorKind::WorkspaceNotFound | v3::ErrorKind::PaneNotFound => {
             ErrorClassification::ResourceNotFound
         }
         v3::ErrorKind::OwnershipConflict | v3::ErrorKind::TakeoverRequired => {
@@ -161,9 +161,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_runtime_not_found() {
+    fn classify_workspace_not_found() {
         assert_eq!(
-            classify_error_kind(v3::ErrorKind::RuntimeNotFound),
+            classify_error_kind(v3::ErrorKind::WorkspaceNotFound),
             ErrorClassification::ResourceNotFound
         );
     }
@@ -231,8 +231,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_not_found_not_retryable() {
-        assert!(!is_default_retryable(v3::ErrorKind::RuntimeNotFound));
+    fn workspace_not_found_not_retryable() {
+        assert!(!is_default_retryable(v3::ErrorKind::WorkspaceNotFound));
     }
 
     #[test]
@@ -278,8 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_not_found_does_not_require_user_action() {
-        assert!(!is_default_user_action_required(v3::ErrorKind::RuntimeNotFound));
+    fn workspace_not_found_does_not_require_user_action() {
+        assert!(!is_default_user_action_required(v3::ErrorKind::WorkspaceNotFound));
     }
 
     // ── build_error ──
@@ -287,10 +287,10 @@ mod tests {
     #[test]
     fn build_error_sets_kind_and_message() {
         let err =
-            build_error(v3::ErrorKind::RuntimeNotFound, "runtime abc not found", "AttachRuntime");
-        assert_eq!(err.kind, v3::ErrorKind::RuntimeNotFound as i32);
-        assert_eq!(err.message, "runtime abc not found");
-        assert_eq!(err.operation, "AttachRuntime");
+            build_error(v3::ErrorKind::WorkspaceNotFound, "workspace abc not found", "AttachWorkspace");
+        assert_eq!(err.kind, v3::ErrorKind::WorkspaceNotFound as i32);
+        assert_eq!(err.message, "workspace abc not found");
+        assert_eq!(err.operation, "AttachWorkspace");
     }
 
     #[test]
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn build_retryable_error_sets_retry_hint() {
-        let err = build_retryable_error(v3::ErrorKind::Internal, "busy", "CreateRuntime", 5);
+        let err = build_retryable_error(v3::ErrorKind::Internal, "busy", "CreateWorkspace", 5);
         assert!(err.retryable);
         assert!(!err.user_action_required);
         assert_eq!(err.retry_after_seconds, 5);
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn error_response_wire_roundtrip() {
-        let err = build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachRuntime");
+        let err = build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachWorkspace");
         let env = build_error_response(7, err);
         let mut buf = BytesMut::new();
         encode_frame(&env, &mut buf).unwrap();
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn error_kind_extracts_known_kind() {
-        let err = build_error(v3::ErrorKind::TakeoverRequired, "takeover", "AttachRuntime");
+        let err = build_error(v3::ErrorKind::TakeoverRequired, "takeover", "AttachWorkspace");
         assert_eq!(error_kind(&err), v3::ErrorKind::TakeoverRequired);
     }
 
@@ -403,7 +403,7 @@ mod tests {
             v3::ErrorKind::ProtocolMismatch,
             v3::ErrorKind::UnsupportedCapability,
             v3::ErrorKind::InvalidArgument,
-            v3::ErrorKind::RuntimeNotFound,
+            v3::ErrorKind::WorkspaceNotFound,
             v3::ErrorKind::PaneNotFound,
             v3::ErrorKind::OwnershipConflict,
             v3::ErrorKind::TakeoverRequired,
@@ -426,7 +426,7 @@ mod tests {
             v3::ErrorKind::ProtocolMismatch,
             v3::ErrorKind::UnsupportedCapability,
             v3::ErrorKind::InvalidArgument,
-            v3::ErrorKind::RuntimeNotFound,
+            v3::ErrorKind::WorkspaceNotFound,
             v3::ErrorKind::PaneNotFound,
             v3::ErrorKind::OwnershipConflict,
             v3::ErrorKind::TakeoverRequired,

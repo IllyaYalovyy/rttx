@@ -16,7 +16,7 @@ use tokio::process::{Child, Command};
 const PROMPT: &str = "PROMPT> ";
 
 async fn start_binary_server(tmp: &tempfile::TempDir) -> (PathBuf, Child) {
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     let cache_dir = tmp.path().join("cache");
     let config_dir = tmp.path().join("config");
     let home_dir = tmp.path().join("home");
@@ -75,15 +75,15 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "shell-editing".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => created.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     client
@@ -107,14 +107,14 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
@@ -158,7 +158,7 @@ async fn resize_pane(
     client.ping().await; // barrier: flush the fire-and-forget resize
 }
 
-fn pane_scrollback(snapshot: &v3::RuntimeSnapshot, pane_id: &[u8]) -> bytes::Bytes {
+fn pane_scrollback(snapshot: &v3::WorkspaceSnapshot, pane_id: &[u8]) -> bytes::Bytes {
     snapshot
         .panes
         .iter()
@@ -176,31 +176,31 @@ async fn reattach_snapshot_bytes(
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+            command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
                 runtime_id: runtime_id.to_vec(),
             })),
         })
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeDetached(_)) => break,
+            Some(v3::server_envelope::Payload::WorkspaceDetached(_)) => break,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}"),
+            other => panic!("expected WorkspaceDetached, got {other:?}"),
         }
     }
 
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     let snapshot = loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => break snapshot,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => break snapshot,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
@@ -220,15 +220,15 @@ async fn attach_snapshot_bytes(
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.to_vec(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     let snapshot = loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => break snapshot,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => break snapshot,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }

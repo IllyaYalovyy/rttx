@@ -91,17 +91,17 @@ impl TestClient {
         // A test client advertises every capability so that all server
         // features (diagnostics, inventory, takeover, etc.) are negotiated.
         const ALL_CAPABILITIES: &[v3::Capability] = &[
-            v3::Capability::CoreRuntimeLifecycle,
+            v3::Capability::CoreWorkspaceLifecycle,
             v3::Capability::CorePaneLifecycle,
             v3::Capability::CoreTerminalIo,
             v3::Capability::CoreTerminalModes,
             v3::Capability::CorePasteIntent,
             v3::Capability::CoreFocusEvents,
-            v3::Capability::OptRuntimeInventoryV2,
+            v3::Capability::OptWorkspaceInventoryV2,
             v3::Capability::OptResync,
             v3::Capability::OptChunkedScrollback,
             v3::Capability::OptDiagnostics,
-            v3::Capability::OptRuntimeTakeover,
+            v3::Capability::OptWorkspaceTakeover,
         ];
         let hello = v3_handshake::build_client_hello(
             uuid::Uuid::new_v4(),
@@ -239,7 +239,7 @@ pub async fn start_test_server(
         }
     }
 
-    let runtime_dir = tmp_dir.join("runtime");
+    let runtime_dir = tmp_dir.join("workspace");
     let cache_dir = tmp_dir.join("cache");
     std::fs::create_dir_all(&runtime_dir).unwrap();
     std::fs::create_dir_all(&cache_dir).unwrap();
@@ -252,7 +252,7 @@ pub async fn start_test_server(
         let mut s = server.lock().await;
         s.load_persisted_state();
     }
-    Server::reconstruct_runtimes(&server).await;
+    Server::reconstruct_workspaces(&server).await;
     let sock = socket_path.clone();
     let handle = tokio::spawn(async move { rttx_server::server::run(server).await });
     for _ in 0..50 {
@@ -283,7 +283,7 @@ pub async fn wait_for_scrollback_log(
     base_dir: &Path,
     timeout: std::time::Duration,
 ) -> Vec<PathBuf> {
-    let runtimes_dir = base_dir.join("state/rttx/daemon/runtimes");
+    let runtimes_dir = base_dir.join("state/rttx/daemon/workspaces");
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let logs = find_scrollback_logs(&runtimes_dir);
@@ -317,13 +317,13 @@ pub async fn wait_for_state_containing(
     needle: &str,
     timeout: std::time::Duration,
 ) {
-    let runtimes_dir = base_dir.join("state/rttx/daemon/runtimes");
+    let runtimes_dir = base_dir.join("state/rttx/daemon/workspaces");
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if let Ok(entries) = std::fs::read_dir(&runtimes_dir) {
             for entry in entries.flatten() {
-                let runtime_json = entry.path().join("runtime.json");
-                if let Ok(content) = std::fs::read_to_string(&runtime_json)
+                let workspace_json = entry.path().join("workspace.json");
+                if let Ok(content) = std::fs::read_to_string(&workspace_json)
                     && content.contains(needle)
                 {
                     return;
@@ -335,54 +335,54 @@ pub async fn wait_for_state_containing(
     }
 }
 
-pub async fn create_runtime(
+pub async fn create_workspace(
     client: &mut TestClient,
     name: &str,
-    policy: v3::RuntimePolicy,
+    policy: v3::WorkspacePolicy,
 ) -> Vec<u8> {
     client
-        .send_cmd(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        .send_cmd(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: name.into(),
             policy: policy as i32,
         }))
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => return rc.runtime_id,
+            Some(v3::server_envelope::Payload::WorkspaceCreated(rc)) => return rc.runtime_id,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         }
     }
 }
 
-pub async fn attach_rw(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
+pub async fn attach_rw(client: &mut TestClient, runtime_id: &[u8]) -> v3::WorkspaceSnapshot {
     client
-        .send_cmd(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        .send_cmd(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.to_vec(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         }))
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => return s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => return s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeSnapshot, got {other:?}"),
+            other => panic!("expected WorkspaceSnapshot, got {other:?}"),
         }
     }
 }
 
-pub async fn attach_ro(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
+pub async fn attach_ro(client: &mut TestClient, runtime_id: &[u8]) -> v3::WorkspaceSnapshot {
     client
-        .send_cmd(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        .send_cmd(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.to_vec(),
-            attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadOnly as i32,
         }))
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => return s,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => return s,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeSnapshot, got {other:?}"),
+            other => panic!("expected WorkspaceSnapshot, got {other:?}"),
         }
     }
 }
@@ -435,47 +435,47 @@ pub async fn close_pane(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
     }
 }
 
-pub async fn detach_runtime(client: &mut TestClient, runtime_id: &[u8]) {
+pub async fn detach_workspace(client: &mut TestClient, runtime_id: &[u8]) {
     client
-        .send_cmd(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        .send_cmd(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: runtime_id.to_vec(),
         }))
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
             Some(
-                v3::server_envelope::Payload::RuntimeDetached(_)
-                | v3::server_envelope::Payload::RuntimeTerminated(_),
+                v3::server_envelope::Payload::WorkspaceDetached(_)
+                | v3::server_envelope::Payload::WorkspaceTerminated(_),
             ) => return,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeDetached/Terminated, got {other:?}"),
+            other => panic!("expected WorkspaceDetached/Terminated, got {other:?}"),
         }
     }
 }
 
-pub async fn terminate_runtime(client: &mut TestClient, runtime_id: &[u8]) {
+pub async fn terminate_workspace(client: &mut TestClient, runtime_id: &[u8]) {
     client
-        .send_cmd(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        .send_cmd(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: runtime_id.to_vec(),
         }))
         .await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeTerminated(_)) => return,
+            Some(v3::server_envelope::Payload::WorkspaceTerminated(_)) => return,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeTerminated, got {other:?}"),
+            other => panic!("expected WorkspaceTerminated, got {other:?}"),
         }
     }
 }
 
-pub async fn list_runtimes(client: &mut TestClient) -> Vec<v3::RuntimeInfo> {
+pub async fn list_workspaces(client: &mut TestClient) -> Vec<v3::WorkspaceInfo> {
     client.drain(std::time::Duration::from_millis(50)).await;
-    client.send_cmd(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})).await;
+    client.send_cmd(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})).await;
     loop {
         match client.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(rl)) => return rl.runtimes,
+            Some(v3::server_envelope::Payload::WorkspaceList(rl)) => return rl.workspaces,
             Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
-            other => panic!("expected RuntimeList, got {other:?}"),
+            other => panic!("expected WorkspaceList, got {other:?}"),
         }
     }
 }
@@ -588,14 +588,14 @@ pub async fn report_client_size(
 
 /// Reattach (resync) and return a fresh snapshot carrying the authoritative
 /// tree.
-pub async fn resync(client: &mut TestClient, runtime_id: &[u8]) -> v3::RuntimeSnapshot {
+pub async fn resync(client: &mut TestClient, runtime_id: &[u8]) -> v3::WorkspaceSnapshot {
     let reply = client
-        .request(v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+        .request(v3::client_envelope::Command::ResyncWorkspace(v3::ResyncWorkspace {
             runtime_id: runtime_id.to_vec(),
         }))
         .await;
     match reply.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(s)) => s,
-        other => panic!("expected RuntimeSnapshot, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(s)) => s,
+        other => panic!("expected WorkspaceSnapshot, got {other:?}"),
     }
 }

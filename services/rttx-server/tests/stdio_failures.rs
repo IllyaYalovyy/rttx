@@ -13,7 +13,7 @@ use tokio::process::{Child, Command};
 
 async fn spawn_daemon(tmp: &TempDir) -> Child {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     let cache_dir = tmp.path().join("cache");
     tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
     tokio::fs::create_dir_all(&cache_dir).await.unwrap();
@@ -45,7 +45,7 @@ async fn spawn_daemon(tmp: &TempDir) -> Child {
 
 fn spawn_stdio(tmp: &TempDir) -> Child {
     let bin = env!("CARGO_BIN_EXE_rttx-server");
-    let runtime_dir = tmp.path().join("runtime");
+    let runtime_dir = tmp.path().join("workspace");
     let cache_dir = tmp.path().join("cache");
 
     Command::new(bin)
@@ -169,14 +169,14 @@ async fn stdin_close_after_session_create_exits_cleanly() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "disconnect-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     send_frame(&mut stdin, &create).await;
     let resp = recv_frame(&mut stdout, &mut read_buf).await;
-    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeCreated(_))));
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceCreated(_))));
 
     // Disconnect mid-session.
     drop(stdin);

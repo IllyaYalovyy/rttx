@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{attach_rw, create_pane, create_runtime, start_test_server};
+use common::{attach_rw, create_pane, create_workspace, start_test_server};
 use rttx_proto::{bytes_to_uuid, v3};
 
 #[tokio::test]
@@ -15,7 +15,7 @@ async fn session_label_resolves_name_through_lifecycle() {
     client.handshake().await;
 
     // Create a named session.
-    let sid = create_runtime(&mut client, "dev-workspace", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client, "dev-workspace", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&sid).unwrap();
 
     // Attach and create a pane so the session is fully active.
@@ -25,9 +25,9 @@ async fn session_label_resolves_name_through_lifecycle() {
     // Verify the session is visible with its name.
     let mut client2 = common::TestClient::connect(&socket_path).await;
     client2.handshake().await;
-    let runtimes = common::list_runtimes(&mut client2).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].name, "dev-workspace");
+    let workspaces = common::list_workspaces(&mut client2).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].name, "dev-workspace");
 
     // Verify short_id produces 8-char output matching the UUID prefix.
     let short = rttx_server::server::short_id(runtime_id);

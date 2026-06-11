@@ -37,7 +37,7 @@ pub struct FeedResult {
     pub pending_replies: Vec<Vec<u8>>,
 }
 
-/// Runtime state of a single pane.
+/// Workspace state of a single pane.
 pub struct Pane {
     /// Unique pane identifier.
     pub id: Uuid,
@@ -433,7 +433,7 @@ mod tests {
         let log_path = pane.scrollback_log_path.as_ref().unwrap();
         let expected = tmp
             .path()
-            .join("runtimes")
+            .join("workspaces")
             .join(runtime_id.to_string())
             .join("scrollback")
             .join(format!("{}.log", pane.id));

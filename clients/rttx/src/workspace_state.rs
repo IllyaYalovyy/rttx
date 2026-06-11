@@ -185,7 +185,7 @@ impl WindowState {
                     status: ConnectionStatus::Disconnected,
                 });
             }
-            EndpointEvent::RuntimeTerminated { workspace_id, .. } => {
+            EndpointEvent::WorkspaceTerminated { workspace_id, .. } => {
                 if let Some(session) =
                     self.workspaces.iter_mut().find(|session| session.uuid == *workspace_id)
                 {
@@ -196,14 +196,14 @@ impl WindowState {
                     status: ConnectionStatus::Disconnected,
                 });
             }
-            EndpointEvent::InventoryLoaded { endpoint, runtimes } => {
-                let inventory_ids: std::collections::BTreeSet<String> = runtimes
+            EndpointEvent::InventoryLoaded { endpoint, workspaces } => {
+                let inventory_ids: std::collections::BTreeSet<String> = workspaces
                     .iter()
                     .filter_map(|s| rttx_proto::bytes_to_uuid(&s.id).ok().map(|u| u.to_string()))
                     .collect();
                 self.dismissed_runtime_ids.retain(|id| inventory_ids.contains(id));
 
-                let recovered = self.recover_managed_workspaces_from_inventory(endpoint, runtimes);
+                let recovered = self.recover_managed_workspaces_from_inventory(endpoint, workspaces);
                 if recovered.is_empty() {
                     return transition;
                 }
@@ -221,7 +221,7 @@ impl WindowState {
                 let restores = self.build_resync_restores(workspace_id, snapshot);
                 transition.pane_snapshot_restores = restores;
             }
-            EndpointEvent::RuntimeMessage { .. } | EndpointEvent::WorkspaceError { .. } => {}
+            EndpointEvent::WorkspaceMessage { .. } | EndpointEvent::WorkspaceError { .. } => {}
         }
 
         transition
@@ -231,7 +231,7 @@ impl WindowState {
     pub fn recover_managed_workspaces_from_inventory(
         &mut self,
         endpoint: &RuntimeEndpoint,
-        runtimes: &[v3::RuntimeInfo],
+        workspaces: &[v3::WorkspaceInfo],
     ) -> Vec<WorkspaceState> {
         let mut known_runtime_ids = self
             .workspaces
@@ -243,7 +243,7 @@ impl WindowState {
             .collect::<BTreeSet<_>>();
         let mut recovered = Vec::new();
 
-        for rt_info in runtimes {
+        for rt_info in workspaces {
             let Some(session) = recovered_managed_workspace(endpoint, rt_info) else {
                 continue;
             };
@@ -395,7 +395,7 @@ impl WindowState {
         &mut self,
         workspace_id: &str,
         runtime_id: &str,
-        snapshot: &v3::RuntimeSnapshot,
+        snapshot: &v3::WorkspaceSnapshot,
     ) -> Option<ManagedWorkspaceOpenResult> {
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
 
@@ -529,7 +529,7 @@ impl WindowState {
     fn build_resync_restores(
         &self,
         workspace_id: &str,
-        snapshot: &v3::RuntimeSnapshot,
+        snapshot: &v3::WorkspaceSnapshot,
     ) -> Vec<WorkspacePaneRestore> {
         let Some(session) = self.workspaces.iter().find(|s| s.uuid == workspace_id) else {
             return Vec::new();
@@ -564,11 +564,11 @@ impl WindowState {
 
 fn recovered_managed_workspace(
     endpoint: &RuntimeEndpoint,
-    rt_info: &v3::RuntimeInfo,
+    rt_info: &v3::WorkspaceInfo,
 ) -> Option<WorkspaceState> {
     let runtime_id = rttx_proto::bytes_to_uuid(&rt_info.id).ok()?.to_string();
-    let policy = match v3::RuntimePolicy::try_from(rt_info.policy).ok() {
-        Some(v3::RuntimePolicy::Ephemeral) => WorkspacePolicy::Ephemeral,
+    let policy = match v3::WorkspacePolicy::try_from(rt_info.policy).ok() {
+        Some(v3::WorkspacePolicy::Ephemeral) => WorkspacePolicy::Ephemeral,
         _ => WorkspacePolicy::Persistent,
     };
 
@@ -638,7 +638,7 @@ fn snapshot_pane_id(pane_snapshot: &v3::PaneSnapshot) -> Option<String> {
 /// durable server pane id, so the render tree and the daemon share one
 /// identity with no client-side binding indirection.
 #[must_use]
-pub fn render_layout_from_snapshot(snapshot: &v3::RuntimeSnapshot) -> Option<LayoutNode> {
+pub fn render_layout_from_snapshot(snapshot: &v3::WorkspaceSnapshot) -> Option<LayoutNode> {
     snapshot.tree.as_ref().and_then(layout_from_pane_tree)
 }
 
@@ -669,14 +669,14 @@ mod tests {
         }
     }
 
-    fn snapshot(runtime_id: &str, panes: Vec<v3::PaneSnapshot>) -> v3::RuntimeSnapshot {
-        v3::RuntimeSnapshot {
+    fn snapshot(runtime_id: &str, panes: Vec<v3::PaneSnapshot>) -> v3::WorkspaceSnapshot {
+        v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             panes,
-            runtime_revision: 7,
-            client_role: v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 7,
+            client_role: v3::WorkspaceClientRole::Writer as i32,
         }
     }
 
@@ -725,19 +725,19 @@ mod tests {
     fn rt_info(
         runtime_id: &str,
         name: &str,
-        policy: v3::RuntimePolicy,
+        policy: v3::WorkspacePolicy,
         panes: Vec<v3::PaneInfo>,
         _active_pane_id: Option<&str>,
-    ) -> v3::RuntimeInfo {
-        v3::RuntimeInfo {
+    ) -> v3::WorkspaceInfo {
+        v3::WorkspaceInfo {
             id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(runtime_id).unwrap()),
             name: name.to_string(),
             pane_count: panes.len() as u32,
             panes,
             policy: policy as i32,
             reconstructed: true,
-            runtime_revision: 7,
-            current_client_role: v3::RuntimeClientRole::Unattached as i32,
+            workspace_revision: 7,
+            current_client_role: v3::WorkspaceClientRole::Unattached as i32,
             has_write_owner: false,
             read_only_client_count: 0,
             active_pane_summary: String::new(),
@@ -968,7 +968,7 @@ mod tests {
             &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![
                     pane_info(first_pane, "Shell", "/srv/project"),
                     pane_info(second_pane, "Logs", "/srv/project"),
@@ -1034,7 +1034,7 @@ mod tests {
             &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![pane_info("07fa83b4-9ae3-4354-a1c5-1f685ffab370", "Shell", "/srv/project")],
                 None,
             )],
@@ -1055,7 +1055,7 @@ mod tests {
             &[rt_info(
                 runtime_id,
                 "Recovered Workspace",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![],
                 None,
             )],
@@ -1103,10 +1103,10 @@ mod tests {
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: RuntimeEndpoint::Local,
-            runtimes: vec![rt_info(
+            workspaces: vec![rt_info(
                 &runtime_id,
                 "Recovered Workspace",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![pane_info(&pane_id, "Shell", "/srv/project")],
                 Some(&pane_id),
             )],
@@ -1378,10 +1378,10 @@ mod tests {
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         )]);
 
-        let transition = state.reconcile_endpoint_event(&EndpointEvent::RuntimeTerminated {
+        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceTerminated {
             workspace_id: "workspace-1".into(),
             runtime_id: "d7d04564-b2bf-4302-9495-e65c4df12ac6".into(),
-            reason: v3::RuntimeTerminationReason::Explicit,
+            reason: v3::WorkspaceTerminationReason::Explicit,
         });
 
         assert_eq!(state.workspaces[0].runtime.runtime_id, None);
@@ -1419,10 +1419,10 @@ mod tests {
         // Inventory refresh reports the runtime still exists on the daemon.
         let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: RuntimeEndpoint::Local,
-            runtimes: vec![rt_info(
+            workspaces: vec![rt_info(
                 &runtime_id,
                 "Should Not Resurrect",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![pane_info(&pane_id, "Shell", "/tmp")],
                 Some(&pane_id),
             )],
@@ -1451,10 +1451,10 @@ mod tests {
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: endpoint.clone(),
-            runtimes: vec![rt_info(
+            workspaces: vec![rt_info(
                 &runtime_id,
                 "Remote Work",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![pane_info(&pane_id, "bash", "/home/user")],
                 Some(&pane_id),
             )],
@@ -1491,10 +1491,10 @@ mod tests {
 
             let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
                 endpoint: RuntimeEndpoint::Local,
-                runtimes: vec![rt_info(
+                workspaces: vec![rt_info(
                     &runtime_id,
                     &format!("Dismissed {i}"),
-                    v3::RuntimePolicy::Persistent,
+                    v3::WorkspacePolicy::Persistent,
                     vec![pane_info(&pane_id, "bash", "/tmp")],
                     Some(&pane_id),
                 )],
@@ -1542,7 +1542,7 @@ mod tests {
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "ws-1".into(),
             runtime_id: runtime_id.clone(),
-            snapshot: v3::RuntimeSnapshot {
+            snapshot: v3::WorkspaceSnapshot {
                 tree: None,
                 default_active_pane_id: Vec::new(),
                 runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
@@ -1559,8 +1559,8 @@ mod tests {
                     total_scrollback_bytes: 0,
                     scrollback_complete: true,
                 }],
-                runtime_revision: 2,
-                client_role: v3::RuntimeClientRole::Writer as i32,
+                workspace_revision: 2,
+                client_role: v3::WorkspaceClientRole::Writer as i32,
             },
         });
 
@@ -2007,10 +2007,10 @@ mod tests {
         // Inventory only contains live_id — stale_id was already removed by daemon.
         let _transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
             endpoint: RuntimeEndpoint::Local,
-            runtimes: vec![rt_info(
+            workspaces: vec![rt_info(
                 &live_id,
                 "Still Running",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![pane_info(&pane_id, "bash", "/tmp")],
                 Some(&pane_id),
             )],
@@ -2311,7 +2311,7 @@ mod tests {
             &[rt_info(
                 &runtime_id,
                 "Recovered",
-                v3::RuntimePolicy::Persistent,
+                v3::WorkspacePolicy::Persistent,
                 vec![pane_info(&pane_id, "Shell", "/home")],
                 Some(&pane_id),
             )],

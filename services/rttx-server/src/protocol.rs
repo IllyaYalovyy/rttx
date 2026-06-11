@@ -3,7 +3,7 @@
 //! Convenience functions for constructing server response messages.
 
 use crate::pane_tree::{PaneId, PaneTree, Side, SplitAxis, WorkspaceTree};
-use crate::runtime::{ClientRole, Runtime, TerminationReason};
+use crate::workspace::{ClientRole, Workspace, TerminationReason};
 use rttx_proto::{uuid_to_bytes, v3};
 use uuid::Uuid;
 
@@ -33,14 +33,14 @@ pub fn v3_cwd_changed(
     runtime_id: Uuid,
     pane_id: Uuid,
     cwd: String,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::ServerEnvelope {
     rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::CwdChanged(
         v3::CwdChanged {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cwd,
-            runtime_revision,
+            workspace_revision,
         },
     ))
 }
@@ -51,14 +51,14 @@ pub fn v3_title_changed(
     runtime_id: Uuid,
     pane_id: Uuid,
     title: String,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::ServerEnvelope {
     rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::TitleChanged(
         v3::TitleChanged {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             title,
-            runtime_revision,
+            workspace_revision,
         },
     ))
 }
@@ -69,27 +69,27 @@ pub fn v3_pane_exited(
     runtime_id: Uuid,
     pane_id: Uuid,
     status: i32,
-    runtime_revision: u64,
+    workspace_revision: u64,
 ) -> v3::ServerEnvelope {
     rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::PaneExited(
         v3::PaneExited {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             status,
-            runtime_revision,
+            workspace_revision,
         },
     ))
 }
 
-/// Build a v3 `RuntimeTerminated` push envelope.
+/// Build a v3 `WorkspaceTerminated` push envelope.
 #[must_use]
-pub fn v3_runtime_terminated(
+pub fn v3_workspace_terminated(
     runtime_id: Uuid,
     final_revision: u64,
     reason: TerminationReason,
 ) -> v3::ServerEnvelope {
-    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::RuntimeTerminated(
-        v3::RuntimeTerminated {
+    rttx_proto::v3_envelope::build_push_envelope(v3::server_envelope::Payload::WorkspaceTerminated(
+        v3::WorkspaceTerminated {
             runtime_id: uuid_to_bytes(runtime_id),
             final_revision,
             reason: reason.as_v3_proto() as i32,
@@ -184,13 +184,13 @@ where
     Some((min_cols?, min_rows?))
 }
 
-/// Build a v3 `RuntimeSnapshot` from a runtime's current state.
+/// Build a v3 `WorkspaceSnapshot` from a workspace's current state.
 #[must_use]
-pub fn build_v3_runtime_snapshot(
-    rt: &Runtime,
+pub fn build_v3_workspace_snapshot(
+    rt: &Workspace,
     runtime_id: Uuid,
-    client_role: v3::RuntimeClientRole,
-) -> v3::RuntimeSnapshot {
+    client_role: v3::WorkspaceClientRole,
+) -> v3::WorkspaceSnapshot {
     let panes: Vec<v3::PaneSnapshot> = rt
         .panes
         .values()
@@ -215,7 +215,7 @@ pub fn build_v3_runtime_snapshot(
             )
         })
         .collect();
-    rttx_proto::v3_snapshot::build_runtime_snapshot_with_tree(
+    rttx_proto::v3_snapshot::build_workspace_snapshot_with_tree(
         runtime_id,
         rt.revision(),
         client_role,
@@ -225,43 +225,43 @@ pub fn build_v3_runtime_snapshot(
     )
 }
 
-/// Build a v3 runtime inventory for `ListRuntimes`.
+/// Build a v3 workspace inventory for `ListWorkspaces`.
 #[must_use]
-pub fn v3_runtime_inventory_for<'a, I>(
+pub fn v3_workspace_inventory_for<'a, I>(
     client_id: Uuid,
-    runtimes: I,
+    workspaces: I,
     has_inventory_v2: bool,
-) -> Vec<v3::RuntimeInfo>
+) -> Vec<v3::WorkspaceInfo>
 where
-    I: IntoIterator<Item = &'a Runtime>,
+    I: IntoIterator<Item = &'a Workspace>,
 {
-    let mut inventory: Vec<_> = runtimes
+    let mut inventory: Vec<_> = workspaces
         .into_iter()
-        .map(|rt| v3_runtime_info_for(client_id, rt, has_inventory_v2))
+        .map(|rt| v3_workspace_info_for(client_id, rt, has_inventory_v2))
         .collect();
     inventory.sort_by(|left, right| left.id.cmp(&right.id));
     inventory
 }
 
-/// Build a v3 `RuntimeInfo` for a single runtime.
+/// Build a v3 `WorkspaceInfo` for a single workspace.
 ///
-/// Public so callers with per-runtime locks can build inventory entries
+/// Public so callers with per-workspace locks can build inventory entries
 /// one at a time.
 #[must_use]
-pub fn v3_runtime_info_for(
+pub fn v3_workspace_info_for(
     client_id: Uuid,
-    rt: &Runtime,
+    rt: &Workspace,
     has_inventory_v2: bool,
-) -> v3::RuntimeInfo {
+) -> v3::WorkspaceInfo {
     let policy = match rt.policy {
-        crate::runtime::RuntimePolicy::Persistent => v3::RuntimePolicy::Persistent,
-        crate::runtime::RuntimePolicy::Ephemeral => v3::RuntimePolicy::Ephemeral,
+        crate::workspace::WorkspacePolicy::Persistent => v3::WorkspacePolicy::Persistent,
+        crate::workspace::WorkspacePolicy::Ephemeral => v3::WorkspacePolicy::Ephemeral,
     };
     let current_role = rt
         .client_role(client_id)
-        .map_or(v3::RuntimeClientRole::Unattached, ClientRole::as_v3_proto);
+        .map_or(v3::WorkspaceClientRole::Unattached, ClientRole::as_v3_proto);
 
-    let params = rttx_proto::v3_inventory::RuntimeInfoParams {
+    let params = rttx_proto::v3_inventory::WorkspaceInfoParams {
         id: rt.id,
         name: rt.name.clone(),
         policy,
@@ -269,7 +269,7 @@ pub fn v3_runtime_info_for(
         has_write_owner: rt.has_write_owner(),
         read_only_client_count: u32::try_from(rt.read_only_client_count()).unwrap_or(u32::MAX),
         current_client_role: current_role,
-        runtime_revision: rt.revision(),
+        workspace_revision: rt.revision(),
         reconstructed: rt.reconstructed,
     };
 
@@ -293,9 +293,9 @@ pub fn v3_runtime_info_for(
             })
             .collect();
         panes.sort_by(|left, right| left.id.cmp(&right.id));
-        rttx_proto::v3_inventory::build_runtime_info_v2(
+        rttx_proto::v3_inventory::build_workspace_info_v2(
             params,
-            rttx_proto::v3_inventory::RuntimeInfoV2Fields {
+            rttx_proto::v3_inventory::WorkspaceInfoV2Fields {
                 active_pane_summary: String::new(),
                 takeover_eligible: !rt.has_write_owner(),
                 disabled_reason: String::new(),
@@ -303,7 +303,7 @@ pub fn v3_runtime_info_for(
             },
         )
     } else {
-        rttx_proto::v3_inventory::build_runtime_info(params)
+        rttx_proto::v3_inventory::build_workspace_info(params)
     }
 }
 
@@ -311,8 +311,8 @@ pub fn v3_runtime_info_for(
 #[must_use]
 pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsReport {
     let report = server.diagnostics();
-    let runtimes = report
-        .runtimes
+    let workspaces = report
+        .workspaces
         .iter()
         .map(|s| {
             let panes = s
@@ -329,7 +329,7 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
                 })
                 .collect();
             let id = uuid::Uuid::parse_str(&s.id).map(uuid_to_bytes).unwrap_or_default();
-            v3::RuntimeDiagnosticsInfo {
+            v3::WorkspaceDiagnosticsInfo {
                 id,
                 name: s.name.clone(),
                 active_pane_count: s.active_pane_count as u32,
@@ -341,7 +341,7 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
         })
         .collect();
     v3::DiagnosticsReport {
-        runtime_count: report.runtime_count as u32,
+        workspace_count: report.workspace_count as u32,
         total_pane_count: report.total_pane_count as u32,
         total_active_panes: report.total_active_panes as u32,
         total_exited_panes: report.total_exited_panes as u32,
@@ -350,7 +350,7 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
         total_raw_bytes: report.total_raw_bytes as u64,
         total_pending_flush: report.total_pending_flush as u64,
         total_command_history: 0,
-        runtimes,
+        workspaces,
     }
 }
 
@@ -367,7 +367,7 @@ mod tests {
             panic!("expected CwdChanged");
         };
         assert_eq!(inner.cwd, "/home/user");
-        assert_eq!(inner.runtime_revision, 42);
+        assert_eq!(inner.workspace_revision, 42);
         assert_eq!(inner.runtime_id, sid.as_bytes().to_vec());
         assert_eq!(inner.pane_id, pid.as_bytes().to_vec());
     }
@@ -395,17 +395,17 @@ mod tests {
             panic!("expected PaneExited");
         };
         assert_eq!(p.status, 137);
-        assert_eq!(p.runtime_revision, 9);
+        assert_eq!(p.workspace_revision, 9);
     }
 
     #[test]
-    fn v3_runtime_terminated_maps_reason() {
-        let env = v3_runtime_terminated(Uuid::new_v4(), 3, TerminationReason::EphemeralLastDetach);
-        let Some(v3::server_envelope::Payload::RuntimeTerminated(t)) = env.payload else {
-            panic!("expected RuntimeTerminated");
+    fn v3_workspace_terminated_maps_reason() {
+        let env = v3_workspace_terminated(Uuid::new_v4(), 3, TerminationReason::EphemeralLastDetach);
+        let Some(v3::server_envelope::Payload::WorkspaceTerminated(t)) = env.payload else {
+            panic!("expected WorkspaceTerminated");
         };
         assert_eq!(t.final_revision, 3);
-        assert_eq!(t.reason, v3::RuntimeTerminationReason::EphemeralDetach as i32);
+        assert_eq!(t.reason, v3::WorkspaceTerminationReason::EphemeralDetach as i32);
     }
 
     // ── Workspace tree conversions (RFC-031 §5) ──

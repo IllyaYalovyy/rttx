@@ -84,20 +84,20 @@ pub async fn lock_server<'a>(
     }
 }
 
-/// Acquire a per-runtime mutex with profiling instrumentation.
+/// Acquire a per-workspace mutex with profiling instrumentation.
 ///
 /// Records wait time via a `tracing` profiling span and hold time via
 /// the returned RAII guard.
-pub async fn lock_runtime<'a>(
-    mutex: &'a tokio::sync::Mutex<crate::runtime::Runtime>,
+pub async fn lock_workspace<'a>(
+    mutex: &'a tokio::sync::Mutex<crate::workspace::Workspace>,
     metrics: &Arc<DaemonMetrics>,
-) -> InstrumentedMutexGuard<'a, crate::runtime::Runtime> {
+) -> InstrumentedMutexGuard<'a, crate::workspace::Workspace> {
     let wait_start = Instant::now();
     let span = tracing::info_span!(
         target: "rttx_profile",
         "mutex.acquire",
         span_kind = "mutex_acquire",
-        target_lock = "runtime",
+        target_lock = "workspace",
     );
     let guard = mutex.lock().instrument(span).await;
     let wait_us = wait_start.elapsed().as_micros() as u64;
@@ -108,7 +108,7 @@ pub async fn lock_runtime<'a>(
         guard,
         acquired_at: Instant::now(),
         metrics: Arc::clone(metrics),
-        target_lock: "runtime",
+        target_lock: "workspace",
     }
 }
 
@@ -210,12 +210,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lock_runtime_returns_working_guard() {
+    async fn lock_workspace_returns_working_guard() {
         let metrics = Arc::new(DaemonMetrics::new());
-        let rt = crate::runtime::Runtime::new("test".to_string());
+        let rt = crate::workspace::Workspace::new("test".to_string());
         let mutex = tokio::sync::Mutex::new(rt);
 
-        let guard = lock_runtime(&mutex, &metrics).await;
+        let guard = lock_workspace(&mutex, &metrics).await;
         assert_eq!(guard.name, "test");
         drop(guard);
     }
@@ -223,11 +223,11 @@ mod tests {
     #[tokio::test]
     async fn long_hold_increments_metric_on_drop() {
         let metrics = Arc::new(DaemonMetrics::new());
-        let rt = crate::runtime::Runtime::new("test".to_string());
+        let rt = crate::workspace::Workspace::new("test".to_string());
         let mutex = tokio::sync::Mutex::new(rt);
 
         {
-            let _guard = lock_runtime(&mutex, &metrics).await;
+            let _guard = lock_workspace(&mutex, &metrics).await;
             // Simulate a long hold.
             tokio::time::sleep(std::time::Duration::from_millis(12)).await;
         }
@@ -238,11 +238,11 @@ mod tests {
     #[tokio::test]
     async fn short_hold_does_not_increment_long_hold_metric() {
         let metrics = Arc::new(DaemonMetrics::new());
-        let rt = crate::runtime::Runtime::new("test".to_string());
+        let rt = crate::workspace::Workspace::new("test".to_string());
         let mutex = tokio::sync::Mutex::new(rt);
 
         {
-            let _guard = lock_runtime(&mutex, &metrics).await;
+            let _guard = lock_workspace(&mutex, &metrics).await;
         }
 
         assert_eq!(metrics.mutex_long_holds.load(Ordering::Relaxed), 0);
@@ -251,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn contention_increments_metric_on_slow_acquire() {
         let metrics = Arc::new(DaemonMetrics::new());
-        let rt = crate::runtime::Runtime::new("test".to_string());
+        let rt = crate::workspace::Workspace::new("test".to_string());
         let mutex = Arc::new(tokio::sync::Mutex::new(rt));
 
         // Hold the lock in another task to create contention.
@@ -265,7 +265,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
 
         // This acquisition should be contended (wait > 1ms).
-        let _guard = lock_runtime(&mutex, &metrics).await;
+        let _guard = lock_workspace(&mutex, &metrics).await;
         hold_task.await.unwrap();
 
         assert!(metrics.mutex_contentions.load(Ordering::Relaxed) >= 1);

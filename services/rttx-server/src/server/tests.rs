@@ -11,7 +11,7 @@ use tracing_test::traced_test;
 struct StubOs;
 impl OsInterface for StubOs {
     fn runtime_dir(&self) -> PathBuf {
-        PathBuf::from("/tmp/test-runtime")
+        PathBuf::from("/tmp/test-workspace")
     }
     fn cache_dir(&self) -> PathBuf {
         PathBuf::from("/tmp/test-cache")
@@ -44,13 +44,13 @@ fn test_metrics() -> Arc<crate::metrics::DaemonMetrics> {
     Arc::new(crate::metrics::DaemonMetrics::new())
 }
 
-/// Broadcast a message to all clients attached to a runtime.
+/// Broadcast a message to all clients attached to a workspace.
 ///
-/// Test helper that replaces the old `Server::broadcast_to_runtime` by
-/// extracting client IDs from the per-runtime lock first.
-async fn broadcast_to_runtime(server: &Arc<Mutex<Server>>, runtime_id: Uuid, msg: &ClientMsg) {
+/// Test helper that replaces the old `Server::broadcast_to_workspace` by
+/// extracting client IDs from the per-workspace lock first.
+async fn broadcast_to_workspace(server: &Arc<Mutex<Server>>, runtime_id: Uuid, msg: &ClientMsg) {
     let s = server.lock().await;
-    let Some(rt_lock) = s.runtimes.get(&runtime_id) else { return };
+    let Some(rt_lock) = s.workspaces.get(&runtime_id) else { return };
     let rt = rt_lock.lock().await;
     let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
     drop(rt);
@@ -60,15 +60,15 @@ async fn broadcast_to_runtime(server: &Arc<Mutex<Server>>, runtime_id: Uuid, msg
     s.broadcast_to_clients(client_ids, None, msg);
 }
 
-/// Insert a runtime with a pane and attach a client as writer.
-async fn setup_runtime_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -> (Uuid, Uuid) {
-    let mut rt = Runtime::new("test".into());
+/// Insert a workspace with a pane and attach a client as writer.
+async fn setup_workspace_with_pane(server: &Arc<Mutex<Server>>, client_id: Uuid) -> (Uuid, Uuid) {
+    let mut rt = Workspace::new("test".into());
     let runtime_id = rt.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
     let pane_id = pane.id;
     rt.add_pane(pane);
     let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
-    server.lock().await.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
+    server.lock().await.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
     (runtime_id, pane_id)
 }
 
@@ -113,25 +113,25 @@ fn short_id_returns_first_eight_characters() {
 }
 
 #[test]
-fn runtime_label_includes_name_and_short_id() {
+fn workspace_label_includes_name_and_short_id() {
     let mut server =
         Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
-    let rt = Runtime::new("my-workspace".into());
+    let rt = Workspace::new("my-workspace".into());
     let runtime_id = rt.id;
-    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
+    server.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
-    let label = server.runtime_label(runtime_id);
+    let label = server.workspace_label(runtime_id);
     assert!(label.starts_with("\"my-workspace\" ("), "got: {label}");
     assert!(label.ends_with(')'), "got: {label}");
     assert_eq!(label.len(), "\"my-workspace\" (12345678)".len());
 }
 
 #[test]
-fn runtime_label_falls_back_for_unknown_runtime() {
+fn workspace_label_falls_back_for_unknown_workspace() {
     let server =
         Server::new(Box::new(StubOs), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
     let unknown_id = Uuid::new_v4();
-    let label = server.runtime_label(unknown_id);
+    let label = server.workspace_label(unknown_id);
     assert!(label.starts_with('('), "got: {label}");
     assert!(label.ends_with(')'), "got: {label}");
     assert_eq!(label.len(), "(12345678)".len());
@@ -143,35 +143,35 @@ fn runtime_label_falls_back_for_unknown_runtime() {
 
 // ── Ping ────────────────────────────────────────────────────────
 
-// ── CreateRuntime ───────────────────────────────────────────────
+// ── CreateWorkspace ───────────────────────────────────────────────
 
-// ── ListRuntimes ────────────────────────────────────────────────
+// ── ListWorkspaces ────────────────────────────────────────────────
 
-// ── AttachRuntime ───────────────────────────────────────────────
+// ── AttachWorkspace ───────────────────────────────────────────────
 
-// ── DetachRuntime ───────────────────────────────────────────────
+// ── DetachWorkspace ───────────────────────────────────────────────
 
-// ── TerminateRuntime ────────────────────────────────────────────
+// ── TerminateWorkspace ────────────────────────────────────────────
 
 // ── ClosePane ───────────────────────────────────────────────────
 
 // ── SetPaneTitle ────────────────────────────────────────────────
 
-// ── RenameRuntime ───────────────────────────────────────────────
+// ── RenameWorkspace ───────────────────────────────────────────────
 
 // ── Input ownership ─────────────────────────────────────────────
 
 // ── Resize ownership ────────────────────────────────────────────
 
-// ── Input to nonexistent pane in existing runtime ───────────────
+// ── Input to nonexistent pane in existing workspace ───────────────
 
 // ── Resize with invalid dimensions ──────────────────────────────
 
-// ── Resize nonexistent pane in existing runtime ─────────────────
+// ── Resize nonexistent pane in existing workspace ─────────────────
 
-// ── DetachRuntime success ───────────────────────────────────────
+// ── DetachWorkspace success ───────────────────────────────────────
 
-// ── Ephemeral last-detach terminates runtime ────────────────────
+// ── Ephemeral last-detach terminates workspace ────────────────────
 
 // ── ClosePane success ───────────────────────────────────────────
 
@@ -181,13 +181,13 @@ fn runtime_label_falls_back_for_unknown_runtime() {
 
 // ── CreatePane ownership violation ──────────────────────────────
 
-// ── CreatePane nonexistent runtime ──────────────────────────────
+// ── CreatePane nonexistent workspace ──────────────────────────────
 
 // ── Attach with TakeOver mode ───────────────────────────────────
 
 // ── Attach blocked by existing writer ───────────────────────────
 
-// ── CreateRuntime with ephemeral policy ─────────────────────────
+// ── CreateWorkspace with ephemeral policy ─────────────────────────
 
 // ── Shutdown message returns None ───────────────────────────────
 
@@ -202,7 +202,7 @@ fn runtime_label_falls_back_for_unknown_runtime() {
 async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
 
     // Register the client sender (bounded channel).
     let (tx, rx) = mpsc::channel(PUSH_CHANNEL_BOUND);
@@ -211,11 +211,11 @@ async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
     // Fill the channel to capacity.
     let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from(vec![0u8; 64]), 0);
     for _ in 0..PUSH_CHANNEL_BOUND {
-        broadcast_to_runtime(&server, runtime_id, &msg).await;
+        broadcast_to_workspace(&server, runtime_id, &msg).await;
     }
 
     // Next broadcast should trigger overflow handling (disconnect v2 client).
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     // Channel should have exactly PUSH_CHANNEL_BOUND messages (overflow was not silently added).
     let s = server.lock().await;
@@ -244,14 +244,14 @@ async fn client_senders_use_bounded_channel() {
 async fn delta_broadcast_shares_bytes_across_clients() {
     let server = new_server();
     let client_id_a = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id_a).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id_a).await;
 
     let client_id_b = Uuid::new_v4();
     {
         let s = server.lock().await;
-        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let rt_lock = s.workspaces.get(&runtime_id).unwrap();
         let mut rt = rt_lock.lock().await;
-        rt.attached_clients.insert(client_id_b, crate::runtime::ClientRole::Writer);
+        rt.attached_clients.insert(client_id_b, crate::workspace::ClientRole::Writer);
     }
 
     let (tx_a, mut rx_a) = mpsc::channel(16);
@@ -264,7 +264,7 @@ async fn delta_broadcast_shares_bytes_across_clients() {
 
     let data = bytes::Bytes::from(vec![b'X'; 4096]);
     let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), data.clone(), 0);
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     let msg_a = rx_a.try_recv().unwrap();
     let msg_b = rx_b.try_recv().unwrap();
@@ -289,10 +289,10 @@ async fn delta_broadcast_shares_bytes_across_clients() {
 async fn exited_pane_scrollback_is_released() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_workspace_with_pane(&server, client_id).await;
 
     let s = server.lock().await;
-    let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+    let rt_lock = s.workspaces.get(&runtime_id).unwrap();
     let mut rt = rt_lock.lock().await;
 
     // Feed output to build up scrollback.
@@ -392,14 +392,14 @@ async fn collect_senders_for_clients_returns_attached_client_senders() {
     let server = new_server();
     let client_a = Uuid::new_v4();
     let client_b = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_a).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_a).await;
 
     // Attach a second client.
     {
         let s = server.lock().await;
-        let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+        let rt_lock = s.workspaces.get(&runtime_id).unwrap();
         let mut rt = rt_lock.lock().await;
-        rt.attached_clients.insert(client_b, crate::runtime::ClientRole::Writer);
+        rt.attached_clients.insert(client_b, crate::workspace::ClientRole::Writer);
     }
 
     let (tx_a, _rx_a) = mpsc::channel(16);
@@ -411,7 +411,7 @@ async fn collect_senders_for_clients_returns_attached_client_senders() {
     }
 
     let s = server.lock().await;
-    let rt_lock = s.runtimes.get(&runtime_id).unwrap();
+    let rt_lock = s.workspaces.get(&runtime_id).unwrap();
     let rt = rt_lock.lock().await;
     let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
     drop(rt);
@@ -423,7 +423,7 @@ async fn collect_senders_for_clients_returns_attached_client_senders() {
 }
 
 #[tokio::test]
-async fn collect_senders_for_clients_returns_empty_for_unknown_runtime() {
+async fn collect_senders_for_clients_returns_empty_for_unknown_workspace() {
     let server = new_server();
     let senders = server.lock().await.collect_senders_for_clients(&[]);
     assert!(senders.is_empty());
@@ -475,12 +475,12 @@ async fn send_to_collected_returns_overflowed_clients() {
 async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
 
     let (tx, _push_rx) = mpsc::channel(1);
     let (resp_tx, mut resp_rx) = mpsc::channel::<ClientMsg>(16);
     let caps = vec![
-        rttx_proto::v3::Capability::CoreRuntimeLifecycle as i32,
+        rttx_proto::v3::Capability::CoreWorkspaceLifecycle as i32,
         rttx_proto::v3::Capability::OptResync as i32,
     ];
     {
@@ -492,9 +492,9 @@ async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
 
     let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
     // Overflow — should send StreamOverflow via resp channel.
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     let overflow_msg = resp_rx.try_recv().expect("should receive StreamOverflow via resp channel");
     match overflow_msg.payload {
@@ -511,7 +511,7 @@ async fn broadcast_overflow_v3_resync_sends_stream_overflow() {
 async fn broadcast_overflow_v2_removes_sender() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
 
     let (tx, _push_rx) = mpsc::channel(1);
     {
@@ -521,9 +521,9 @@ async fn broadcast_overflow_v2_removes_sender() {
 
     let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     let sender_removed = !server.lock().await.has_client_sender(client_id);
     assert!(sender_removed, "v2 client sender should be removed on overflow");
@@ -534,9 +534,9 @@ async fn broadcast_overflow_v2_removes_sender() {
 async fn broadcast_overflow_v3_no_resync_removes_sender() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
 
-    let caps = vec![rttx_proto::v3::Capability::CoreRuntimeLifecycle as i32];
+    let caps = vec![rttx_proto::v3::Capability::CoreWorkspaceLifecycle as i32];
     let (tx, _push_rx) = mpsc::channel(1);
     {
         let mut s = server.lock().await;
@@ -546,9 +546,9 @@ async fn broadcast_overflow_v3_no_resync_removes_sender() {
 
     let msg = protocol::v3_delta(runtime_id, Uuid::new_v4(), bytes::Bytes::from_static(b"x"), 0);
     // Fill the push channel.
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
     // Overflow — should remove sender (force disconnect).
-    broadcast_to_runtime(&server, runtime_id, &msg).await;
+    broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     let sender_removed = !server.lock().await.has_client_sender(client_id);
     assert!(sender_removed, "v3 client without OPT_RESYNC should be disconnected on overflow");
@@ -708,14 +708,14 @@ async fn v3_ping_returns_pong() {
 }
 
 #[tokio::test]
-async fn v3_create_runtime_returns_runtime_created() {
+async fn v3_create_workspace_returns_workspace_created() {
     let server = new_server();
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 1,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "test-ws".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     let resp = Server::handle_v3_message(&server, Uuid::new_v4(), &caps, env, &test_metrics())
@@ -723,10 +723,10 @@ async fn v3_create_runtime_returns_runtime_created() {
         .unwrap();
     assert_eq!(resp.request_id, 1);
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(rc)) => {
+        Some(v3::server_envelope::Payload::WorkspaceCreated(rc)) => {
             assert!(!rc.runtime_id.is_empty());
         }
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     }
 }
 
@@ -734,37 +734,37 @@ async fn v3_create_runtime_returns_runtime_created() {
 async fn v3_attach_returns_snapshot() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _pane_id) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _pane_id) = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 2,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: uuid_to_bytes(runtime_id),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     let resp =
         Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 2);
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => {
             assert_eq!(snap.runtime_id, uuid_to_bytes(runtime_id));
             assert_eq!(snap.panes.len(), 1);
             assert!(snap.panes[0].terminal_modes.is_some());
         }
-        other => panic!("expected RuntimeSnapshot, got {other:?}"),
+        other => panic!("expected WorkspaceSnapshot, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn v3_detach_returns_runtime_detached() {
+async fn v3_detach_returns_workspace_detached() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 3,
-        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
@@ -772,22 +772,22 @@ async fn v3_detach_returns_runtime_detached() {
         Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 3);
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeDetached(rd)) => {
+        Some(v3::server_envelope::Payload::WorkspaceDetached(rd)) => {
             assert_eq!(rd.runtime_id, uuid_to_bytes(runtime_id));
         }
-        other => panic!("expected RuntimeDetached, got {other:?}"),
+        other => panic!("expected WorkspaceDetached, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn v3_terminate_returns_runtime_terminated() {
+async fn v3_terminate_returns_workspace_terminated() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 4,
-        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        command: Some(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: uuid_to_bytes(runtime_id),
         })),
     };
@@ -795,33 +795,33 @@ async fn v3_terminate_returns_runtime_terminated() {
         Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 4);
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeTerminated(rt)) => {
+        Some(v3::server_envelope::Payload::WorkspaceTerminated(rt)) => {
             assert_eq!(rt.runtime_id, uuid_to_bytes(runtime_id));
-            assert_eq!(rt.reason, v3::RuntimeTerminationReason::Explicit as i32);
+            assert_eq!(rt.reason, v3::WorkspaceTerminationReason::Explicit as i32);
         }
-        other => panic!("expected RuntimeTerminated, got {other:?}"),
+        other => panic!("expected WorkspaceTerminated, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn v3_list_runtimes_returns_inventory() {
+async fn v3_list_workspaces_returns_inventory() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let _ = setup_runtime_with_pane(&server, client_id).await;
+    let _ = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 5,
-        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
     };
     let resp =
         Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 5);
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeList(rl)) => {
-            assert_eq!(rl.runtimes.len(), 1);
-            assert_eq!(rl.runtimes[0].name, "test");
+        Some(v3::server_envelope::Payload::WorkspaceList(rl)) => {
+            assert_eq!(rl.workspaces.len(), 1);
+            assert_eq!(rl.workspaces[0].name, "test");
         }
-        other => panic!("expected RuntimeList, got {other:?}"),
+        other => panic!("expected WorkspaceList, got {other:?}"),
     }
 }
 
@@ -860,14 +860,14 @@ async fn v3_get_diagnostics_with_capability_returns_report() {
 }
 
 #[tokio::test]
-async fn v3_rename_runtime_returns_renamed() {
+async fn v3_rename_workspace_returns_renamed() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 8,
-        command: Some(v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+        command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: uuid_to_bytes(runtime_id),
             name: "new-name".into(),
         })),
@@ -876,10 +876,10 @@ async fn v3_rename_runtime_returns_renamed() {
         Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
     assert_eq!(resp.request_id, 8);
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeRenamed(rr)) => {
+        Some(v3::server_envelope::Payload::WorkspaceRenamed(rr)) => {
             assert_eq!(rr.name, "new-name");
         }
-        other => panic!("expected RuntimeRenamed, got {other:?}"),
+        other => panic!("expected WorkspaceRenamed, got {other:?}"),
     }
 }
 
@@ -887,7 +887,7 @@ async fn v3_rename_runtime_returns_renamed() {
 async fn v3_terminal_input_is_fire_and_forget() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, pane_id) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, pane_id) = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 0,
@@ -909,7 +909,7 @@ async fn v3_resync_requires_capability() {
     let caps = vec![]; // no OPT_RESYNC
     let env = v3::ClientEnvelope {
         request_id: 9,
-        command: Some(v3::client_envelope::Command::ResyncRuntime(v3::ResyncRuntime {
+        command: Some(v3::client_envelope::Command::ResyncWorkspace(v3::ResyncWorkspace {
             runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
@@ -954,7 +954,7 @@ async fn v3_takeover_requires_capability() {
     let caps = vec![]; // no OPT_RUNTIME_TAKEOVER
     let env = v3::ClientEnvelope {
         request_id: 11,
-        command: Some(v3::client_envelope::Command::TakeoverRuntime(v3::TakeoverRuntime {
+        command: Some(v3::client_envelope::Command::TakeoverWorkspace(v3::TakeoverWorkspace {
             runtime_id: uuid_to_bytes(Uuid::new_v4()),
         })),
     };
@@ -994,38 +994,38 @@ async fn v3_delta_carries_pane_output_seq() {
 async fn v3_snapshot_includes_terminal_modes() {
     let server = new_server();
     let client_id = Uuid::new_v4();
-    let (runtime_id, _) = setup_runtime_with_pane(&server, client_id).await;
+    let (runtime_id, _) = setup_workspace_with_pane(&server, client_id).await;
     let caps = vec![];
     let env = v3::ClientEnvelope {
         request_id: 1,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: uuid_to_bytes(runtime_id),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     let resp =
         Server::handle_v3_message(&server, client_id, &caps, env, &test_metrics()).await.unwrap();
-    if let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = resp.payload {
+    if let Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) = resp.payload {
         for pane_snap in &snap.panes {
             assert!(pane_snap.terminal_modes.is_some());
         }
     } else {
-        panic!("expected RuntimeSnapshot");
+        panic!("expected WorkspaceSnapshot");
     }
 }
 
-// ── Runtime directory cleanup tests ─────────────────────────────
+// ── Workspace directory cleanup tests ─────────────────────────────
 
 #[derive(Debug)]
 struct TempOs {
-    runtime: PathBuf,
+    workspace: PathBuf,
     cache: PathBuf,
     state: PathBuf,
 }
 
 impl OsInterface for TempOs {
     fn runtime_dir(&self) -> PathBuf {
-        self.runtime.clone()
+        self.workspace.clone()
     }
     fn cache_dir(&self) -> PathBuf {
         self.cache.clone()
@@ -1036,37 +1036,37 @@ impl OsInterface for TempOs {
 }
 
 fn temp_os(tmp: &std::path::Path) -> TempOs {
-    let runtime = tmp.join("runtime");
+    let workspace = tmp.join("workspace");
     let cache = tmp.join("cache");
     let state = tmp.join("state");
-    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&cache).unwrap();
     std::fs::create_dir_all(&state).unwrap();
-    TempOs { runtime, cache, state }
+    TempOs { workspace, cache, state }
 }
 
 #[tokio::test]
 #[traced_test]
-async fn terminate_runtime_removes_state_directory() {
+async fn terminate_workspace_removes_state_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
     let state_dir = os.state_dir();
     let mut server =
         Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
 
-    let mut rt = Runtime::new("cleanup-test".into());
+    let mut rt = Workspace::new("cleanup-test".into());
     let runtime_id = rt.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
     rt.add_pane(pane);
-    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
+    server.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
-    // Persist the runtime to disk so there's a directory to clean up.
-    let rf = server.runtimes[&runtime_id].try_lock().unwrap().to_runtime_file();
-    crate::state::persistence::save_runtime(&state_dir, &rf).unwrap();
+    // Persist the workspace to disk so there's a directory to clean up.
+    let rf = server.workspaces[&runtime_id].try_lock().unwrap().to_workspace_file();
+    crate::state::persistence::save_workspace(&state_dir, &rf).unwrap();
     let dir = crate::state::layout::runtime_dir(&state_dir, runtime_id);
     assert!(dir.exists());
 
-    server.terminate_runtime(runtime_id, 1, TerminationReason::Explicit, None);
+    server.terminate_workspace(runtime_id, 1, TerminationReason::Explicit, None);
 
     // Wait for background cleanup thread.
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1082,15 +1082,15 @@ async fn close_pane_removes_its_durable_state() {
     let metrics = test_metrics();
     let mut server = Server::new(Box::new(os), metrics.clone(), test_ring());
 
-    // Runtime with a single pane, owned by a read-write client.
-    let mut rt = Runtime::new("close-cleanup".into());
+    // Workspace with a single pane, owned by a read-write client.
+    let mut rt = Workspace::new("close-cleanup".into());
     let runtime_id = rt.id;
     let pane = Pane::new(Uuid::new_v4(), 80, 24);
     let pane_id = pane.id;
     rt.add_pane(pane);
     let client_id = Uuid::new_v4();
     let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
-    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
+    server.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
     // Seed the pane's durable artifacts on disk.
     let screen = crate::state::layout::screen_snapshot(&state_dir, runtime_id, pane_id);
@@ -1148,7 +1148,7 @@ fn v1_state_json_in_cache_dir_is_ignored() {
     let os = temp_os(tmp.path());
     let cache_dir = os.cache_dir();
 
-    // Write a v1 state.json with a runtime — should be ignored.
+    // Write a v1 state.json with a workspace — should be ignored.
     std::fs::create_dir_all(&cache_dir).unwrap();
     std::fs::write(
         cache_dir.join("state.json"),
@@ -1175,7 +1175,7 @@ fn v1_state_json_in_cache_dir_is_ignored() {
     server.load_persisted_state();
 
     assert!(
-        server.runtimes.is_empty(),
+        server.workspaces.is_empty(),
         "v1 state.json must not be loaded — v1 fallback was removed"
     );
     assert!(logs_contain("Starting fresh"));
@@ -1257,28 +1257,28 @@ async fn connection_limit_rejects_excess_clients() {
     client2.abort();
 }
 
-// ── Per-runtime locking ─────────────────────────────────────────
+// ── Per-workspace locking ─────────────────────────────────────────
 
 #[tokio::test]
-async fn per_runtime_locks_are_independent() {
-    // Regression: #834 — independent runtimes must not block each other.
-    // Verify that locking one runtime does not prevent access to another.
+async fn per_workspace_locks_are_independent() {
+    // Regression: #834 — independent workspaces must not block each other.
+    // Verify that locking one workspace does not prevent access to another.
     let server = new_server();
     let client_id = Uuid::new_v4();
 
-    // Create two independent runtimes.
-    let (runtime_a, _) = setup_runtime_with_pane(&server, client_id).await;
-    let (runtime_b, _) = setup_runtime_with_pane(&server, client_id).await;
+    // Create two independent workspaces.
+    let (workspace_a, _) = setup_workspace_with_pane(&server, client_id).await;
+    let (workspace_b, _) = setup_workspace_with_pane(&server, client_id).await;
 
     let s = server.lock().await;
-    let lock_a = s.runtimes.get(&runtime_a).unwrap().clone();
-    let lock_b = s.runtimes.get(&runtime_b).unwrap().clone();
+    let lock_a = s.workspaces.get(&workspace_a).unwrap().clone();
+    let lock_b = s.workspaces.get(&workspace_b).unwrap().clone();
     drop(s);
 
-    // Hold runtime A's lock while accessing runtime B — must not deadlock.
+    // Hold workspace A's lock while accessing workspace B — must not deadlock.
     let _guard_a = lock_a.lock().await;
     let guard_b = lock_b.lock().await;
-    assert_ne!(guard_b.id, runtime_a);
+    assert_ne!(guard_b.id, workspace_a);
     drop(guard_b);
 }
 

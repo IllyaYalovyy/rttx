@@ -17,7 +17,7 @@ async fn snapshot_carries_pane_output_seq() {
     let mut client = common::TestV3Client::connect(&socket_path).await;
     client.handshake().await;
     let runtime_id =
-        common::create_runtime(&mut client, "seq-snap", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "seq-snap", v3::WorkspacePolicy::Persistent).await;
     let _snap = common::attach_rw(&mut client, &runtime_id).await;
     let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
@@ -27,8 +27,8 @@ async fn snapshot_carries_pane_output_seq() {
     // Detach and reattach — snapshot should carry the current seq.
     let env = rttx_proto::v3::ClientEnvelope {
         request_id: 100,
-        command: Some(rttx_proto::v3::client_envelope::Command::DetachRuntime(
-            rttx_proto::v3::DetachRuntime { runtime_id: runtime_id.clone() },
+        command: Some(rttx_proto::v3::client_envelope::Command::DetachWorkspace(
+            rttx_proto::v3::DetachWorkspace { runtime_id: runtime_id.clone() },
         )),
     };
     client.send(&env).await;
@@ -38,8 +38,8 @@ async fn snapshot_carries_pane_output_seq() {
         if matches!(
             resp.payload,
             Some(
-                rttx_proto::v3::server_envelope::Payload::RuntimeDetached(_)
-                    | rttx_proto::v3::server_envelope::Payload::RuntimeTerminated(_)
+                rttx_proto::v3::server_envelope::Payload::WorkspaceDetached(_)
+                    | rttx_proto::v3::server_envelope::Payload::WorkspaceTerminated(_)
             )
         ) {
             break;
@@ -67,7 +67,7 @@ async fn live_deltas_carry_contiguous_pane_output_seq() {
     let mut client = common::TestV3Client::connect(&socket_path).await;
     client.handshake().await;
     let runtime_id =
-        common::create_runtime(&mut client, "seq-delta", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "seq-delta", v3::WorkspacePolicy::Persistent).await;
     let _snap = common::attach_rw(&mut client, &runtime_id).await;
     let _pane_id = common::create_pane(&mut client, &runtime_id).await;
 
@@ -103,7 +103,7 @@ async fn delta_seq_continues_from_snapshot_seq() {
     let mut client = common::TestV3Client::connect(&socket_path).await;
     client.handshake().await;
     let runtime_id =
-        common::create_runtime(&mut client, "seq-cont", v3::RuntimePolicy::Persistent).await;
+        common::create_workspace(&mut client, "seq-cont", v3::WorkspacePolicy::Persistent).await;
     let _snap = common::attach_rw(&mut client, &runtime_id).await;
     let pane_id = common::create_pane(&mut client, &runtime_id).await;
 
@@ -113,8 +113,8 @@ async fn delta_seq_continues_from_snapshot_seq() {
     // Detach.
     let env = rttx_proto::v3::ClientEnvelope {
         request_id: 200,
-        command: Some(rttx_proto::v3::client_envelope::Command::DetachRuntime(
-            rttx_proto::v3::DetachRuntime { runtime_id: runtime_id.clone() },
+        command: Some(rttx_proto::v3::client_envelope::Command::DetachWorkspace(
+            rttx_proto::v3::DetachWorkspace { runtime_id: runtime_id.clone() },
         )),
     };
     client.send(&env).await;
@@ -123,8 +123,8 @@ async fn delta_seq_continues_from_snapshot_seq() {
         if matches!(
             resp.payload,
             Some(
-                rttx_proto::v3::server_envelope::Payload::RuntimeDetached(_)
-                    | rttx_proto::v3::server_envelope::Payload::RuntimeTerminated(_)
+                rttx_proto::v3::server_envelope::Payload::WorkspaceDetached(_)
+                    | rttx_proto::v3::server_envelope::Payload::WorkspaceTerminated(_)
             )
         ) {
             break;

@@ -84,7 +84,7 @@ async fn short_uuid_in_attach_returns_invalid_parameter() {
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: short_uuid(),
             attach_mode: 0,
         })),
@@ -128,7 +128,7 @@ async fn attach_nonexistent_session_returns_session_not_found() {
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: bogus_uuid(),
             attach_mode: 0,
         })),
@@ -172,7 +172,7 @@ async fn close_pane_with_nonexistent_pane_returns_error() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "test", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
@@ -195,8 +195,8 @@ async fn resize_nonexistent_pane_is_silently_dropped() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "test", v3::RuntimePolicy::Persistent).await;
-    attach_runtime(&mut client, &runtime_id).await;
+    let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
+    attach_workspace(&mut client, &runtime_id).await;
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
@@ -220,11 +220,11 @@ async fn resize_nonexistent_pane_is_silently_dropped() {
     // Server must remain functional.
     let list = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
-    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeList(_))));
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceList(_))));
 }
 
 // ── Duplicate and out-of-order mutations ────────────────────────
@@ -236,7 +236,7 @@ async fn duplicate_close_pane_returns_error_on_second_call() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "test", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = attach_and_create_pane(&mut client, &runtime_id).await;
 
     // First close succeeds.
@@ -271,12 +271,12 @@ async fn detach_without_attach_is_harmless() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "test", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
 
     // Detach without ever attaching — should not panic or error.
     let msg = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id,
         })),
     };
@@ -287,11 +287,11 @@ async fn detach_without_attach_is_harmless() {
         matches!(
             resp.payload,
             Some(
-                v3::server_envelope::Payload::RuntimeDetached(_)
+                v3::server_envelope::Payload::WorkspaceDetached(_)
                     | v3::server_envelope::Payload::OutputDelta(_)
             )
         ),
-        "detach without attach should return RuntimeDetached, got {resp:?}"
+        "detach without attach should return WorkspaceDetached, got {resp:?}"
     );
 }
 
@@ -336,8 +336,8 @@ async fn input_to_nonexistent_pane_is_silently_dropped() {
     let mut client = TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "test", v3::RuntimePolicy::Persistent).await;
-    attach_runtime(&mut client, &runtime_id).await;
+    let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
+    attach_workspace(&mut client, &runtime_id).await;
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
@@ -362,11 +362,11 @@ async fn input_to_nonexistent_pane_is_silently_dropped() {
     // Server must remain functional.
     let list = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+        command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
     };
     client.send(&list).await;
     let resp = client.recv_or_timeout().await;
-    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::RuntimeList(_))));
+    assert!(matches!(resp.payload, Some(v3::server_envelope::Payload::WorkspaceList(_))));
 }
 
 // ── Fire-and-forget commands to nonexistent sessions ────────────
@@ -428,24 +428,24 @@ fn expect_error(resp: &v3::ServerEnvelope) -> &v3::ProtocolError {
     }
 }
 
-async fn attach_runtime(client: &mut TestClient, runtime_id: &[u8]) {
+async fn attach_workspace(client: &mut TestClient, runtime_id: &[u8]) {
     let msg = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.to_vec(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&msg).await;
     let resp = client.recv_or_timeout().await;
     match resp.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 }
 
 async fn attach_and_create_pane(client: &mut TestClient, runtime_id: &[u8]) -> Vec<u8> {
-    attach_runtime(client, runtime_id).await;
+    attach_workspace(client, runtime_id).await;
 
     let msg = v3::ClientEnvelope {
         request_id: 0,
@@ -479,8 +479,8 @@ fn close_already_closed_pane_returns_pane_not_found() {
         let mut client = TestClient::connect(&socket_path).await;
         client.handshake().await;
 
-        let runtime_id = create_runtime(&mut client, "test", v3::RuntimePolicy::Persistent).await;
-        attach_runtime(&mut client, &runtime_id).await;
+        let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
+        attach_workspace(&mut client, &runtime_id).await;
         let pane_id = create_pane(&mut client, &runtime_id).await;
 
         // First close succeeds.

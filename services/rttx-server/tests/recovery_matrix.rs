@@ -1,6 +1,6 @@
 //! Restart and recovery behavior matrix.
 //!
-//! Explicit matrix covering: runtime policy × disconnect mode × client role.
+//! Explicit matrix covering: workspace policy × disconnect mode × client role.
 //! Each test documents the expected outcome for one cell of the matrix.
 //!
 //! | Policy     | Disconnect Mode    | Expected After Recovery              |
@@ -31,7 +31,7 @@ async fn persistent_transport_drop_session_survives_and_reattaches() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "p-drop", v3::RuntimePolicy::Persistent).await;
+        let sid = create_workspace(&mut c, "p-drop", v3::WorkspacePolicy::Persistent).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
         sid
@@ -42,15 +42,15 @@ async fn persistent_transport_drop_session_survives_and_reattaches() {
 
     let mut c2 = TestClient::connect(&sock).await;
     c2.handshake().await;
-    let runtimes = list_runtimes(&mut c2).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].id, runtime_id);
-    assert_eq!(runtimes[0].pane_count, 1);
-    assert_eq!(runtimes[0].read_only_client_count, 0);
-    assert!(!runtimes[0].has_write_owner);
+    let workspaces = list_workspaces(&mut c2).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].id, runtime_id);
+    assert_eq!(workspaces[0].pane_count, 1);
+    assert_eq!(workspaces[0].read_only_client_count, 0);
+    assert!(!workspaces[0].has_write_owner);
 
     let snap = attach_rw(&mut c2, &runtime_id).await;
-    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.client_role, v3::WorkspaceClientRole::Writer as i32);
     assert!(!snap.panes.is_empty());
 }
 
@@ -65,7 +65,7 @@ async fn persistent_daemon_restart_reconstructs_session_and_panes() {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        runtime_id = create_runtime(&mut c, "p-restart", v3::RuntimePolicy::Persistent).await;
+        runtime_id = create_workspace(&mut c, "p-restart", v3::WorkspacePolicy::Persistent).await;
         attach_rw(&mut c, &runtime_id).await;
         create_pane(&mut c, &runtime_id).await;
 
@@ -80,44 +80,44 @@ async fn persistent_daemon_restart_reconstructs_session_and_panes() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let runtimes = list_runtimes(&mut c).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].id, runtime_id);
-    assert!(runtimes[0].reconstructed);
-    assert_eq!(runtimes[0].pane_count, 1);
-    assert_eq!(runtimes[0].read_only_client_count, 0);
+    let workspaces = list_workspaces(&mut c).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].id, runtime_id);
+    assert!(workspaces[0].reconstructed);
+    assert_eq!(workspaces[0].pane_count, 1);
+    assert_eq!(workspaces[0].read_only_client_count, 0);
 
     let snap = attach_rw(&mut c, &runtime_id).await;
     assert_eq!(snap.panes.len(), 1);
     // reconstructed flag is on PaneInfo (inventory), not PaneSnapshot.
-    assert!(snap.runtime_revision > 0);
+    assert!(snap.workspace_revision > 0);
 }
 
 // ── Persistent × Explicit detach ────────────────────────────────
 
 #[tokio::test]
-async fn persistent_explicit_detach_runtime_survives_unattached() {
+async fn persistent_explicit_detach_workspace_survives_unattached() {
     let tmp = tempfile::tempdir().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let runtime_id = create_runtime(&mut c, "p-detach", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut c, "p-detach", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut c, &runtime_id).await;
     create_pane(&mut c, &runtime_id).await;
 
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: runtime_id.clone(),
         })),
     })
     .await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for RuntimeDetached");
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for WorkspaceDetached");
         match c.recv_or_timeout().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeDetached(d)) => {
+            Some(v3::server_envelope::Payload::WorkspaceDetached(d)) => {
                 assert_eq!(d.runtime_id, runtime_id);
                 break;
             }
@@ -125,15 +125,15 @@ async fn persistent_explicit_detach_runtime_survives_unattached() {
                 v3::server_envelope::Payload::OutputDelta(_)
                 | v3::server_envelope::Payload::PaneExited(_),
             ) => {}
-            other => panic!("expected RuntimeDetached, got {other:?}"),
+            other => panic!("expected WorkspaceDetached, got {other:?}"),
         }
     }
 
-    let runtimes = list_runtimes(&mut c).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].read_only_client_count, 0);
-    assert!(!runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].pane_count, 1);
+    let workspaces = list_workspaces(&mut c).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].read_only_client_count, 0);
+    assert!(!workspaces[0].has_write_owner);
+    assert_eq!(workspaces[0].pane_count, 1);
 }
 
 // ── Persistent × Explicit terminate ─────────────────────────────
@@ -145,26 +145,26 @@ async fn persistent_explicit_terminate_removes_session() {
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let runtime_id = create_runtime(&mut c, "p-term", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut c, "p-term", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut c, &runtime_id).await;
 
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        command: Some(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: runtime_id.clone(),
         })),
     })
     .await;
     match c.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeTerminated(t)) => {
+        Some(v3::server_envelope::Payload::WorkspaceTerminated(t)) => {
             assert_eq!(t.runtime_id, runtime_id);
-            assert_eq!(t.reason, v3::RuntimeTerminationReason::Explicit as i32);
+            assert_eq!(t.reason, v3::WorkspaceTerminationReason::Explicit as i32);
         }
-        other => panic!("expected RuntimeTerminated, got {other:?}"),
+        other => panic!("expected WorkspaceTerminated, got {other:?}"),
     }
 
-    let runtimes = list_runtimes(&mut c).await;
-    assert!(runtimes.is_empty());
+    let workspaces = list_workspaces(&mut c).await;
+    assert!(workspaces.is_empty());
 }
 
 // ── Ephemeral × Transport disconnect ────────────────────────────
@@ -177,7 +177,7 @@ async fn ephemeral_transport_drop_session_survives_until_restart() {
     let runtime_id = {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "e-drop", v3::RuntimePolicy::Ephemeral).await;
+        let sid = create_workspace(&mut c, "e-drop", v3::WorkspacePolicy::Ephemeral).await;
         attach_rw(&mut c, &sid).await;
         sid
     };
@@ -187,12 +187,12 @@ async fn ephemeral_transport_drop_session_survives_until_restart() {
     // Session still exists after transport drop (not explicit detach).
     let mut c2 = TestClient::connect(&sock).await;
     c2.handshake().await;
-    let runtimes = list_runtimes(&mut c2).await;
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0].id, runtime_id);
+    let workspaces = list_workspaces(&mut c2).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].id, runtime_id);
     assert_eq!(
-        v3::RuntimePolicy::try_from(runtimes[0].policy).unwrap(),
-        v3::RuntimePolicy::Ephemeral
+        v3::WorkspacePolicy::try_from(workspaces[0].policy).unwrap(),
+        v3::WorkspacePolicy::Ephemeral
     );
 }
 
@@ -206,13 +206,13 @@ async fn ephemeral_daemon_restart_does_not_restore_session() {
         let (sock, handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
-        let sid = create_runtime(&mut c, "e-restart", v3::RuntimePolicy::Ephemeral).await;
+        let sid = create_workspace(&mut c, "e-restart", v3::WorkspacePolicy::Ephemeral).await;
         attach_rw(&mut c, &sid).await;
         create_pane(&mut c, &sid).await;
 
-        // Create a persistent runtime so we can wait for the serialization
-        // loop to have run at least once (ephemeral runtimes are not persisted).
-        let _ = create_runtime(&mut c, "e-restart-anchor", v3::RuntimePolicy::Persistent).await;
+        // Create a persistent workspace so we can wait for the serialization
+        // loop to have run at least once (ephemeral workspaces are not persisted).
+        let _ = create_workspace(&mut c, "e-restart-anchor", v3::WorkspacePolicy::Persistent).await;
         wait_for_state_containing(tmp.path(), "e-restart-anchor", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -222,13 +222,13 @@ async fn ephemeral_daemon_restart_does_not_restore_session() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let runtimes = list_runtimes(&mut c).await;
+    let workspaces = list_workspaces(&mut c).await;
     assert_eq!(
-        runtimes.len(),
+        workspaces.len(),
         1,
-        "only the persistent anchor should survive restart, not the ephemeral runtime"
+        "only the persistent anchor should survive restart, not the ephemeral workspace"
     );
-    assert_eq!(runtimes[0].name, "e-restart-anchor");
+    assert_eq!(workspaces[0].name, "e-restart-anchor");
 }
 
 // ── Ephemeral × Explicit detach ─────────────────────────────────
@@ -240,26 +240,26 @@ async fn ephemeral_explicit_detach_terminates_immediately() {
 
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
-    let runtime_id = create_runtime(&mut c, "e-detach", v3::RuntimePolicy::Ephemeral).await;
+    let runtime_id = create_workspace(&mut c, "e-detach", v3::WorkspacePolicy::Ephemeral).await;
     attach_rw(&mut c, &runtime_id).await;
 
     c.send(&v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+        command: Some(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
             runtime_id: runtime_id.clone(),
         })),
     })
     .await;
     match c.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeTerminated(t)) => {
+        Some(v3::server_envelope::Payload::WorkspaceTerminated(t)) => {
             assert_eq!(t.runtime_id, runtime_id);
-            assert_eq!(t.reason, v3::RuntimeTerminationReason::EphemeralDetach as i32);
+            assert_eq!(t.reason, v3::WorkspaceTerminationReason::EphemeralDetach as i32);
         }
-        other => panic!("expected RuntimeTerminated, got {other:?}"),
+        other => panic!("expected WorkspaceTerminated, got {other:?}"),
     }
 
-    let runtimes = list_runtimes(&mut c).await;
-    assert!(runtimes.is_empty());
+    let workspaces = list_workspaces(&mut c).await;
+    assert!(workspaces.is_empty());
 }
 
 // ── Persistent × Restart with read-only client role ─────────────
@@ -274,7 +274,7 @@ async fn persistent_restart_reader_reattaches_after_reconstruction() {
         let mut writer = TestClient::connect(&sock).await;
         writer.handshake().await;
         runtime_id =
-            create_runtime(&mut writer, "p-reader-restart", v3::RuntimePolicy::Persistent).await;
+            create_workspace(&mut writer, "p-reader-restart", v3::WorkspacePolicy::Persistent).await;
         attach_rw(&mut writer, &runtime_id).await;
         create_pane(&mut writer, &runtime_id).await;
 
@@ -291,22 +291,22 @@ async fn persistent_restart_reader_reattaches_after_reconstruction() {
     reader
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadOnly as i32,
             })),
         })
         .await;
     match reader.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => {
-            assert_eq!(snap.client_role, v3::RuntimeClientRole::Reader as i32);
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => {
+            assert_eq!(snap.client_role, v3::WorkspaceClientRole::Reader as i32);
             assert!(!snap.panes.is_empty());
             // reconstructed flag is on PaneInfo (inventory), not PaneSnapshot.
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    let runtimes = list_runtimes(&mut reader).await;
-    assert_eq!(runtimes[0].read_only_client_count, 1);
-    assert!(!runtimes[0].has_write_owner);
+    let workspaces = list_workspaces(&mut reader).await;
+    assert_eq!(workspaces[0].read_only_client_count, 1);
+    assert!(!workspaces[0].has_write_owner);
 }

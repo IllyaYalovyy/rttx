@@ -46,7 +46,7 @@ impl Window {
             ("new-session", Self::add_session),
             ("new-ephemeral-workspace", Self::add_ephemeral_session),
             ("new-remote-workspace", Self::show_new_remote_workspace_dialog),
-            ("browse-remote-runtimes", Self::show_browse_remote_runtimes_dialog),
+            ("browse-remote-workspaces", Self::show_browse_remote_workspaces_dialog),
             ("connect-existing-local", Self::connect_existing_local),
             ("connect-to-existing", Self::connect_existing_local),
             ("new-direct", |w| {

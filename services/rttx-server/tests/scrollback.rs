@@ -17,15 +17,15 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     // Create session and pane.
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "scrollback-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let create_pane = v3::ClientEnvelope {
@@ -48,14 +48,14 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     // Attach to get Deltas.
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
@@ -80,10 +80,10 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     wait_for_state_containing(tmp.path(), "scrollback-test", Duration::from_secs(10)).await;
 
     // Check that scrollback log exists in the state directory (RFC-022 layout).
-    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
-    assert!(runtimes_dir.exists(), "runtimes directory should exist");
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/workspaces");
+    assert!(runtimes_dir.exists(), "workspaces directory should exist");
 
-    // Find the log file under runtimes/<id>/scrollback/<pane>.log.
+    // Find the log file under workspaces/<id>/scrollback/<pane>.log.
     let mut log_files = Vec::new();
     for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
         let runtime_dir = runtime_dir.unwrap().path();
@@ -116,15 +116,15 @@ async fn scrollback_written_to_state_dir_not_cache_dir() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "path-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let create_pane = v3::ClientEnvelope {
@@ -146,14 +146,14 @@ async fn scrollback_written_to_state_dir_not_cache_dir() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
     client.drain(Duration::from_millis(500)).await;
@@ -180,9 +180,9 @@ async fn scrollback_written_to_state_dir_not_cache_dir() {
         cache_scrollback.display()
     );
 
-    // Scrollback MUST appear under state_dir/runtimes/<id>/scrollback/.
-    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
-    assert!(runtimes_dir.exists(), "runtimes directory should exist under state_dir");
+    // Scrollback MUST appear under state_dir/workspaces/<id>/scrollback/.
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/workspaces");
+    assert!(runtimes_dir.exists(), "workspaces directory should exist under state_dir");
 }
 
 #[tokio::test]
@@ -195,15 +195,15 @@ async fn scrollback_log_capped_at_max_size() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "cap-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let create_pane = v3::ClientEnvelope {
@@ -225,14 +225,14 @@ async fn scrollback_log_capped_at_max_size() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
     client.drain(Duration::from_millis(500)).await;
@@ -274,15 +274,15 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
 
     let create = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "dsr-strip-test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     client.send(&create).await;
     let runtime_id = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     let create_pane = v3::ClientEnvelope {
@@ -304,14 +304,14 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
 
     let attach = v3::ClientEnvelope {
         request_id: 0,
-        command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: runtime_id.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         })),
     };
     client.send(&attach).await;
     match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
         other => panic!("expected Snapshot, got {other:?}"),
     }
     client.drain(Duration::from_millis(500)).await;
@@ -337,7 +337,7 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Find the scrollback log file in the state directory.
-    let runtimes_dir = tmp.path().join("state/rttx/daemon/runtimes");
+    let runtimes_dir = tmp.path().join("state/rttx/daemon/workspaces");
     let mut log_files = Vec::new();
     for runtime_dir in std::fs::read_dir(&runtimes_dir).unwrap() {
         let runtime_dir = runtime_dir.unwrap().path();

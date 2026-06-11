@@ -1917,7 +1917,7 @@ fn connect_existing_dialog_classifies_available_session() {
     require_display!();
 
     let id = uuid::Uuid::new_v4();
-    let workspaces = vec![rttx_proto::v3::RuntimeInfo {
+    let workspaces = vec![rttx_proto::v3::WorkspaceInfo {
         id: rttx_proto::uuid_to_bytes(id),
         name: "workspace-1".into(),
         pane_count: 2,
@@ -1927,12 +1927,12 @@ fn connect_existing_dialog_classifies_available_session() {
         panes: vec![],
         policy: 0,
         reconstructed: false,
-        runtime_revision: 1,
+        workspace_revision: 1,
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
     }];
-    let entries = rttx::connect_existing_dialog::classify_runtimes(&workspaces, &[]);
+    let entries = rttx::connect_existing_dialog::classify_workspaces(&workspaces, &[]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -1948,7 +1948,7 @@ fn connect_existing_dialog_classifies_busy_session() {
     require_display!();
 
     let id = uuid::Uuid::new_v4();
-    let workspaces = vec![rttx_proto::v3::RuntimeInfo {
+    let workspaces = vec![rttx_proto::v3::WorkspaceInfo {
         id: rttx_proto::uuid_to_bytes(id),
         name: "busy-ws".into(),
         pane_count: 1,
@@ -1958,12 +1958,12 @@ fn connect_existing_dialog_classifies_busy_session() {
         panes: vec![],
         policy: 0,
         reconstructed: false,
-        runtime_revision: 1,
+        workspace_revision: 1,
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
     }];
-    let entries = rttx::connect_existing_dialog::classify_runtimes(&workspaces, &[]);
+    let entries = rttx::connect_existing_dialog::classify_workspaces(&workspaces, &[]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -1979,7 +1979,7 @@ fn connect_existing_dialog_classifies_already_open_session() {
     require_display!();
 
     let id = uuid::Uuid::new_v4();
-    let workspaces = vec![rttx_proto::v3::RuntimeInfo {
+    let workspaces = vec![rttx_proto::v3::WorkspaceInfo {
         id: rttx_proto::uuid_to_bytes(id),
         name: "open-ws".into(),
         pane_count: 3,
@@ -1989,12 +1989,12 @@ fn connect_existing_dialog_classifies_already_open_session() {
         panes: vec![],
         policy: 0,
         reconstructed: false,
-        runtime_revision: 1,
+        workspace_revision: 1,
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
     }];
-    let entries = rttx::connect_existing_dialog::classify_runtimes(&workspaces, &[id.to_string()]);
+    let entries = rttx::connect_existing_dialog::classify_workspaces(&workspaces, &[id.to_string()]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(

@@ -1,4 +1,4 @@
-//! Integration tests for runtime inventory metadata exposed by `ListRuntimes`.
+//! Integration tests for workspace inventory metadata exposed by `ListWorkspaces`.
 
 mod common;
 
@@ -7,7 +7,7 @@ use rttx_proto::v3;
 use std::time::Duration;
 
 #[tokio::test]
-async fn list_runtimes_includes_runtime_inventory_metadata() {
+async fn list_workspaces_includes_workspace_inventory_metadata() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -17,15 +17,15 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
     client
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "inventory-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     let runtime_id = match client.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => created.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     client
@@ -48,7 +48,7 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
 
     // Attach read-write so the client can set the pane title (SetPaneTitle is
     // silently dropped for clients without write access in v3), then detach
-    // afterwards so the inventory reports the runtime as unattached.
+    // afterwards so the inventory reports the workspace as unattached.
     common::attach_rw(&mut client, &runtime_id).await;
 
     // Let the interactive shell emit its initial prompt/title traffic before
@@ -71,20 +71,20 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
     // Drain any PTY output that may overwrite the title via OSC sequences.
     let _ = client.drain(Duration::from_millis(300)).await;
 
-    // Detach so the runtime is reported as unattached in the inventory.
-    common::detach_runtime(&mut client, &runtime_id).await;
+    // Detach so the workspace is reported as unattached in the inventory.
+    common::detach_workspace(&mut client, &runtime_id).await;
 
-    let runtimes = list_runtimes(&mut client).await;
-    assert_eq!(runtimes.len(), 1);
+    let workspaces = list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
 
-    let session = &runtimes[0];
+    let session = &workspaces[0];
     assert_eq!(session.id, runtime_id);
     assert_eq!(session.name, "inventory-test");
     assert_eq!(session.pane_count, 1);
     assert!(!session.has_write_owner);
     assert_eq!(session.read_only_client_count, 0);
-    assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
-    assert_eq!(v3::RuntimePolicy::try_from(session.policy).unwrap(), v3::RuntimePolicy::Persistent);
+    assert_eq!(session.current_client_role, v3::WorkspaceClientRole::Unattached as i32);
+    assert_eq!(v3::WorkspacePolicy::try_from(session.policy).unwrap(), v3::WorkspacePolicy::Persistent);
     assert!(!session.reconstructed);
     assert_eq!(session.panes.len(), 1);
 
@@ -100,7 +100,7 @@ async fn list_runtimes_includes_runtime_inventory_metadata() {
 }
 
 #[tokio::test]
-async fn list_runtimes_tracks_attached_client_count() {
+async fn list_workspaces_tracks_attached_client_count() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (sock, _handle) = start_test_server(tmp.path()).await;
 
@@ -110,29 +110,29 @@ async fn list_runtimes_tracks_attached_client_count() {
     first
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "attach-count".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         })
         .await;
     let runtime_id = match first.recv().await.payload {
-        Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-        other => panic!("expected RuntimeCreated, got {other:?}"),
+        Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => created.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     first
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
     assert!(matches!(
         first.recv().await.payload,
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_))
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_))
     ));
 
     let mut second = TestClient::connect(&sock).await;
@@ -140,42 +140,42 @@ async fn list_runtimes_tracks_attached_client_count() {
     second
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadOnly as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadOnly as i32,
             })),
         })
         .await;
     assert!(matches!(
         second.recv().await.payload,
-        Some(v3::server_envelope::Payload::RuntimeSnapshot(_))
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_))
     ));
 
-    let runtimes = list_runtimes(&mut second).await;
-    assert_eq!(runtimes.len(), 1);
-    assert!(runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].current_client_role, v3::RuntimeClientRole::Reader as i32);
-    assert_eq!(runtimes[0].read_only_client_count, 1);
+    let workspaces = list_workspaces(&mut second).await;
+    assert_eq!(workspaces.len(), 1);
+    assert!(workspaces[0].has_write_owner);
+    assert_eq!(workspaces[0].current_client_role, v3::WorkspaceClientRole::Reader as i32);
+    assert_eq!(workspaces[0].read_only_client_count, 1);
 
     drop(first);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let runtimes = list_runtimes(&mut second).await;
-    assert!(!runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].read_only_client_count, 1);
+    let workspaces = list_workspaces(&mut second).await;
+    assert!(!workspaces[0].has_write_owner);
+    assert_eq!(workspaces[0].read_only_client_count, 1);
 
     drop(second);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut third = TestClient::connect(&sock).await;
     third.handshake().await;
-    let runtimes = list_runtimes(&mut third).await;
-    assert_eq!(runtimes[0].read_only_client_count, 0);
-    assert!(!runtimes[0].has_write_owner);
+    let workspaces = list_workspaces(&mut third).await;
+    assert_eq!(workspaces[0].read_only_client_count, 0);
+    assert!(!workspaces[0].has_write_owner);
 }
 
 #[tokio::test]
-async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
+async fn list_workspaces_marks_restored_workspace_and_panes_as_reconstructed() {
     let tmp = tempfile::TempDir::new().unwrap();
     let runtime_id;
     let pane_id;
@@ -188,15 +188,15 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                     name: "reconstructed-inventory".into(),
-                    policy: v3::RuntimePolicy::Persistent as i32,
+                    policy: v3::WorkspacePolicy::Persistent as i32,
                 })),
             })
             .await;
         runtime_id = match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => created.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         client
@@ -259,19 +259,19 @@ async fn list_runtimes_marks_restored_runtime_and_panes_as_reconstructed() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        let runtimes = list_runtimes(&mut client).await;
-        assert_eq!(runtimes.len(), 1);
+        let workspaces = list_workspaces(&mut client).await;
+        assert_eq!(workspaces.len(), 1);
 
-        let session = &runtimes[0];
+        let session = &workspaces[0];
         assert_eq!(session.id, runtime_id);
         assert_eq!(session.name, "reconstructed-inventory");
         assert_eq!(session.pane_count, 1);
         assert_eq!(session.read_only_client_count, 0);
         assert!(!session.has_write_owner);
-        assert_eq!(session.current_client_role, v3::RuntimeClientRole::Unattached as i32);
+        assert_eq!(session.current_client_role, v3::WorkspaceClientRole::Unattached as i32);
         assert_eq!(
-            v3::RuntimePolicy::try_from(session.policy).unwrap(),
-            v3::RuntimePolicy::Persistent
+            v3::WorkspacePolicy::try_from(session.policy).unwrap(),
+            v3::WorkspacePolicy::Persistent
         );
         assert!(session.reconstructed);
         assert_eq!(session.panes.len(), 1);
@@ -292,13 +292,13 @@ async fn inventory_pane_cwd_populated_from_proc_fallback() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "cwd-check", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "cwd-check", v3::WorkspacePolicy::Persistent).await;
     let _pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Give the shell a moment to start so /proc/<pid>/cwd is readable.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let runtimes = list_runtimes(&mut client).await;
-    let pane = &runtimes[0].panes[0];
+    let workspaces = list_workspaces(&mut client).await;
+    let pane = &workspaces[0].panes[0];
     assert!(!pane.cwd.is_empty(), "pane CWD should be populated from /proc fallback, got empty");
 }

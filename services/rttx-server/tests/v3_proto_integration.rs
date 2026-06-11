@@ -16,7 +16,7 @@ fn v3_client_hello_frames_through_shared_codec() {
         client_name: "rttx".into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         capabilities: vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             v3::Capability::CorePaneLifecycle as i32,
             v3::Capability::CoreTerminalIo as i32,
             v3::Capability::CoreTerminalModes as i32,
@@ -34,42 +34,42 @@ fn v3_client_hello_frames_through_shared_codec() {
 }
 
 #[test]
-fn v3_envelope_roundtrip_create_runtime_and_response() {
+fn v3_envelope_roundtrip_create_workspace_and_response() {
     let request_id = 1;
-    let runtime_name = "integration-test";
+    let workspace_name = "integration-test";
     let cmd = v3::ClientEnvelope {
         request_id,
-        command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
-            name: runtime_name.into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+            name: workspace_name.into(),
+            policy: v3::WorkspacePolicy::Persistent as i32,
         })),
     };
     let mut buf = BytesMut::new();
     encode_frame(&cmd, &mut buf).unwrap();
     let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, request_id);
-    let Some(v3::client_envelope::Command::CreateRuntime(cr)) = decoded.command else {
-        panic!("expected CreateRuntime");
+    let Some(v3::client_envelope::Command::CreateWorkspace(cr)) = decoded.command else {
+        panic!("expected CreateWorkspace");
     };
-    assert_eq!(cr.name, runtime_name);
+    assert_eq!(cr.name, workspace_name);
 
     let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
     let resp = v3::ServerEnvelope {
         request_id,
-        payload: Some(v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+        payload: Some(v3::server_envelope::Payload::WorkspaceCreated(v3::WorkspaceCreated {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 1,
+            workspace_revision: 1,
         })),
     };
     let mut buf = BytesMut::new();
     encode_frame(&resp, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, request_id);
-    let Some(v3::server_envelope::Payload::RuntimeCreated(created)) = decoded.payload else {
-        panic!("expected RuntimeCreated");
+    let Some(v3::server_envelope::Payload::WorkspaceCreated(created)) = decoded.payload else {
+        panic!("expected WorkspaceCreated");
     };
     assert_eq!(created.runtime_id, runtime_id);
-    assert_eq!(created.runtime_revision, 1);
+    assert_eq!(created.workspace_revision, 1);
 }
 
 #[test]
@@ -113,10 +113,10 @@ fn v3_envelope_request_response_correlation_roundtrip() {
     let id_gen = v3_envelope::RequestIdGenerator::new();
     let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
 
-    // Client sends CreateRuntime (request/response command)
-    let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+    // Client sends CreateWorkspace (request/response command)
+    let cmd = v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
         name: "correlation-test".into(),
-        policy: v3::RuntimePolicy::Persistent as i32,
+        policy: v3::WorkspacePolicy::Persistent as i32,
     });
     let client_env = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_ne!(client_env.request_id, 0);
@@ -131,9 +131,9 @@ fn v3_envelope_request_response_correlation_roundtrip() {
     // Server builds response echoing request_id
     let response = v3_envelope::build_response_envelope(
         decoded_client.request_id,
-        v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+        v3::server_envelope::Payload::WorkspaceCreated(v3::WorkspaceCreated {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 1,
+            workspace_revision: 1,
         }),
     );
     assert_eq!(response.request_id, saved_request_id);
@@ -196,11 +196,11 @@ fn v3_envelope_mixed_command_sequence() {
     let rt = uuid_to_bytes(uuid::Uuid::new_v4());
     let pn = uuid_to_bytes(uuid::Uuid::new_v4());
 
-    // Sequence: CreateRuntime(1), TerminalInput(0), Ping(2), ResizePane(0), ClosePane(3)
+    // Sequence: CreateWorkspace(1), TerminalInput(0), Ping(2), ResizePane(0), ClosePane(3)
     let commands: Vec<v3::client_envelope::Command> = vec![
-        v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "seq".into(),
-            policy: v3::RuntimePolicy::Ephemeral as i32,
+            policy: v3::WorkspacePolicy::Ephemeral as i32,
         }),
         v3::client_envelope::Command::TerminalInput(v3::TerminalInput {
             runtime_id: rt.clone(),
@@ -395,7 +395,7 @@ fn v3_terminal_mode_changed_push_event_roundtrip() {
     };
     assert_eq!(changed.runtime_id, uuid_to_bytes(runtime_id));
     assert_eq!(changed.pane_id, uuid_to_bytes(pane_id));
-    assert_eq!(changed.runtime_revision, 42);
+    assert_eq!(changed.workspace_revision, 42);
     let decoded_modes = changed.modes.expect("modes must be present");
     assert!(decoded_modes.bracketed_paste);
     assert!(decoded_modes.focus_reporting);
@@ -535,9 +535,9 @@ fn v3_error_response_roundtrip_through_envelope() {
     use rttx_proto::v3_error;
 
     let err = v3_error::build_error(
-        v3::ErrorKind::RuntimeNotFound,
-        "runtime abc not found",
-        "AttachRuntime",
+        v3::ErrorKind::WorkspaceNotFound,
+        "workspace abc not found",
+        "AttachWorkspace",
     );
     let env = v3_error::build_error_response(42, err);
     assert_eq!(env.request_id, 42);
@@ -548,8 +548,8 @@ fn v3_error_response_roundtrip_through_envelope() {
     assert_eq!(decoded.request_id, 42);
     match decoded.payload {
         Some(v3::server_envelope::Payload::Error(ref e)) => {
-            assert_eq!(v3_error::error_kind(e), v3::ErrorKind::RuntimeNotFound);
-            assert_eq!(e.operation, "AttachRuntime");
+            assert_eq!(v3_error::error_kind(e), v3::ErrorKind::WorkspaceNotFound);
+            assert_eq!(e.operation, "AttachWorkspace");
             assert!(!e.retryable);
         }
         _ => panic!("expected Error payload"),
@@ -605,7 +605,7 @@ fn v3_error_classification_maps_to_connection_policy() {
     );
 
     // Ownership conflict
-    let conflict = v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachRuntime");
+    let conflict = v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachWorkspace");
     assert_eq!(
         v3_error::classify_error_kind(v3_error::error_kind(&conflict)),
         ErrorClassification::OwnershipConflict
@@ -663,10 +663,10 @@ fn v3_snapshot_attach_response_roundtrip() {
     });
     assert!(!pane.scrollback_complete);
 
-    let snapshot = v3_snapshot::build_runtime_snapshot(
+    let snapshot = v3_snapshot::build_workspace_snapshot(
         runtime_id,
         10,
-        v3::RuntimeClientRole::Writer,
+        v3::WorkspaceClientRole::Writer,
         vec![pane],
     );
     let env = v3_snapshot::build_snapshot_response(7, snapshot);
@@ -679,12 +679,12 @@ fn v3_snapshot_attach_response_roundtrip() {
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.request_id, 7);
 
-    let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = decoded.payload else {
-        panic!("expected RuntimeSnapshot");
+    let Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) = decoded.payload else {
+        panic!("expected WorkspaceSnapshot");
     };
     assert_eq!(snap.runtime_id, uuid_to_bytes(runtime_id));
-    assert_eq!(snap.runtime_revision, 10);
-    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.workspace_revision, 10);
+    assert_eq!(snap.client_role, v3::WorkspaceClientRole::Writer as i32);
     assert_eq!(snap.panes.len(), 1);
     assert_eq!(snap.panes[0].pane_output_seq, 42);
     assert_eq!(snap.panes[0].scrollback_tail.as_ref(), b"$ ls\nfile.txt\n");
@@ -855,13 +855,13 @@ fn v3_chunked_scrollback_paging_with_slice() {
 fn v3_chunked_scrollback_capability_gating() {
     // With OPT_CHUNKED_SCROLLBACK negotiated
     let caps_with = vec![
-        v3::Capability::CoreRuntimeLifecycle as i32,
+        v3::Capability::CoreWorkspaceLifecycle as i32,
         v3::Capability::OptChunkedScrollback as i32,
     ];
     assert!(v3_scrollback::is_supported(&caps_with));
 
     // Without OPT_CHUNKED_SCROLLBACK
-    let caps_without = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+    let caps_without = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
     assert!(!v3_scrollback::is_supported(&caps_without));
 
     // Server returns error when capability not negotiated
@@ -908,9 +908,9 @@ fn v3_resync_overflow_and_resync_roundtrip() {
     assert_eq!(so.pane_id, Some(uuid_to_bytes(pane_id)));
     assert_eq!(so.dropped_count, 5);
 
-    // 2. Client sends ResyncRuntime request
-    let resync_req = v3_resync::build_resync_runtime(runtime_id);
-    let resync_env = v3_resync::build_resync_runtime_envelope(&id_gen, resync_req);
+    // 2. Client sends ResyncWorkspace request
+    let resync_req = v3_resync::build_resync_workspace(runtime_id);
+    let resync_env = v3_resync::build_resync_workspace_envelope(&id_gen, resync_req);
     assert_ne!(resync_env.request_id, 0);
     let saved_request_id = resync_env.request_id;
 
@@ -919,12 +919,12 @@ fn v3_resync_overflow_and_resync_roundtrip() {
     encode_frame(&resync_env, &mut buf).unwrap();
     let decoded_resync: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded_resync.request_id, saved_request_id);
-    let Some(v3::client_envelope::Command::ResyncRuntime(rs)) = decoded_resync.command else {
-        panic!("expected ResyncRuntime command");
+    let Some(v3::client_envelope::Command::ResyncWorkspace(rs)) = decoded_resync.command else {
+        panic!("expected ResyncWorkspace command");
     };
     assert_eq!(rs.runtime_id, uuid_to_bytes(runtime_id));
 
-    // 3. Server responds with fresh RuntimeSnapshot
+    // 3. Server responds with fresh WorkspaceSnapshot
     let pane = v3_snapshot::build_pane_snapshot(PaneSnapshotParams {
         pane_id,
         pane_output_seq: 200,
@@ -937,10 +937,10 @@ fn v3_resync_overflow_and_resync_roundtrip() {
         scrollback_tail: bytes::Bytes::from_static(b"$ ls\n"),
         total_scrollback_bytes: 5,
     });
-    let snapshot = v3_snapshot::build_runtime_snapshot(
+    let snapshot = v3_snapshot::build_workspace_snapshot(
         runtime_id,
         50,
-        v3::RuntimeClientRole::Writer,
+        v3::WorkspaceClientRole::Writer,
         vec![pane],
     );
     let snap_env = v3_resync::build_resync_response(saved_request_id, snapshot);
@@ -952,11 +952,11 @@ fn v3_resync_overflow_and_resync_roundtrip() {
     encode_frame(&snap_env, &mut buf).unwrap();
     let decoded_snap: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded_snap.request_id, saved_request_id);
-    let Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) = decoded_snap.payload else {
-        panic!("expected RuntimeSnapshot");
+    let Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) = decoded_snap.payload else {
+        panic!("expected WorkspaceSnapshot");
     };
     assert_eq!(snap.runtime_id, uuid_to_bytes(runtime_id));
-    assert_eq!(snap.runtime_revision, 50);
+    assert_eq!(snap.workspace_revision, 50);
     assert_eq!(snap.panes.len(), 1);
     assert_eq!(snap.panes[0].pane_output_seq, 200);
 }
@@ -965,18 +965,18 @@ fn v3_resync_overflow_and_resync_roundtrip() {
 fn v3_resync_capability_gating() {
     // With OPT_RESYNC negotiated
     let caps_with =
-        vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::OptResync as i32];
+        vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::OptResync as i32];
     assert!(v3_resync::is_supported(&caps_with));
 
     // Without OPT_RESYNC
-    let caps_without = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+    let caps_without = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
     assert!(!v3_resync::is_supported(&caps_without));
 
     // Server returns error when capability not negotiated
     let err = rttx_proto::v3_error::build_error(
         v3::ErrorKind::UnsupportedCapability,
         "OPT_RESYNC not negotiated",
-        "ResyncRuntime",
+        "ResyncWorkspace",
     );
     let env = rttx_proto::v3_error::build_error_response(1, err);
     let mut buf = BytesMut::new();
@@ -986,12 +986,12 @@ fn v3_resync_capability_gating() {
         panic!("expected Error payload");
     };
     assert_eq!(e.kind, v3::ErrorKind::UnsupportedCapability as i32);
-    assert_eq!(e.operation, "ResyncRuntime");
+    assert_eq!(e.operation, "ResyncWorkspace");
 }
 
 #[test]
-fn v3_resync_runtime_level_overflow() {
-    // Runtime-level overflow (no pane_id)
+fn v3_resync_workspace_level_overflow() {
+    // Workspace-level overflow (no pane_id)
     let runtime_id = uuid::Uuid::new_v4();
     let overflow = v3_resync::build_stream_overflow(runtime_id, None, 10);
     let env = v3_resync::build_stream_overflow_envelope(overflow);
@@ -1016,20 +1016,20 @@ fn v3_resync_seq_gap_triggers_resync_when_supported() {
     let gap = v3_snapshot::detect_output_seq_gap(10, 15);
     assert_eq!(gap, Some(5));
 
-    // Client has OPT_RESYNC → sends ResyncRuntime
-    let caps = vec![v3::Capability::CoreRuntimeLifecycle as i32, v3::Capability::OptResync as i32];
+    // Client has OPT_RESYNC → sends ResyncWorkspace
+    let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::OptResync as i32];
     assert!(v3_resync::is_supported(&caps));
 
-    let req = v3_resync::build_resync_runtime(runtime_id);
-    let env = v3_resync::build_resync_runtime_envelope(&id_gen, req);
+    let req = v3_resync::build_resync_workspace(runtime_id);
+    let env = v3_resync::build_resync_workspace_envelope(&id_gen, req);
     assert_ne!(env.request_id, 0);
 
     // Wire roundtrip
     let mut buf = BytesMut::new();
     encode_frame(&env, &mut buf).unwrap();
     let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
-    let Some(v3::client_envelope::Command::ResyncRuntime(rs)) = decoded.command else {
-        panic!("expected ResyncRuntime");
+    let Some(v3::client_envelope::Command::ResyncWorkspace(rs)) = decoded.command else {
+        panic!("expected ResyncWorkspace");
     };
     assert_eq!(rs.runtime_id, uuid_to_bytes(runtime_id));
 }
@@ -1037,7 +1037,7 @@ fn v3_resync_seq_gap_triggers_resync_when_supported() {
 #[test]
 fn v3_without_resync_server_disconnects_client() {
     // Without OPT_RESYNC, server sends ProtocolError with StreamOverflow kind
-    let caps = vec![v3::Capability::CoreRuntimeLifecycle as i32];
+    let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
     assert!(!v3_resync::is_supported(&caps));
 
     let err = rttx_proto::v3_error::build_error(
@@ -1070,8 +1070,8 @@ fn core_only_caps() -> Vec<i32> {
 
 fn all_optional_caps() -> Vec<v3::Capability> {
     vec![
-        v3::Capability::OptRuntimeInventoryV2,
-        v3::Capability::OptRuntimeTakeover,
+        v3::Capability::OptWorkspaceInventoryV2,
+        v3::Capability::OptWorkspaceTakeover,
         v3::Capability::OptResync,
         v3::Capability::OptChunkedScrollback,
         v3::Capability::OptDiagnostics,
@@ -1124,14 +1124,14 @@ fn v3_profile_core_plus_individual_optional() {
                 assert!(!v3_inventory::is_supported(&effective));
                 assert!(!v3_takeover::is_supported(&effective));
             }
-            v3::Capability::OptRuntimeInventoryV2 => {
+            v3::Capability::OptWorkspaceInventoryV2 => {
                 assert!(!v3_resync::is_supported(&effective));
                 assert!(!v3_scrollback::is_supported(&effective));
                 assert!(!v3_diagnostics::is_supported(&effective));
                 assert!(v3_inventory::is_supported(&effective));
                 assert!(!v3_takeover::is_supported(&effective));
             }
-            v3::Capability::OptRuntimeTakeover => {
+            v3::Capability::OptWorkspaceTakeover => {
                 assert!(!v3_resync::is_supported(&effective));
                 assert!(!v3_scrollback::is_supported(&effective));
                 assert!(!v3_diagnostics::is_supported(&effective));
@@ -1209,7 +1209,7 @@ fn v3_send_discipline_optional_client_commands_gated() {
     // Client must not send optional commands when capability is absent.
     let core_caps = core_only_caps();
 
-    // ResyncRuntime requires OPT_RESYNC
+    // ResyncWorkspace requires OPT_RESYNC
     assert!(!v3_resync::is_supported(&core_caps));
 
     // GetScrollback requires OPT_CHUNKED_SCROLLBACK
@@ -1218,7 +1218,7 @@ fn v3_send_discipline_optional_client_commands_gated() {
     // GetDiagnostics requires OPT_DIAGNOSTICS
     assert!(!v3_diagnostics::is_supported(&core_caps));
 
-    // TakeoverRuntime requires OPT_RUNTIME_TAKEOVER
+    // TakeoverWorkspace requires OPT_RUNTIME_TAKEOVER
     assert!(!v3_takeover::is_supported(&core_caps));
 
     // With each capability individually enabled, only that command is allowed
@@ -1250,7 +1250,7 @@ fn v3_send_discipline_optional_server_payloads_gated() {
     // TakeoverCompleted/LeaseLost/OwnerDisconnected require OPT_RUNTIME_TAKEOVER
     assert!(!v3_takeover::is_supported(&core_caps));
 
-    // RuntimeList v2 fields require OPT_RUNTIME_INVENTORY_V2
+    // WorkspaceList v2 fields require OPT_RUNTIME_INVENTORY_V2
     assert!(!v3_inventory::is_supported(&core_caps));
 }
 
@@ -1305,23 +1305,23 @@ fn v3_send_discipline_core_commands_always_allowed() {
     let core_commands: Vec<v3::client_envelope::Command> = vec![
         v3::client_envelope::Command::Ping(v3::Ping { nonce: 1 }),
         v3::client_envelope::Command::Shutdown(v3::Shutdown {}),
-        v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+        v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
             name: "test".into(),
-            policy: v3::RuntimePolicy::Persistent as i32,
+            policy: v3::WorkspacePolicy::Persistent as i32,
         }),
-        v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+        v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
             runtime_id: rt.clone(),
-            attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         }),
-        v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime { runtime_id: rt.clone() }),
-        v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+        v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace { runtime_id: rt.clone() }),
+        v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: rt.clone(),
         }),
-        v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+        v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: rt.clone(),
             name: "renamed".into(),
         }),
-        v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {}),
+        v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}),
         v3::client_envelope::Command::CreatePane(v3::CreatePane {
             runtime_id: rt.clone(),
             cwd: Some("/tmp".into()),
@@ -1394,7 +1394,7 @@ fn v3_wire_compat_unknown_capability_value_preserved() {
         client_name: "rttx".into(),
         client_version: "0.5.0".into(),
         capabilities: vec![
-            v3::Capability::CoreRuntimeLifecycle as i32,
+            v3::Capability::CoreWorkspaceLifecycle as i32,
             200, // future optional capability
         ],
     };
@@ -1405,17 +1405,17 @@ fn v3_wire_compat_unknown_capability_value_preserved() {
 }
 
 #[test]
-fn v3_wire_compat_unknown_runtime_policy_value() {
-    // A CreateRuntime with an unknown policy value (from a newer client).
-    let msg = v3::CreateRuntime { name: "test".into(), policy: 99 };
+fn v3_wire_compat_unknown_workspace_policy_value() {
+    // A CreateWorkspace with an unknown policy value (from a newer client).
+    let msg = v3::CreateWorkspace { name: "test".into(), policy: 99 };
     let mut buf = BytesMut::new();
     encode_frame(&msg, &mut buf).unwrap();
-    let decoded: v3::CreateRuntime = decode_frame(&mut buf).unwrap();
+    let decoded: v3::CreateWorkspace = decode_frame(&mut buf).unwrap();
     assert_eq!(decoded.policy, 99);
     // try_from returns Unspecified for unknown values
     assert_eq!(
-        v3::RuntimePolicy::try_from(decoded.policy).unwrap_or(v3::RuntimePolicy::Unspecified),
-        v3::RuntimePolicy::Unspecified
+        v3::WorkspacePolicy::try_from(decoded.policy).unwrap_or(v3::WorkspacePolicy::Unspecified),
+        v3::WorkspacePolicy::Unspecified
     );
 }
 
@@ -1543,18 +1543,18 @@ fn v3_wire_compat_unknown_oneof_variant_in_server_envelope() {
 }
 
 #[test]
-fn v3_wire_compat_runtime_info_without_v2_fields() {
-    // A RuntimeInfo from a server without OPT_RUNTIME_INVENTORY_V2 has
+fn v3_wire_compat_workspace_info_without_v2_fields() {
+    // A WorkspaceInfo from a server without OPT_RUNTIME_INVENTORY_V2 has
     // empty v2 fields (default values).
-    let info = v3::RuntimeInfo {
+    let info = v3::WorkspaceInfo {
         id: uuid_to_bytes(uuid::Uuid::new_v4()),
         name: "test".into(),
-        policy: v3::RuntimePolicy::Persistent as i32,
+        policy: v3::WorkspacePolicy::Persistent as i32,
         pane_count: 1,
         has_write_owner: true,
         read_only_client_count: 0,
-        current_client_role: v3::RuntimeClientRole::Writer as i32,
-        runtime_revision: 5,
+        current_client_role: v3::WorkspaceClientRole::Writer as i32,
+        workspace_revision: 5,
         reconstructed: false,
         // v2 fields left at defaults
         active_pane_summary: String::new(),
@@ -1564,7 +1564,7 @@ fn v3_wire_compat_runtime_info_without_v2_fields() {
     };
     let mut buf = BytesMut::new();
     encode_frame(&info, &mut buf).unwrap();
-    let decoded: v3::RuntimeInfo = decode_frame(&mut buf).unwrap();
+    let decoded: v3::WorkspaceInfo = decode_frame(&mut buf).unwrap();
     assert!(decoded.active_pane_summary.is_empty());
     assert!(decoded.panes.is_empty());
     assert!(!decoded.takeover_eligible);
@@ -1573,85 +1573,85 @@ fn v3_wire_compat_runtime_info_without_v2_fields() {
 // ── Core capabilities exercised end-to-end ──
 
 #[test]
-fn v3_core_runtime_lifecycle_end_to_end() {
+fn v3_core_workspace_lifecycle_end_to_end() {
     let id_gen = v3_envelope::RequestIdGenerator::new();
     let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
 
-    // CreateRuntime → RuntimeCreated
-    let cmd = v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+    // CreateWorkspace → WorkspaceCreated
+    let cmd = v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
         name: "lifecycle-test".into(),
-        policy: v3::RuntimePolicy::Persistent as i32,
+        policy: v3::WorkspacePolicy::Persistent as i32,
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
-        v3::server_envelope::Payload::RuntimeCreated(v3::RuntimeCreated {
+        v3::server_envelope::Payload::WorkspaceCreated(v3::WorkspaceCreated {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 1,
+            workspace_revision: 1,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
 
-    // AttachRuntime → RuntimeSnapshot
-    let cmd = v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+    // AttachWorkspace → WorkspaceSnapshot
+    let cmd = v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
         runtime_id: runtime_id.clone(),
-        attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+        attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
-        v3::server_envelope::Payload::RuntimeSnapshot(v3::RuntimeSnapshot {
+        v3::server_envelope::Payload::WorkspaceSnapshot(v3::WorkspaceSnapshot {
             tree: None,
             default_active_pane_id: Vec::new(),
             runtime_id: runtime_id.clone(),
-            runtime_revision: 2,
-            client_role: v3::RuntimeClientRole::Writer as i32,
+            workspace_revision: 2,
+            client_role: v3::WorkspaceClientRole::Writer as i32,
             panes: vec![],
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
 
-    // RenameRuntime → RuntimeRenamed
-    let cmd = v3::client_envelope::Command::RenameRuntime(v3::RenameRuntime {
+    // RenameWorkspace → WorkspaceRenamed
+    let cmd = v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
         runtime_id: runtime_id.clone(),
         name: "renamed".into(),
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
-        v3::server_envelope::Payload::RuntimeRenamed(v3::RuntimeRenamed {
+        v3::server_envelope::Payload::WorkspaceRenamed(v3::WorkspaceRenamed {
             runtime_id: runtime_id.clone(),
             name: "renamed".into(),
-            runtime_revision: 3,
+            workspace_revision: 3,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
 
-    // DetachRuntime → RuntimeDetached
-    let cmd = v3::client_envelope::Command::DetachRuntime(v3::DetachRuntime {
+    // DetachWorkspace → WorkspaceDetached
+    let cmd = v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
         runtime_id: runtime_id.clone(),
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
-        v3::server_envelope::Payload::RuntimeDetached(v3::RuntimeDetached {
+        v3::server_envelope::Payload::WorkspaceDetached(v3::WorkspaceDetached {
             runtime_id: runtime_id.clone(),
-            runtime_revision: 4,
+            workspace_revision: 4,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
 
-    // TerminateRuntime → RuntimeTerminated
-    let cmd = v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+    // TerminateWorkspace → WorkspaceTerminated
+    let cmd = v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
         runtime_id: runtime_id.clone(),
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
-        v3::server_envelope::Payload::RuntimeTerminated(v3::RuntimeTerminated {
+        v3::server_envelope::Payload::WorkspaceTerminated(v3::WorkspaceTerminated {
             runtime_id,
             final_revision: 5,
-            reason: v3::RuntimeTerminationReason::Explicit as i32,
+            reason: v3::WorkspaceTerminationReason::Explicit as i32,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
@@ -1685,7 +1685,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         v3::server_envelope::Payload::PaneCreated(v3::PaneCreated {
             runtime_id: runtime_id.clone(),
             pane_id: pane_id.clone(),
-            runtime_revision: 1,
+            workspace_revision: 1,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
@@ -1705,7 +1705,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
             pane_id: pane_id.clone(),
             cols: 120,
             rows: 40,
-            runtime_revision: 2,
+            workspace_revision: 2,
         },
     ));
     assert!(v3_envelope::is_push_event(&push));
@@ -1731,7 +1731,7 @@ fn v3_core_pane_lifecycle_end_to_end() {
         v3::server_envelope::Payload::PaneClosed(v3::PaneClosed {
             runtime_id,
             pane_id,
-            runtime_revision: 3,
+            workspace_revision: 3,
         }),
     );
     let mut buf = BytesMut::new();
@@ -1771,7 +1771,7 @@ fn v3_core_terminal_io_end_to_end() {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             cwd: "/home/user/project".into(),
-            runtime_revision: 2,
+            workspace_revision: 2,
         },
     ));
     assert!(v3_envelope::is_push_event(&cwd));
@@ -1789,7 +1789,7 @@ fn v3_core_terminal_io_end_to_end() {
             runtime_id: uuid_to_bytes(runtime_id),
             pane_id: uuid_to_bytes(pane_id),
             status: 0,
-            runtime_revision: 3,
+            workspace_revision: 3,
         },
     ));
     assert!(v3_envelope::is_push_event(&exited));
@@ -1888,16 +1888,16 @@ fn v3_opt_inventory_v2_absent_strips_extended_fields() {
     let effective = core_only_caps();
     assert!(!v3_inventory::is_supported(&effective));
 
-    // Server builds RuntimeInfo with only core fields
-    let info = v3::RuntimeInfo {
+    // Server builds WorkspaceInfo with only core fields
+    let info = v3::WorkspaceInfo {
         id: uuid_to_bytes(uuid::Uuid::new_v4()),
         name: "test".into(),
-        policy: v3::RuntimePolicy::Persistent as i32,
+        policy: v3::WorkspacePolicy::Persistent as i32,
         pane_count: 2,
         has_write_owner: true,
         read_only_client_count: 0,
-        current_client_role: v3::RuntimeClientRole::Writer as i32,
-        runtime_revision: 5,
+        current_client_role: v3::WorkspaceClientRole::Writer as i32,
+        workspace_revision: 5,
         reconstructed: false,
         active_pane_summary: String::new(),
         takeover_eligible: false,
@@ -1906,7 +1906,7 @@ fn v3_opt_inventory_v2_absent_strips_extended_fields() {
     };
     let mut buf = BytesMut::new();
     encode_frame(&info, &mut buf).unwrap();
-    let decoded: v3::RuntimeInfo = decode_frame(&mut buf).unwrap();
+    let decoded: v3::WorkspaceInfo = decode_frame(&mut buf).unwrap();
     assert!(decoded.panes.is_empty());
     assert!(decoded.active_pane_summary.is_empty());
 }
@@ -1920,7 +1920,7 @@ fn v3_opt_takeover_absent_attach_blocked_without_takeover() {
     let blocked = v3_envelope::build_push_envelope(v3::server_envelope::Payload::AttachBlocked(
         v3::AttachBlocked {
             runtime_id: uuid_to_bytes(uuid::Uuid::new_v4()),
-            current_client_role: v3::RuntimeClientRole::Unattached as i32,
+            current_client_role: v3::WorkspaceClientRole::Unattached as i32,
             attached_client_count: 1,
             read_only_client_count: 0,
         },
@@ -1983,7 +1983,7 @@ fn v3_error_all_kinds_map_to_connection_problem() {
         (v3::ErrorKind::ProtocolMismatch, ErrorClassification::IncompatibleVersion),
         (v3::ErrorKind::UnsupportedCapability, ErrorClassification::IncompatibleVersion),
         (v3::ErrorKind::InvalidArgument, ErrorClassification::InvalidRequest),
-        (v3::ErrorKind::RuntimeNotFound, ErrorClassification::ResourceNotFound),
+        (v3::ErrorKind::WorkspaceNotFound, ErrorClassification::ResourceNotFound),
         (v3::ErrorKind::PaneNotFound, ErrorClassification::ResourceNotFound),
         (v3::ErrorKind::OwnershipConflict, ErrorClassification::OwnershipConflict),
         (v3::ErrorKind::TakeoverRequired, ErrorClassification::OwnershipConflict),
@@ -2002,7 +2002,7 @@ fn v3_error_each_kind_roundtrips_through_envelope() {
         v3::ErrorKind::ProtocolMismatch,
         v3::ErrorKind::UnsupportedCapability,
         v3::ErrorKind::InvalidArgument,
-        v3::ErrorKind::RuntimeNotFound,
+        v3::ErrorKind::WorkspaceNotFound,
         v3::ErrorKind::PaneNotFound,
         v3::ErrorKind::OwnershipConflict,
         v3::ErrorKind::TakeoverRequired,
@@ -2046,28 +2046,28 @@ fn v3_ping_pong_roundtrip() {
     assert_eq!(pong.nonce, 12345);
 }
 
-// ── ListRuntimes end-to-end ──
+// ── ListWorkspaces end-to-end ──
 
 #[test]
-fn v3_list_runtimes_end_to_end() {
+fn v3_list_workspaces_end_to_end() {
     let id_gen = v3_envelope::RequestIdGenerator::new();
-    let cmd = v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {});
+    let cmd = v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {});
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     assert_ne!(req.request_id, 0);
 
     let runtime_id = uuid_to_bytes(uuid::Uuid::new_v4());
     let resp = v3_envelope::build_response_envelope(
         req.request_id,
-        v3::server_envelope::Payload::RuntimeList(v3::RuntimeList {
-            runtimes: vec![v3::RuntimeInfo {
+        v3::server_envelope::Payload::WorkspaceList(v3::WorkspaceList {
+            workspaces: vec![v3::WorkspaceInfo {
                 id: runtime_id,
                 name: "dev".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
                 pane_count: 2,
                 has_write_owner: true,
                 read_only_client_count: 0,
-                current_client_role: v3::RuntimeClientRole::Unattached as i32,
-                runtime_revision: 10,
+                current_client_role: v3::WorkspaceClientRole::Unattached as i32,
+                workspace_revision: 10,
                 reconstructed: false,
                 active_pane_summary: String::new(),
                 takeover_eligible: false,
@@ -2080,9 +2080,9 @@ fn v3_list_runtimes_end_to_end() {
     let mut buf = BytesMut::new();
     encode_frame(&resp, &mut buf).unwrap();
     let decoded: v3::ServerEnvelope = decode_frame(&mut buf).unwrap();
-    let Some(v3::server_envelope::Payload::RuntimeList(list)) = decoded.payload else {
-        panic!("expected RuntimeList");
+    let Some(v3::server_envelope::Payload::WorkspaceList(list)) = decoded.payload else {
+        panic!("expected WorkspaceList");
     };
-    assert_eq!(list.runtimes.len(), 1);
-    assert_eq!(list.runtimes[0].name, "dev");
+    assert_eq!(list.workspaces.len(), 1);
+    assert_eq!(list.workspaces[0].name, "dev");
 }

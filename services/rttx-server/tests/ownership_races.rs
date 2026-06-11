@@ -21,18 +21,18 @@ async fn three_competing_writers_only_first_succeeds() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let runtime_id = create_runtime(&mut c1, "race", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut c1, "race", v3::WorkspacePolicy::Persistent).await;
     let snap = attach_rw(&mut c1, &runtime_id).await;
-    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.client_role, v3::WorkspaceClientRole::Writer as i32);
 
     for i in 0..2 {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
         c.send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         })
         .await;
@@ -54,7 +54,7 @@ async fn readers_observe_pane_created_push() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_runtime(&mut writer, "push-test", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut writer, "push-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -100,9 +100,9 @@ async fn multiple_readers_see_consistent_revision() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_runtime(&mut writer, "rev-test", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut writer, "rev-test", v3::WorkspacePolicy::Persistent).await;
     let snap = attach_rw(&mut writer, &runtime_id).await;
-    let base_rev = snap.runtime_revision;
+    let base_rev = snap.workspace_revision;
 
     let mut r1 = TestClient::connect(&sock).await;
     r1.handshake().await;
@@ -113,13 +113,13 @@ async fn multiple_readers_see_consistent_revision() {
     let s2 = attach_ro(&mut r2, &runtime_id).await;
 
     // Each reader attach bumps revision.
-    assert!(s1.runtime_revision > base_rev);
-    assert!(s2.runtime_revision > s1.runtime_revision);
+    assert!(s1.workspace_revision > base_rev);
+    assert!(s2.workspace_revision > s1.workspace_revision);
 
     // Inventory should show consistent counts.
-    let runtimes = list_runtimes(&mut r2).await;
-    assert_eq!(runtimes[0].read_only_client_count, 2);
-    assert!(runtimes[0].has_write_owner);
+    let workspaces = list_workspaces(&mut r2).await;
+    assert_eq!(workspaces[0].read_only_client_count, 2);
+    assert!(workspaces[0].has_write_owner);
 }
 
 // ── Detach vs terminate races ───────────────────────────────────
@@ -132,7 +132,7 @@ async fn writer_detach_then_reader_detach_leaves_clean_state() {
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
     let runtime_id =
-        create_runtime(&mut writer, "detach-race", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut writer, "detach-race", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -140,20 +140,20 @@ async fn writer_detach_then_reader_detach_leaves_clean_state() {
     attach_ro(&mut reader, &runtime_id).await;
 
     // Writer detaches first.
-    detach_runtime(&mut writer, &runtime_id).await;
-    // Reader gets RuntimeDetached push.
+    detach_workspace(&mut writer, &runtime_id).await;
+    // Reader gets WorkspaceDetached push.
     reader.drain(Duration::from_millis(200)).await;
 
     // Reader detaches.
-    detach_runtime(&mut reader, &runtime_id).await;
+    detach_workspace(&mut reader, &runtime_id).await;
 
     // Session should still exist (persistent policy).
     let mut checker = TestClient::connect(&sock).await;
     checker.handshake().await;
-    let runtimes = list_runtimes(&mut checker).await;
-    assert_eq!(runtimes.len(), 1);
-    assert!(!runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].read_only_client_count, 0);
+    let workspaces = list_workspaces(&mut checker).await;
+    assert_eq!(workspaces.len(), 1);
+    assert!(!workspaces[0].has_write_owner);
+    assert_eq!(workspaces[0].read_only_client_count, 0);
 }
 
 #[tokio::test]
@@ -163,7 +163,7 @@ async fn terminate_while_reader_attached_notifies_reader() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_runtime(&mut writer, "term-race", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut writer, "term-race", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -174,24 +174,24 @@ async fn terminate_while_reader_attached_notifies_reader() {
     writer
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::TerminateRuntime(v3::TerminateRuntime {
+            command: Some(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
                 runtime_id: runtime_id.clone(),
             })),
         })
         .await;
 
-    // Both should get RuntimeTerminated.
+    // Both should get WorkspaceTerminated.
     let w_resp = writer.recv_or_timeout().await;
-    assert!(matches!(w_resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))));
+    assert!(matches!(w_resp.payload, Some(v3::server_envelope::Payload::WorkspaceTerminated(_))));
 
     let r_resp = reader.recv_or_timeout().await;
-    assert!(matches!(r_resp.payload, Some(v3::server_envelope::Payload::RuntimeTerminated(_))));
+    assert!(matches!(r_resp.payload, Some(v3::server_envelope::Payload::WorkspaceTerminated(_))));
 
     // Session gone.
     let mut checker = TestClient::connect(&sock).await;
     checker.handshake().await;
-    let runtimes = list_runtimes(&mut checker).await;
-    assert!(runtimes.is_empty());
+    let workspaces = list_workspaces(&mut checker).await;
+    assert!(workspaces.is_empty());
 }
 
 // ── Writer disconnect during pane operations ────────────────────
@@ -203,7 +203,7 @@ async fn writer_disconnect_frees_ownership_for_new_writer() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_runtime(&mut writer, "disconnect", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut writer, "disconnect", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     // Drop the writer (simulates disconnect).
@@ -214,7 +214,7 @@ async fn writer_disconnect_frees_ownership_for_new_writer() {
     let mut new_writer = TestClient::connect(&sock).await;
     new_writer.handshake().await;
     let snap = attach_rw(&mut new_writer, &runtime_id).await;
-    assert_eq!(snap.client_role, v3::RuntimeClientRole::Writer as i32);
+    assert_eq!(snap.client_role, v3::WorkspaceClientRole::Writer as i32);
 }
 
 #[tokio::test]
@@ -225,7 +225,7 @@ async fn reader_survives_writer_disconnect() {
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
     let runtime_id =
-        create_runtime(&mut writer, "reader-survives", v3::RuntimePolicy::Persistent).await;
+        create_workspace(&mut writer, "reader-survives", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -236,11 +236,11 @@ async fn reader_survives_writer_disconnect() {
     drop(writer);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Reader should still be able to list runtimes.
-    let runtimes = list_runtimes(&mut reader).await;
-    assert_eq!(runtimes.len(), 1);
-    assert!(!runtimes[0].has_write_owner);
-    assert_eq!(runtimes[0].read_only_client_count, 1);
+    // Reader should still be able to list workspaces.
+    let workspaces = list_workspaces(&mut reader).await;
+    assert_eq!(workspaces.len(), 1);
+    assert!(!workspaces[0].has_write_owner);
+    assert_eq!(workspaces[0].read_only_client_count, 1);
 }
 
 // ── Revision monotonicity under concurrent operations ───────────
@@ -252,21 +252,21 @@ async fn revisions_monotonic_across_attach_detach_cycle() {
 
     let mut c1 = TestClient::connect(&sock).await;
     c1.handshake().await;
-    let runtime_id = create_runtime(&mut c1, "mono-rev", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut c1, "mono-rev", v3::WorkspacePolicy::Persistent).await;
 
     let mut last_rev = 0u64;
 
     // Attach-detach cycle with multiple clients.
     for _ in 0..3 {
         let snap = attach_rw(&mut c1, &runtime_id).await;
-        assert!(snap.runtime_revision > last_rev, "revision must increase on attach");
-        last_rev = snap.runtime_revision;
+        assert!(snap.workspace_revision > last_rev, "revision must increase on attach");
+        last_rev = snap.workspace_revision;
 
-        detach_runtime(&mut c1, &runtime_id).await;
+        detach_workspace(&mut c1, &runtime_id).await;
     }
 
     // Final inventory check.
-    let runtimes = list_runtimes(&mut c1).await;
-    assert_eq!(runtimes.len(), 1);
-    assert!(runtimes[0].runtime_revision >= last_rev);
+    let workspaces = list_workspaces(&mut c1).await;
+    assert_eq!(workspaces.len(), 1);
+    assert!(workspaces[0].workspace_revision >= last_rev);
 }

@@ -1,6 +1,6 @@
 //! State storage modules for the rttx daemon.
 //!
-//! This module organizes the v2 per-runtime directory layout defined by
+//! This module organizes the v2 per-workspace directory layout defined by
 //! RFC-022.
 
 pub mod cleanup;

@@ -18,7 +18,7 @@ async fn ping_succeeds_during_pty_output_burst() {
     // Client A: create session, attach, create pane, start output burst.
     let mut client_a = TestClient::connect(&sock).await;
     client_a.handshake().await;
-    let sid = create_runtime(&mut client_a, "mutex-test", v3::RuntimePolicy::Persistent).await;
+    let sid = create_workspace(&mut client_a, "mutex-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client_a, &sid).await;
     let pane_id = create_pane(&mut client_a, &sid).await;
 

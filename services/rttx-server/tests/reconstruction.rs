@@ -23,16 +23,16 @@ async fn reconstruct_session_after_restart() {
         // Create session.
         let create = v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                 name: "reconstruct-test".into(),
-                policy: v3::RuntimePolicy::Persistent as i32,
+                policy: v3::WorkspacePolicy::Persistent as i32,
             })),
         };
         client.send(&create).await;
         let resp = client.recv().await;
         runtime_id = match resp.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(sc)) => sc.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         // Create pane (spawns a PTY).
@@ -57,9 +57,9 @@ async fn reconstruct_session_after_restart() {
         // Attach to get deltas.
         let attach = v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         };
         client.send(&attach).await;
@@ -98,30 +98,30 @@ async fn reconstruct_session_after_restart() {
         // List sessions — should find our session.
         let list = v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::ListRuntimes(v3::ListRuntimes {})),
+            command: Some(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})),
         };
         client.send(&list).await;
         let resp = client.recv().await;
-        let runtimes = match resp.payload {
-            Some(v3::server_envelope::Payload::RuntimeList(sl)) => sl.runtimes,
-            other => panic!("expected RuntimeList, got {other:?}"),
+        let workspaces = match resp.payload {
+            Some(v3::server_envelope::Payload::WorkspaceList(sl)) => sl.workspaces,
+            other => panic!("expected WorkspaceList, got {other:?}"),
         };
-        assert_eq!(runtimes.len(), 1, "session should be restored");
-        assert_eq!(runtimes[0].name, "reconstruct-test");
-        assert_eq!(runtimes[0].id, runtime_id);
+        assert_eq!(workspaces.len(), 1, "session should be restored");
+        assert_eq!(workspaces[0].name, "reconstruct-test");
+        assert_eq!(workspaces[0].id, runtime_id);
 
         // Attach and check snapshot contains scrollback with our marker.
         let attach = v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                 runtime_id: runtime_id.clone(),
-                attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
             })),
         };
         client.send(&attach).await;
         let resp = client.recv().await;
         let panes = match resp.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snap)) => snap.panes,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => snap.panes,
             other => panic!("expected Snapshot, got {other:?}"),
         };
         assert!(!panes.is_empty(), "should have at least one pane");
@@ -154,15 +154,15 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::CreateRuntime(v3::CreateRuntime {
+                command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
                     name: "reconstruct-cwd".into(),
-                    policy: v3::RuntimePolicy::Persistent as i32,
+                    policy: v3::WorkspacePolicy::Persistent as i32,
                 })),
             })
             .await;
         runtime_id = match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeCreated(created)) => created.runtime_id,
-            other => panic!("expected RuntimeCreated, got {other:?}"),
+            Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => created.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
         client
@@ -186,14 +186,14 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                     runtime_id: runtime_id.clone(),
-                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
         match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(_)) => {}
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
             other => panic!("expected Snapshot, got {other:?}"),
         }
 
@@ -229,15 +229,15 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
         client
             .send(&v3::ClientEnvelope {
                 request_id: 0,
-                command: Some(v3::client_envelope::Command::AttachRuntime(v3::AttachRuntime {
+                command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
                     runtime_id: runtime_id.clone(),
-                    attach_mode: v3::RuntimeAttachMode::ReadWrite as i32,
+                    attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
                 })),
             })
             .await;
 
         let panes = match client.recv().await.payload {
-            Some(v3::server_envelope::Payload::RuntimeSnapshot(snapshot)) => snapshot.panes,
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snapshot)) => snapshot.panes,
             other => panic!("expected Snapshot, got {other:?}"),
         };
         let pane = panes
@@ -299,7 +299,7 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        runtime_id = create_runtime(&mut client, "multi-cwd", v3::RuntimePolicy::Persistent).await;
+        runtime_id = create_workspace(&mut client, "multi-cwd", v3::WorkspacePolicy::Persistent).await;
         pane_a_id = create_pane(&mut client, &runtime_id).await;
         pane_b_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
@@ -357,7 +357,7 @@ async fn pane_gets_unique_histfile() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "hist-test", v3::RuntimePolicy::Persistent).await;
+    let runtime_id = create_workspace(&mut client, "hist-test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
     attach_rw(&mut client, &runtime_id).await;
 
