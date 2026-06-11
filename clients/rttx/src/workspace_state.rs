@@ -391,6 +391,82 @@ impl WindowState {
         Some(result)
     }
 
+    /// Adopt the daemon's authoritative pane tree as the client's render
+    /// layout (RFC-031 §3, Step 4). The render leaf uuids are the durable
+    /// server pane ids, so the layout and the daemon share one identity and the
+    /// client neither mints structure nor creates panes to match the daemon.
+    fn adopt_server_tree(
+        &mut self,
+        workspace_id: &str,
+        runtime_id: &str,
+        layout: LayoutNode,
+        snapshot: &v3::WorkspaceSnapshot,
+    ) -> Option<ManagedWorkspaceOpenResult> {
+        let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
+        session.runtime.runtime_id = Some(runtime_id.to_string());
+
+        let previous_layout_terminals = session.layout.terminal_uuids();
+        session.layout = layout;
+        let layout_terminal_uuids = session.layout.terminal_uuids();
+
+        // Bindings degenerate to an identity map over the server pane ids
+        // (removed entirely in a later step); keep them coherent so the
+        // pane-resolution path stays correct in the meantime.
+        session.runtime.pane_bindings =
+            layout_terminal_uuids.iter().map(|id| (id.clone(), id.clone())).collect();
+        session.runtime.pending_layout_panes.clear();
+
+        // The server names the fallback focus pane (RFC-031 §2).
+        if let Some(active) = rttx_proto::bytes_to_uuid(&snapshot.default_active_pane_id)
+            .ok()
+            .map(|uuid| uuid.to_string())
+            .filter(|id| layout_terminal_uuids.contains(id))
+        {
+            session.active_terminal_uuid = Some(active);
+        }
+        session.normalize_active_terminal();
+
+        // Pane content restores map 1:1 to layout terminals by pane id.
+        let snapshot_restores = snapshot
+            .panes
+            .iter()
+            .filter_map(|pane_snapshot| {
+                let pane_id = snapshot_pane_id(pane_snapshot)?;
+                layout_terminal_uuids.contains(&pane_id).then(|| WorkspacePaneRestore {
+                    layout_terminal_uuid: pane_id,
+                    title: pane_snapshot.title.clone(),
+                    cwd: pane_snapshot.cwd.clone(),
+                    pane_output_seq: pane_snapshot.pane_output_seq,
+                    scrollback_tail: pane_snapshot.scrollback_tail.clone(),
+                    scrollback_complete: pane_snapshot.scrollback_complete,
+                    cols: pane_snapshot.cols as u16,
+                    rows: pane_snapshot.rows as u16,
+                    terminal_modes: pane_snapshot.terminal_modes,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        // Carry the daemon's current CWD into the adopted layout.
+        for restore in &snapshot_restores {
+            if !restore.cwd.is_empty() {
+                session
+                    .layout
+                    .set_terminal_cwd(&restore.layout_terminal_uuid, Some(restore.cwd.clone()));
+            }
+        }
+
+        let session_state = session.clone();
+        self.rebuild_pane_reverse_index();
+
+        Some(ManagedWorkspaceOpenResult {
+            session_state,
+            panes_to_create: Vec::new(),
+            snapshot_restores,
+            skipped_runtime_panes: Vec::new(),
+            previous_layout_terminals,
+        })
+    }
+
     /// Apply the state mutation for attaching/reconciling a managed runtime snapshot.
     pub fn apply_managed_workspace_opened(
         &mut self,
@@ -398,6 +474,18 @@ impl WindowState {
         runtime_id: &str,
         snapshot: &v3::WorkspaceSnapshot,
     ) -> Option<ManagedWorkspaceOpenResult> {
+        // RFC-031 §3 (Step 4): when the daemon provides its authoritative pane
+        // tree, the client adopts it wholesale and renders as a pure view. The
+        // tree's leaf uuids are the durable server pane ids, so layout terminal
+        // uuid == pane id with no client-side binding translation, and the
+        // client never mints structure nor creates panes to "match" the daemon.
+        if let Some(layout) = render_layout_from_snapshot(snapshot) {
+            return self.adopt_server_tree(workspace_id, runtime_id, layout, snapshot);
+        }
+
+        // Legacy fallback for a tree-less snapshot (an empty workspace, or a
+        // pre-tree daemon): reconcile the client-owned layout against the flat
+        // pane list. Removed once the daemon guarantees a tree per workspace.
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
 
         let had_runtime_id = session.runtime.runtime_id.is_some();
@@ -708,6 +796,85 @@ mod tests {
         assert_eq!(orientation, SplitOrientation::Horizontal);
         assert_eq!(first.terminal_uuids(), vec![left.to_string()]);
         assert_eq!(second.terminal_uuids(), vec![right.to_string()]);
+    }
+
+    #[test]
+    fn apply_managed_workspace_opened_adopts_server_tree_as_pure_view() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
+        // The client starts with a stale single-pane layout that does not match
+        // the server tree.
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let session = managed_session_with_runtime(
+            "workspace-1",
+            "Workspace",
+            term("stale-old-pane"),
+            RuntimeEndpoint::Local,
+            WorkspacePolicy::Persistent,
+            Some(runtime_id),
+        );
+        let mut state = window_state(vec![session]);
+
+        // Server tree: a horizontal split of two server-minted pane ids.
+        let left = uuid::Uuid::new_v4();
+        let right = uuid::Uuid::new_v4();
+        let mut snap = snapshot(
+            runtime_id,
+            vec![
+                pane_snapshot(&left.to_string(), "left", "/work/left", b"L"),
+                pane_snapshot(&right.to_string(), "right", "/work/right", b"R"),
+            ],
+        );
+        snap.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(left),
+            pane_tree_leaf(right),
+        ));
+        snap.default_active_pane_id = rttx_proto::uuid_to_bytes(right);
+
+        let result = state
+            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
+            .expect("adopts the server tree");
+
+        // The client discards its stale layout and renders the server tree.
+        let uuids = result.session_state.layout.terminal_uuids();
+        assert_eq!(uuids.len(), 2, "layout is rebuilt from the two server panes");
+        assert!(uuids.contains(&left.to_string()), "left server pane is rendered");
+        assert!(uuids.contains(&right.to_string()), "right server pane is rendered");
+        assert!(
+            !uuids.contains(&"stale-old-pane".to_string()),
+            "the stale client-owned pane is discarded",
+        );
+
+        // A pure view never mints structure or creates panes to match the daemon.
+        assert!(result.panes_to_create.is_empty(), "pure view creates no panes");
+        assert!(result.skipped_runtime_panes.is_empty());
+        assert!(
+            result.previous_layout_terminals.contains(&"stale-old-pane".to_string()),
+            "the discarded layout terminal is reported so its widget is torn down",
+        );
+
+        // Restores map 1:1 to layout terminals by pane id (identity).
+        assert_eq!(result.snapshot_restores.len(), 2);
+        assert!(result.snapshot_restores.iter().all(|r| {
+            r.layout_terminal_uuid == left.to_string()
+                || r.layout_terminal_uuid == right.to_string()
+        }));
+
+        let session = &state.workspaces[0];
+        // Bindings degenerate to an identity map over the server pane ids.
+        assert_eq!(
+            session.runtime.pane_bindings.get(&left.to_string()).map(String::as_str),
+            Some(left.to_string().as_str()),
+        );
+        assert_eq!(
+            session.runtime.pane_bindings.get(&right.to_string()).map(String::as_str),
+            Some(right.to_string().as_str()),
+        );
+        // Active pane follows the server's fallback focus, and nothing is pending.
+        assert_eq!(session.active_terminal_uuid.as_deref(), Some(right.to_string().as_str()));
+        assert!(!session.runtime.is_layout_pane_pending(&left.to_string()));
     }
 
     fn pane_info(pane_id: &str, title: &str, cwd: &str) -> v3::PaneInfo {
