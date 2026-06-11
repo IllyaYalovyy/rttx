@@ -9,8 +9,8 @@
 mod common;
 
 use common::{
-    attach_ro, attach_rw, close_pane, create_pane, create_workspace, split_pane,
-    start_test_server, TestClient,
+    TestClient, attach_ro, attach_rw, close_pane, create_pane, create_workspace, split_pane,
+    start_test_server,
 };
 use rttx_proto::v3;
 use std::time::Duration;
@@ -40,9 +40,8 @@ async fn split_and_close_are_broadcast_to_other_attached_clients() {
     // The writer splits its pane. The observer must receive the PaneSplit delta.
     let split =
         split_pane(&mut writer, &runtime_id, &pane_a, v3::PaneSplitAxis::Vertical, 0.4).await;
-    let env = observer
-        .recv_matching(|p| matches!(p, v3::server_envelope::Payload::PaneSplit(_)))
-        .await;
+    let env =
+        observer.recv_matching(|p| matches!(p, v3::server_envelope::Payload::PaneSplit(_))).await;
     let Some(v3::server_envelope::Payload::PaneSplit(observed)) = env.payload else {
         unreachable!("recv_matching guaranteed PaneSplit");
     };
@@ -53,9 +52,8 @@ async fn split_and_close_are_broadcast_to_other_attached_clients() {
 
     // The writer closes the new pane. The observer must receive a PaneClosed delta.
     close_pane(&mut writer, &runtime_id, &split.new_pane_id).await;
-    let env = observer
-        .recv_matching(|p| matches!(p, v3::server_envelope::Payload::PaneClosed(_)))
-        .await;
+    let env =
+        observer.recv_matching(|p| matches!(p, v3::server_envelope::Payload::PaneClosed(_))).await;
     let Some(v3::server_envelope::Payload::PaneClosed(closed)) = env.payload else {
         unreachable!("recv_matching guaranteed PaneClosed");
     };
