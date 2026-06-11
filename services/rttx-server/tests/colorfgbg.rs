@@ -126,7 +126,8 @@ async fn create_pane_default_assumes_dark() {
     client.handshake().await;
 
     let runtime_id =
-        common::create_workspace(&mut client, "default-test", v3::WorkspacePolicy::Persistent).await;
+        common::create_workspace(&mut client, "default-test", v3::WorkspacePolicy::Persistent)
+            .await;
 
     let pane_id = create_pane_with_appearance(&mut client, &runtime_id, None).await;
     attach_and_send(&mut client, &runtime_id, &pane_id, b"echo $COLORFGBG\n").await;

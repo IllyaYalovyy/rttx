@@ -236,11 +236,11 @@ pub fn remove_runtime_dir(state_dir: &Path, runtime_id: Uuid) -> std::io::Result
 mod tests {
     use super::*;
     use crate::pane_tree::{PaneId, SplitAxis, WorkspaceTree};
-    use crate::workspace::WorkspacePolicy;
     use crate::state::types::{
-        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, SCREEN_SNAPSHOT_SCHEMA_VERSION,
-        ScreenSnapshotV1, TerminalModeSnapshot, WorkspaceFileV2, WorkspaceSpecV2,
+        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1,
+        TerminalModeSnapshot, WorkspaceFileV2, WorkspaceInstanceV1, WorkspaceSpecV2,
     };
+    use crate::workspace::WorkspacePolicy;
     use tempfile::TempDir;
 
     fn sample_runtime_file(id: Uuid) -> WorkspaceFileV2 {

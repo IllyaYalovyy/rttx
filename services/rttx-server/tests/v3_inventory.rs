@@ -90,8 +90,10 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
 
 #[test]
 fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
-    let caps_without_v2 =
-        vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::CorePaneLifecycle as i32];
+    let caps_without_v2 = vec![
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::CorePaneLifecycle as i32,
+    ];
     assert!(!v3_inventory::is_supported(&caps_without_v2));
 
     let pane = test_pane("bash", "/home", None);

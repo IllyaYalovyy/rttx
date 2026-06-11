@@ -1994,7 +1994,8 @@ fn connect_existing_dialog_classifies_already_open_session() {
         takeover_eligible: false,
         disabled_reason: String::new(),
     }];
-    let entries = rttx::connect_existing_dialog::classify_workspaces(&workspaces, &[id.to_string()]);
+    let entries =
+        rttx::connect_existing_dialog::classify_workspaces(&workspaces, &[id.to_string()]);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(

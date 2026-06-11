@@ -3,7 +3,7 @@
 //! Convenience functions for constructing server response messages.
 
 use crate::pane_tree::{PaneId, PaneTree, Side, SplitAxis, WorkspaceTree};
-use crate::workspace::{ClientRole, Workspace, TerminationReason};
+use crate::workspace::{ClientRole, TerminationReason, Workspace};
 use rttx_proto::{uuid_to_bytes, v3};
 use uuid::Uuid;
 
@@ -400,7 +400,8 @@ mod tests {
 
     #[test]
     fn v3_workspace_terminated_maps_reason() {
-        let env = v3_workspace_terminated(Uuid::new_v4(), 3, TerminationReason::EphemeralLastDetach);
+        let env =
+            v3_workspace_terminated(Uuid::new_v4(), 3, TerminationReason::EphemeralLastDetach);
         let Some(v3::server_envelope::Payload::WorkspaceTerminated(t)) = env.payload else {
             panic!("expected WorkspaceTerminated");
         };

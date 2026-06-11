@@ -501,7 +501,7 @@ impl Workspace {
     #[must_use]
     pub fn to_workspace_file(&self) -> crate::state::types::WorkspaceFileV2 {
         use crate::state::types::{
-            PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, WorkspaceFileV2,
+            PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceFileV2, WorkspaceInstanceV1,
             WorkspaceSpecV2,
         };
 

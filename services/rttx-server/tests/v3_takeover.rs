@@ -61,8 +61,10 @@ fn v3_takeover_full_flow_wire_roundtrip() {
 
 #[test]
 fn v3_takeover_capability_gating_rejects_when_absent() {
-    let caps_without_takeover =
-        vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::CorePaneLifecycle as i32];
+    let caps_without_takeover = vec![
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::CorePaneLifecycle as i32,
+    ];
     assert!(!v3_takeover::is_supported(&caps_without_takeover));
 
     // Server returns OwnershipConflict error instead of allowing takeover

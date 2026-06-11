@@ -201,8 +201,9 @@ mod tests {
 
     #[test]
     fn detach_workspace_is_not_fire_and_forget() {
-        let cmd =
-            v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace { runtime_id: rid() });
+        let cmd = v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
+            runtime_id: rid(),
+        });
         assert!(!is_fire_and_forget(&cmd));
     }
 
@@ -253,8 +254,9 @@ mod tests {
 
     #[test]
     fn resync_workspace_is_not_fire_and_forget() {
-        let cmd =
-            v3::client_envelope::Command::ResyncWorkspace(v3::ResyncWorkspace { runtime_id: rid() });
+        let cmd = v3::client_envelope::Command::ResyncWorkspace(v3::ResyncWorkspace {
+            runtime_id: rid(),
+        });
         assert!(!is_fire_and_forget(&cmd));
     }
 

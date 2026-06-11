@@ -8,8 +8,8 @@
 mod common;
 
 use common::{
-    TestClient, attach_ro, attach_rw, create_pane, create_workspace, detach_workspace, list_workspaces,
-    send_input, start_test_server, terminate_workspace,
+    TestClient, attach_ro, attach_rw, create_pane, create_workspace, detach_workspace,
+    list_workspaces, send_input, start_test_server, terminate_workspace,
 };
 use rttx_proto::v3;
 use std::time::Duration;

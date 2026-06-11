@@ -551,9 +551,9 @@ mod v3_envelope_tests {
             // Takeover (OPT_RUNTIME_TAKEOVER)
             v3::ClientEnvelope {
                 request_id: 13,
-                command: Some(v3::client_envelope::Command::TakeoverWorkspace(v3::TakeoverWorkspace {
-                    runtime_id: rt.clone(),
-                })),
+                command: Some(v3::client_envelope::Command::TakeoverWorkspace(
+                    v3::TakeoverWorkspace { runtime_id: rt.clone() },
+                )),
             },
         ];
 
@@ -603,28 +603,28 @@ mod v3_envelope_tests {
             // Workspace lifecycle
             v3::ServerEnvelope {
                 request_id: 2,
-                payload: Some(v3::server_envelope::Payload::WorkspaceCreated(v3::WorkspaceCreated {
-                    runtime_id: rt.clone(),
-                    workspace_revision: 1,
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceCreated(
+                    v3::WorkspaceCreated { runtime_id: rt.clone(), workspace_revision: 1 },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 3,
-                payload: Some(v3::server_envelope::Payload::WorkspaceSnapshot(v3::WorkspaceSnapshot {
-                    runtime_id: rt.clone(),
-                    workspace_revision: 10,
-                    client_role: v3::WorkspaceClientRole::Writer as i32,
-                    panes: vec![],
-                    tree: None,
-                    default_active_pane_id: Vec::new(),
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceSnapshot(
+                    v3::WorkspaceSnapshot {
+                        runtime_id: rt.clone(),
+                        workspace_revision: 10,
+                        client_role: v3::WorkspaceClientRole::Writer as i32,
+                        panes: vec![],
+                        tree: None,
+                        default_active_pane_id: Vec::new(),
+                    },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 4,
-                payload: Some(v3::server_envelope::Payload::WorkspaceDetached(v3::WorkspaceDetached {
-                    runtime_id: rt.clone(),
-                    workspace_revision: 11,
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceDetached(
+                    v3::WorkspaceDetached { runtime_id: rt.clone(), workspace_revision: 11 },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 5,
@@ -638,11 +638,13 @@ mod v3_envelope_tests {
             },
             v3::ServerEnvelope {
                 request_id: 6,
-                payload: Some(v3::server_envelope::Payload::WorkspaceRenamed(v3::WorkspaceRenamed {
-                    runtime_id: rt.clone(),
-                    name: "renamed".into(),
-                    workspace_revision: 13,
-                })),
+                payload: Some(v3::server_envelope::Payload::WorkspaceRenamed(
+                    v3::WorkspaceRenamed {
+                        runtime_id: rt.clone(),
+                        name: "renamed".into(),
+                        workspace_revision: 13,
+                    },
+                )),
             },
             v3::ServerEnvelope {
                 request_id: 7,

@@ -9,13 +9,13 @@
 //! separate recovery directory without disturbing the source state.
 
 use rttx_server::pane_tree::{PaneId, WorkspaceTree};
-use rttx_server::workspace::WorkspacePolicy;
 use rttx_server::salvage::{export_orphans, scan_orphans};
 use rttx_server::state::layout;
 use rttx_server::state::persistence::{save_daemon_index, save_workspace};
 use rttx_server::state::types::{
-    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, WorkspaceFileV2, WorkspaceSpecV2,
+    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceFileV2, WorkspaceInstanceV1, WorkspaceSpecV2,
 };
+use rttx_server::workspace::WorkspacePolicy;
 use std::path::Path;
 use std::time::SystemTime;
 use uuid::Uuid;

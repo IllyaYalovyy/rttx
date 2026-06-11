@@ -84,7 +84,8 @@ async fn closing_a_pane_removes_only_its_durable_state() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let closed_cleaned =
-        poll_until(deadline, || pane_artifacts_absent(&state_dir, workspace_uuid, close_uuid)).await;
+        poll_until(deadline, || pane_artifacts_absent(&state_dir, workspace_uuid, close_uuid))
+            .await;
     assert!(
         closed_cleaned,
         "closed pane's history/scrollback/screen must be removed by close-driven cleanup"

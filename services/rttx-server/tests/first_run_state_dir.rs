@@ -19,7 +19,8 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
     let mut c = common::TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes = create_workspace(&mut c, "first-run-test", v3::WorkspacePolicy::Persistent).await;
+    let rt_id_bytes =
+        create_workspace(&mut c, "first-run-test", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = rttx_proto::bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for serialization to write state.

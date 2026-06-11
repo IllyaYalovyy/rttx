@@ -159,12 +159,12 @@ fn collect_workspace_orphans(
 mod tests {
     use super::*;
     use crate::pane_tree::WorkspaceTree;
-    use crate::workspace::WorkspacePolicy;
     use crate::state::persistence::{save_daemon_index, save_workspace};
     use crate::state::types::{
-        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, WorkspaceFileV2,
+        PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceFileV2, WorkspaceInstanceV1,
         WorkspaceSpecV2,
     };
+    use crate::workspace::WorkspacePolicy;
     use std::time::SystemTime;
     use tempfile::TempDir;
 

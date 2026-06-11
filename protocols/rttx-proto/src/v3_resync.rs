@@ -63,7 +63,10 @@ pub fn build_resync_workspace_envelope(
 /// This reuses the snapshot response builder — the wire format is identical
 /// to an attach snapshot response.
 #[must_use]
-pub fn build_resync_response(request_id: u64, snapshot: v3::WorkspaceSnapshot) -> v3::ServerEnvelope {
+pub fn build_resync_response(
+    request_id: u64,
+    snapshot: v3::WorkspaceSnapshot,
+) -> v3::ServerEnvelope {
     crate::v3_snapshot::build_snapshot_response(request_id, snapshot)
 }
 

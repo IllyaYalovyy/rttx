@@ -203,7 +203,8 @@ impl WindowState {
                     .collect();
                 self.dismissed_runtime_ids.retain(|id| inventory_ids.contains(id));
 
-                let recovered = self.recover_managed_workspaces_from_inventory(endpoint, workspaces);
+                let recovered =
+                    self.recover_managed_workspaces_from_inventory(endpoint, workspaces);
                 if recovered.is_empty() {
                     return transition;
                 }

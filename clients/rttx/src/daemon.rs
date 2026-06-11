@@ -403,8 +403,9 @@ impl DaemonConnection {
 
     /// List all workspaces on the daemon.
     pub async fn list_workspaces(&mut self) -> Result<Vec<v3::WorkspaceInfo>, DaemonError> {
-        let response =
-            self.request(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {})).await?;
+        let response = self
+            .request(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}))
+            .await?;
         match response.payload {
             Some(v3::server_envelope::Payload::WorkspaceList(list)) => Ok(list.workspaces),
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),

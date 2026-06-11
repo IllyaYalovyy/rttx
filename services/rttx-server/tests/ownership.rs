@@ -211,9 +211,9 @@ async fn terminate_workspace_notifies_other_attached_clients_and_removes_state()
     writer
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
-                runtime_id: runtime_id.clone(),
-            })),
+            command: Some(v3::client_envelope::Command::TerminateWorkspace(
+                v3::TerminateWorkspace { runtime_id: runtime_id.clone() },
+            )),
         })
         .await;
     match writer.recv().await.payload {
@@ -249,7 +249,8 @@ async fn read_only_client_cannot_rename_workspace() {
     writer.handshake().await;
 
     let runtime_id =
-        common::create_workspace(&mut writer, "rename-denied", v3::WorkspacePolicy::Persistent).await;
+        common::create_workspace(&mut writer, "rename-denied", v3::WorkspacePolicy::Persistent)
+            .await;
     common::attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -286,7 +287,8 @@ async fn read_only_client_cannot_set_pane_title() {
     writer.handshake().await;
 
     let runtime_id =
-        common::create_workspace(&mut writer, "title-denied", v3::WorkspacePolicy::Persistent).await;
+        common::create_workspace(&mut writer, "title-denied", v3::WorkspacePolicy::Persistent)
+            .await;
     common::attach_rw(&mut writer, &runtime_id).await;
     let pane_id = common::create_pane(&mut writer, &runtime_id).await;
 

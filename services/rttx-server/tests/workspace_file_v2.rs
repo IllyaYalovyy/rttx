@@ -6,11 +6,11 @@
 //! ignored, and removed on load with no migration path.
 
 use rttx_server::pane_tree::{PaneId, SplitAxis, WorkspaceTree};
-use rttx_server::workspace::WorkspacePolicy;
 use rttx_server::state::types::{
-    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceInstanceV1, WorkspaceFileV2, WorkspaceSpecV2,
+    PaneSpecV2, RUNTIME_FILE_SCHEMA_VERSION, WorkspaceFileV2, WorkspaceInstanceV1, WorkspaceSpecV2,
 };
 use rttx_server::state::{layout, persistence};
+use rttx_server::workspace::WorkspacePolicy;
 use std::time::SystemTime;
 use tempfile::TempDir;
 use uuid::Uuid;

@@ -479,7 +479,8 @@ fn close_already_closed_pane_returns_pane_not_found() {
         let mut client = TestClient::connect(&socket_path).await;
         client.handshake().await;
 
-        let runtime_id = create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
+        let runtime_id =
+            create_workspace(&mut client, "test", v3::WorkspacePolicy::Persistent).await;
         attach_workspace(&mut client, &runtime_id).await;
         let pane_id = create_pane(&mut client, &runtime_id).await;
 

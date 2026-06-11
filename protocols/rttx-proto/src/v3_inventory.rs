@@ -146,7 +146,10 @@ pub fn build_workspace_list(workspaces: Vec<v3::WorkspaceInfo>) -> v3::Workspace
 
 /// Build a `ServerEnvelope` response containing a `WorkspaceList`.
 #[must_use]
-pub fn build_workspace_list_response(request_id: u64, list: v3::WorkspaceList) -> v3::ServerEnvelope {
+pub fn build_workspace_list_response(
+    request_id: u64,
+    list: v3::WorkspaceList,
+) -> v3::ServerEnvelope {
     crate::v3_envelope::build_response_envelope(
         request_id,
         v3::server_envelope::Payload::WorkspaceList(list),

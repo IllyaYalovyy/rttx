@@ -154,7 +154,8 @@ async fn resize_split_rejects_unaddressable_path() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_workspace(&mut client, "resize-bad", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "resize-bad", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_a = create_pane(&mut client, &runtime_id).await;
     split_pane(&mut client, &runtime_id, &pane_a, v3::PaneSplitAxis::Horizontal, 0.5).await;
@@ -203,7 +204,8 @@ async fn multi_client_pty_size_is_the_minimum_across_clients() {
     // Writer creates the workspace and a pane.
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_workspace(&mut writer, "min-size", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "min-size", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
     let pane = create_pane(&mut writer, &runtime_id).await;
 
@@ -231,7 +233,8 @@ async fn single_client_pty_tracks_that_client_size() {
 
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
-    let runtime_id = create_workspace(&mut client, "solo-size", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "solo-size", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane = create_pane(&mut client, &runtime_id).await;
 

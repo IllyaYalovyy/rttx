@@ -299,7 +299,8 @@ async fn reconstruct_preserves_cwd_for_multiple_panes() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        runtime_id = create_workspace(&mut client, "multi-cwd", v3::WorkspacePolicy::Persistent).await;
+        runtime_id =
+            create_workspace(&mut client, "multi-cwd", v3::WorkspacePolicy::Persistent).await;
         pane_a_id = create_pane(&mut client, &runtime_id).await;
         pane_b_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
@@ -357,7 +358,8 @@ async fn pane_gets_unique_histfile() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_workspace(&mut client, "hist-test", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "hist-test", v3::WorkspacePolicy::Persistent).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
     attach_rw(&mut client, &runtime_id).await;
 

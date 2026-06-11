@@ -28,7 +28,8 @@ async fn history_survives_hard_restart() {
         let mut client = TestClient::connect(&sock).await;
         client.handshake().await;
 
-        runtime_id = create_workspace(&mut client, "crash-hist", v3::WorkspacePolicy::Persistent).await;
+        runtime_id =
+            create_workspace(&mut client, "crash-hist", v3::WorkspacePolicy::Persistent).await;
         pane_id = create_pane(&mut client, &runtime_id).await;
         attach_rw(&mut client, &runtime_id).await;
 

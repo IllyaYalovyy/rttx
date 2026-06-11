@@ -74,8 +74,10 @@ fn v3_diagnostics_full_flow_wire_roundtrip() {
 
 #[test]
 fn v3_diagnostics_capability_gating_rejects_when_absent() {
-    let caps_without_diagnostics =
-        vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::CorePaneLifecycle as i32];
+    let caps_without_diagnostics = vec![
+        v3::Capability::CoreWorkspaceLifecycle as i32,
+        v3::Capability::CorePaneLifecycle as i32,
+    ];
     assert!(!v3_diagnostics::is_supported(&caps_without_diagnostics));
 
     // Server returns UnsupportedCapability error

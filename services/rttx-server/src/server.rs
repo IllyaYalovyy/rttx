@@ -10,11 +10,11 @@ use crate::ipc::{ClientConnection, ClientConnectionReader, ClientConnectionWrite
 use crate::os::OsInterface;
 use crate::pane::Pane;
 use crate::protocol;
-use crate::workspace::{
-    AttachError, AttachMode, AttachOutcome, ClientRole, DetachOutcome, DetachReason, Workspace,
-    WorkspacePolicy, TerminationReason,
-};
 use crate::screen::{restart_safe_scrollback, strip_client_queries};
+use crate::workspace::{
+    AttachError, AttachMode, AttachOutcome, ClientRole, DetachOutcome, DetachReason,
+    TerminationReason, Workspace, WorkspacePolicy,
+};
 use rttx_proto::{bytes_to_uuid, uuid_to_bytes, v3};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -370,7 +370,8 @@ impl Server {
 
         tracing::info!("Reconstructing {} panes", panes_to_reconstruct.len());
 
-        for (runtime_id, pane_id, workspace_name, cwd, cols, rows, no_persist) in panes_to_reconstruct
+        for (runtime_id, pane_id, workspace_name, cwd, cols, rows, no_persist) in
+            panes_to_reconstruct
         {
             let workspace_label = format!("\"{}\" ({})", workspace_name, short_id(runtime_id));
             let pane_short = short_id(pane_id);
@@ -413,7 +414,9 @@ impl Server {
                             Arc::clone(&s.ring)
                         },
                     );
-                    tracing::info!("Reconstructed pane {pane_short} in workspace {workspace_label}");
+                    tracing::info!(
+                        "Reconstructed pane {pane_short} in workspace {workspace_label}"
+                    );
                 }
                 Err(e) => {
                     tracing::error!(
@@ -645,7 +648,9 @@ impl Server {
                 infos.sort_by(|a, b| a.id.cmp(&b.id));
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
-                    v3::server_envelope::Payload::WorkspaceList(v3::WorkspaceList { workspaces: infos }),
+                    v3::server_envelope::Payload::WorkspaceList(v3::WorkspaceList {
+                        workspaces: infos,
+                    }),
                 ))
             }
 
@@ -2487,7 +2492,10 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
     }
     for rf in &runtime_files {
         if let Err(e) = crate::state::persistence::save_workspace(&state_dir, rf) {
-            tracing::error!("Failed to write v2 workspace {} on shutdown: {e}", short_id(rf.spec.id));
+            tracing::error!(
+                "Failed to write v2 workspace {} on shutdown: {e}",
+                short_id(rf.spec.id)
+            );
         }
     }
     for (runtime_id, snap) in &screen_snapshots {

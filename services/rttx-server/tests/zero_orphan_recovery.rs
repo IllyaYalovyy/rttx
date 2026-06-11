@@ -154,8 +154,11 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
                     workspace_uuid,
                     pane_uuid,
                 );
-                let scroll =
-                    rttx_server::state::layout::scrollback_log(&state_dir, workspace_uuid, pane_uuid);
+                let scroll = rttx_server::state::layout::scrollback_log(
+                    &state_dir,
+                    workspace_uuid,
+                    pane_uuid,
+                );
                 std::fs::read_to_string(&hist).unwrap_or_default().contains(marker)
                     && screen.exists()
                     && scroll.exists()
@@ -185,7 +188,11 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
             1,
             "cycle {cycle}: exactly one workspace directory must exist, found {dirs:?}"
         );
-        assert_eq!(dirs[0], workspace_uuid.to_string(), "cycle {cycle}: workspace dir id is stable");
+        assert_eq!(
+            dirs[0],
+            workspace_uuid.to_string(),
+            "cycle {cycle}: workspace dir id is stable"
+        );
         assert_eq!(
             orphan_count(&state_dir),
             0,

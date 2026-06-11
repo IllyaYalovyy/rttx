@@ -22,7 +22,8 @@ async fn hashmap_cleanup_after_session_terminate() {
     // Create several sessions with panes, then terminate them all.
     for i in 0..5 {
         let sid =
-            create_workspace(&mut client, &format!("map-{i}"), v3::WorkspacePolicy::Persistent).await;
+            create_workspace(&mut client, &format!("map-{i}"), v3::WorkspacePolicy::Persistent)
+                .await;
         attach_rw(&mut client, &sid).await;
         let _pane = create_pane(&mut client, &sid).await;
         terminate_workspace(&mut client, &sid).await;
@@ -97,7 +98,8 @@ async fn hashmap_cleanup_ephemeral_detach() {
 
     for i in 0..3 {
         let sid =
-            create_workspace(&mut client, &format!("eph-{i}"), v3::WorkspacePolicy::Ephemeral).await;
+            create_workspace(&mut client, &format!("eph-{i}"), v3::WorkspacePolicy::Ephemeral)
+                .await;
         attach_rw(&mut client, &sid).await;
         detach_workspace(&mut client, &sid).await;
     }

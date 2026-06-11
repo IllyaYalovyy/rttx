@@ -30,7 +30,8 @@ async fn corrupt_daemon_index_falls_back_to_backup() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let _rt_id = create_workspace(&mut c, "index-fallback", v3::WorkspacePolicy::Persistent).await;
+        let _rt_id =
+            create_workspace(&mut c, "index-fallback", v3::WorkspacePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "index-fallback", Duration::from_secs(10)).await;
 
@@ -78,7 +79,8 @@ async fn both_daemon_index_copies_corrupt_starts_fresh() {
         let mut c = TestClient::connect(&sock).await;
         c.handshake().await;
 
-        let _rt_id = create_workspace(&mut c, "doomed-workspace", v3::WorkspacePolicy::Persistent).await;
+        let _rt_id =
+            create_workspace(&mut c, "doomed-workspace", v3::WorkspacePolicy::Persistent).await;
 
         wait_for_state_containing(tmp.path(), "doomed-workspace", Duration::from_secs(10)).await;
         handle.abort();
@@ -211,7 +213,8 @@ async fn multiple_mutations_coalesce_into_single_write() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes = create_workspace(&mut c, "coalesce-test", v3::WorkspacePolicy::Persistent).await;
+    let rt_id_bytes =
+        create_workspace(&mut c, "coalesce-test", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for initial write.
@@ -267,7 +270,8 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
     let mut c = TestClient::connect(&sock).await;
     c.handshake().await;
 
-    let rt_id_bytes = create_workspace(&mut c, "rotation-test", v3::WorkspacePolicy::Persistent).await;
+    let rt_id_bytes =
+        create_workspace(&mut c, "rotation-test", v3::WorkspacePolicy::Persistent).await;
     let runtime_id = bytes_to_uuid(&rt_id_bytes).unwrap();
 
     attach_rw(&mut c, &rt_id_bytes).await;

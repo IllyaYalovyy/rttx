@@ -50,7 +50,8 @@ async fn output_delta_is_broadcast_to_multiple_clients() {
     // Writer creates the workspace and a pane.
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_workspace(&mut writer, "v3-fanout", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "v3-fanout", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
     let pane_id = create_pane(&mut writer, &runtime_id).await;
 

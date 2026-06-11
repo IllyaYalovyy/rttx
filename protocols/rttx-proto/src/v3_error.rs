@@ -286,8 +286,11 @@ mod tests {
 
     #[test]
     fn build_error_sets_kind_and_message() {
-        let err =
-            build_error(v3::ErrorKind::WorkspaceNotFound, "workspace abc not found", "AttachWorkspace");
+        let err = build_error(
+            v3::ErrorKind::WorkspaceNotFound,
+            "workspace abc not found",
+            "AttachWorkspace",
+        );
         assert_eq!(err.kind, v3::ErrorKind::WorkspaceNotFound as i32);
         assert_eq!(err.message, "workspace abc not found");
         assert_eq!(err.operation, "AttachWorkspace");

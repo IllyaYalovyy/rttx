@@ -19,7 +19,8 @@ async fn create_terminate_loop_leaves_zero_sessions() {
 
     for i in 0..10 {
         let sid =
-            create_workspace(&mut client, &format!("loop-{i}"), v3::WorkspacePolicy::Persistent).await;
+            create_workspace(&mut client, &format!("loop-{i}"), v3::WorkspacePolicy::Persistent)
+                .await;
         attach_rw(&mut client, &sid).await;
         terminate_workspace(&mut client, &sid).await;
     }
@@ -79,7 +80,8 @@ async fn ephemeral_create_detach_loop_leaves_zero_sessions() {
 
     for i in 0..10 {
         let sid =
-            create_workspace(&mut client, &format!("eph-{i}"), v3::WorkspacePolicy::Ephemeral).await;
+            create_workspace(&mut client, &format!("eph-{i}"), v3::WorkspacePolicy::Ephemeral)
+                .await;
         attach_rw(&mut client, &sid).await;
         detach_workspace(&mut client, &sid).await;
     }
@@ -98,7 +100,8 @@ async fn full_lifecycle_loop_returns_to_clean_state() {
 
     for i in 0..5 {
         let sid =
-            create_workspace(&mut client, &format!("full-{i}"), v3::WorkspacePolicy::Persistent).await;
+            create_workspace(&mut client, &format!("full-{i}"), v3::WorkspacePolicy::Persistent)
+                .await;
         attach_rw(&mut client, &sid).await;
         let p1 = create_pane(&mut client, &sid).await;
         let p2 = create_pane(&mut client, &sid).await;

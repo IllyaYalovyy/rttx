@@ -274,7 +274,8 @@ async fn persistent_restart_reader_reattaches_after_reconstruction() {
         let mut writer = TestClient::connect(&sock).await;
         writer.handshake().await;
         runtime_id =
-            create_workspace(&mut writer, "p-reader-restart", v3::WorkspacePolicy::Persistent).await;
+            create_workspace(&mut writer, "p-reader-restart", v3::WorkspacePolicy::Persistent)
+                .await;
         attach_rw(&mut writer, &runtime_id).await;
         create_pane(&mut writer, &runtime_id).await;
 

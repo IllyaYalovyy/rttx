@@ -77,10 +77,10 @@ fn remove_file_if_present(path: &Path, short_pane: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::WorkspacePolicy;
     use crate::state::layout;
     use crate::state::persistence;
     use crate::state::types::*;
+    use crate::workspace::WorkspacePolicy;
     use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
     use uuid::Uuid;

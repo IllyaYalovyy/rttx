@@ -23,7 +23,8 @@ async fn ten_workspaces_listed_in_stable_order() {
     client.handshake().await;
 
     for i in 0..10 {
-        create_workspace(&mut client, &format!("session-{i}"), v3::WorkspacePolicy::Persistent).await;
+        create_workspace(&mut client, &format!("session-{i}"), v3::WorkspacePolicy::Persistent)
+            .await;
     }
 
     let workspaces = list_workspaces(&mut client).await;
@@ -51,7 +52,8 @@ async fn five_panes_in_one_workspace() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_workspace(&mut client, "multi-pane", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "multi-pane", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
 
     let mut pane_ids = Vec::new();
@@ -79,7 +81,8 @@ async fn large_scrollback_survives_detach_and_reattach() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_workspace(&mut client, "scrollback", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "scrollback", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
     let pane_id = create_pane(&mut client, &runtime_id).await;
 

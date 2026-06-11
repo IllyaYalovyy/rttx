@@ -298,8 +298,14 @@ mod tests {
     fn diagnostics_report_wire_roundtrip() {
         let pane1 = build_pane_diagnostics_info(pn(), 1024, 0, false);
         let pane2 = build_pane_diagnostics_info(pn(), 2048, 512, true);
-        let workspace =
-            build_workspace_diagnostics_info(rt(), "multi-pane".into(), 1, 1, 2, vec![pane1, pane2]);
+        let workspace = build_workspace_diagnostics_info(
+            rt(),
+            "multi-pane".into(),
+            1,
+            1,
+            2,
+            vec![pane1, pane2],
+        );
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             workspace_count: 1,
             total_pane_count: 2,
@@ -378,7 +384,8 @@ mod tests {
     #[test]
     fn report_response_wire_roundtrip() {
         let pane = build_pane_diagnostics_info(pn(), 65536, 1024, false);
-        let workspace = build_workspace_diagnostics_info(rt(), "roundtrip".into(), 1, 0, 1, vec![pane]);
+        let workspace =
+            build_workspace_diagnostics_info(rt(), "roundtrip".into(), 1, 0, 1, vec![pane]);
         let report = build_diagnostics_report(DiagnosticsReportArgs {
             workspace_count: 1,
             total_pane_count: 1,

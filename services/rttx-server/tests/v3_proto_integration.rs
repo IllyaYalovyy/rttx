@@ -605,7 +605,8 @@ fn v3_error_classification_maps_to_connection_policy() {
     );
 
     // Ownership conflict
-    let conflict = v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachWorkspace");
+    let conflict =
+        v3_error::build_error(v3::ErrorKind::OwnershipConflict, "busy", "AttachWorkspace");
     assert_eq!(
         v3_error::classify_error_kind(v3_error::error_kind(&conflict)),
         ErrorClassification::OwnershipConflict
@@ -1017,7 +1018,8 @@ fn v3_resync_seq_gap_triggers_resync_when_supported() {
     assert_eq!(gap, Some(5));
 
     // Client has OPT_RESYNC → sends ResyncWorkspace
-    let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::OptResync as i32];
+    let caps =
+        vec![v3::Capability::CoreWorkspaceLifecycle as i32, v3::Capability::OptResync as i32];
     assert!(v3_resync::is_supported(&caps));
 
     let req = v3_resync::build_resync_workspace(runtime_id);
@@ -1313,7 +1315,9 @@ fn v3_send_discipline_core_commands_always_allowed() {
             runtime_id: rt.clone(),
             attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
         }),
-        v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace { runtime_id: rt.clone() }),
+        v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
+            runtime_id: rt.clone(),
+        }),
         v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
             runtime_id: rt.clone(),
         }),

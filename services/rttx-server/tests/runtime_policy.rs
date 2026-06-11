@@ -179,9 +179,12 @@ async fn ephemeral_workspace_is_not_restored_after_restart() {
         ));
 
         // Create a persistent workspace as anchor to wait for serialization.
-        let _ =
-            common::create_workspace(&mut client, "e-policy-anchor", v3::WorkspacePolicy::Persistent)
-                .await;
+        let _ = common::create_workspace(
+            &mut client,
+            "e-policy-anchor",
+            v3::WorkspacePolicy::Persistent,
+        )
+        .await;
         wait_for_state_containing(tmp.path(), "e-policy-anchor", Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;

@@ -21,7 +21,8 @@ async fn slow_client_does_not_block_server() {
     let mut fast = TestClient::connect(&sock).await;
     fast.handshake().await;
 
-    let runtime_id = create_workspace(&mut fast, "bounded-test", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut fast, "bounded-test", v3::WorkspacePolicy::Persistent).await;
     let snapshot = attach_rw(&mut fast, &runtime_id).await;
     assert!(snapshot.panes.is_empty());
 

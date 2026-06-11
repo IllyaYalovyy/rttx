@@ -54,7 +54,8 @@ async fn readers_observe_pane_created_push() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_workspace(&mut writer, "push-test", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "push-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -100,7 +101,8 @@ async fn multiple_readers_see_consistent_revision() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_workspace(&mut writer, "rev-test", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "rev-test", v3::WorkspacePolicy::Persistent).await;
     let snap = attach_rw(&mut writer, &runtime_id).await;
     let base_rev = snap.workspace_revision;
 
@@ -163,7 +165,8 @@ async fn terminate_while_reader_attached_notifies_reader() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_workspace(&mut writer, "term-race", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "term-race", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     let mut reader = TestClient::connect(&sock).await;
@@ -174,9 +177,9 @@ async fn terminate_while_reader_attached_notifies_reader() {
     writer
         .send(&v3::ClientEnvelope {
             request_id: 0,
-            command: Some(v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
-                runtime_id: runtime_id.clone(),
-            })),
+            command: Some(v3::client_envelope::Command::TerminateWorkspace(
+                v3::TerminateWorkspace { runtime_id: runtime_id.clone() },
+            )),
         })
         .await;
 
@@ -203,7 +206,8 @@ async fn writer_disconnect_frees_ownership_for_new_writer() {
 
     let mut writer = TestClient::connect(&sock).await;
     writer.handshake().await;
-    let runtime_id = create_workspace(&mut writer, "disconnect", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut writer, "disconnect", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut writer, &runtime_id).await;
 
     // Drop the writer (simulates disconnect).

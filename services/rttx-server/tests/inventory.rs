@@ -84,7 +84,10 @@ async fn list_workspaces_includes_workspace_inventory_metadata() {
     assert!(!session.has_write_owner);
     assert_eq!(session.read_only_client_count, 0);
     assert_eq!(session.current_client_role, v3::WorkspaceClientRole::Unattached as i32);
-    assert_eq!(v3::WorkspacePolicy::try_from(session.policy).unwrap(), v3::WorkspacePolicy::Persistent);
+    assert_eq!(
+        v3::WorkspacePolicy::try_from(session.policy).unwrap(),
+        v3::WorkspacePolicy::Persistent
+    );
     assert!(!session.reconstructed);
     assert_eq!(session.panes.len(), 1);
 
@@ -292,7 +295,8 @@ async fn inventory_pane_cwd_populated_from_proc_fallback() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_workspace(&mut client, "cwd-check", v3::WorkspacePolicy::Persistent).await;
+    let runtime_id =
+        create_workspace(&mut client, "cwd-check", v3::WorkspacePolicy::Persistent).await;
     let _pane_id = create_pane(&mut client, &runtime_id).await;
 
     // Give the shell a moment to start so /proc/<pid>/cwd is readable.

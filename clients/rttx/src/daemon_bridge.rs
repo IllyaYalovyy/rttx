@@ -1024,9 +1024,10 @@ impl EndpointActor {
                     return;
                 }
 
-                let msg = v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
-                    runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                });
+                let msg =
+                    v3::client_envelope::Command::TerminateWorkspace(v3::TerminateWorkspace {
+                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                    });
                 match self.send_and_read(msg, true).await {
                     Ok(response) => match response.payload {
                         Some(v3::server_envelope::Payload::WorkspaceTerminated(terminated)) => {
@@ -1267,10 +1268,12 @@ impl EndpointActor {
                 }
                 let env = v3::ClientEnvelope {
                     request_id: 0,
-                    command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
-                        runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
-                        name,
-                    })),
+                    command: Some(v3::client_envelope::Command::RenameWorkspace(
+                        v3::RenameWorkspace {
+                            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+                            name,
+                        },
+                    )),
                 };
                 let _ = self.send_message(&env).await;
             }
@@ -1636,7 +1639,9 @@ impl EndpointActor {
         runtime_uuid: Uuid,
     ) -> Result<v3::WorkspaceSnapshot, DaemonError> {
         if let Some(connection) = self.connection.as_mut() {
-            return connection.attach_runtime(runtime_uuid, v3::WorkspaceAttachMode::ReadWrite).await;
+            return connection
+                .attach_runtime(runtime_uuid, v3::WorkspaceAttachMode::ReadWrite)
+                .await;
         }
 
         let msg = v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
@@ -1698,9 +1703,10 @@ impl EndpointActor {
             dropped = overflow.dropped_count,
             "StreamOverflow received, requesting resync"
         );
-        let _ = self
-            .self_tx
-            .try_send(EndpointCommand::ResyncWorkspace { workspace_id, runtime_id: runtime_id_str });
+        let _ = self.self_tx.try_send(EndpointCommand::ResyncWorkspace {
+            workspace_id,
+            runtime_id: runtime_id_str,
+        });
     }
 
     fn forward_push(&self, message: v3::ServerEnvelope) {
