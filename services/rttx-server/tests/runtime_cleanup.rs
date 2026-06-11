@@ -1,4 +1,4 @@
-//! Integration tests for runtime directory cleanup and orphan sweep.
+//! Integration tests for runtime directory cleanup (RFC-022 §7, RFC-031 §8).
 
 mod common;
 
@@ -71,9 +71,11 @@ async fn terminate_runtime_cleans_up_v2_directory() {
     assert!(!runtime_dir.exists(), "runtime directory should be removed after termination");
 }
 
-/// On startup, unreferenced runtime directories are moved to .orphans/.
+/// On startup the daemon no longer sweeps unreferenced runtime directories
+/// (RFC-031 §8). The startup orphan quarantine is deleted: a directory not in
+/// the daemon index is simply ignored, never moved into `.orphans/`.
 #[tokio::test]
-async fn startup_quarantines_orphaned_runtime_directories() {
+async fn startup_does_not_quarantine_unreferenced_directories() {
     let tmp = tempfile::TempDir::new().unwrap();
     let state_dir = tmp.path().join("state/rttx/daemon");
     std::fs::create_dir_all(&state_dir).unwrap();
@@ -107,7 +109,7 @@ async fn startup_quarantines_orphaned_runtime_directories() {
     )
     .unwrap();
 
-    // Create an orphan directory (not in daemon index).
+    // Create a directory not referenced by the daemon index.
     let orphan_dir = runtimes_dir.join(orphan_id.to_string());
     std::fs::create_dir_all(&orphan_dir).unwrap();
     std::fs::write(orphan_dir.join("runtime.json"), "{}").unwrap();
@@ -123,13 +125,15 @@ async fn startup_quarantines_orphaned_runtime_directories() {
     std::fs::write(state_dir.join("daemon.json"), serde_json::to_string_pretty(&index).unwrap())
         .unwrap();
 
-    // Start the server — it should sweep orphans during load.
+    // Start the server — no sweep runs during load.
     let (_socket_path, _handle) = start_test_server(tmp.path()).await;
 
-    // Orphan should have been moved to .orphans/.
-    assert!(!orphan_dir.exists(), "orphan directory should be moved");
-    let orphan_dest = runtimes_dir.join(".orphans").join(orphan_id.to_string());
-    assert!(orphan_dest.exists(), "orphan should be in .orphans/");
+    // The unreferenced directory is left untouched: not moved, not quarantined.
+    assert!(orphan_dir.exists(), "unreferenced directory must be left in place");
+    assert!(
+        !runtimes_dir.join(".orphans").exists(),
+        "startup must never create the deleted .orphans/ quarantine"
+    );
 
     // Known runtime directory should still exist.
     assert!(known_dir.exists(), "known runtime directory should remain");

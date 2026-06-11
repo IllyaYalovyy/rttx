@@ -214,15 +214,6 @@ impl Server {
                 self.runtimes.insert(rt.id, Arc::new(Mutex::new(rt)));
             }
 
-            // Sweep orphaned runtime directories (RFC-022 §7).
-            let known_ids: std::collections::HashSet<Uuid> = result
-                .runtimes
-                .iter()
-                .map(|rf| rf.spec.id)
-                .chain(result.failed_ids.iter().copied())
-                .collect();
-            crate::state::cleanup::sweep_orphans(&state_dir, &known_ids);
-
             if total > 0 || result.failed_ids.is_empty() {
                 return;
             }
@@ -1446,6 +1437,8 @@ impl Server {
         if let Some(kill_tx) = s.pty_kill_senders.remove(&pane_id) {
             let _ = kill_tx.send(());
         }
+        // The pane left the tree: sweep its durable artifacts (RFC-031 §8).
+        crate::state::cleanup::remove_pane_state_background(&s.os.state_dir(), runtime_id, pane_id);
         tracing::info!("Pane {} closed in runtime {runtime_label}", short_id(pane_id));
         Some(rttx_proto::v3_envelope::build_response_envelope(
             request_id,

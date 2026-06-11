@@ -39,9 +39,6 @@ const HISTORY_DIR: &str = "history";
 /// `ZDOTDIR`).
 const SHELL_INIT_DIR: &str = "shell-init";
 
-/// Subdirectory for orphaned runtime directories awaiting pruning.
-const ORPHANS_DIR: &str = ".orphans";
-
 /// Path to the top-level daemon index file.
 #[must_use]
 pub fn daemon_index(state_dir: &Path) -> PathBuf {
@@ -90,12 +87,6 @@ pub fn history_file(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> PathBu
 #[must_use]
 pub fn shell_init_dir(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> PathBuf {
     runtime_dir(state_dir, runtime_id).join(SHELL_INIT_DIR).join(pane_id.to_string())
-}
-
-/// Path to the `.orphans/` directory inside `runtimes/`.
-#[must_use]
-pub fn orphans_dir(state_dir: &Path) -> PathBuf {
-    runtimes_dir(state_dir).join(ORPHANS_DIR)
 }
 
 #[cfg(test)]
@@ -175,12 +166,6 @@ mod tests {
         assert!(p.to_string_lossy().contains("/shell-init/"));
         assert!(p.ends_with(pane.to_string()));
         assert!(p.starts_with(runtime_dir(Path::new(STATE), rt)));
-    }
-
-    #[test]
-    fn orphans_dir_path() {
-        let p = orphans_dir(Path::new(STATE));
-        assert_eq!(p, Path::new("/xdg/state/rttx/daemon/runtimes/.orphans"));
     }
 
     #[test]

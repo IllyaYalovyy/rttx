@@ -1,18 +1,19 @@
-//! Runtime directory cleanup and orphan sweep (RFC-022 §7).
+//! Runtime and pane directory cleanup (RFC-022 §7, RFC-031 §8).
 //!
-//! On runtime delete: remove `runtimes/<id>/` in a background task.
-//! On startup: move unreferenced runtime directories to `runtimes/.orphans/`.
-//! Prune `.orphans/` entries older than 30 days.
+//! Cleanup is explicit and close-driven, keyed on pane-tree membership:
+//!
+//! - On runtime delete: remove `runtimes/<id>/` in a background task.
+//! - On pane close: remove that pane's durable artifacts (screen snapshot,
+//!   scrollback log, history file, generated shell-init dir) in a background
+//!   task. A pane that leaves the tree leaves nothing behind.
+//!
+//! There is no startup orphan sweep. With server-authoritative, immutable
+//! `PaneId`s (RFC-031) nothing is ever left unreferenced, so a sweep would only
+//! mask bugs rather than fix them.
 
 use crate::state::layout;
-use std::collections::HashSet;
-use std::hash::BuildHasher;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
 use uuid::Uuid;
-
-/// How long orphaned directories are kept before pruning.
-const ORPHAN_RETENTION: Duration = Duration::from_hours(30 * 24);
 
 /// Remove a runtime's directory in a background task.
 ///
@@ -34,107 +35,42 @@ pub fn remove_runtime_dir_background(state_dir: &Path, runtime_id: Uuid) {
     });
 }
 
-/// Move unreferenced runtime directories to `.orphans/` and prune old orphans.
+/// Remove a single pane's durable artifacts in a background task.
 ///
-/// Called once on startup after loading the daemon index. `known_ids` is the
-/// set of runtime IDs that the daemon index references (both successfully
-/// loaded and failed-to-load runtimes are considered "known").
-pub fn sweep_orphans<S: BuildHasher>(state_dir: &Path, known_ids: &HashSet<Uuid, S>) {
-    let runtimes = layout::runtimes_dir(state_dir);
-    if !runtimes.exists() {
-        return;
-    }
-
-    let orphans = layout::orphans_dir(state_dir);
-
-    // Phase 1: move unreferenced runtime dirs to .orphans/
-    let entries = match std::fs::read_dir(&runtimes) {
-        Ok(entries) => entries,
-        Err(e) => {
-            tracing::error!("Failed to read runtimes directory: {e}");
-            return;
-        }
-    };
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        // Skip the .orphans directory itself.
-        if name_str == ".orphans" {
-            continue;
-        }
-
-        // Only consider directories that look like UUIDs.
-        let Ok(id) = Uuid::parse_str(&name_str) else {
-            continue;
-        };
-
-        if known_ids.contains(&id) {
-            continue;
-        }
-
-        // Move to .orphans/
-        if let Err(e) = std::fs::create_dir_all(&orphans) {
-            tracing::error!("Failed to create orphans directory: {e}");
-            return;
-        }
-        let dest = orphans.join(&name);
-        match std::fs::rename(entry.path(), &dest) {
-            Ok(()) => {
-                tracing::info!("Moved orphaned runtime {} to .orphans/", &name_str[..8]);
-            }
-            Err(e) => {
-                tracing::error!("Failed to move orphaned runtime {}: {e}", &name_str[..8]);
-            }
-        }
-    }
-
-    // Phase 2: prune old orphans.
-    prune_old_orphans(&orphans);
+/// Called when a pane is closed and thus leaves the workspace tree. The caller
+/// holds the server lock, so the file I/O is deferred to a background thread.
+pub fn remove_pane_state_background(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) {
+    let state_dir = state_dir.to_path_buf();
+    std::thread::spawn(move || {
+        remove_pane_state(&state_dir, runtime_id, pane_id);
+    });
 }
 
-/// Remove orphan entries older than [`ORPHAN_RETENTION`].
-fn prune_old_orphans(orphans_dir: &Path) {
-    if !orphans_dir.exists() {
-        return;
+/// Remove every durable artifact keyed on `pane_id`: screen snapshot,
+/// scrollback log, history file, and the generated shell-init directory.
+///
+/// Missing entries are not an error. Failures are logged but never propagate.
+pub fn remove_pane_state(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) {
+    let short = &pane_id.to_string()[..8];
+    remove_file_if_present(&layout::screen_snapshot(state_dir, runtime_id, pane_id), short);
+    remove_file_if_present(&layout::scrollback_log(state_dir, runtime_id, pane_id), short);
+    remove_file_if_present(&layout::history_file(state_dir, runtime_id, pane_id), short);
+
+    let shell_init = layout::shell_init_dir(state_dir, runtime_id, pane_id);
+    if shell_init.exists()
+        && let Err(e) = std::fs::remove_dir_all(&shell_init)
+    {
+        tracing::error!("Failed to remove shell-init dir for pane {short}: {e}");
     }
+    tracing::info!("Removed durable state for closed pane {short}");
+}
 
-    let now = SystemTime::now();
-    let entries = match std::fs::read_dir(orphans_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            tracing::error!("Failed to read orphans directory: {e}");
-            return;
-        }
-    };
-
-    for entry in entries.flatten() {
-        let age = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|mtime| now.duration_since(mtime).ok());
-
-        let Some(age) = age else {
-            continue;
-        };
-
-        if age > ORPHAN_RETENTION {
-            let name = entry.file_name();
-            let short = &name.to_string_lossy()[..8.min(name.len())];
-            match std::fs::remove_dir_all(entry.path()) {
-                Ok(()) => {
-                    tracing::info!(
-                        "Pruned old orphan {short} (age: {} days)",
-                        age.as_secs() / 86400
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Failed to prune orphan {short}: {e}");
-                }
-            }
-        }
+/// Remove a file if it exists, logging any failure.
+fn remove_file_if_present(path: &Path, short_pane: &str) {
+    if path.exists()
+        && let Err(e) = std::fs::remove_file(path)
+    {
+        tracing::error!("Failed to remove {} for pane {short_pane}: {e}", path.display());
     }
 }
 
@@ -145,8 +81,9 @@ mod tests {
     use crate::state::layout;
     use crate::state::persistence;
     use crate::state::types::*;
-    use std::collections::HashSet;
+    use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
+    use uuid::Uuid;
 
     fn sample_runtime_file(id: Uuid) -> WorkspaceFileV2 {
         WorkspaceFileV2 {
@@ -165,6 +102,27 @@ mod tests {
                 last_snapshot_at: SystemTime::now(),
             },
         }
+    }
+
+    /// Create the four durable artifacts for a pane on disk.
+    fn seed_pane_state(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) {
+        let screen = layout::screen_snapshot(state_dir, runtime_id, pane_id);
+        let scroll = layout::scrollback_log(state_dir, runtime_id, pane_id);
+        let hist = layout::history_file(state_dir, runtime_id, pane_id);
+        let shell_init = layout::shell_init_dir(state_dir, runtime_id, pane_id);
+        for f in [&screen, &scroll, &hist] {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, b"x").unwrap();
+        }
+        std::fs::create_dir_all(&shell_init).unwrap();
+        std::fs::write(shell_init.join("rcfile"), b"x").unwrap();
+    }
+
+    fn pane_state_exists(state_dir: &Path, runtime_id: Uuid, pane_id: Uuid) -> bool {
+        layout::screen_snapshot(state_dir, runtime_id, pane_id).exists()
+            || layout::scrollback_log(state_dir, runtime_id, pane_id).exists()
+            || layout::history_file(state_dir, runtime_id, pane_id).exists()
+            || layout::shell_init_dir(state_dir, runtime_id, pane_id).exists()
     }
 
     #[test]
@@ -194,121 +152,61 @@ mod tests {
     }
 
     #[test]
-    fn sweep_orphans_moves_unreferenced_dirs() {
+    fn remove_pane_state_removes_all_durable_artifacts() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
+        let runtime_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
 
-        let known_id = Uuid::new_v4();
-        let orphan_id = Uuid::new_v4();
+        seed_pane_state(state_dir, runtime_id, pane_id);
+        assert!(pane_state_exists(state_dir, runtime_id, pane_id));
 
-        // Create directories for both.
-        persistence::save_runtime(state_dir, &sample_runtime_file(known_id)).unwrap();
-        persistence::save_runtime(state_dir, &sample_runtime_file(orphan_id)).unwrap();
+        remove_pane_state(state_dir, runtime_id, pane_id);
 
-        let known_ids: HashSet<Uuid> = std::iter::once(known_id).collect();
-        sweep_orphans(state_dir, &known_ids);
-
-        // Known runtime dir still exists.
-        assert!(layout::runtime_dir(state_dir, known_id).exists());
-
-        // Orphan was moved.
-        assert!(!layout::runtime_dir(state_dir, orphan_id).exists());
-        let orphan_dest = layout::orphans_dir(state_dir).join(orphan_id.to_string());
-        assert!(orphan_dest.exists());
+        assert!(
+            !pane_state_exists(state_dir, runtime_id, pane_id),
+            "screen, scrollback, history, and shell-init must all be removed"
+        );
     }
 
     #[test]
-    fn sweep_orphans_skips_orphans_dir_itself() {
+    fn remove_pane_state_leaves_sibling_panes_untouched() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
+        let runtime_id = Uuid::new_v4();
+        let closed = Uuid::new_v4();
+        let kept = Uuid::new_v4();
 
-        // Create .orphans/ with some content.
-        let orphans = layout::orphans_dir(state_dir);
-        std::fs::create_dir_all(&orphans).unwrap();
-        std::fs::write(orphans.join("marker"), "test").unwrap();
+        seed_pane_state(state_dir, runtime_id, closed);
+        seed_pane_state(state_dir, runtime_id, kept);
 
-        let known_ids: HashSet<Uuid> = HashSet::new();
-        sweep_orphans(state_dir, &known_ids);
+        remove_pane_state(state_dir, runtime_id, closed);
 
-        // .orphans/ should still exist.
-        assert!(orphans.exists());
+        assert!(!pane_state_exists(state_dir, runtime_id, closed));
+        assert!(
+            pane_state_exists(state_dir, runtime_id, kept),
+            "closing one pane must not remove a sibling pane's state"
+        );
     }
 
     #[test]
-    fn sweep_orphans_skips_non_uuid_directories() {
+    fn remove_pane_state_noop_when_missing() {
         let tmp = TempDir::new().unwrap();
-        let state_dir = tmp.path();
-
-        let runtimes = layout::runtimes_dir(state_dir);
-        std::fs::create_dir_all(&runtimes).unwrap();
-        let non_uuid = runtimes.join("not-a-uuid");
-        std::fs::create_dir_all(&non_uuid).unwrap();
-
-        let known_ids: HashSet<Uuid> = HashSet::new();
-        sweep_orphans(state_dir, &known_ids);
-
-        // Non-UUID directory should be left alone.
-        assert!(non_uuid.exists());
+        // No artifacts on disk: must not panic.
+        remove_pane_state(tmp.path(), Uuid::new_v4(), Uuid::new_v4());
     }
 
     #[test]
-    fn sweep_orphans_prunes_old_entries() {
+    fn remove_pane_state_background_removes_artifacts() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
+        let runtime_id = Uuid::new_v4();
+        let pane_id = Uuid::new_v4();
 
-        let orphans = layout::orphans_dir(state_dir);
-        std::fs::create_dir_all(&orphans).unwrap();
+        seed_pane_state(state_dir, runtime_id, pane_id);
+        remove_pane_state_background(state_dir, runtime_id, pane_id);
 
-        // Create an old orphan (set mtime to 31 days ago).
-        let old_id = Uuid::new_v4();
-        let old_dir = orphans.join(old_id.to_string());
-        std::fs::create_dir_all(&old_dir).unwrap();
-        std::fs::write(old_dir.join("runtime.json"), "{}").unwrap();
-
-        let old_time = SystemTime::now() - Duration::from_hours(31 * 24);
-        let old_filetime = std::fs::FileTimes::new().set_modified(old_time);
-        std::fs::File::open(&old_dir).unwrap().set_times(old_filetime).unwrap();
-
-        // Create a recent orphan.
-        let recent_id = Uuid::new_v4();
-        let recent_dir = orphans.join(recent_id.to_string());
-        std::fs::create_dir_all(&recent_dir).unwrap();
-
-        let known_ids: HashSet<Uuid> = HashSet::new();
-        sweep_orphans(state_dir, &known_ids);
-
-        // Old orphan should be pruned.
-        assert!(!old_dir.exists());
-        // Recent orphan should remain.
-        assert!(recent_dir.exists());
-    }
-
-    #[test]
-    fn sweep_orphans_noop_when_no_runtimes_dir() {
-        let tmp = TempDir::new().unwrap();
-        let known_ids: HashSet<Uuid> = HashSet::new();
-        // Should not panic.
-        sweep_orphans(tmp.path(), &known_ids);
-    }
-
-    #[test]
-    fn sweep_orphans_with_empty_known_ids_moves_all() {
-        let tmp = TempDir::new().unwrap();
-        let state_dir = tmp.path();
-
-        let id1 = Uuid::new_v4();
-        let id2 = Uuid::new_v4();
-        persistence::save_runtime(state_dir, &sample_runtime_file(id1)).unwrap();
-        persistence::save_runtime(state_dir, &sample_runtime_file(id2)).unwrap();
-
-        let known_ids: HashSet<Uuid> = HashSet::new();
-        sweep_orphans(state_dir, &known_ids);
-
-        assert!(!layout::runtime_dir(state_dir, id1).exists());
-        assert!(!layout::runtime_dir(state_dir, id2).exists());
-
-        let orphans = layout::orphans_dir(state_dir);
-        assert!(orphans.join(id1.to_string()).exists());
-        assert!(orphans.join(id2.to_string()).exists());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!pane_state_exists(state_dir, runtime_id, pane_id));
     }
 }

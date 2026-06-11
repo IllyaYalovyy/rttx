@@ -1073,54 +1073,53 @@ async fn terminate_runtime_removes_state_directory() {
     assert!(!dir.exists());
 }
 
-#[test]
+#[tokio::test]
 #[traced_test]
-fn load_persisted_state_sweeps_orphans() {
+async fn close_pane_removes_its_durable_state() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
     let state_dir = os.state_dir();
+    let metrics = test_metrics();
+    let mut server = Server::new(Box::new(os), metrics.clone(), test_ring());
 
-    let known_id = Uuid::new_v4();
-    let orphan_id = Uuid::new_v4();
+    // Runtime with a single pane, owned by a read-write client.
+    let mut rt = Runtime::new("close-cleanup".into());
+    let runtime_id = rt.id;
+    let pane = Pane::new(Uuid::new_v4(), 80, 24);
+    let pane_id = pane.id;
+    rt.add_pane(pane);
+    let client_id = Uuid::new_v4();
+    let _ = rt.attach_client(client_id, AttachMode::ReadWrite);
+    server.runtimes.insert(runtime_id, Arc::new(Mutex::new(rt)));
 
-    // Create runtime files for both.
-    let known_rf = crate::state::types::WorkspaceFileV2 {
-        schema_version: crate::state::types::RUNTIME_FILE_SCHEMA_VERSION,
-        spec: crate::state::types::WorkspaceSpecV2 {
-            id: known_id,
-            name: "known".into(),
-            policy: RuntimePolicy::Persistent,
-            created_at: std::time::SystemTime::now(),
-            tree: crate::pane_tree::WorkspaceTree::new(),
-            panes: vec![],
-        },
-        instance: crate::state::types::RuntimeInstanceV1 {
-            revision: 1,
-            last_active_at: std::time::SystemTime::now(),
-            last_snapshot_at: std::time::SystemTime::now(),
-        },
+    // Seed the pane's durable artifacts on disk.
+    let screen = crate::state::layout::screen_snapshot(&state_dir, runtime_id, pane_id);
+    let scroll = crate::state::layout::scrollback_log(&state_dir, runtime_id, pane_id);
+    let hist = crate::state::layout::history_file(&state_dir, runtime_id, pane_id);
+    for f in [&screen, &scroll, &hist] {
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, b"x").unwrap();
+    }
+
+    let server = Arc::new(Mutex::new(server));
+    let req = rttx_proto::v3::ClosePane {
+        runtime_id: rttx_proto::uuid_to_bytes(runtime_id),
+        pane_id: rttx_proto::uuid_to_bytes(pane_id),
     };
-    crate::state::persistence::save_runtime(&state_dir, &known_rf).unwrap();
+    let resp = Server::handle_v3_close_pane(&server, client_id, 1, req, &metrics).await;
+    assert!(
+        matches!(
+            resp.and_then(|e| e.payload),
+            Some(rttx_proto::v3::server_envelope::Payload::PaneClosed(_))
+        ),
+        "ClosePane must succeed for the owning client"
+    );
 
-    // Create orphan directory (not in daemon index).
-    let orphan_dir = crate::state::layout::runtime_dir(&state_dir, orphan_id);
-    std::fs::create_dir_all(&orphan_dir).unwrap();
-    std::fs::write(orphan_dir.join("runtime.json"), "{}").unwrap();
-
-    // Save daemon index referencing only the known runtime.
-    crate::state::persistence::save_daemon_index(&state_dir, &[known_id]).unwrap();
-
-    let mut server =
-        Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
-    server.load_persisted_state();
-
-    // Known runtime should be loaded.
-    assert!(server.runtimes.contains_key(&known_id));
-
-    // Orphan should have been moved to .orphans/.
-    assert!(!orphan_dir.exists());
-    let orphan_dest = crate::state::layout::orphans_dir(&state_dir).join(orphan_id.to_string());
-    assert!(orphan_dest.exists());
+    // The close-driven cleanup runs in the background.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!screen.exists(), "screen snapshot must be removed when the pane is closed");
+    assert!(!scroll.exists(), "scrollback log must be removed when the pane is closed");
+    assert!(!hist.exists(), "history file must be removed when the pane is closed");
 }
 
 #[test]
