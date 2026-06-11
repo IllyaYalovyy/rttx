@@ -47,7 +47,8 @@ async fn closing_a_pane_removes_only_its_durable_state() {
     let mut client = TestClient::connect(&sock).await;
     client.handshake().await;
 
-    let runtime_id = create_runtime(&mut client, "close-cleanup", v3::RuntimePolicy::Persistent).await;
+    let runtime_id =
+        create_runtime(&mut client, "close-cleanup", v3::RuntimePolicy::Persistent).await;
     attach_rw(&mut client, &runtime_id).await;
 
     let keep = create_pane(&mut client, &runtime_id).await;
@@ -82,10 +83,8 @@ async fn closing_a_pane_removes_only_its_durable_state() {
     close_pane(&mut client, &runtime_id, &close).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let closed_cleaned = poll_until(deadline, || {
-        pane_artifacts_absent(&state_dir, runtime_uuid, close_uuid)
-    })
-    .await;
+    let closed_cleaned =
+        poll_until(deadline, || pane_artifacts_absent(&state_dir, runtime_uuid, close_uuid)).await;
     assert!(
         closed_cleaned,
         "closed pane's history/scrollback/screen must be removed by close-driven cleanup"
