@@ -146,6 +146,44 @@ mod tests {
     fn uuid_invalid_length() {
         assert!(bytes_to_uuid(&[0; 5]).is_err());
     }
+
+    // RFC-031 Step 6 renamed the v3 `Runtime*` types/enums to `Workspace*`.
+    // The rename must be wire-compatible: protobuf serializes enums by their
+    // integer value, so the renamed variants must keep their original numbers
+    // or a renamed daemon would silently misread a peer built before the
+    // rename (and persisted snapshots would decode wrong). Pin the values.
+    #[test]
+    fn renamed_workspace_enums_preserve_wire_values() {
+        assert_eq!(v3::WorkspacePolicy::Persistent as i32, 1);
+        assert_eq!(v3::WorkspacePolicy::Ephemeral as i32, 2);
+        assert_eq!(v3::WorkspaceAttachMode::ReadWrite as i32, 1);
+        assert_eq!(v3::WorkspaceAttachMode::ReadOnly as i32, 2);
+        assert_eq!(v3::WorkspaceClientRole::Writer as i32, 2);
+        assert_eq!(v3::WorkspaceClientRole::Reader as i32, 3);
+        assert_eq!(v3::WorkspaceTerminationReason::Explicit as i32, 1);
+        assert_eq!(v3::WorkspaceTerminationReason::EphemeralDetach as i32, 2);
+        assert_eq!(v3::Capability::CoreWorkspaceLifecycle as i32, 1);
+        assert_eq!(v3::Capability::OptWorkspaceInventoryV2 as i32, 100);
+        assert_eq!(v3::Capability::OptWorkspaceTakeover as i32, 101);
+        assert_eq!(v3::ErrorKind::WorkspaceNotFound as i32, 4);
+    }
+
+    // A renamed lifecycle command must still occupy its original envelope
+    // field tag so it round-trips on the wire unchanged.
+    #[test]
+    fn renamed_create_workspace_command_roundtrips_on_wire() {
+        let msg = v3::ClientEnvelope {
+            request_id: 7,
+            command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+                name: "alpha".into(),
+                policy: v3::WorkspacePolicy::Persistent as i32,
+            })),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&msg, &mut buf).unwrap();
+        let decoded: v3::ClientEnvelope = decode_frame(&mut buf).unwrap();
+        assert_eq!(msg, decoded);
+    }
 }
 
 #[cfg(test)]
