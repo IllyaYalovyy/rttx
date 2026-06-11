@@ -4,7 +4,7 @@
 //! 1. Corrupt `runtime.json` does not kill the daemon
 //! 2. Dirty-flag skips writes
 //! 3. Scrollback rotation keeps N segments
-//! 4. Orphan sweep quarantines unreferenced directories
+//! 4. Terminated runtimes are cleaned up, never quarantined (RFC-031 §8)
 //! 5. `ScreenSnapshotV1` round-trip through server restart
 
 mod common;
@@ -312,55 +312,7 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
     assert_eq!(runtimes.len(), 1, "runtime should still be alive after rotation");
 }
 
-// ── 4. Orphan sweep quarantines unreferenced directories ────────
-
-/// On startup, orphan directories older than 30 days are pruned.
-#[tokio::test]
-async fn startup_prunes_old_orphans() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let state_dir = tmp.path().join("state/rttx/daemon");
-    std::fs::create_dir_all(&state_dir).unwrap();
-
-    // Write an empty daemon index (no runtimes).
-    let index = serde_json::json!({
-        "schema_version": 1,
-        "server_version": "0.4.0",
-        "runtime_ids": [],
-        "created_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 },
-        "last_serialized_at": { "secs_since_epoch": 1_700_000_000, "nanos_since_epoch": 0 }
-    });
-    std::fs::write(state_dir.join("daemon.json"), serde_json::to_string_pretty(&index).unwrap())
-        .unwrap();
-
-    // Pre-seed .orphans/ with an old entry (31 days ago).
-    let orphans_dir = layout::orphans_dir(&state_dir);
-    std::fs::create_dir_all(&orphans_dir).unwrap();
-
-    let old_id = uuid::Uuid::new_v4();
-    let old_dir = orphans_dir.join(old_id.to_string());
-    std::fs::create_dir_all(&old_dir).unwrap();
-    std::fs::write(old_dir.join("runtime.json"), "{}").unwrap();
-
-    // Set mtime to 31 days ago.
-    let old_time = std::time::SystemTime::now() - Duration::from_hours(31 * 24);
-    let old_filetime = std::fs::FileTimes::new().set_modified(old_time);
-    std::fs::File::open(&old_dir).unwrap().set_times(old_filetime).unwrap();
-
-    // Also add a recent orphan that should survive.
-    let recent_id = uuid::Uuid::new_v4();
-    let recent_dir = orphans_dir.join(recent_id.to_string());
-    std::fs::create_dir_all(&recent_dir).unwrap();
-    std::fs::write(recent_dir.join("runtime.json"), "{}").unwrap();
-
-    // Start the server — orphan sweep runs during load.
-    let (_sock, _handle) = start_test_server(tmp.path()).await;
-
-    // Old orphan should be pruned.
-    assert!(!old_dir.exists(), "old orphan (>30 days) should be pruned on startup");
-
-    // Recent orphan should remain.
-    assert!(recent_dir.exists(), "recent orphan should survive pruning");
-}
+// ── 4. Terminated runtimes are cleaned up, never quarantined ────
 
 /// Terminated runtime's directory is cleaned up and does not become an orphan.
 #[tokio::test]
@@ -398,13 +350,11 @@ async fn terminated_runtime_does_not_become_orphan_on_restart() {
         let runtimes = list_runtimes(&mut c).await;
         assert!(runtimes.is_empty(), "terminated runtime should not reappear");
 
-        // No orphans directory should exist (or it should be empty).
+        // The sweep is gone (RFC-031 §8): no `.orphans/` quarantine is ever
+        // created. A terminated runtime is simply removed.
         let state_dir = tmp.path().join("state/rttx/daemon");
-        let orphans = layout::orphans_dir(&state_dir);
-        if orphans.exists() {
-            let entries: Vec<_> = std::fs::read_dir(&orphans).unwrap().collect();
-            assert!(entries.is_empty(), "no orphans should exist after clean termination");
-        }
+        let orphans = state_dir.join("runtimes/.orphans");
+        assert!(!orphans.exists(), "the removed orphan sweep must never create .orphans/");
     }
 }
 

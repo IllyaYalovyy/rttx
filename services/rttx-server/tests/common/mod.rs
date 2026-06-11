@@ -427,7 +427,8 @@ pub async fn close_pane(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
             Some(v3::server_envelope::Payload::PaneClosed(_)) => return,
             Some(
                 v3::server_envelope::Payload::OutputDelta(_)
-                | v3::server_envelope::Payload::PaneExited(_),
+                | v3::server_envelope::Payload::PaneExited(_)
+                | v3::server_envelope::Payload::TitleChanged(_),
             ) => {}
             other => panic!("expected PaneClosed, got {other:?}"),
         }

@@ -1075,56 +1075,6 @@ async fn terminate_runtime_removes_state_directory() {
 
 #[test]
 #[traced_test]
-fn load_persisted_state_sweeps_orphans() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let os = temp_os(tmp.path());
-    let state_dir = os.state_dir();
-
-    let known_id = Uuid::new_v4();
-    let orphan_id = Uuid::new_v4();
-
-    // Create runtime files for both.
-    let known_rf = crate::state::types::WorkspaceFileV2 {
-        schema_version: crate::state::types::RUNTIME_FILE_SCHEMA_VERSION,
-        spec: crate::state::types::WorkspaceSpecV2 {
-            id: known_id,
-            name: "known".into(),
-            policy: RuntimePolicy::Persistent,
-            created_at: std::time::SystemTime::now(),
-            tree: crate::pane_tree::WorkspaceTree::new(),
-            panes: vec![],
-        },
-        instance: crate::state::types::RuntimeInstanceV1 {
-            revision: 1,
-            last_active_at: std::time::SystemTime::now(),
-            last_snapshot_at: std::time::SystemTime::now(),
-        },
-    };
-    crate::state::persistence::save_runtime(&state_dir, &known_rf).unwrap();
-
-    // Create orphan directory (not in daemon index).
-    let orphan_dir = crate::state::layout::runtime_dir(&state_dir, orphan_id);
-    std::fs::create_dir_all(&orphan_dir).unwrap();
-    std::fs::write(orphan_dir.join("runtime.json"), "{}").unwrap();
-
-    // Save daemon index referencing only the known runtime.
-    crate::state::persistence::save_daemon_index(&state_dir, &[known_id]).unwrap();
-
-    let mut server =
-        Server::new(Box::new(os), Arc::new(crate::metrics::DaemonMetrics::new()), test_ring());
-    server.load_persisted_state();
-
-    // Known runtime should be loaded.
-    assert!(server.runtimes.contains_key(&known_id));
-
-    // Orphan should have been moved to .orphans/.
-    assert!(!orphan_dir.exists());
-    let orphan_dest = crate::state::layout::orphans_dir(&state_dir).join(orphan_id.to_string());
-    assert!(orphan_dest.exists());
-}
-
-#[test]
-#[traced_test]
 fn fresh_start_log_includes_state_directory_path() {
     let tmp = tempfile::TempDir::new().unwrap();
     let os = temp_os(tmp.path());
