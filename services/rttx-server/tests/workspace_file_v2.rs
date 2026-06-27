@@ -168,7 +168,6 @@ fn good_v2_workspace_survives_alongside_unsupported_sibling() {
     assert_eq!(result.failed_ids, vec![old_id]);
 }
 
-
 #[test]
 fn newer_schema_runtime_file_is_skipped() {
     // A workspace.json whose schema_version is newer than this daemon supports

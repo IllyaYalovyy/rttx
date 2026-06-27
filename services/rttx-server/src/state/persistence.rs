@@ -354,7 +354,8 @@ mod tests {
     /// A current workspace still loads even when a sibling carries an
     /// unsupported schema version.
     #[test]
-    fn unsupported_schema_does_not_drop_current_workspaces() {        let tmp = TempDir::new().unwrap();
+    fn unsupported_schema_does_not_drop_current_workspaces() {
+        let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let good_id = Uuid::new_v4();
         let old_id = Uuid::new_v4();
