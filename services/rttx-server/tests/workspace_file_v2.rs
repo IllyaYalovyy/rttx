@@ -61,7 +61,6 @@ fn multi_pane_tree_survives_save_and_load() {
 
     let result = persistence::load_all(state_dir).unwrap();
     assert!(result.failed_ids.is_empty());
-    assert!(result.reset_ids.is_empty());
     assert_eq!(result.workspaces.len(), 1);
 
     let recovered = &result.workspaces[0];
@@ -72,9 +71,9 @@ fn multi_pane_tree_survives_save_and_load() {
 }
 
 #[test]
-fn old_schema_runtime_file_is_reset_not_migrated() {
-    // RFC-031 clean break: an old v1 workspace.json (flat panes, active_pane_id,
-    // command_history, no durable tree) is detected, ignored, and removed.
+fn unsupported_schema_runtime_file_is_skipped() {
+    // Legacy-free load: a workspace.json with any non-current schema_version is
+    // unsupported — it does not load and is skipped (not migrated, not loaded).
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path();
     let old_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
@@ -111,14 +110,12 @@ fn old_schema_runtime_file_is_reset_not_migrated() {
     persistence::save_daemon_index(state_dir, &[old_id]).unwrap();
 
     let result = persistence::load_all(state_dir).unwrap();
-    assert!(result.workspaces.is_empty(), "old-schema workspace must not load");
-    assert!(result.failed_ids.is_empty(), "old schema is a reset, not a failure");
-    assert_eq!(result.reset_ids, vec![old_id]);
-    assert!(!old_dir.exists(), "old-schema workspace directory must be removed on load");
+    assert!(result.workspaces.is_empty(), "unsupported-schema workspace must not load");
+    assert_eq!(result.failed_ids, vec![old_id], "it is skipped like any unsupported file");
 }
 
 #[test]
-fn good_v2_workspace_survives_alongside_old_schema_sibling() {
+fn good_v2_workspace_survives_alongside_unsupported_sibling() {
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path();
     let good_id = Uuid::new_v4();
@@ -168,6 +165,28 @@ fn good_v2_workspace_survives_alongside_old_schema_sibling() {
     let result = persistence::load_all(state_dir).unwrap();
     assert_eq!(result.workspaces.len(), 1);
     assert_eq!(result.workspaces[0].spec.id, good_id);
-    assert_eq!(result.reset_ids, vec![old_id]);
-    assert!(!old_dir.exists());
+    assert_eq!(result.failed_ids, vec![old_id]);
+}
+
+#[test]
+fn newer_schema_runtime_file_is_skipped() {
+    // A workspace.json whose schema_version is newer than this daemon supports
+    // must be skipped, not loaded — the legacy-free loader reads exactly one
+    // schema version and refuses everything else.
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path();
+    let future_id = Uuid::new_v4();
+
+    let dir = layout::runtime_dir(state_dir, future_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        layout::runtime_file(state_dir, future_id),
+        r#"{"schema_version": 9999, "spec": {}, "instance": {}}"#,
+    )
+    .unwrap();
+    persistence::save_daemon_index(state_dir, &[future_id]).unwrap();
+
+    let result = persistence::load_all(state_dir).unwrap();
+    assert!(result.workspaces.is_empty(), "unsupported future-schema workspace must not load");
+    assert_eq!(result.failed_ids, vec![future_id]);
 }
