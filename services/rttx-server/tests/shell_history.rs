@@ -243,3 +243,92 @@ async fn other_shell_sets_histfile_env() {
     assert!(s.command.is_empty(), "other shells keep the default login shell");
     assert_eq!(s.env, vec![("HISTFILE".to_string(), hist.to_string_lossy().into_owned())]);
 }
+
+/// Run a unique marker command in a fresh daemon-configured bash pane, wait for
+/// it to flush to the per-pane HISTFILE, then drop the PTY (`kill_on_drop`
+/// simulates a hard crash with no clean exit).
+async fn run_marker_and_crash(
+    bash: &str,
+    state_dir: &Path,
+    home_dir: &Path,
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    marker: &str,
+) {
+    let s = shell_init::build(bash, state_dir, runtime_id, pane_id, false);
+    let mut env = s.env;
+    env.push(("HOME".to_string(), home_dir.to_string_lossy().into_owned()));
+    let mut pty = spawn(s.command, env, home_dir);
+    drain(&mut pty, Duration::from_millis(400)).await;
+    send(&mut pty, &format!("echo {marker}\n")).await;
+    drain(&mut pty, Duration::from_millis(300)).await;
+    // Trigger another prompt so PROMPT_COMMAND runs `history -a`.
+    send(&mut pty, "true\n").await;
+    drain(&mut pty, Duration::from_millis(300)).await;
+    let hist = rttx_server::state::layout::history_file(state_dir, runtime_id, pane_id);
+    assert!(
+        wait_for_file_contains(&hist, marker, Duration::from_secs(5)),
+        "pane history must flush to {}",
+        hist.display()
+    );
+    // `pty` drops here → hard crash.
+}
+
+/// #987 acceptance: two panes in the same workspace keep *distinct* histories
+/// keyed on their `PaneId`. A command run in one pane survives a crash in that
+/// pane's history only and never leaks into the other pane ("arrow-up shows
+/// commands specific to that pane, not shared across all panes"). Uses the
+/// daemon's own `shell_init::build` config, so no manual shell configuration is
+/// involved.
+#[tokio::test]
+async fn distinct_panes_keep_separate_history_across_crash() {
+    let Some(bash) = find_shell("bash") else {
+        eprintln!("SKIPPED: bash not installed");
+        return;
+    };
+
+    let state = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    // A benign user rc that does not flush history itself.
+    std::fs::write(home.path().join(".bashrc"), "export PS1='$ '\n").unwrap();
+
+    let runtime_id = Uuid::new_v4();
+    let pane_one = Uuid::new_v4();
+    let pane_two = Uuid::new_v4();
+    let marker_one = "RTTX_PANE_ONE_a1b2";
+    let marker_two = "RTTX_PANE_TWO_c3d4";
+
+    run_marker_and_crash(&bash, state.path(), home.path(), runtime_id, pane_one, marker_one).await;
+    run_marker_and_crash(&bash, state.path(), home.path(), runtime_id, pane_two, marker_two).await;
+
+    let hist_one = rttx_server::state::layout::history_file(state.path(), runtime_id, pane_one);
+    let hist_two = rttx_server::state::layout::history_file(state.path(), runtime_id, pane_two);
+    let content_one = std::fs::read_to_string(&hist_one).unwrap_or_default();
+    let content_two = std::fs::read_to_string(&hist_two).unwrap_or_default();
+
+    assert!(content_one.contains(marker_one), "pane one keeps its own command: {content_one:?}");
+    assert!(content_two.contains(marker_two), "pane two keeps its own command: {content_two:?}");
+    // The crux: no cross-contamination between panes.
+    assert!(
+        !content_one.contains(marker_two),
+        "pane one history must not contain pane two's command: {content_one:?}"
+    );
+    assert!(
+        !content_two.contains(marker_one),
+        "pane two history must not contain pane one's command: {content_two:?}"
+    );
+
+    // And a respawned pane recalls only its own history.
+    let s = shell_init::build(&bash, state.path(), runtime_id, pane_one, false);
+    let mut env = s.env;
+    env.push(("HOME".to_string(), home.path().to_string_lossy().into_owned()));
+    let mut pty = spawn(s.command, env, home.path());
+    drain(&mut pty, Duration::from_millis(400)).await;
+    send(&mut pty, "history\n").await;
+    let out = drain(&mut pty, Duration::from_secs(2)).await;
+    assert!(out.contains(marker_one), "respawned pane one recalls its own command: {out}");
+    assert!(
+        !out.contains(marker_two),
+        "respawned pane one must not recall pane two's command: {out}"
+    );
+}
