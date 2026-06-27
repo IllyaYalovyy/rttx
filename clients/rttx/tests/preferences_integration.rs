@@ -1,7 +1,7 @@
 /// Integration tests for preferences persistence.
 use std::collections::BTreeMap;
 
-use rttx::preferences::{DefaultSessionFolder, PaneNavigationKeys, Preferences, TerminalThemeMode};
+use rttx::preferences::{DefaultSessionFolder, Preferences, TerminalThemeMode};
 use rttx::store::{ClientStore, StorePaths};
 use tempfile::TempDir;
 
@@ -52,13 +52,11 @@ fn preferences_roundtrip_all_fields() {
         smart_clipboard: true,
         trim_trailing_whitespace_on_copy: true,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
-        pane_navigation_keys: PaneNavigationKeys::AltArrow,
         keyboard_shortcuts: BTreeMap::new(),
         auto_start_daemon: true,
         reconnect_delay_secs: 10,
         paste_guard: false,
         paste_guard_threshold: 2048,
-        ..Default::default()
     };
 
     store.save_preferences(&prefs).unwrap();
@@ -189,19 +187,6 @@ fn custom_title_backward_compat_null() {
     {
         assert_eq!(*custom_title, None);
     }
-}
-
-#[test]
-fn pane_navigation_keys_persists_through_store() {
-    let (_tmp, store) = test_store();
-
-    let prefs = Preferences {
-        pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
-        ..Default::default()
-    };
-    store.save_preferences(&prefs).unwrap();
-    let loaded = store.load_preferences().into_value().unwrap();
-    assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
 }
 
 #[test]

@@ -21,7 +21,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 
     let appearance_group = adw::PreferencesGroup::new();
     appearance_group.set_title("Appearance");
-    let legacy_color_scheme = prefs.color_scheme.clone();
 
     let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
     let font_dialog = gtk4::FontDialog::new();
@@ -235,7 +234,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
         };
         let new_prefs = Preferences {
             font: font_button.font_desc().map_or_else(|| prefs.font.clone(), |d| d.to_string()),
-            color_scheme: legacy_color_scheme.clone(),
             terminal_theme_mode,
             light_color_scheme: light_scheme_row
                 .selected_item()
@@ -264,7 +262,6 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
                 2 => DefaultSessionFolder::Custom(custom_folder_row.text().to_string()),
                 _ => DefaultSessionFolder::Home,
             },
-            pane_navigation_keys: prefs.pane_navigation_keys,
             keyboard_shortcuts: shortcut_overrides.borrow().clone(),
             auto_start_daemon: prefs.auto_start_daemon,
             reconnect_delay_secs: prefs.reconnect_delay_secs,

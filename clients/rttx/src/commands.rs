@@ -146,15 +146,6 @@ pub fn visible_for_host(saved: &[SavedCommand], host_key: &str) -> Vec<SavedComm
     saved.iter().filter(|c| is_visible_on(c, host_key)).cloned().collect()
 }
 
-/// Migrate legacy commands that lack host tags by tagging them with `"local"`.
-pub fn migrate_legacy(commands: &mut [SavedCommand]) {
-    for command in commands.iter_mut() {
-        if command.host_tags.is_empty() {
-            command.host_tags.push(crate::host::LOCAL_KEY.into());
-        }
-    }
-}
-
 /// Move the item with `source_uuid` to the position of `target_uuid`.
 pub fn reorder(items: &mut Vec<SavedCommand>, source_uuid: &str, target_uuid: &str) {
     let Some(src) = items.iter().position(|c| c.uuid == source_uuid) else {
@@ -405,23 +396,6 @@ mod tests {
     fn visible_for_host_with_no_commands_returns_empty() {
         let visible = visible_for_host(&[], "local");
         assert!(visible.is_empty());
-    }
-
-    #[test]
-    fn migrate_legacy_tags_untagged_commands_with_local() {
-        let mut commands = vec![SavedCommand::new("A", "echo a"), SavedCommand::new("B", "echo b")];
-        migrate_legacy(&mut commands);
-        assert_eq!(commands[0].host_tags, vec!["local"]);
-        assert_eq!(commands[1].host_tags, vec!["local"]);
-    }
-
-    #[test]
-    fn migrate_legacy_preserves_existing_tags() {
-        let mut command = SavedCommand::new("Tagged", "echo tagged");
-        command.host_tags = vec!["example.com".into()];
-        let mut commands = vec![command];
-        migrate_legacy(&mut commands);
-        assert_eq!(commands[0].host_tags, vec!["example.com"]);
     }
 
     // ── Parameters ──────────────────────────────────────────────

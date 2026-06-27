@@ -26,14 +26,6 @@ pub enum DefaultSessionFolder {
     Custom(String),
 }
 
-/// Pane navigation key binding style.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum PaneNavigationKeys {
-    AltArrow,
-    CtrlShiftArrow,
-}
-
 /// Durable user preferences — no workspace layout, connection status, or runtime inventory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PreferencesV1 {
@@ -63,8 +55,6 @@ pub struct PreferencesV1 {
     pub trim_trailing_whitespace_on_copy: bool,
     #[serde(default = "default_session_folder")]
     pub default_session_folder: DefaultSessionFolder,
-    #[serde(default = "default_pane_navigation_keys")]
-    pub pane_navigation_keys: PaneNavigationKeys,
     #[serde(default)]
     pub keyboard_shortcuts: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_true")]
@@ -93,7 +83,6 @@ impl Default for PreferencesV1 {
             smart_clipboard: false,
             trim_trailing_whitespace_on_copy: false,
             default_session_folder: default_session_folder(),
-            pane_navigation_keys: default_pane_navigation_keys(),
             keyboard_shortcuts: BTreeMap::new(),
             auto_start_daemon: true,
             reconnect_delay_secs: default_reconnect_delay_secs(),
@@ -131,10 +120,6 @@ const fn default_session_folder() -> DefaultSessionFolder {
     DefaultSessionFolder::Home
 }
 
-const fn default_pane_navigation_keys() -> PaneNavigationKeys {
-    PaneNavigationKeys::AltArrow
-}
-
 const fn default_reconnect_delay_secs() -> u32 {
     3
 }
@@ -149,7 +134,6 @@ impl From<PreferencesV1> for crate::preferences::Preferences {
     fn from(v1: PreferencesV1) -> Self {
         Self {
             font: v1.font,
-            color_scheme: "default".into(),
             terminal_theme_mode: match v1.terminal_theme_mode {
                 TerminalThemeMode::System => crate::preferences::TerminalThemeMode::System,
                 TerminalThemeMode::Light => crate::preferences::TerminalThemeMode::Light,
@@ -172,12 +156,6 @@ impl From<PreferencesV1> for crate::preferences::Preferences {
                 }
                 DefaultSessionFolder::Custom(s) => {
                     crate::preferences::DefaultSessionFolder::Custom(s)
-                }
-            },
-            pane_navigation_keys: match v1.pane_navigation_keys {
-                PaneNavigationKeys::AltArrow => crate::preferences::PaneNavigationKeys::AltArrow,
-                PaneNavigationKeys::CtrlShiftArrow => {
-                    crate::preferences::PaneNavigationKeys::CtrlShiftArrow
                 }
             },
             keyboard_shortcuts: v1.keyboard_shortcuts,
@@ -215,12 +193,6 @@ impl From<&crate::preferences::Preferences> for PreferencesV1 {
                 }
                 crate::preferences::DefaultSessionFolder::Custom(s) => {
                     DefaultSessionFolder::Custom(s.clone())
-                }
-            },
-            pane_navigation_keys: match prefs.pane_navigation_keys {
-                crate::preferences::PaneNavigationKeys::AltArrow => PaneNavigationKeys::AltArrow,
-                crate::preferences::PaneNavigationKeys::CtrlShiftArrow => {
-                    PaneNavigationKeys::CtrlShiftArrow
                 }
             },
             keyboard_shortcuts: prefs.keyboard_shortcuts.clone(),
