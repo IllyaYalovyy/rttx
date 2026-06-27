@@ -20,27 +20,6 @@ pub enum DefaultSessionFolder {
     Custom(String),
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum PaneNavigationKeys {
-    #[default]
-    AltArrow,
-    CtrlShiftArrow,
-}
-
-impl PaneNavigationKeys {
-    /// GTK accelerator strings for (left, right, up, down).
-    #[must_use]
-    pub const fn accels(&self) -> (&str, &str, &str, &str) {
-        match self {
-            Self::AltArrow => ("<Alt>Left", "<Alt>Right", "<Alt>Up", "<Alt>Down"),
-            Self::CtrlShiftArrow => {
-                ("<Ctrl><Shift>Left", "<Ctrl><Shift>Right", "<Ctrl><Shift>Up", "<Ctrl><Shift>Down")
-            }
-        }
-    }
-}
-
 const fn default_session_folder() -> DefaultSessionFolder {
     DefaultSessionFolder::Home
 }
@@ -49,9 +28,6 @@ const fn default_session_folder() -> DefaultSessionFolder {
 pub struct Preferences {
     #[serde(default = "default_font")]
     pub font: String,
-    /// Legacy single-scheme preference kept for backward-compatible loading.
-    #[serde(default = "default_color_scheme")]
-    pub color_scheme: String,
     #[serde(default = "default_terminal_theme_mode")]
     pub terminal_theme_mode: TerminalThemeMode,
     #[serde(default = "default_light_color_scheme")]
@@ -77,8 +53,6 @@ pub struct Preferences {
     #[serde(default = "default_session_folder")]
     pub default_session_folder: DefaultSessionFolder,
     #[serde(default)]
-    pub pane_navigation_keys: PaneNavigationKeys,
-    #[serde(default)]
     pub keyboard_shortcuts: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_true")]
     pub auto_start_daemon: bool,
@@ -92,9 +66,6 @@ pub struct Preferences {
 
 fn default_font() -> String {
     "Monospace 12".into()
-}
-fn default_color_scheme() -> String {
-    "default".into()
 }
 const fn default_terminal_theme_mode() -> TerminalThemeMode {
     TerminalThemeMode::System
@@ -122,7 +93,6 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             font: default_font(),
-            color_scheme: default_color_scheme(),
             terminal_theme_mode: default_terminal_theme_mode(),
             light_color_scheme: default_light_color_scheme(),
             dark_color_scheme: default_dark_color_scheme(),
@@ -135,7 +105,6 @@ impl Default for Preferences {
             smart_clipboard: false,
             trim_trailing_whitespace_on_copy: false,
             default_session_folder: default_session_folder(),
-            pane_navigation_keys: PaneNavigationKeys::default(),
             keyboard_shortcuts: BTreeMap::new(),
             auto_start_daemon: true,
             reconnect_delay_secs: default_reconnect_delay_secs(),
@@ -166,8 +135,6 @@ impl Preferences {
 struct PreferencesDisk {
     #[serde(default = "default_font")]
     font: String,
-    #[serde(default = "default_color_scheme")]
-    color_scheme: String,
     #[serde(default = "default_terminal_theme_mode")]
     terminal_theme_mode: TerminalThemeMode,
     #[serde(default)]
@@ -193,8 +160,6 @@ struct PreferencesDisk {
     #[serde(default = "default_session_folder")]
     default_session_folder: DefaultSessionFolder,
     #[serde(default)]
-    pane_navigation_keys: PaneNavigationKeys,
-    #[serde(default)]
     keyboard_shortcuts: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_true")]
     auto_start_daemon: bool,
@@ -208,30 +173,11 @@ struct PreferencesDisk {
 
 impl From<PreferencesDisk> for Preferences {
     fn from(raw: PreferencesDisk) -> Self {
-        let legacy_override = if raw.color_scheme == default_color_scheme() {
-            None
-        } else {
-            Some(raw.color_scheme.clone())
-        };
-
-        let mut keyboard_shortcuts = raw.keyboard_shortcuts;
-        crate::shortcuts::migrate_pane_navigation(
-            &raw.pane_navigation_keys,
-            &mut keyboard_shortcuts,
-        );
-
         Self {
             font: raw.font,
-            color_scheme: raw.color_scheme,
             terminal_theme_mode: raw.terminal_theme_mode,
-            light_color_scheme: raw
-                .light_color_scheme
-                .or_else(|| legacy_override.clone())
-                .unwrap_or_else(default_light_color_scheme),
-            dark_color_scheme: raw
-                .dark_color_scheme
-                .or(legacy_override)
-                .unwrap_or_else(default_dark_color_scheme),
+            light_color_scheme: raw.light_color_scheme.unwrap_or_else(default_light_color_scheme),
+            dark_color_scheme: raw.dark_color_scheme.unwrap_or_else(default_dark_color_scheme),
             scrollback_lines: raw.scrollback_lines,
             show_headerbar: raw.show_headerbar,
             scroll_on_keystroke: raw.scroll_on_keystroke,
@@ -241,8 +187,7 @@ impl From<PreferencesDisk> for Preferences {
             smart_clipboard: raw.smart_clipboard,
             trim_trailing_whitespace_on_copy: raw.trim_trailing_whitespace_on_copy,
             default_session_folder: raw.default_session_folder,
-            pane_navigation_keys: raw.pane_navigation_keys,
-            keyboard_shortcuts,
+            keyboard_shortcuts: raw.keyboard_shortcuts,
             auto_start_daemon: raw.auto_start_daemon,
             reconnect_delay_secs: raw.reconnect_delay_secs,
             paste_guard: raw.paste_guard,
@@ -327,13 +272,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_single_color_scheme_populates_light_and_dark() {
-        let loaded = parse_preferences_json(r#"{"color_scheme": "Solarized Dark"}"#);
-        assert_eq!(loaded.light_color_scheme, "Solarized Dark");
-        assert_eq!(loaded.dark_color_scheme, "Solarized Dark");
-    }
-
-    #[test]
     fn effective_color_scheme_tracks_mode() {
         let prefs = Preferences {
             terminal_theme_mode: TerminalThemeMode::System,
@@ -387,27 +325,6 @@ mod tests {
     fn missing_session_folder_defaults_to_home() {
         let loaded = parse_preferences_json("{}");
         assert_eq!(loaded.default_session_folder, DefaultSessionFolder::Home);
-    }
-
-    #[test]
-    fn pane_navigation_keys_defaults_to_alt_arrow() {
-        let prefs = Preferences::default();
-        assert_eq!(prefs.pane_navigation_keys, PaneNavigationKeys::AltArrow);
-    }
-
-    #[test]
-    fn pane_navigation_keys_roundtrips() {
-        let prefs = Preferences {
-            pane_navigation_keys: PaneNavigationKeys::CtrlShiftArrow,
-            ..Default::default()
-        };
-        assert_eq!(roundtrip(&prefs).pane_navigation_keys, PaneNavigationKeys::CtrlShiftArrow);
-    }
-
-    #[test]
-    fn missing_pane_navigation_keys_defaults_to_alt_arrow() {
-        let loaded = parse_preferences_json("{}");
-        assert_eq!(loaded.pane_navigation_keys, PaneNavigationKeys::AltArrow);
     }
 
     #[test]

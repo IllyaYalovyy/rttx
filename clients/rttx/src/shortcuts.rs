@@ -132,30 +132,6 @@ pub fn default_accels(action: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Migrate legacy `PaneNavigationKeys` into shortcut overrides.
-///
-/// If the user had `CtrlShiftArrow` selected and no explicit overrides exist
-/// for the navigation actions, populate them.
-pub fn migrate_pane_navigation(
-    legacy: &crate::preferences::PaneNavigationKeys,
-    shortcuts: &mut BTreeMap<String, Vec<String>>,
-) {
-    use crate::preferences::PaneNavigationKeys;
-    if *legacy == PaneNavigationKeys::AltArrow {
-        return; // default — nothing to migrate
-    }
-    let (left, right, up, down) = legacy.accels();
-    let nav = [
-        ("navigate-left", left),
-        ("navigate-right", right),
-        ("navigate-up", up),
-        ("navigate-down", down),
-    ];
-    for (action, accel) in nav {
-        shortcuts.entry(action.to_string()).or_insert_with(|| vec![accel.to_string()]);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,35 +185,6 @@ mod tests {
         for def in DEFAULT_SHORTCUTS {
             assert!(!def.label.is_empty(), "empty label for action: {}", def.action);
         }
-    }
-
-    #[test]
-    fn migrate_pane_navigation_noop_for_alt_arrow() {
-        use crate::preferences::PaneNavigationKeys;
-        let mut shortcuts = BTreeMap::new();
-        migrate_pane_navigation(&PaneNavigationKeys::AltArrow, &mut shortcuts);
-        assert!(shortcuts.is_empty());
-    }
-
-    #[test]
-    fn migrate_pane_navigation_populates_ctrl_shift_arrow() {
-        use crate::preferences::PaneNavigationKeys;
-        let mut shortcuts = BTreeMap::new();
-        migrate_pane_navigation(&PaneNavigationKeys::CtrlShiftArrow, &mut shortcuts);
-        assert_eq!(shortcuts["navigate-left"], vec!["<Ctrl><Shift>Left"]);
-        assert_eq!(shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
-        assert_eq!(shortcuts["navigate-up"], vec!["<Ctrl><Shift>Up"]);
-        assert_eq!(shortcuts["navigate-down"], vec!["<Ctrl><Shift>Down"]);
-    }
-
-    #[test]
-    fn migrate_pane_navigation_does_not_overwrite_existing() {
-        use crate::preferences::PaneNavigationKeys;
-        let mut shortcuts = BTreeMap::new();
-        shortcuts.insert("navigate-left".into(), vec!["<Alt>h".into()]);
-        migrate_pane_navigation(&PaneNavigationKeys::CtrlShiftArrow, &mut shortcuts);
-        assert_eq!(shortcuts["navigate-left"], vec!["<Alt>h"]);
-        assert_eq!(shortcuts["navigate-right"], vec!["<Ctrl><Shift>Right"]);
     }
 
     #[test]

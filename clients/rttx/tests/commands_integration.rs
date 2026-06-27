@@ -37,26 +37,6 @@ fn commands_with_host_tags_roundtrip() {
 }
 
 #[test]
-fn legacy_commands_without_host_tags_deserialize_and_migrate() {
-    let json = r#"[{
-        "uuid": "abc-123",
-        "title": "Old command",
-        "body": "echo hello",
-        "default_run_mode": "run"
-    }]"#;
-
-    let mut loaded: Vec<SavedCommand> = serde_json::from_str(json).unwrap();
-    assert!(loaded[0].host_tags.is_empty(), "legacy commands load with empty tags");
-
-    commands::migrate_legacy(&mut loaded);
-    assert_eq!(loaded[0].host_tags, vec!["local"], "migration tags with local");
-
-    let json2 = serde_json::to_string(&loaded).unwrap();
-    let reloaded: Vec<SavedCommand> = serde_json::from_str(&json2).unwrap();
-    assert_eq!(reloaded[0].host_tags, vec!["local"], "migrated tags persist");
-}
-
-#[test]
 fn commands_with_parameters_roundtrip() {
     let (_tmp, store) = test_store();
 
