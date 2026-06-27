@@ -167,3 +167,27 @@ fn good_v2_workspace_survives_alongside_unsupported_sibling() {
     assert_eq!(result.workspaces[0].spec.id, good_id);
     assert_eq!(result.failed_ids, vec![old_id]);
 }
+
+
+#[test]
+fn newer_schema_runtime_file_is_skipped() {
+    // A workspace.json whose schema_version is newer than this daemon supports
+    // must be skipped, not loaded — the legacy-free loader reads exactly one
+    // schema version and refuses everything else.
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path();
+    let future_id = Uuid::new_v4();
+
+    let dir = layout::runtime_dir(state_dir, future_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        layout::runtime_file(state_dir, future_id),
+        r#"{"schema_version": 9999, "spec": {}, "instance": {}}"#,
+    )
+    .unwrap();
+    persistence::save_daemon_index(state_dir, &[future_id]).unwrap();
+
+    let result = persistence::load_all(state_dir).unwrap();
+    assert!(result.workspaces.is_empty(), "unsupported future-schema workspace must not load");
+    assert_eq!(result.failed_ids, vec![future_id]);
+}

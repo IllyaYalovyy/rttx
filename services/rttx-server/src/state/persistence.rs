@@ -354,8 +354,7 @@ mod tests {
     /// A current workspace still loads even when a sibling carries an
     /// unsupported schema version.
     #[test]
-    fn unsupported_schema_does_not_drop_current_workspaces() {
-        let tmp = TempDir::new().unwrap();
+    fn unsupported_schema_does_not_drop_current_workspaces() {        let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let good_id = Uuid::new_v4();
         let old_id = Uuid::new_v4();
@@ -376,6 +375,29 @@ mod tests {
         assert_eq!(result.workspaces.len(), 1);
         assert_eq!(result.workspaces[0].spec.id, good_id);
         assert_eq!(result.failed_ids, vec![old_id]);
+    }
+
+    #[test]
+    fn newer_schema_version_is_skipped_not_loaded() {
+        // Forward-compat: a file whose schema_version is *newer* than this
+        // daemon understands is treated the same as any unsupported version —
+        // skipped, never loaded or reset.
+        let tmp = TempDir::new().unwrap();
+        let state_dir = tmp.path();
+        let future_id = Uuid::new_v4();
+
+        let dir = layout::runtime_dir(state_dir, future_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            layout::runtime_file(state_dir, future_id),
+            r#"{"schema_version": 9999, "spec": {}, "instance": {}}"#,
+        )
+        .unwrap();
+        save_daemon_index(state_dir, &[future_id]).unwrap();
+
+        let result = load_all(state_dir).unwrap();
+        assert!(result.workspaces.is_empty(), "an unsupported future schema must not load");
+        assert_eq!(result.failed_ids, vec![future_id]);
     }
 
     #[test]
