@@ -244,7 +244,6 @@ async fn other_shell_sets_histfile_env() {
     assert_eq!(s.env, vec![("HISTFILE".to_string(), hist.to_string_lossy().into_owned())]);
 }
 
-
 /// Run a unique marker command in a fresh daemon-configured bash pane, wait for
 /// it to flush to the per-pane HISTFILE, then drop the PTY (`kill_on_drop`
 /// simulates a hard crash with no clean exit).
@@ -328,5 +327,8 @@ async fn distinct_panes_keep_separate_history_across_crash() {
     send(&mut pty, "history\n").await;
     let out = drain(&mut pty, Duration::from_secs(2)).await;
     assert!(out.contains(marker_one), "respawned pane one recalls its own command: {out}");
-    assert!(!out.contains(marker_two), "respawned pane one must not recall pane two's command: {out}");
+    assert!(
+        !out.contains(marker_two),
+        "respawned pane one must not recall pane two's command: {out}"
+    );
 }
