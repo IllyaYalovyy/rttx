@@ -3,9 +3,9 @@
 //! Provides `load_all` and `save_workspace` / `save_daemon_index` that use
 //! the layout paths, typed structs, and atomic I/O.
 //!
-//! Loading is a **clean break** (RFC-031 NG1): only the current schema version
-//! is read. Older-schema workspace files are detected, ignored, and removed —
-//! there is no migration path.
+//! Loading reads exactly one schema version — the current one. A file with any
+//! other `schema_version` (or that fails to parse) is treated as unsupported
+//! and skipped; there is no migration path and no special-cased reset.
 
 use crate::state::io::write_with_backup;
 use crate::state::layout;
@@ -23,17 +23,15 @@ use uuid::Uuid;
 pub struct LoadResult {
     /// Successfully loaded workspace files.
     pub workspaces: Vec<WorkspaceFileV2>,
-    /// Workspace IDs that failed to load (corrupt or unreadable).
+    /// Workspace IDs that failed to load (corrupt, unreadable, or an
+    /// unsupported schema version) and were skipped.
     pub failed_ids: Vec<Uuid>,
-    /// Workspace IDs whose old-schema state was detected, ignored, and removed
-    /// on load (RFC-031 clean break).
-    pub reset_ids: Vec<Uuid>,
 }
 
 /// Load all persisted state from the daemon state directory.
 ///
-/// Returns `None` if no `daemon.json` exists (first startup). Old-schema
-/// workspaces are reset (removed); corrupt workspaces are skipped — neither is
+/// Returns `None` if no `daemon.json` exists (first startup). Workspaces that
+/// are corrupt or carry an unsupported schema version are skipped; this is not
 /// fatal.
 pub fn load_all(state_dir: &Path) -> Option<LoadResult> {
     let index_path = layout::daemon_index(state_dir);
@@ -43,21 +41,11 @@ pub fn load_all(state_dir: &Path) -> Option<LoadResult> {
 
     let mut workspaces = Vec::new();
     let mut failed_ids = Vec::new();
-    let mut reset_ids = Vec::new();
 
     for &runtime_id in &index.runtime_ids {
         let short = &runtime_id.to_string()[..8];
         match load_workspace(state_dir, runtime_id) {
             WorkspaceLoad::Loaded(wf) => workspaces.push(*wf),
-            WorkspaceLoad::OldSchema(version) => {
-                tracing::warn!(
-                    "Workspace {short} uses old schema v{version}; resetting state (RFC-031 clean break)"
-                );
-                if let Err(e) = remove_runtime_dir(state_dir, runtime_id) {
-                    tracing::error!("Failed to remove old-schema workspace {short}: {e}");
-                }
-                reset_ids.push(runtime_id);
-            }
             WorkspaceLoad::Corrupt => {
                 tracing::error!("Failed to load workspace {short} — skipping");
                 failed_ids.push(runtime_id);
@@ -69,7 +57,7 @@ pub fn load_all(state_dir: &Path) -> Option<LoadResult> {
         }
     }
 
-    Some(LoadResult { workspaces, failed_ids, reset_ids })
+    Some(LoadResult { workspaces, failed_ids })
 }
 
 /// Load daemon index, trying backup on parse failure.
@@ -110,27 +98,24 @@ fn load_daemon_index_with_fallback(path: &Path) -> Option<DaemonIndexV1> {
 enum WorkspaceLoad {
     /// A current-schema workspace file loaded successfully.
     Loaded(Box<WorkspaceFileV2>),
-    /// A recognized older schema; ignore and remove (RFC-031 clean break).
-    OldSchema(u32),
-    /// Unreadable, unparseable, or an unsupported future version; skip.
+    /// Unreadable, unparseable, or any non-current schema version; skip.
     Corrupt,
     /// No workspace file present at primary or backup.
     NotFound,
 }
 
-/// Classify a workspace JSON document by its schema version.
+/// Classify a workspace JSON document by its schema version. Only the current
+/// schema loads; any other version (older or newer) or a parse failure is
+/// unsupported and treated as corrupt.
 fn classify_workspace_json(json: &str) -> WorkspaceLoad {
-    use std::cmp::Ordering;
-
     let Ok(version) = peek_schema_version(json) else {
         return WorkspaceLoad::Corrupt;
     };
-    match version.cmp(&RUNTIME_FILE_SCHEMA_VERSION) {
-        Ordering::Equal => serde_json::from_str::<WorkspaceFileV2>(json)
-            .map_or(WorkspaceLoad::Corrupt, |wf| WorkspaceLoad::Loaded(Box::new(wf))),
-        Ordering::Less => WorkspaceLoad::OldSchema(version),
-        // Unsupported future version: refuse to touch data we do not understand.
-        Ordering::Greater => WorkspaceLoad::Corrupt,
+    if version == RUNTIME_FILE_SCHEMA_VERSION {
+        serde_json::from_str::<WorkspaceFileV2>(json)
+            .map_or(WorkspaceLoad::Corrupt, |wf| WorkspaceLoad::Loaded(Box::new(wf)))
+    } else {
+        WorkspaceLoad::Corrupt
     }
 }
 
@@ -285,7 +270,6 @@ mod tests {
 
         let result = load_all(state_dir).unwrap();
         assert!(result.failed_ids.is_empty());
-        assert!(result.reset_ids.is_empty());
         assert_eq!(result.workspaces.len(), 1);
         assert_eq!(result.workspaces[0].spec.id, rt_id);
         assert_eq!(result.workspaces[0].spec.name, "test-rt");
@@ -347,47 +331,30 @@ mod tests {
     /// Old-schema (v1) workspace state is detected, ignored, and removed from
     /// disk on load — no migration (RFC-031 clean break).
     #[test]
-    fn old_schema_workspace_is_reset_and_removed() {
+    fn unsupported_schema_workspace_is_skipped() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let old_id = Uuid::new_v4();
 
-        // Write a genuine v1-format workspace.json: flat panes, active_pane_id,
-        // command_history, and no durable tree.
+        // A workspace file carrying a non-current schema version must not load.
         let old_dir = layout::runtime_dir(state_dir, old_id);
         std::fs::create_dir_all(&old_dir).unwrap();
-        let v1_json = format!(
-            r#"{{
-                "schema_version": 1,
-                "spec": {{
-                    "id": "{old_id}",
-                    "name": "legacy-ws",
-                    "policy": "persistent",
-                    "created_at": {{"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}},
-                    "panes": [],
-                    "active_pane_id": null,
-                    "command_history": []
-                }},
-                "instance": {{
-                    "revision": 3,
-                    "last_active_at": {{"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}},
-                    "last_snapshot_at": {{"secs_since_epoch": 1700000000, "nanos_since_epoch": 0}}
-                }}
-            }}"#
-        );
-        std::fs::write(layout::runtime_file(state_dir, old_id), v1_json).unwrap();
+        std::fs::write(
+            layout::runtime_file(state_dir, old_id),
+            r#"{"schema_version": 1, "spec": {}, "instance": {}}"#,
+        )
+        .unwrap();
         save_daemon_index(state_dir, &[old_id]).unwrap();
 
         let result = load_all(state_dir).unwrap();
-        assert!(result.workspaces.is_empty(), "old-schema workspace must not load");
-        assert!(result.failed_ids.is_empty(), "old schema is a reset, not a failure");
-        assert_eq!(result.reset_ids, vec![old_id]);
-        assert!(!old_dir.exists(), "old-schema workspace directory must be removed");
+        assert!(result.workspaces.is_empty(), "unsupported-schema workspace must not load");
+        assert_eq!(result.failed_ids, vec![old_id], "it is skipped like any unsupported file");
     }
 
-    /// A good v2 workspace survives even when a sibling is reset for old schema.
+    /// A current workspace still loads even when a sibling carries an
+    /// unsupported schema version.
     #[test]
-    fn old_schema_reset_does_not_drop_current_workspaces() {
+    fn unsupported_schema_does_not_drop_current_workspaces() {
         let tmp = TempDir::new().unwrap();
         let state_dir = tmp.path();
         let good_id = Uuid::new_v4();
@@ -408,8 +375,7 @@ mod tests {
         let result = load_all(state_dir).unwrap();
         assert_eq!(result.workspaces.len(), 1);
         assert_eq!(result.workspaces[0].spec.id, good_id);
-        assert_eq!(result.reset_ids, vec![old_id]);
-        assert!(!old_dir.exists());
+        assert_eq!(result.failed_ids, vec![old_id]);
     }
 
     #[test]

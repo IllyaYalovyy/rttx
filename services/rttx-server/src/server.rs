@@ -197,12 +197,11 @@ impl Server {
         let state_dir = self.os.state_dir();
 
         if let Some(result) = crate::state::persistence::load_all(&state_dir) {
-            let total = result.workspaces.len() + result.failed_ids.len() + result.reset_ids.len();
+            let total = result.workspaces.len() + result.failed_ids.len();
             tracing::info!(
-                "Loaded {} persisted workspaces ({} failed, {} reset for old schema)",
+                "Loaded {} persisted workspaces ({} skipped)",
                 result.workspaces.len(),
                 result.failed_ids.len(),
-                result.reset_ids.len()
             );
             for rf in &result.workspaces {
                 let mut rt = Workspace::from_workspace_file(rf);
