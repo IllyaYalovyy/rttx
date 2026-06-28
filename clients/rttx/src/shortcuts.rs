@@ -198,4 +198,27 @@ mod tests {
         let accels = default_accels("rename-workspace");
         assert_eq!(accels, vec!["F2"]);
     }
+
+    #[test]
+    fn every_default_shortcut_resolves_to_its_defaults_without_overrides() {
+        let overrides = BTreeMap::new();
+        for def in DEFAULT_SHORTCUTS {
+            assert_eq!(
+                effective_accels(def.action, &overrides),
+                def.default_accels.to_vec(),
+                "action '{}' must resolve to its default accelerators",
+                def.action,
+            );
+        }
+    }
+
+    #[test]
+    fn user_override_replaces_default_accelerator() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("new-session".into(), vec!["<Ctrl><Shift>N".into()]);
+        let accels = effective_accels("new-session", &overrides);
+        assert_eq!(accels, vec!["<Ctrl><Shift>N"]);
+        // Other actions keep their defaults.
+        assert_eq!(effective_accels("fullscreen", &overrides), vec!["F11"]);
+    }
 }

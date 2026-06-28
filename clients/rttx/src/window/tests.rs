@@ -6832,7 +6832,42 @@ fn reapply_preferences_updates_keyboard_shortcut_accels() {
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
 
-// ═══════════════════════════════════════════════════════════════════
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn default_keyboard_shortcuts_register_expected_accels() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.shortcut-registration-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    // setup_actions must register every default shortcut with the application,
+    // not just fullscreen. Verify the key actions end-to-end.
+    for (action, accel) in [
+        ("new-session", "<Ctrl><Shift>T"),
+        ("close-terminal", "<Ctrl><Shift>W"),
+        ("split-horizontal", "<Ctrl><Shift>E"),
+        ("split-vertical", "<Ctrl><Shift>O"),
+        ("search", "<Ctrl><Shift>F"),
+        ("fullscreen", "F11"),
+    ] {
+        let accels = app.accels_for_action(&format!("win.{action}"));
+        assert!(
+            accels.iter().any(|a| a == accel),
+            "action '{action}' should register accelerator '{accel}', got: {accels:?}"
+        );
+    }
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
 // C4 — Signal handler doubling
 //
 // When rebuild_session_content is called multiple times (e.g. after
