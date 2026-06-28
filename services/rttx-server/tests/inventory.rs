@@ -306,3 +306,25 @@ async fn inventory_pane_cwd_populated_from_proc_fallback() {
     let pane = &workspaces[0].panes[0];
     assert!(!pane.cwd.is_empty(), "pane CWD should be populated from /proc fallback, got empty");
 }
+
+/// Behavior backing `status <runtime-id>`: with the inventory capability
+/// negotiated, `ListWorkspaces` returns per-pane detail (id + size) that the
+/// CLI detail view formats. Guards the end-to-end data path the command relies
+/// on.
+#[tokio::test]
+async fn status_detail_inventory_carries_pane_id_and_size() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&sock).await;
+    client.handshake().await;
+
+    let runtime_id = create_workspace(&mut client, "detail", v3::WorkspacePolicy::Persistent).await;
+    let pane_id = create_pane(&mut client, &runtime_id).await;
+
+    let workspaces = list_workspaces(&mut client).await;
+    let ws = workspaces.iter().find(|w| w.id == runtime_id).expect("workspace is listed");
+    assert_eq!(ws.panes.len(), 1, "enriched per-pane detail must be present");
+    let pane = &ws.panes[0];
+    assert_eq!(pane.id, pane_id, "pane id matches the created pane");
+    assert!(pane.cols > 0 && pane.rows > 0, "pane size populated: {}x{}", pane.cols, pane.rows);
+}
