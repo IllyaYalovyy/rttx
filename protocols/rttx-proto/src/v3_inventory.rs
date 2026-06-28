@@ -1,9 +1,9 @@
 //! V3 workspace inventory: capability gating, builders, and field stripping.
 //!
-//! Implements RFC-021 Section 9 (`OPT_RUNTIME_INVENTORY_V2`).
+//! Implements RFC-021 Section 9 (`OPT_WORKSPACE_INVENTORY`).
 //!
 //! `ListWorkspaces` always returns core fields (id, name, policy, pane_count,
-//! ownership, revision). When `OPT_RUNTIME_INVENTORY_V2` is negotiated, the
+//! ownership, revision). When `OPT_WORKSPACE_INVENTORY` is negotiated, the
 //! server additionally populates `active_pane_summary`, `takeover_eligible`,
 //! `disabled_reason`, and `panes`.
 //!
@@ -13,10 +13,10 @@
 
 use crate::v3;
 
-/// Check whether `OPT_RUNTIME_INVENTORY_V2` is in the effective capability set.
+/// Check whether `OPT_WORKSPACE_INVENTORY` is in the effective capability set.
 #[must_use]
 pub fn is_supported(effective_caps: &[i32]) -> bool {
-    effective_caps.contains(&(v3::Capability::OptWorkspaceInventoryV2 as i32))
+    effective_caps.contains(&(v3::Capability::OptWorkspaceInventory as i32))
 }
 
 /// Parameters for building a `PaneInfo`.
@@ -59,8 +59,8 @@ pub struct WorkspaceInfoParams {
     pub reconstructed: bool,
 }
 
-/// V2 enrichment fields for `WorkspaceInfo`.
-pub struct WorkspaceInfoV2Fields {
+/// Enriched fields for `WorkspaceInfo`.
+pub struct WorkspaceInfoEnrichedFields {
     pub active_pane_summary: String,
     pub takeover_eligible: bool,
     pub disabled_reason: String,
@@ -87,11 +87,11 @@ pub fn build_workspace_info(params: WorkspaceInfoParams) -> v3::WorkspaceInfo {
     }
 }
 
-/// Build a `WorkspaceInfo` with V2 enriched fields.
+/// Build a `WorkspaceInfo` with enriched fields.
 #[must_use]
-pub fn build_workspace_info_v2(
+pub fn build_workspace_info_enriched(
     params: WorkspaceInfoParams,
-    v2: WorkspaceInfoV2Fields,
+    enriched: WorkspaceInfoEnrichedFields,
 ) -> v3::WorkspaceInfo {
     v3::WorkspaceInfo {
         id: crate::uuid_to_bytes(params.id),
@@ -103,18 +103,18 @@ pub fn build_workspace_info_v2(
         current_client_role: params.current_client_role as i32,
         workspace_revision: params.workspace_revision,
         reconstructed: params.reconstructed,
-        active_pane_summary: v2.active_pane_summary,
-        takeover_eligible: v2.takeover_eligible,
-        disabled_reason: v2.disabled_reason,
-        panes: v2.panes,
+        active_pane_summary: enriched.active_pane_summary,
+        takeover_eligible: enriched.takeover_eligible,
+        disabled_reason: enriched.disabled_reason,
+        panes: enriched.panes,
     }
 }
 
-/// Strip V2 fields from a `WorkspaceInfo`, leaving only core fields.
+/// Strip enriched fields from a `WorkspaceInfo`, leaving only core fields.
 ///
 /// Used by the server when the client did not negotiate
-/// `OPT_RUNTIME_INVENTORY_V2`.
-pub fn strip_inventory_v2_fields(info: &mut v3::WorkspaceInfo) {
+/// `OPT_WORKSPACE_INVENTORY`.
+pub fn strip_enriched_inventory_fields(info: &mut v3::WorkspaceInfo) {
     info.active_pane_summary.clear();
     info.takeover_eligible = false;
     info.disabled_reason.clear();
@@ -214,7 +214,7 @@ mod tests {
     fn supported_when_capability_present() {
         let caps = vec![
             v3::Capability::CoreWorkspaceLifecycle as i32,
-            v3::Capability::OptWorkspaceInventoryV2 as i32,
+            v3::Capability::OptWorkspaceInventory as i32,
         ];
         assert!(is_supported(&caps));
     }
@@ -330,7 +330,7 @@ mod tests {
         assert_eq!(info.current_client_role, v3::WorkspaceClientRole::Writer as i32);
         assert_eq!(info.workspace_revision, 42);
         assert!(!info.reconstructed);
-        // V2 fields are empty/default
+        // enriched fields are empty/default
         assert!(info.active_pane_summary.is_empty());
         assert!(!info.takeover_eligible);
         assert!(info.disabled_reason.is_empty());
@@ -356,13 +356,13 @@ mod tests {
         assert_eq!(info, decoded);
     }
 
-    // ── build_workspace_info_v2 ──
+    // ── build_workspace_info_enriched ──
 
     #[test]
-    fn workspace_info_v2_populates_all_fields() {
+    fn workspace_info_enriched_populates_all_fields() {
         let r = rt();
         let pane = test_pane("bash", "/home", None);
-        let info = build_workspace_info_v2(
+        let info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: r,
                 name: "dev".into(),
@@ -374,7 +374,7 @@ mod tests {
                 workspace_revision: 10,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
                 takeover_eligible: true,
                 disabled_reason: String::new(),
@@ -389,8 +389,8 @@ mod tests {
     }
 
     #[test]
-    fn workspace_info_v2_with_disabled_reason() {
-        let info = build_workspace_info_v2(
+    fn workspace_info_enriched_with_disabled_reason() {
+        let info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "busy".into(),
@@ -402,7 +402,7 @@ mod tests {
                 workspace_revision: 5,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "vim".into(),
                 takeover_eligible: false,
                 disabled_reason: "owned by another client".into(),
@@ -414,9 +414,9 @@ mod tests {
     }
 
     #[test]
-    fn workspace_info_v2_wire_roundtrip() {
+    fn workspace_info_enriched_wire_roundtrip() {
         let pane = test_pane("htop", "/", None);
-        let info = build_workspace_info_v2(
+        let info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "monitor".into(),
@@ -428,7 +428,7 @@ mod tests {
                 workspace_revision: 99,
                 reconstructed: true,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "htop".into(),
                 takeover_eligible: true,
                 disabled_reason: String::new(),
@@ -441,12 +441,12 @@ mod tests {
         assert_eq!(info, decoded);
     }
 
-    // ── strip_inventory_v2_fields ──
+    // ── strip_enriched_inventory_fields ──
 
     #[test]
-    fn strip_clears_v2_fields() {
+    fn strip_clears_enriched_fields() {
         let pane = test_pane("bash", "/home", None);
-        let mut info = build_workspace_info_v2(
+        let mut info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "ws".into(),
@@ -458,14 +458,14 @@ mod tests {
                 workspace_revision: 1,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
                 takeover_eligible: true,
                 disabled_reason: "busy".into(),
                 panes: vec![pane],
             },
         );
-        strip_inventory_v2_fields(&mut info);
+        strip_enriched_inventory_fields(&mut info);
         assert!(info.active_pane_summary.is_empty());
         assert!(!info.takeover_eligible);
         assert!(info.disabled_reason.is_empty());
@@ -479,8 +479,8 @@ mod tests {
     #[test]
     fn strip_is_idempotent() {
         let mut info = build_workspace_info(core_params("empty"));
-        strip_inventory_v2_fields(&mut info);
-        strip_inventory_v2_fields(&mut info);
+        strip_enriched_inventory_fields(&mut info);
+        strip_enriched_inventory_fields(&mut info);
         assert!(info.active_pane_summary.is_empty());
         assert!(info.panes.is_empty());
     }
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn list_response_wire_roundtrip() {
         let pane = test_pane("bash", "/home", None);
-        let info = build_workspace_info_v2(
+        let info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "full".into(),
@@ -611,7 +611,7 @@ mod tests {
                 workspace_revision: 10,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
                 takeover_eligible: false,
                 disabled_reason: String::new(),
@@ -655,15 +655,15 @@ mod tests {
         assert_eq!(env, decoded);
     }
 
-    // ── Integration: capability gating strips V2 fields ──
+    // ── Integration: capability gating strips enriched fields ──
 
     #[test]
-    fn capability_gating_strips_v2_when_absent() {
+    fn capability_gating_strips_enriched_when_absent() {
         let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
         assert!(!is_supported(&caps));
 
         let pane = test_pane("bash", "/home", None);
-        let mut info = build_workspace_info_v2(
+        let mut info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "ws".into(),
@@ -675,7 +675,7 @@ mod tests {
                 workspace_revision: 1,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
                 takeover_eligible: true,
                 disabled_reason: String::new(),
@@ -684,7 +684,7 @@ mod tests {
         );
 
         if !is_supported(&caps) {
-            strip_inventory_v2_fields(&mut info);
+            strip_enriched_inventory_fields(&mut info);
         }
 
         assert!(info.active_pane_summary.is_empty());
@@ -696,15 +696,15 @@ mod tests {
     }
 
     #[test]
-    fn capability_gating_preserves_v2_when_present() {
+    fn capability_gating_preserves_enriched_when_present() {
         let caps = vec![
             v3::Capability::CoreWorkspaceLifecycle as i32,
-            v3::Capability::OptWorkspaceInventoryV2 as i32,
+            v3::Capability::OptWorkspaceInventory as i32,
         ];
         assert!(is_supported(&caps));
 
         let pane = test_pane("vim", "/src", None);
-        let info = build_workspace_info_v2(
+        let info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "dev".into(),
@@ -716,7 +716,7 @@ mod tests {
                 workspace_revision: 5,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "vim".into(),
                 takeover_eligible: true,
                 disabled_reason: String::new(),
@@ -732,10 +732,10 @@ mod tests {
     // ── Integration: unsupported capability error ──
 
     #[test]
-    fn unsupported_capability_error_for_inventory_v2() {
+    fn unsupported_capability_error_for_inventory_enriched() {
         let err = crate::v3_error::build_error(
             v3::ErrorKind::UnsupportedCapability,
-            "OPT_RUNTIME_INVENTORY_V2 not negotiated",
+            "OPT_WORKSPACE_INVENTORY not negotiated",
             "ListWorkspaces",
         );
         let env = crate::v3_error::build_error_response(42, err);
@@ -752,7 +752,7 @@ mod tests {
     // ── Integration: full list flow with multiple workspaces ──
 
     #[test]
-    fn full_list_flow_with_v2_fields() {
+    fn full_list_flow_with_enriched_fields() {
         let id_gen = RequestIdGenerator::new();
 
         let req_env = build_list_workspaces_envelope(&id_gen);
@@ -764,7 +764,7 @@ mod tests {
         let panes = vec![pane1, pane2];
         let summary = build_active_pane_summary(&panes);
 
-        let info = build_workspace_info_v2(
+        let info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "dev-workspace".into(),
@@ -776,7 +776,7 @@ mod tests {
                 workspace_revision: 42,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: summary,
                 takeover_eligible: false,
                 disabled_reason: String::new(),
@@ -799,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn full_list_flow_without_v2_fields() {
+    fn full_list_flow_without_enriched_fields() {
         let id_gen = RequestIdGenerator::new();
         let caps = vec![v3::Capability::CoreWorkspaceLifecycle as i32];
 
@@ -807,7 +807,7 @@ mod tests {
         let saved_request_id = req_env.request_id;
 
         let pane = test_pane("bash", "/home", None);
-        let mut info = build_workspace_info_v2(
+        let mut info = build_workspace_info_enriched(
             WorkspaceInfoParams {
                 id: rt(),
                 name: "ws".into(),
@@ -819,7 +819,7 @@ mod tests {
                 workspace_revision: 1,
                 reconstructed: false,
             },
-            WorkspaceInfoV2Fields {
+            WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
                 takeover_eligible: true,
                 disabled_reason: String::new(),
@@ -828,7 +828,7 @@ mod tests {
         );
 
         if !is_supported(&caps) {
-            strip_inventory_v2_fields(&mut info);
+            strip_enriched_inventory_fields(&mut info);
         }
 
         let list = build_workspace_list(vec![info]);
