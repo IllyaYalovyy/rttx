@@ -1643,6 +1643,50 @@ fn smart_clipboard_preference_reaches_live_terminals() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
+fn search_bar_toggles_and_returns_focus_to_terminal() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.search-bar-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let terminal = window
+        .imp()
+        .terminals
+        .borrow()
+        .values()
+        .next()
+        .cloned()
+        .expect("window should create an initial terminal");
+
+    assert!(!terminal.search_bar().is_search_mode(), "search bar starts hidden");
+
+    // Toggle on: the bar shows and the search entry takes focus.
+    terminal.toggle_search();
+    assert!(terminal.search_bar().is_search_mode(), "toggle shows the search bar");
+    assert!(
+        wait_until(1000, || terminal.search_entry().has_focus()),
+        "the search entry should take focus when the bar opens"
+    );
+
+    // Toggle off: the bar hides and focus returns to the terminal (guards the
+    // 'focus not returning after close' regression called out in #323).
+    terminal.toggle_search();
+    assert!(!terminal.search_bar().is_search_mode(), "toggle hides the search bar");
+    assert!(
+        wait_until(1000, || terminal.vte().has_focus()),
+        "focus must return to the terminal when the search bar closes"
+    );
+
+    window.close();
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
 fn font_preference_reaches_live_terminals_and_new_ones() {
     require_display!();
 
