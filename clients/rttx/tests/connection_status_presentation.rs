@@ -22,10 +22,8 @@ fn connection_status_presentation_shows_expected_label_and_input_state() {
     assert!(connected.input_enabled, "input must be enabled once connected");
 
     // Reconnecting shows a retry countdown and keeps input disabled.
-    let reconnecting = present_connection_status(&ConnectionStatus::Reconnecting {
-        attempt: 1,
-        retry_in_secs: 3,
-    });
+    let reconnecting =
+        present_connection_status(&ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 });
     assert_eq!(reconnecting.header_label, "Retry 3s");
     assert!(!reconnecting.input_enabled);
 
