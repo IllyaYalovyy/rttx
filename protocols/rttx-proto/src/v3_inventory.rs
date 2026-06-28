@@ -170,6 +170,15 @@ pub fn build_list_workspaces_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renamed_inventory_capability_keeps_wire_value_100() {
+        // The rename dropped the meaningless "V2" from the symbol; the wire
+        // value must stay 100 so negotiation remains compatible.
+        assert_eq!(v3::Capability::OptWorkspaceInventory as i32, 100);
+        assert!(is_supported(&[v3::Capability::OptWorkspaceInventory as i32]));
+        assert!(!is_supported(&[]));
+    }
     use crate::{decode_frame, encode_frame, uuid_to_bytes, v3_envelope::RequestIdGenerator};
     use bytes::BytesMut;
 
