@@ -1,6 +1,6 @@
 //! Integration tests for v3 `OPT_WORKSPACE_INVENTORY` protocol builders.
 //!
-//! Validates the end-to-end flow: build inventory with V2 fields, gate on
+//! Validates the end-to-end flow: build inventory with enriched fields, gate on
 //! capability, strip when absent, and verify wire roundtrip through envelopes.
 
 use rttx_proto::v3;
@@ -172,4 +172,42 @@ fn v3_inventory_disabled_workspace_visible_with_explanation() {
     assert!(!info.takeover_eligible);
     assert_eq!(info.active_pane_summary, "vim");
     assert_eq!(info.panes.len(), 1);
+}
+
+/// Wire-compatibility guard for the capability rename (V2 dropped from the
+/// symbol): the negotiated capability value must remain 100, and the renamed
+/// enriched builder/strip API must round-trip through the crate boundary.
+#[test]
+fn enriched_inventory_capability_is_wire_stable_after_rename() {
+    assert_eq!(
+        v3::Capability::OptWorkspaceInventory as i32,
+        100,
+        "the renamed capability must keep its wire value"
+    );
+
+    let mut info = v3_inventory::build_workspace_info_enriched(
+        WorkspaceInfoParams {
+            id: rt(),
+            name: "ws".into(),
+            policy: v3::WorkspacePolicy::Persistent,
+            pane_count: 1,
+            has_write_owner: true,
+            read_only_client_count: 0,
+            current_client_role: v3::WorkspaceClientRole::Writer,
+            workspace_revision: 1,
+            reconstructed: false,
+        },
+        WorkspaceInfoEnrichedFields {
+            active_pane_summary: "bash".into(),
+            takeover_eligible: true,
+            disabled_reason: String::new(),
+            panes: vec![],
+        },
+    );
+    assert_eq!(info.active_pane_summary, "bash");
+
+    // Stripping when the capability is absent clears the enriched fields.
+    v3_inventory::strip_enriched_inventory_fields(&mut info);
+    assert!(info.active_pane_summary.is_empty());
+    assert!(!info.takeover_eligible);
 }
