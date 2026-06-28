@@ -33,8 +33,12 @@ enum Command {
     },
     /// Stop the running daemon
     Stop,
-    /// Show daemon status and active workspaces
-    Status,
+    /// Show daemon status; with a workspace id, show its per-pane detail
+    Status {
+        /// Workspace (runtime) id for a detailed per-pane view; omit for the
+        /// fleet overview.
+        runtime_id: Option<String>,
+    },
     /// Remove all workspaces with no connected clients
     Clean,
     /// Terminate a specific workspace by ID
@@ -87,7 +91,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Start { foreground: false }) {
         Command::Start { foreground } => start(foreground),
         Command::Stop => stop(),
-        Command::Status => status(),
+        Command::Status { runtime_id } => status(runtime_id.as_deref()),
         Command::Clean => clean(),
         Command::Kill { runtime_id } => kill(&runtime_id),
         Command::AttachStdio => attach_stdio(),
@@ -344,6 +348,7 @@ async fn v3_connect(
             v3::Capability::CorePasteIntent,
             v3::Capability::CoreFocusEvents,
             v3::Capability::OptDiagnostics,
+            v3::Capability::OptWorkspaceInventory,
         ],
     );
     conn.send_v3_client_hello(&hello).await?;
@@ -554,7 +559,7 @@ fn stop() -> anyhow::Result<()> {
     })
 }
 
-fn status() -> anyhow::Result<()> {
+fn status(runtime_id: Option<&str>) -> anyhow::Result<()> {
     let os = UnixOs;
     let socket_path = os.runtime_dir().join("rttx-server.sock");
 
@@ -580,6 +585,13 @@ fn status() -> anyhow::Result<()> {
 
         let resp = recv_v3_response(&mut conn).await?;
         if let Some(v3::server_envelope::Payload::WorkspaceList(sl)) = resp.payload {
+            if let Some(target) = runtime_id {
+                match sl.workspaces.iter().find(|w| workspace_id_matches(&w.id, target)) {
+                    Some(info) => print!("{}", format_workspace_detail(info)),
+                    None => println!("Workspace '{target}' not found"),
+                }
+                return Ok(());
+            }
             println!("Status: running");
             println!("Workspaces: {}", sl.workspaces.len());
 
@@ -740,6 +752,66 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max - 1]) }
 }
 
+/// Match a workspace by its full UUID string or by a unique prefix (so a short
+/// id from the `status` table can be passed to `status <id>`).
+fn workspace_id_matches(id_bytes: &[u8], target: &str) -> bool {
+    rttx_proto::bytes_to_uuid(id_bytes).is_ok_and(|u| {
+        let s = u.to_string();
+        s == target || s.starts_with(target)
+    })
+}
+
+/// Render the per-pane detail view for a single workspace (`status <id>`).
+fn format_workspace_detail(info: &v3::WorkspaceInfo) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let id = rttx_proto::bytes_to_uuid(&info.id).map_or_else(|_| "?".into(), |u| u.to_string());
+    let policy = match v3::WorkspacePolicy::try_from(info.policy) {
+        Ok(v3::WorkspacePolicy::Persistent) => "persistent",
+        Ok(v3::WorkspacePolicy::Ephemeral) => "ephemeral",
+        _ => "unknown",
+    };
+    let clients = u32::from(info.has_write_owner) + info.read_only_client_count;
+    let _ = writeln!(out, "Workspace: {id}");
+    let _ = writeln!(out, "  Name:     {}", info.name);
+    let _ = writeln!(out, "  Policy:   {policy}");
+    let _ = writeln!(out, "  Revision: {}", info.workspace_revision);
+    let _ = writeln!(out, "  Clients:  {clients}");
+    let _ = writeln!(out, "  Panes:    {}", info.pane_count);
+
+    if info.panes.is_empty() {
+        let _ = writeln!(out, "  (no pane detail reported)");
+        return out;
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  {:<10} {:<9} {:<24} CWD", "PANE", "SIZE", "TITLE");
+    for p in &info.panes {
+        let pid = rttx_proto::bytes_to_uuid(&p.id).map_or_else(|_| "?".into(), |u| u.to_string());
+        let pid_short = &pid[..pid.len().min(8)];
+        let size = format!("{}x{}", p.cols, p.rows);
+        let title = if p.title.is_empty() { "—" } else { p.title.as_str() };
+        let cwd = if p.cwd.is_empty() { "—" } else { p.cwd.as_str() };
+        let _ =
+            writeln!(out, "  {:<10} {:<9} {:<24} {}", pid_short, size, truncate(title, 24), cwd);
+
+        let mut flags = Vec::new();
+        if let Some(code) = p.exit_status {
+            flags.push(format!("exited:{code}"));
+        }
+        if p.no_persist {
+            flags.push("no-persist".to_string());
+        }
+        if p.reconstructed {
+            flags.push("reconstructed".to_string());
+        }
+        if !flags.is_empty() {
+            let _ = writeln!(out, "             flags: [{}]", flags.join(", "));
+        }
+    }
+    out
+}
+
 async fn handle_signals(server: Arc<Mutex<Server>>) {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     use signal_hook_tokio::Signals;
@@ -761,6 +833,75 @@ async fn handle_signals(server: Arc<Mutex<Server>>) {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    fn sample_workspace_with_pane() -> v3::WorkspaceInfo {
+        let ws_id = uuid::Uuid::parse_str("d7d04564-b2bf-4302-9495-e65c4df12ac6").unwrap();
+        let pane_id = uuid::Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap();
+        v3::WorkspaceInfo {
+            id: rttx_proto::uuid_to_bytes(ws_id),
+            name: "dev".into(),
+            policy: v3::WorkspacePolicy::Persistent as i32,
+            pane_count: 1,
+            has_write_owner: true,
+            read_only_client_count: 1,
+            current_client_role: v3::WorkspaceClientRole::Writer as i32,
+            workspace_revision: 7,
+            reconstructed: false,
+            active_pane_summary: String::new(),
+            takeover_eligible: false,
+            disabled_reason: String::new(),
+            panes: vec![v3::PaneInfo {
+                id: rttx_proto::uuid_to_bytes(pane_id),
+                title: "bash".into(),
+                cwd: "/home/user/project".into(),
+                cols: 120,
+                rows: 40,
+                exit_status: Some(0),
+                reconstructed: true,
+                no_persist: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn workspace_id_matches_full_and_prefix() {
+        let id = rttx_proto::uuid_to_bytes(
+            uuid::Uuid::parse_str("d7d04564-b2bf-4302-9495-e65c4df12ac6").unwrap(),
+        );
+        assert!(workspace_id_matches(&id, "d7d04564-b2bf-4302-9495-e65c4df12ac6"));
+        assert!(workspace_id_matches(&id, "d7d04564"), "a short prefix matches");
+        assert!(!workspace_id_matches(&id, "ffffffff"));
+    }
+
+    #[test]
+    fn format_workspace_detail_renders_panes_and_flags() {
+        let detail = format_workspace_detail(&sample_workspace_with_pane());
+        assert!(detail.contains("Workspace: d7d04564-b2bf-4302-9495-e65c4df12ac6"));
+        assert!(detail.contains("Name:     dev"));
+        assert!(detail.contains("persistent"));
+        assert!(detail.contains("11111111"), "short pane id");
+        assert!(detail.contains("120x40"), "pane size");
+        assert!(detail.contains("bash"), "pane title");
+        assert!(detail.contains("/home/user/project"), "pane cwd");
+        assert!(detail.contains("exited:0"));
+        assert!(detail.contains("reconstructed"));
+    }
+
+    #[test]
+    fn format_workspace_detail_without_enriched_panes_notes_it() {
+        let mut info = sample_workspace_with_pane();
+        info.panes.clear();
+        let detail = format_workspace_detail(&info);
+        assert!(detail.contains("no pane detail reported"));
+    }
+
+    #[test]
+    fn cli_parses_status_with_and_without_id() {
+        let cli = Cli::try_parse_from(["rttx-server", "status"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Status { runtime_id: None })));
+        let cli = Cli::try_parse_from(["rttx-server", "status", "d7d04564"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Status { runtime_id: Some(_) })));
+    }
 
     #[test]
     fn cli_parses_clean_command() {
