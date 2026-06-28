@@ -42,7 +42,7 @@ pub mod v3_scrollback;
 /// V3 resync: capability gating, builders, and overflow handling (RFC-021 Section 8, `OPT_RESYNC`).
 pub mod v3_resync;
 
-/// V3 workspace inventory: capability gating, builders, and field stripping (RFC-021 Section 9, `OPT_RUNTIME_INVENTORY_V2`).
+/// V3 workspace inventory: capability gating, builders, and field stripping (RFC-021 Section 9, `OPT_WORKSPACE_INVENTORY`).
 pub mod v3_inventory;
 
 /// V3 workspace takeover: capability gating, builders, and lease events (RFC-021 Section 10, `OPT_RUNTIME_TAKEOVER`).
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(v3::WorkspaceTerminationReason::Explicit as i32, 1);
         assert_eq!(v3::WorkspaceTerminationReason::EphemeralDetach as i32, 2);
         assert_eq!(v3::Capability::CoreWorkspaceLifecycle as i32, 1);
-        assert_eq!(v3::Capability::OptWorkspaceInventoryV2 as i32, 100);
+        assert_eq!(v3::Capability::OptWorkspaceInventory as i32, 100);
         assert_eq!(v3::Capability::OptWorkspaceTakeover as i32, 101);
         assert_eq!(v3::ErrorKind::WorkspaceNotFound as i32, 4);
     }
@@ -252,7 +252,7 @@ mod v3_tests {
         assert_eq!(v3::Capability::CoreTerminalModes as i32, 4);
         assert_eq!(v3::Capability::CorePasteIntent as i32, 5);
         assert_eq!(v3::Capability::CoreFocusEvents as i32, 6);
-        assert_eq!(v3::Capability::OptWorkspaceInventoryV2 as i32, 100);
+        assert_eq!(v3::Capability::OptWorkspaceInventory as i32, 100);
         assert_eq!(v3::Capability::OptWorkspaceTakeover as i32, 101);
         assert_eq!(v3::Capability::OptResync as i32, 102);
         assert_eq!(v3::Capability::OptChunkedScrollback as i32, 103);

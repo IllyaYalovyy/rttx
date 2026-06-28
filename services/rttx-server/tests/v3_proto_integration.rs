@@ -1072,7 +1072,7 @@ fn core_only_caps() -> Vec<i32> {
 
 fn all_optional_caps() -> Vec<v3::Capability> {
     vec![
-        v3::Capability::OptWorkspaceInventoryV2,
+        v3::Capability::OptWorkspaceInventory,
         v3::Capability::OptWorkspaceTakeover,
         v3::Capability::OptResync,
         v3::Capability::OptChunkedScrollback,
@@ -1126,7 +1126,7 @@ fn v3_profile_core_plus_individual_optional() {
                 assert!(!v3_inventory::is_supported(&effective));
                 assert!(!v3_takeover::is_supported(&effective));
             }
-            v3::Capability::OptWorkspaceInventoryV2 => {
+            v3::Capability::OptWorkspaceInventory => {
                 assert!(!v3_resync::is_supported(&effective));
                 assert!(!v3_scrollback::is_supported(&effective));
                 assert!(!v3_diagnostics::is_supported(&effective));
@@ -1252,7 +1252,7 @@ fn v3_send_discipline_optional_server_payloads_gated() {
     // TakeoverCompleted/LeaseLost/OwnerDisconnected require OPT_RUNTIME_TAKEOVER
     assert!(!v3_takeover::is_supported(&core_caps));
 
-    // WorkspaceList v2 fields require OPT_RUNTIME_INVENTORY_V2
+    // WorkspaceList enriched fields require OPT_WORKSPACE_INVENTORY
     assert!(!v3_inventory::is_supported(&core_caps));
 }
 
@@ -1547,9 +1547,9 @@ fn v3_wire_compat_unknown_oneof_variant_in_server_envelope() {
 }
 
 #[test]
-fn v3_wire_compat_workspace_info_without_v2_fields() {
-    // A WorkspaceInfo from a server without OPT_RUNTIME_INVENTORY_V2 has
-    // empty v2 fields (default values).
+fn v3_wire_compat_workspace_info_without_enriched_fields() {
+    // A WorkspaceInfo from a server without OPT_WORKSPACE_INVENTORY has
+    // empty enriched fields (default values).
     let info = v3::WorkspaceInfo {
         id: uuid_to_bytes(uuid::Uuid::new_v4()),
         name: "test".into(),
@@ -1560,7 +1560,7 @@ fn v3_wire_compat_workspace_info_without_v2_fields() {
         current_client_role: v3::WorkspaceClientRole::Writer as i32,
         workspace_revision: 5,
         reconstructed: false,
-        // v2 fields left at defaults
+        // enriched fields left at defaults
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
@@ -1888,7 +1888,7 @@ fn v3_core_focus_events_end_to_end() {
 // ── Optional capability absent fallback paths ──
 
 #[test]
-fn v3_opt_inventory_v2_absent_strips_extended_fields() {
+fn v3_opt_enriched_inventory_absent_strips_extended_fields() {
     let effective = core_only_caps();
     assert!(!v3_inventory::is_supported(&effective));
 

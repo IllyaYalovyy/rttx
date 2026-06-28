@@ -116,7 +116,7 @@ pub fn missing_capabilities_error(missing: &[v3::Capability]) -> v3::ProtocolErr
             other => {
                 // Optional capabilities should not appear here, but handle gracefully
                 match *other as i32 {
-                    100 => "OPT_RUNTIME_INVENTORY_V2",
+                    100 => "OPT_WORKSPACE_INVENTORY",
                     101 => "OPT_RUNTIME_TAKEOVER",
                     102 => "OPT_RESYNC",
                     103 => "OPT_CHUNKED_SCROLLBACK",

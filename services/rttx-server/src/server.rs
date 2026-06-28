@@ -637,11 +637,15 @@ impl Server {
 
             v3::client_envelope::Command::ListWorkspaces(_) => {
                 let s = crate::instrument::lock_server(server, metrics).await;
-                let has_inventory_v2 = rttx_proto::v3_inventory::is_supported(effective_caps);
+                let has_enriched_inventory = rttx_proto::v3_inventory::is_supported(effective_caps);
                 let mut infos = Vec::with_capacity(s.workspaces.len());
                 for rt_lock in s.workspaces.values() {
                     let rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
-                    infos.push(protocol::v3_workspace_info_for(client_id, &rt, has_inventory_v2));
+                    infos.push(protocol::v3_workspace_info_for(
+                        client_id,
+                        &rt,
+                        has_enriched_inventory,
+                    ));
                 }
                 drop(s);
                 infos.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1006,7 +1010,7 @@ pub const SERVER_CAPABILITIES: &[v3::Capability] = &[
     v3::Capability::CoreTerminalModes,
     v3::Capability::CorePasteIntent,
     v3::Capability::CoreFocusEvents,
-    v3::Capability::OptWorkspaceInventoryV2,
+    v3::Capability::OptWorkspaceInventory,
     v3::Capability::OptResync,
     v3::Capability::OptChunkedScrollback,
     v3::Capability::OptDiagnostics,

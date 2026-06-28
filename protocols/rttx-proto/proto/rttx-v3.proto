@@ -13,7 +13,7 @@ enum Capability {
   CORE_PASTE_INTENT = 5;
   CORE_FOCUS_EVENTS = 6;
   // Optional — values 100+
-  OPT_WORKSPACE_INVENTORY_V2 = 100;
+  OPT_WORKSPACE_INVENTORY = 100;
   OPT_WORKSPACE_TAKEOVER = 101;
   OPT_RESYNC = 102;
   OPT_CHUNKED_SCROLLBACK = 103;
@@ -243,7 +243,7 @@ message WorkspaceInfo {
   WorkspaceClientRole current_client_role = 7;
   uint64 workspace_revision = 8;
   bool reconstructed = 9;
-  // OPT_WORKSPACE_INVENTORY_V2 fields
+  // OPT_WORKSPACE_INVENTORY fields
   string active_pane_summary = 10;
   bool takeover_eligible = 11;
   string disabled_reason = 12;

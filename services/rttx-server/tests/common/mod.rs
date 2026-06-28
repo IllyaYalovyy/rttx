@@ -97,7 +97,7 @@ impl TestClient {
             v3::Capability::CoreTerminalModes,
             v3::Capability::CorePasteIntent,
             v3::Capability::CoreFocusEvents,
-            v3::Capability::OptWorkspaceInventoryV2,
+            v3::Capability::OptWorkspaceInventory,
             v3::Capability::OptResync,
             v3::Capability::OptChunkedScrollback,
             v3::Capability::OptDiagnostics,

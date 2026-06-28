@@ -230,14 +230,14 @@ pub fn build_v3_workspace_snapshot(
 pub fn v3_workspace_inventory_for<'a, I>(
     client_id: Uuid,
     workspaces: I,
-    has_inventory_v2: bool,
+    has_enriched_inventory: bool,
 ) -> Vec<v3::WorkspaceInfo>
 where
     I: IntoIterator<Item = &'a Workspace>,
 {
     let mut inventory: Vec<_> = workspaces
         .into_iter()
-        .map(|rt| v3_workspace_info_for(client_id, rt, has_inventory_v2))
+        .map(|rt| v3_workspace_info_for(client_id, rt, has_enriched_inventory))
         .collect();
     inventory.sort_by(|left, right| left.id.cmp(&right.id));
     inventory
@@ -251,7 +251,7 @@ where
 pub fn v3_workspace_info_for(
     client_id: Uuid,
     rt: &Workspace,
-    has_inventory_v2: bool,
+    has_enriched_inventory: bool,
 ) -> v3::WorkspaceInfo {
     let policy = match rt.policy {
         crate::workspace::WorkspacePolicy::Persistent => v3::WorkspacePolicy::Persistent,
@@ -273,7 +273,7 @@ pub fn v3_workspace_info_for(
         reconstructed: rt.reconstructed,
     };
 
-    if has_inventory_v2 {
+    if has_enriched_inventory {
         let mut panes: Vec<_> = rt
             .panes
             .values()
@@ -293,9 +293,9 @@ pub fn v3_workspace_info_for(
             })
             .collect();
         panes.sort_by(|left, right| left.id.cmp(&right.id));
-        rttx_proto::v3_inventory::build_workspace_info_v2(
+        rttx_proto::v3_inventory::build_workspace_info_enriched(
             params,
-            rttx_proto::v3_inventory::WorkspaceInfoV2Fields {
+            rttx_proto::v3_inventory::WorkspaceInfoEnrichedFields {
                 active_pane_summary: String::new(),
                 takeover_eligible: !rt.has_write_owner(),
                 disabled_reason: String::new(),

@@ -1,11 +1,13 @@
-//! Integration tests for v3 `OPT_RUNTIME_INVENTORY_V2` protocol builders.
+//! Integration tests for v3 `OPT_WORKSPACE_INVENTORY` protocol builders.
 //!
-//! Validates the end-to-end flow: build inventory with V2 fields, gate on
+//! Validates the end-to-end flow: build inventory with enriched fields, gate on
 //! capability, strip when absent, and verify wire roundtrip through envelopes.
 
 use rttx_proto::v3;
 use rttx_proto::v3_envelope::RequestIdGenerator;
-use rttx_proto::v3_inventory::{self, PaneInfoParams, WorkspaceInfoParams, WorkspaceInfoV2Fields};
+use rttx_proto::v3_inventory::{
+    self, PaneInfoParams, WorkspaceInfoEnrichedFields, WorkspaceInfoParams,
+};
 use rttx_proto::{decode_frame, encode_frame};
 
 fn rt() -> uuid::Uuid {
@@ -30,7 +32,7 @@ fn test_pane(title: &str, cwd: &str, exit_status: Option<i32>) -> v3::PaneInfo {
 }
 
 #[test]
-fn v3_inventory_list_roundtrip_with_v2_fields() {
+fn v3_inventory_list_roundtrip_with_enriched_fields() {
     let id_gen = RequestIdGenerator::new();
 
     // Client sends ListWorkspaces request
@@ -49,7 +51,7 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
     let summary = v3_inventory::build_active_pane_summary(&panes);
     assert_eq!(summary, "bash, vim");
 
-    let info = v3_inventory::build_workspace_info_v2(
+    let info = v3_inventory::build_workspace_info_enriched(
         WorkspaceInfoParams {
             id: rt(),
             name: "integration-test".into(),
@@ -61,7 +63,7 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
             workspace_revision: 42,
             reconstructed: false,
         },
-        WorkspaceInfoV2Fields {
+        WorkspaceInfoEnrichedFields {
             active_pane_summary: summary,
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -89,15 +91,15 @@ fn v3_inventory_list_roundtrip_with_v2_fields() {
 }
 
 #[test]
-fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
-    let caps_without_v2 = vec![
+fn v3_inventory_capability_gating_strips_enriched_fields_end_to_end() {
+    let caps_without_enriched = vec![
         v3::Capability::CoreWorkspaceLifecycle as i32,
         v3::Capability::CorePaneLifecycle as i32,
     ];
-    assert!(!v3_inventory::is_supported(&caps_without_v2));
+    assert!(!v3_inventory::is_supported(&caps_without_enriched));
 
     let pane = test_pane("bash", "/home", None);
-    let mut info = v3_inventory::build_workspace_info_v2(
+    let mut info = v3_inventory::build_workspace_info_enriched(
         WorkspaceInfoParams {
             id: rt(),
             name: "gated".into(),
@@ -109,7 +111,7 @@ fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
             workspace_revision: 5,
             reconstructed: false,
         },
-        WorkspaceInfoV2Fields {
+        WorkspaceInfoEnrichedFields {
             active_pane_summary: "bash".into(),
             takeover_eligible: true,
             disabled_reason: String::new(),
@@ -117,7 +119,7 @@ fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
         },
     );
 
-    v3_inventory::strip_inventory_v2_fields(&mut info);
+    v3_inventory::strip_enriched_inventory_fields(&mut info);
 
     // V2 fields cleared
     assert!(info.active_pane_summary.is_empty());
@@ -140,13 +142,13 @@ fn v3_inventory_capability_gating_strips_v2_fields_end_to_end() {
 
 #[test]
 fn v3_inventory_disabled_workspace_visible_with_explanation() {
-    let caps_with_v2 = vec![
+    let caps_with_enriched = vec![
         v3::Capability::CoreWorkspaceLifecycle as i32,
-        v3::Capability::OptWorkspaceInventoryV2 as i32,
+        v3::Capability::OptWorkspaceInventory as i32,
     ];
-    assert!(v3_inventory::is_supported(&caps_with_v2));
+    assert!(v3_inventory::is_supported(&caps_with_enriched));
 
-    let info = v3_inventory::build_workspace_info_v2(
+    let info = v3_inventory::build_workspace_info_enriched(
         WorkspaceInfoParams {
             id: rt(),
             name: "busy-workspace".into(),
@@ -158,7 +160,7 @@ fn v3_inventory_disabled_workspace_visible_with_explanation() {
             workspace_revision: 10,
             reconstructed: false,
         },
-        WorkspaceInfoV2Fields {
+        WorkspaceInfoEnrichedFields {
             active_pane_summary: "vim".into(),
             takeover_eligible: false,
             disabled_reason: "owned by another client".into(),
@@ -170,4 +172,42 @@ fn v3_inventory_disabled_workspace_visible_with_explanation() {
     assert!(!info.takeover_eligible);
     assert_eq!(info.active_pane_summary, "vim");
     assert_eq!(info.panes.len(), 1);
+}
+
+/// Wire-compatibility guard for the capability rename (V2 dropped from the
+/// symbol): the negotiated capability value must remain 100, and the renamed
+/// enriched builder/strip API must round-trip through the crate boundary.
+#[test]
+fn enriched_inventory_capability_is_wire_stable_after_rename() {
+    assert_eq!(
+        v3::Capability::OptWorkspaceInventory as i32,
+        100,
+        "the renamed capability must keep its wire value"
+    );
+
+    let mut info = v3_inventory::build_workspace_info_enriched(
+        WorkspaceInfoParams {
+            id: rt(),
+            name: "ws".into(),
+            policy: v3::WorkspacePolicy::Persistent,
+            pane_count: 1,
+            has_write_owner: true,
+            read_only_client_count: 0,
+            current_client_role: v3::WorkspaceClientRole::Writer,
+            workspace_revision: 1,
+            reconstructed: false,
+        },
+        WorkspaceInfoEnrichedFields {
+            active_pane_summary: "bash".into(),
+            takeover_eligible: true,
+            disabled_reason: String::new(),
+            panes: vec![],
+        },
+    );
+    assert_eq!(info.active_pane_summary, "bash");
+
+    // Stripping when the capability is absent clears the enriched fields.
+    v3_inventory::strip_enriched_inventory_fields(&mut info);
+    assert!(info.active_pane_summary.is_empty());
+    assert!(!info.takeover_eligible);
 }
