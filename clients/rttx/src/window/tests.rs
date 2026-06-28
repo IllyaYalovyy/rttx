@@ -1643,6 +1643,101 @@ fn smart_clipboard_preference_reaches_live_terminals() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
+fn font_preference_reaches_live_terminals_and_new_ones() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut prefs = preferences::Preferences::default();
+    prefs.font = "Monospace 18".into();
+    store().save_preferences(&prefs).unwrap();
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.font-preferences-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let terminal = window
+        .imp()
+        .terminals
+        .borrow()
+        .values()
+        .next()
+        .cloned()
+        .expect("window should create an initial terminal");
+    window.reapply_terminal_preferences();
+    assert_eq!(
+        terminal.vte().font().map(|f| f.to_string()),
+        Some("Monospace 18".to_string()),
+        "existing terminal must adopt the configured font"
+    );
+
+    // A terminal created after the change inherits the new font.
+    window.add_session();
+    let newest = window
+        .imp()
+        .terminals
+        .borrow()
+        .values()
+        .last()
+        .cloned()
+        .expect("new session should create a terminal");
+    assert_eq!(
+        newest.vte().font().map(|f| f.to_string()),
+        Some("Monospace 18".to_string()),
+        "a terminal created after the change must inherit the font"
+    );
+
+    window.close();
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn scrollback_and_audible_bell_preferences_reach_live_terminals() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let mut prefs = preferences::Preferences::default();
+    prefs.scrollback_lines = 4242;
+    prefs.audible_bell = false;
+    store().save_preferences(&prefs).unwrap();
+
+    let app = adw::Application::builder()
+        .application_id("com.illya.rttx.scrollback-bell-preferences-tests")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let terminal = window
+        .imp()
+        .terminals
+        .borrow()
+        .values()
+        .next()
+        .cloned()
+        .expect("window should create an initial terminal");
+    window.reapply_terminal_preferences();
+    assert_eq!(terminal.vte().scrollback_lines(), 4242, "scrollback must propagate");
+    assert!(!terminal.vte().is_audible_bell(), "audible bell off must propagate");
+
+    // Flip both and reapply.
+    prefs.scrollback_lines = 1000;
+    prefs.audible_bell = true;
+    store().save_preferences(&prefs).unwrap();
+    window.reapply_terminal_preferences();
+    assert_eq!(terminal.vte().scrollback_lines(), 1000);
+    assert!(terminal.vte().is_audible_bell());
+
+    window.close();
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
 fn switch_to_session_number_selects_expected_session() {
     require_display!();
 
