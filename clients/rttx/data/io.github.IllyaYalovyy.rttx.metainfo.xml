@@ -29,6 +29,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.0" date="2026-06-29">
+      <description>
+        <p>First stable release: server-authoritative workspaces with durable pane identity and crash-safe per-pane shell history, plus a clean 1.0 baseline with all pre-release migration code removed.</p>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-05-26">
       <description>
         <p>Version bump release.</p>

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-29
+
+First stable release. Completes the RFC-031 migration to server-authoritative
+workspaces (durable pane identity and crash-safe history) and removes all
+pre-release migration and compatibility code for a clean 1.0 baseline.
+
 ### Added
 
 - Server-authoritative pane tree: the daemon now owns an immutable `PaneId` and
@@ -33,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   preview, `--dest` to choose the target). It is strictly opt-in and never
   touches live runtime state, so it adds no compatibility code to normal daemon
   operation.
+- `rttx-server status <runtime-id>`: the daemon status command now takes an
+  optional workspace id and prints a per-pane detail view — pane id, size,
+  title, cwd, and exit/no-persist/reconstructed flags. Without an id it prints
+  the unchanged fleet overview.
 
 ### Changed
 
@@ -54,6 +64,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   helper API now use `Workspace`. This is a mechanical rename with no behavior
   change; the durable `runtime_id` key, on-disk `runtimes/` layout, and async
   (tokio) runtime names are unchanged.
+
+### Removed
+
+- All pre-release migration and backward-compatibility code, for a clean 1.0
+  baseline: the old-schema storage reset path (a non-current `schema_version`
+  is now simply skipped), client config migrations (`commands::migrate_legacy`,
+  the legacy single `color_scheme` preference, and the `pane_navigation_keys`
+  shortcut bridge), and the obsolete `V2`/`RUNTIME` naming on the
+  workspace-inventory capability (wire value unchanged).
 
 ## [0.9.0] - 2026-05-26
 
@@ -299,7 +318,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/IllyaYalovyy/rttx/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.5...v0.9.0
 [0.6.5]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.1...v0.6.5
 [0.6.1]: https://github.com/IllyaYalovyy/rttx/compare/v0.5.1...v0.6.1
