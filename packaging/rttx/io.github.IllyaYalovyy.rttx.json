@@ -42,10 +42,10 @@
             "name": "rttx",
             "buildsystem": "meson",
             "sources": [
-                "packaging/rttx/flatpak/cargo-sources.json",
+                "flatpak/cargo-sources.json",
                 {
                     "type": "dir",
-                    "path": "."
+                    "path": "../../"
                 }
             ]
         }

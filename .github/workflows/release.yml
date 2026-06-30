@@ -55,6 +55,7 @@ jobs:
         with:
           name: flatpak-bundle
           path: rttx.flatpak
+          if-no-files-found: error
 
   build-deb:
     name: Build DEB package
@@ -111,6 +112,7 @@ jobs:
         with:
           name: deb-package
           path: target/debian/*.deb
+          if-no-files-found: error
 
   build-rpm:
     name: Build RPM package
@@ -167,7 +169,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rpm-package
-          path: target/generate-rpm/*.rpm
+          path: clients/rttx/target/generate-rpm/*.rpm
+          if-no-files-found: error
 
   github-release:
     name: Publish GitHub Release
@@ -206,16 +209,23 @@ jobs:
       - name: Install copr-cli
         run: pip install copr-cli
 
-      - name: Configure COPR credentials
+      - name: Submit build to COPR
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_USERNAME: ${{ secrets.COPR_USERNAME }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
         run: |
+          if [ -z "${COPR_TOKEN}" ]; then
+            echo "COPR secrets are not configured; skipping COPR submission."
+            echo "Set COPR_LOGIN, COPR_USERNAME and COPR_TOKEN to enable it."
+            exit 0
+          fi
           mkdir -p ~/.config
           cat > ~/.config/copr <<EOF
           [copr-cli]
-          login = ${{ secrets.COPR_LOGIN }}
-          username = ${{ secrets.COPR_USERNAME }}
-          token = ${{ secrets.COPR_TOKEN }}
+          login = ${COPR_LOGIN}
+          username = ${COPR_USERNAME}
+          token = ${COPR_TOKEN}
           copr_url = https://copr.fedorainfracloud.org
           EOF
-
-      - name: Submit build to COPR
-        run: copr-cli build --nowait illya/rttx dist/*.rpm
+          copr-cli build --nowait illya/rttx dist/*.rpm
