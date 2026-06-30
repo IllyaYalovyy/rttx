@@ -55,6 +55,7 @@ jobs:
         with:
           name: flatpak-bundle
           path: rttx.flatpak
+          if-no-files-found: error
 
   build-deb:
     name: Build DEB package
@@ -111,6 +112,7 @@ jobs:
         with:
           name: deb-package
           path: target/debian/*.deb
+          if-no-files-found: error
 
   build-rpm:
     name: Build RPM package
@@ -167,7 +169,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rpm-package
-          path: target/generate-rpm/*.rpm
+          path: clients/rttx/target/generate-rpm/*.rpm
+          if-no-files-found: error
 
   github-release:
     name: Publish GitHub Release
