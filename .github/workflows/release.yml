@@ -87,7 +87,17 @@ jobs:
         run: cargo install cargo-deb
 
       - name: Build release binaries
-        run: cargo build --release -p rttx -p rttx-server
+        run: |
+          # vte4-sys requires vte >= 0.78 by default; fall back to the vte-0_76
+          # feature when the runner ships an older vte (mirrors the quality CI).
+          vte_version=$(pkg-config --modversion vte-2.91-gtk4 2>/dev/null || echo "0.78")
+          if printf '%s\n' "0.78" "${vte_version}" | sort -V | head -n1 | grep -q "^0\.78"; then
+            client_features=()
+          else
+            client_features=(--no-default-features --features vte-0_76)
+          fi
+          cargo build --release -p rttx-server
+          cargo build --release -p rttx "${client_features[@]}"
 
       - name: Strip binaries
         run: strip target/release/rttx target/release/rttx-server
@@ -134,7 +144,17 @@ jobs:
         run: cargo install cargo-generate-rpm
 
       - name: Build release binaries
-        run: cargo build --release -p rttx -p rttx-server
+        run: |
+          # vte4-sys requires vte >= 0.78 by default; fall back to the vte-0_76
+          # feature when the runner ships an older vte (mirrors the quality CI).
+          vte_version=$(pkg-config --modversion vte-2.91-gtk4 2>/dev/null || echo "0.78")
+          if printf '%s\n' "0.78" "${vte_version}" | sort -V | head -n1 | grep -q "^0\.78"; then
+            client_features=()
+          else
+            client_features=(--no-default-features --features vte-0_76)
+          fi
+          cargo build --release -p rttx-server
+          cargo build --release -p rttx "${client_features[@]}"
 
       - name: Strip binaries
         run: strip target/release/rttx target/release/rttx-server
