@@ -209,16 +209,23 @@ jobs:
       - name: Install copr-cli
         run: pip install copr-cli
 
-      - name: Configure COPR credentials
+      - name: Submit build to COPR
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_USERNAME: ${{ secrets.COPR_USERNAME }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
         run: |
+          if [ -z "${COPR_TOKEN}" ]; then
+            echo "COPR secrets are not configured; skipping COPR submission."
+            echo "Set COPR_LOGIN, COPR_USERNAME and COPR_TOKEN to enable it."
+            exit 0
+          fi
           mkdir -p ~/.config
           cat > ~/.config/copr <<EOF
           [copr-cli]
-          login = ${{ secrets.COPR_LOGIN }}
-          username = ${{ secrets.COPR_USERNAME }}
-          token = ${{ secrets.COPR_TOKEN }}
+          login = ${COPR_LOGIN}
+          username = ${COPR_USERNAME}
+          token = ${COPR_TOKEN}
           copr_url = https://copr.fedorainfracloud.org
           EOF
-
-      - name: Submit build to COPR
-        run: copr-cli build --nowait illya/rttx dist/*.rpm
+          copr-cli build --nowait illya/rttx dist/*.rpm
