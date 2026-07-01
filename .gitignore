@@ -1,4 +1,5 @@
 /target
+**/target/
 /build
 /build-local
 /build_test
