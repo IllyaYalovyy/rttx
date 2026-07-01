@@ -68,9 +68,6 @@
                     "type": "dir",
                     "path": "../../"
                 }
-            ],
-            "post-install": [
-                "sed -i '/<screenshots>/,/<\\/screenshots>/d' /app/share/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml"
             ]
         }
     ]
