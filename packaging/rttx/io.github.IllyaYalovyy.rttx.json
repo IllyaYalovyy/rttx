@@ -3,7 +3,9 @@
     "runtime": "org.gnome.Platform",
     "runtime-version": "49",
     "sdk": "org.gnome.Sdk",
-    "sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
     "command": "rttx",
     "finish-args": [
         "--share=ipc",
@@ -28,7 +30,8 @@
                 "-Ddocs=false",
                 "-Dgir=false",
                 "-Dglade=false",
-                "-Dvapi=false"
+                "-Dvapi=false",
+                "-Dlibdir=lib"
             ],
             "sources": [
                 {
