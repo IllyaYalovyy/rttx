@@ -19,10 +19,7 @@
         "env": {
             "CARGO_HOME": "/run/build/rttx/cargo",
             "PROTOC": "/app/bin/protoc"
-        },
-        "build-args": [
-            "--share=network"
-        ]
+        }
     },
     "modules": [
         {
@@ -71,6 +68,9 @@
                     "type": "dir",
                     "path": "../../"
                 }
+            ],
+            "post-install": [
+                "sed -i '/<screenshots>/,/<\\/screenshots>/d' /app/share/metainfo/io.github.IllyaYalovyy.rttx.metainfo.xml"
             ]
         }
     ]
