@@ -17,7 +17,8 @@
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin",
         "env": {
-            "CARGO_HOME": "/run/build/rttx/cargo"
+            "CARGO_HOME": "/run/build/rttx/cargo",
+            "PROTOC": "/app/bin/protoc"
         }
     },
     "modules": [
@@ -38,6 +39,23 @@
                     "type": "archive",
                     "url": "https://download.gnome.org/sources/vte/0.78/vte-0.78.7.tar.xz",
                     "sha256": "6fd1edc332d9f9519ce4c0f07135fdf72d64dfd990dc4fabc6ce91b1b7e83dd0"
+                }
+            ]
+        },
+        {
+            "name": "protoc",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm755 bin/protoc /app/bin/protoc",
+                "cp -r include/google /app/include/google"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "archive-type": "zip",
+                    "url": "https://github.com/protocolbuffers/protobuf/releases/download/v35.1/protoc-35.1-linux-x86_64.zip",
+                    "sha256": "6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7",
+                    "strip-components": 0
                 }
             ]
         },
