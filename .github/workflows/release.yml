@@ -27,7 +27,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             flatpak \
             flatpak-builder \
-            elfutils
+            elfutils \
+            librsvg2-common
 
       - name: Cache Flatpak runtimes
         uses: actions/cache@v4
