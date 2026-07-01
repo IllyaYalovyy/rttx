@@ -19,7 +19,10 @@
         "env": {
             "CARGO_HOME": "/run/build/rttx/cargo",
             "PROTOC": "/app/bin/protoc"
-        }
+        },
+        "build-args": [
+            "--share=network"
+        ]
     },
     "modules": [
         {
