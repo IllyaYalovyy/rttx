@@ -350,7 +350,6 @@ impl Window {
         session_state: &WorkspaceState,
         pane_view: &PersistentPaneView,
     ) {
-        let terminal_uuid = pane_view.uuid();
         let status = self
             .imp()
             .workspace_connection_status
@@ -362,38 +361,40 @@ impl Window {
         pane_view.set_connection_presentation(&status, &presentation);
 
         let win = self.downgrade();
-        let input_terminal_uuid = terminal_uuid.clone();
+        let input_pane = pane_view.downgrade();
         pane_view.connect_input(move |bytes| {
-            if let Some(win) = win.upgrade() {
-                win.send_managed_terminal_input(&input_terminal_uuid, bytes);
+            if let (Some(win), Some(pane)) = (win.upgrade(), input_pane.upgrade()) {
+                win.send_managed_terminal_input(&pane.uuid(), bytes);
             }
         });
 
         let win = self.downgrade();
-        let resize_terminal_uuid = terminal_uuid.clone();
+        let resize_pane = pane_view.downgrade();
         pane_view.connect_resize(move |cols, rows| {
-            if let Some(win) = win.upgrade() {
-                win.send_managed_terminal_resize(&resize_terminal_uuid, cols, rows);
+            if let (Some(win), Some(pane)) = (win.upgrade(), resize_pane.upgrade()) {
+                win.send_managed_terminal_resize(&pane.uuid(), cols, rows);
             }
         });
 
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
-        let drag_uuid = terminal_uuid.clone();
+        let drag_pane = pane_view.downgrade();
         drag_source.connect_prepare(move |_, _, _| {
-            Some(gtk4::gdk::ContentProvider::for_value(&drag_uuid.to_value()))
+            let pane = drag_pane.upgrade()?;
+            Some(gtk4::gdk::ContentProvider::for_value(&pane.uuid().to_value()))
         });
         pane_view.header().add_controller(drag_source);
 
         let drop_target = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::MOVE);
         let win = self.downgrade();
-        let target_uuid = terminal_uuid.clone();
+        let drop_pane = pane_view.downgrade();
         drop_target.connect_drop(move |_, value, _, _| {
             if let Ok(source_uuid) = value.get::<String>()
-                && source_uuid != target_uuid
+                && let Some(pane) = drop_pane.upgrade()
+                && source_uuid != pane.uuid()
                 && let Some(win) = win.upgrade()
             {
-                win.swap_terminals(&source_uuid, &target_uuid);
+                win.swap_terminals(&source_uuid, &pane.uuid());
                 return true;
             }
             false
@@ -401,10 +402,13 @@ impl Window {
         pane_view.add_controller(drop_target);
 
         let win = self.downgrade();
-        let focus_uuid = terminal_uuid.clone();
+        let focus_pane = pane_view.downgrade();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
-            let Some(win) = win.upgrade() else { return };
+            let (Some(win), Some(pane)) = (win.upgrade(), focus_pane.upgrade()) else {
+                return;
+            };
+            let focus_uuid = pane.uuid();
             win.set_focused_terminal(Some(&focus_uuid));
             let session_uuid = {
                 let mut state = win.imp().state.borrow_mut();
@@ -426,34 +430,34 @@ impl Window {
         pane_view.vte().add_controller(focus_controller);
 
         let win = self.downgrade();
-        let split_h_uuid = terminal_uuid.clone();
+        let split_h_pane = pane_view.downgrade();
         pane_view.split_h_button().connect_clicked(move |_| {
-            if let Some(win) = win.upgrade() {
-                win.split_terminal(&split_h_uuid, SplitOrientation::Horizontal);
+            if let (Some(win), Some(pane)) = (win.upgrade(), split_h_pane.upgrade()) {
+                win.split_terminal(&pane.uuid(), SplitOrientation::Horizontal);
             }
         });
 
         let win = self.downgrade();
-        let split_v_uuid = terminal_uuid.clone();
+        let split_v_pane = pane_view.downgrade();
         pane_view.split_v_button().connect_clicked(move |_| {
-            if let Some(win) = win.upgrade() {
-                win.split_terminal(&split_v_uuid, SplitOrientation::Vertical);
+            if let (Some(win), Some(pane)) = (win.upgrade(), split_v_pane.upgrade()) {
+                win.split_terminal(&pane.uuid(), SplitOrientation::Vertical);
             }
         });
 
         let win = self.downgrade();
-        let zoom_uuid = terminal_uuid.clone();
-        let close_uuid = terminal_uuid;
+        let close_pane = pane_view.downgrade();
         pane_view.close_button().connect_clicked(move |_| {
-            if let Some(win) = win.upgrade() {
-                win.close_terminal(&close_uuid);
+            if let (Some(win), Some(pane)) = (win.upgrade(), close_pane.upgrade()) {
+                win.close_terminal(&pane.uuid());
             }
         });
 
         let win = self.downgrade();
+        let zoom_pane = pane_view.downgrade();
         pane_view.zoom_button().connect_clicked(move |_| {
-            if let Some(win) = win.upgrade() {
-                win.toggle_pane_zoom_for(Some(&zoom_uuid));
+            if let (Some(win), Some(pane)) = (win.upgrade(), zoom_pane.upgrade()) {
+                win.toggle_pane_zoom_for(Some(&pane.uuid()));
             }
         });
 

@@ -981,6 +981,28 @@ mod tests {
     }
 
     #[test]
+    fn managed_terminal_binding_uses_identity_after_pane_ack() {
+        // After a pane ack re-keys the layout terminal to the server pane id,
+        // the routable binding is the identity of that id — there is no
+        // separate binding table (RFC-031).
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let server_pane = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
+
+        state
+            .apply_managed_pane_created("workspace-1", "pane-1", runtime_id, server_pane)
+            .expect("pane ack applies");
+
+        // The old client-minted id no longer resolves; the server pane id does,
+        // and resolves to itself (identity).
+        assert!(state.managed_terminal_binding("pane-1").is_none());
+        let binding = state.managed_terminal_binding(server_pane).expect("server pane id resolves");
+        assert_eq!(binding.runtime_pane_id, server_pane);
+        assert_eq!(binding.runtime_id, runtime_id);
+    }
+
+    #[test]
     fn apply_managed_pane_closed_prunes_state_and_preserves_remaining_terminal() {
         let left = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
         let right = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
