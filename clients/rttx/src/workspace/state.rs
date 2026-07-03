@@ -224,6 +224,10 @@ impl WorkspaceState {
             self.active_terminal_uuid = Some(new_uuid.to_string());
         }
 
+        if self.zoomed_terminal_uuid.as_deref() == Some(old_uuid) {
+            self.zoomed_terminal_uuid = Some(new_uuid.to_string());
+        }
+
         true
     }
 }

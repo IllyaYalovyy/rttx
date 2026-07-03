@@ -34,6 +34,14 @@ impl Window {
             pane.set_uuid(&rekey.new_uuid);
             imp.persistent_terminals.borrow_mut().insert(rekey.new_uuid.clone(), pane);
         }
+
+        // The focused-pane pointer is stored separately from the layout, so it
+        // must follow the re-key too — otherwise focus-driven actions (split,
+        // close, zoom) would target the stale client-minted uuid, which no
+        // longer exists in the layout.
+        if imp.focused_terminal_uuid.borrow().as_deref() == Some(rekey.old_uuid.as_str()) {
+            imp.focused_terminal_uuid.replace(Some(rekey.new_uuid.clone()));
+        }
     }
 
     pub(super) fn materialize_terminal(

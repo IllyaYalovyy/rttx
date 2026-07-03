@@ -342,6 +342,42 @@ fn top_bar_has_new_connect_direct_buttons() {
     window.close();
 }
 
+// Regression (RFC-031): re-keying a client-minted pane onto its server pane id
+// must also move the window's focused-pane pointer, which is stored outside the
+// layout. Otherwise the next focus-driven action (split, close, zoom) targets
+// the stale uuid that no longer exists in the layout and silently no-ops — e.g.
+// a split that produces no second pane.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn rekey_terminal_widgets_moves_focused_pointer_to_server_pane_id() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.rekey-focus-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.set_focused_terminal(Some("client-minted-pane"));
+
+    window.rekey_terminal_widgets(&crate::workspace_state::PaneRekey {
+        workspace_id: "ws-1".into(),
+        old_uuid: "client-minted-pane".into(),
+        new_uuid: "server-pane-id".into(),
+    });
+
+    assert_eq!(
+        window.focused_terminal_uuid().as_deref(),
+        Some("server-pane-id"),
+        "focused pointer must follow the re-key to the server pane id"
+    );
+
+    window.close();
+}
+
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn new_button_menu_model_survives_activation() {
