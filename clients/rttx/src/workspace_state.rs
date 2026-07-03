@@ -2218,4 +2218,28 @@ mod tests {
         assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, remote_pane).is_none());
         assert!(state.runtime_pane_target(&remote_endpoint, local_pane).is_none());
     }
+
+    #[test]
+    fn pane_ack_establishes_identity_routing_without_a_binding_table() {
+        // Net-new pure-state coverage (RFC-031): a daemon pane ack re-keys the
+        // client layout terminal onto the server pane id, so routing becomes
+        // the identity of that id and no binding table exists.
+        let mut state =
+            window_state(vec![managed_session("workspace-1", "Workspace", term("client-pane"))]);
+        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+        let server_pane = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
+
+        let rekey = state
+            .apply_managed_pane_created("workspace-1", "client-pane", runtime_id, server_pane)
+            .expect("pane ack applies to a known layout terminal");
+
+        assert_eq!(rekey.old_uuid, "client-pane");
+        assert_eq!(rekey.new_uuid, server_pane);
+        assert!(state.workspaces[0].layout.contains_terminal(server_pane));
+        assert!(state.managed_terminal_binding("client-pane").is_none());
+        assert_eq!(
+            state.managed_terminal_binding(server_pane).map(|binding| binding.runtime_pane_id),
+            Some(server_pane.to_string()),
+        );
+    }
 }
