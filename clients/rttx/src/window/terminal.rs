@@ -13,6 +13,29 @@ const fn orientation_to_axis(orientation: SplitOrientation) -> i32 {
 }
 
 impl Window {
+    /// Rename the widget maps when a layout terminal is re-keyed from its
+    /// client-minted uuid to the durable server pane id (RFC-031 identity
+    /// invariant). Keeps `terminals` and `persistent_terminals` (both keyed by
+    /// uuid) consistent with the now-identity layout.
+    pub(super) fn rekey_terminal_widgets(&self, rekey: &PaneRekey) {
+        if rekey.old_uuid == rekey.new_uuid {
+            return;
+        }
+        let imp = self.imp();
+
+        let term = imp.terminals.borrow_mut().remove(&rekey.old_uuid);
+        if let Some(term) = term {
+            term.set_uuid(&rekey.new_uuid);
+            imp.terminals.borrow_mut().insert(rekey.new_uuid.clone(), term);
+        }
+
+        let pane = imp.persistent_terminals.borrow_mut().remove(&rekey.old_uuid);
+        if let Some(pane) = pane {
+            pane.set_uuid(&rekey.new_uuid);
+            imp.persistent_terminals.borrow_mut().insert(rekey.new_uuid.clone(), pane);
+        }
+    }
+
     pub(super) fn materialize_terminal(
         &self,
         session_state: &WorkspaceState,
@@ -316,8 +339,6 @@ impl Window {
                 }
                 state.workspaces[idx].layout = new_layout;
                 state.workspaces[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
-                let layout_terminal_uuids = state.workspaces[idx].layout.terminal_uuids();
-                state.workspaces[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
                 state.workspaces[idx].normalize_active_terminal();
                 let session_uuid = state.workspaces[idx].uuid.clone();
                 let session_state = state.workspaces[idx].clone();
@@ -339,12 +360,8 @@ impl Window {
                     && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
                 {
                     let size = self.persistent_terminal_size(terminal_uuid);
-                    let target_pane_id = session_state
-                        .runtime
-                        .pane_bindings
-                        .get(terminal_uuid)
-                        .cloned()
-                        .unwrap_or_else(|| terminal_uuid.to_string());
+                    // Identity invariant: the layout uuid *is* the server pane id.
+                    let target_pane_id = terminal_uuid.to_string();
                     manager.split_pane(
                         &session_uuid,
                         &session_state.runtime.endpoint,
@@ -416,8 +433,6 @@ impl Window {
         }
         state.workspaces[idx].layout = new_layout;
         state.workspaces[idx].set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
-        let layout_terminal_uuids = state.workspaces[idx].layout.terminal_uuids();
-        state.workspaces[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
         state.workspaces[idx].normalize_active_terminal();
         let session_uuid = state.workspaces[idx].uuid.clone();
         let session_state = state.workspaces[idx].clone();
@@ -440,12 +455,8 @@ impl Window {
             && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
         {
             let size = self.persistent_terminal_size(terminal_uuid);
-            let target_pane_id = session_state
-                .runtime
-                .pane_bindings
-                .get(terminal_uuid)
-                .cloned()
-                .unwrap_or_else(|| terminal_uuid.to_string());
+            // Identity invariant: the layout uuid *is* the server pane id.
+            let target_pane_id = terminal_uuid.to_string();
             manager.split_pane(
                 &session_uuid,
                 &session_state.runtime.endpoint,
@@ -516,8 +527,6 @@ impl Window {
                 state.workspaces[idx].layout.remove_terminal(terminal_uuid)
             {
                 state.workspaces[idx].layout = new_layout;
-                let layout_terminal_uuids = state.workspaces[idx].layout.terminal_uuids();
-                state.workspaces[idx].runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
                 state.workspaces[idx].normalize_active_terminal();
                 Action::Rebuild {
                     session_uuid: state.workspaces[idx].uuid.clone(),

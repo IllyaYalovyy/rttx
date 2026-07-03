@@ -117,8 +117,7 @@ impl WorkspaceState {
         initial_cwd: Option<String>,
     ) -> Self {
         let mut session = Self::new_with_initial_cwd(name, initial_cwd);
-        let layout_terminal_uuids = session.layout.terminal_uuids();
-        session.runtime = WorkspaceRuntime::managed_local(policy, &layout_terminal_uuids);
+        session.runtime = WorkspaceRuntime::managed_local(policy);
         session
     }
 
@@ -130,8 +129,7 @@ impl WorkspaceState {
         initial_cwd: Option<String>,
     ) -> Self {
         let mut session = Self::new_with_initial_cwd(name, initial_cwd);
-        let layout_terminal_uuids = session.layout.terminal_uuids();
-        session.runtime = WorkspaceRuntime::managed_remote(host, policy, &layout_terminal_uuids);
+        session.runtime = WorkspaceRuntime::managed_remote(host, policy);
         session
     }
 
@@ -195,25 +193,22 @@ impl WorkspaceState {
     ///
     /// Returns `Some((runtime_id, runtime_pane_id))` when the close must be sent
     /// to the daemon — a managed workspace with more than one pane whose target
-    /// is bound to a real daemon pane. Returns `None` when the close stays
-    /// client-local: an unmanaged workspace, the final pane (which closes the
-    /// whole workspace), or a pane still pending its daemon assignment.
+    /// is a live daemon pane. Returns `None` when the close stays client-local:
+    /// an unmanaged workspace, the final pane (which closes the whole
+    /// workspace), or a workspace with no daemon runtime yet.
     ///
-    /// Critically this keys on pending state, **not** on whether the binding is
-    /// an identity map: once the client adopts the server tree (RFC-031), every
-    /// layout uuid equals its server pane id, so an identity binding is the
-    /// normal case for a live daemon pane and must still be closed remotely.
+    /// Under the identity invariant (RFC-031) every layout terminal uuid *is*
+    /// its server pane id, so the runtime pane id is the terminal uuid itself.
     #[must_use]
     pub fn managed_close_target(&self, terminal_uuid: &str) -> Option<(String, String)> {
         if !self.uses_managed_runtime() || self.layout.terminal_count() <= 1 {
             return None;
         }
-        if self.runtime.is_layout_pane_pending(terminal_uuid) {
+        if !self.layout.contains_terminal(terminal_uuid) {
             return None;
         }
         let runtime_id = self.runtime.runtime_id.clone()?;
-        let runtime_pane_id = self.runtime.pane_bindings.get(terminal_uuid).cloned()?;
-        Some((runtime_id, runtime_pane_id))
+        Some((runtime_id, terminal_uuid.to_string()))
     }
 
     pub fn replace_terminal_uuid(&mut self, old_uuid: &str, new_uuid: &str) -> bool {
@@ -224,8 +219,6 @@ impl WorkspaceState {
         if let Some(recovery) = self.terminal_recovery.remove(old_uuid) {
             self.terminal_recovery.insert(new_uuid.to_string(), recovery);
         }
-
-        self.runtime.replace_layout_terminal_uuid(old_uuid, new_uuid);
 
         if self.active_terminal_uuid.as_deref() == Some(old_uuid) {
             self.active_terminal_uuid = Some(new_uuid.to_string());
@@ -315,7 +308,10 @@ impl WindowState {
         format!("{endpoint_key}\0{runtime_pane_id}")
     }
 
-    /// Rebuild the reverse index from all workspace pane bindings.
+    /// Rebuild the reverse index from all workspace layout terminals.
+    ///
+    /// Under the identity invariant every layout terminal uuid *is* its server
+    /// pane id, so each managed layout terminal maps to itself.
     pub fn rebuild_pane_reverse_index(&mut self) {
         self.pane_reverse_index.clear();
         for session in &self.workspaces {
@@ -323,12 +319,9 @@ impl WindowState {
                 continue;
             }
             let endpoint_key = session.runtime.endpoint.key();
-            for (layout_uuid, runtime_pane_id) in &session.runtime.pane_bindings {
-                if session.runtime.is_layout_pane_pending(layout_uuid) {
-                    continue;
-                }
-                let key = Self::pane_index_key(&endpoint_key, runtime_pane_id);
-                self.pane_reverse_index.insert(key, (session.uuid.clone(), layout_uuid.clone()));
+            for layout_uuid in session.layout.terminal_uuids() {
+                let key = Self::pane_index_key(&endpoint_key, &layout_uuid);
+                self.pane_reverse_index.insert(key, (session.uuid.clone(), layout_uuid));
             }
         }
     }
@@ -460,9 +453,7 @@ mod tests {
         assert!(session.uses_managed_runtime());
         assert_eq!(session.runtime.endpoint, RuntimeEndpoint::Local);
         assert_eq!(session.runtime.policy, WorkspacePolicy::Ephemeral);
-        assert_eq!(session.runtime.pane_bindings.len(), 1);
-        let only_binding = session.runtime.pane_bindings.iter().next().unwrap();
-        assert_eq!(only_binding.0, only_binding.1);
+        assert_eq!(session.layout.terminal_uuids().len(), 1);
     }
 
     #[test]

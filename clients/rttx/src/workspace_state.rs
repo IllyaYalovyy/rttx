@@ -1,10 +1,10 @@
 use crate::daemon_bridge::EndpointEvent;
-use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy, reconcile_bindings};
+use crate::runtime::{ConnectionStatus, RuntimeEndpoint, WorkspacePolicy};
 use crate::workspace::{
     LayoutNode, PaneRecovery, SplitOrientation, WindowState, WorkspaceState, layout_from_pane_tree,
 };
 use rttx_proto::v3;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Routing metadata for a daemon-managed terminal pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +53,15 @@ pub struct ManagedWorkspaceRebuild {
     pub session_state: WorkspaceState,
 }
 
+/// Records a layout-terminal re-key so the window layer can rename the widget
+/// maps keyed by uuid when a client-minted uuid becomes its server pane id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneRekey {
+    pub workspace_id: String,
+    pub old_uuid: String,
+    pub new_uuid: String,
+}
+
 /// Pure request to create a missing daemon pane for a layout terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPaneCreateRequest {
@@ -73,6 +82,9 @@ pub struct EndpointEventTransition {
     pub connected_layout_terminals: Vec<String>,
     pub layout_terminals_to_recover: Vec<String>,
     pub removed_layout_terminals: Vec<String>,
+    /// Layout-terminal re-keys (client uuid -> server pane id) that the window
+    /// layer must apply to its widget maps.
+    pub pane_rekeys: Vec<PaneRekey>,
     pub connection_status_updates: Vec<ConnectionStatusUpdate>,
     pub skipped_runtime_panes: Vec<String>,
     pub persist_window_state: bool,
@@ -151,18 +163,23 @@ impl WindowState {
                 runtime_id,
                 runtime_pane_id,
             } => {
-                let applied = self.apply_managed_pane_created(
+                let Some(rekey) = self.apply_managed_pane_created(
                     workspace_id,
                     layout_terminal_uuid,
                     runtime_id,
                     runtime_pane_id,
-                );
-                if !applied {
+                ) else {
                     return transition;
-                }
+                };
 
-                transition.connected_layout_terminals.push(layout_terminal_uuid.clone());
-                transition.layout_terminals_to_recover.push(layout_terminal_uuid.clone());
+                // After the re-key the layout terminal *is* the server pane id,
+                // so downstream recovery/connect steps key on the new uuid.
+                let new_uuid = rekey.new_uuid.clone();
+                if rekey.old_uuid != rekey.new_uuid {
+                    transition.pane_rekeys.push(rekey);
+                }
+                transition.connected_layout_terminals.push(new_uuid.clone());
+                transition.layout_terminals_to_recover.push(new_uuid);
                 transition.connection_status_updates.push(ConnectionStatusUpdate {
                     workspace_id: workspace_id.clone(),
                     status: ConnectionStatus::Connected,
@@ -269,21 +286,21 @@ impl WindowState {
     }
 
     /// Resolve a layout terminal to its managed runtime binding.
+    ///
+    /// Under the identity invariant the runtime pane id *is* the layout
+    /// terminal uuid. Returns `None` when the workspace is unmanaged, lacks a
+    /// live runtime, or does not contain the terminal.
     #[must_use]
     pub fn managed_terminal_binding(&self, terminal_uuid: &str) -> Option<ManagedTerminalBinding> {
         let session = self.workspaces.iter().find(|session| {
             session.uses_managed_runtime() && session.layout.contains_terminal(terminal_uuid)
         })?;
         let runtime_id = session.runtime.runtime_id.clone()?;
-        let runtime_pane_id = session.runtime.pane_bindings.get(terminal_uuid)?.clone();
-        if session.runtime.is_layout_pane_pending(terminal_uuid) {
-            return None;
-        }
         Some(ManagedTerminalBinding {
             workspace_id: session.uuid.clone(),
             endpoint: session.runtime.endpoint.clone(),
             runtime_id,
-            runtime_pane_id,
+            runtime_pane_id: terminal_uuid.to_string(),
         })
     }
 
@@ -307,17 +324,11 @@ impl WindowState {
             .terminal_uuids()
             .into_iter()
             .filter(|uuid| uuid != source_uuid)
-            .filter_map(|uuid| {
-                let pane_id = session.runtime.pane_bindings.get(&uuid)?;
-                if session.runtime.is_layout_pane_pending(&uuid) {
-                    return None;
-                }
-                Some(ManagedTerminalBinding {
-                    workspace_id: session.uuid.clone(),
-                    endpoint: session.runtime.endpoint.clone(),
-                    runtime_id: runtime_id.to_string(),
-                    runtime_pane_id: pane_id.clone(),
-                })
+            .map(|uuid| ManagedTerminalBinding {
+                workspace_id: session.uuid.clone(),
+                endpoint: session.runtime.endpoint.clone(),
+                runtime_id: runtime_id.to_string(),
+                runtime_pane_id: uuid,
             })
             .collect()
     }
@@ -351,25 +362,35 @@ impl WindowState {
     }
 
     /// Apply the state mutation for a daemon pane-create acknowledgement.
+    ///
+    /// Re-keys the layout terminal to the durable server pane id so the
+    /// identity invariant (uuid == pane id) holds. Returns the [`PaneRekey`] so
+    /// the window layer can rename its widget maps, or `None` when the
+    /// workspace or layout terminal is unknown.
     pub fn apply_managed_pane_created(
         &mut self,
         workspace_id: &str,
         layout_terminal_uuid: &str,
         runtime_id: &str,
         runtime_pane_id: &str,
-    ) -> bool {
-        let Some(session) = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)
-        else {
-            return false;
-        };
+    ) -> Option<PaneRekey> {
+        let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
         if !session.layout.contains_terminal(layout_terminal_uuid) {
-            return false;
+            return None;
         }
 
         session.runtime.runtime_id = Some(runtime_id.to_string());
-        session.runtime.bind_runtime_pane(layout_terminal_uuid, runtime_pane_id);
+        if layout_terminal_uuid != runtime_pane_id {
+            // Re-key layout, recovery and active-terminal state onto the
+            // server pane id (identity invariant).
+            session.replace_terminal_uuid(layout_terminal_uuid, runtime_pane_id);
+        }
         self.rebuild_pane_reverse_index();
-        true
+        Some(PaneRekey {
+            workspace_id: workspace_id.to_string(),
+            old_uuid: layout_terminal_uuid.to_string(),
+            new_uuid: runtime_pane_id.to_string(),
+        })
     }
 
     /// Apply the state mutation for a daemon-acked managed pane close.
@@ -379,11 +400,8 @@ impl WindowState {
         layout_terminal_uuid: &str,
     ) -> Option<WorkspaceState> {
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
-        session.runtime.pane_bindings.remove(layout_terminal_uuid);
         let new_layout = session.layout.remove_terminal(layout_terminal_uuid)?;
         session.layout = new_layout;
-        let layout_terminal_uuids = session.layout.terminal_uuids();
-        session.runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
         session.prune_recovery();
         session.normalize_active_terminal();
         let result = session.clone();
@@ -408,13 +426,6 @@ impl WindowState {
         let previous_layout_terminals = session.layout.terminal_uuids();
         session.layout = layout;
         let layout_terminal_uuids = session.layout.terminal_uuids();
-
-        // Bindings degenerate to an identity map over the server pane ids
-        // (removed entirely in a later step); keep them coherent so the
-        // pane-resolution path stays correct in the meantime.
-        session.runtime.pane_bindings =
-            layout_terminal_uuids.iter().map(|id| (id.clone(), id.clone())).collect();
-        session.runtime.pending_layout_panes.clear();
 
         // The server names the fallback focus pane (RFC-031 §2).
         if let Some(active) = rttx_proto::bytes_to_uuid(&snapshot.default_active_pane_id)
@@ -483,133 +494,23 @@ impl WindowState {
             return self.adopt_server_tree(workspace_id, runtime_id, layout, snapshot);
         }
 
-        // Legacy fallback for a tree-less snapshot (an empty workspace, or a
-        // pre-tree daemon): reconcile the client-owned layout against the flat
-        // pane list. Removed once the daemon guarantees a tree per workspace.
+        // Tree-less snapshot: an empty workspace whose daemon runtime has no
+        // panes yet (a pre-tree daemon no longer occurs). There is nothing to
+        // adopt — keep the session's existing placeholder layout and record the
+        // runtime id. The daemon-bridge CreatePane bootstrap creates the first
+        // pane and the subsequent PaneCreated re-key assigns identity.
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
-
-        let had_runtime_id = session.runtime.runtime_id.is_some();
         session.runtime.runtime_id = Some(runtime_id.to_string());
 
         let layout_terminal_uuids = session.layout.terminal_uuids();
-        let runtime_pane_uuids =
-            snapshot.panes.iter().filter_map(snapshot_pane_id).collect::<Vec<_>>();
-        let mut reconciliation = reconcile_bindings(
-            &layout_terminal_uuids,
-            &session.runtime.pane_bindings,
-            &runtime_pane_uuids,
-        );
-
-        // Match disconnected layout terminals to unclaimed runtime panes by
-        // position. This covers both placeholder bindings (state saved before
-        // PaneCreated arrived) and stale bindings (daemon restarted with new
-        // pane IDs), preventing layout growth on repeated reconnect cycles.
-        if !reconciliation.disconnected_layout_panes.is_empty()
-            && !reconciliation.recovered_runtime_panes.is_empty()
-        {
-            let mut recovered =
-                reconciliation.recovered_runtime_panes.drain(..).collect::<Vec<_>>();
-            let mut still_disconnected = Vec::new();
-            for layout_uuid in reconciliation.disconnected_layout_panes.drain(..) {
-                if let Some(runtime_pane_id) = recovered.first().cloned() {
-                    recovered.remove(0);
-                    reconciliation.bindings.insert(layout_uuid, runtime_pane_id);
-                } else {
-                    still_disconnected.push(layout_uuid);
-                }
-            }
-            reconciliation.disconnected_layout_panes = still_disconnected;
-            reconciliation.recovered_runtime_panes = recovered;
-        }
-
-        session.runtime.pane_bindings = reconciliation.bindings;
-        session.runtime.pending_layout_panes =
-            reconciliation.disconnected_layout_panes.iter().cloned().collect();
-
-        let panes_to_create = if had_runtime_id {
-            // Reconnecting: create panes for any layout terminals that
-            // couldn't be matched to existing runtime panes (covers both
-            // placeholder-only and stale-binding reconnects).
-            reconciliation.disconnected_layout_panes.clone()
-        } else {
-            let mut placeholders = reconciliation.disconnected_layout_panes.clone();
-            if let Some(initial_terminal_uuid) = layout_terminal_uuids.first() {
-                placeholders
-                    .retain(|layout_terminal_uuid| layout_terminal_uuid != initial_terminal_uuid);
-            }
-            placeholders
-        };
-
-        let mut skipped_runtime_panes = Vec::new();
-        for runtime_pane_id in reconciliation.recovered_runtime_panes {
-            let Some(anchor_uuid) = session.layout.terminal_uuids().last().cloned() else {
-                skipped_runtime_panes.push(runtime_pane_id);
-                continue;
-            };
-            let anchor_cwd = session.layout.terminal_cwd(&anchor_uuid);
-            let Some((mut new_layout, new_terminal_uuid)) = session
-                .layout
-                .split_terminal_with_new_uuid(&anchor_uuid, SplitOrientation::Horizontal)
-            else {
-                skipped_runtime_panes.push(runtime_pane_id);
-                continue;
-            };
-
-            if let Some(cwd) = anchor_cwd {
-                new_layout.set_terminal_cwd(&new_terminal_uuid, Some(cwd));
-            }
-            session.layout = new_layout;
-            session.set_recovery(&new_terminal_uuid, PaneRecovery::empty_shell());
-            session.runtime.bind_runtime_pane(&new_terminal_uuid, &runtime_pane_id);
-            session.normalize_active_terminal();
-        }
-
-        let layout_by_runtime_pane = session
-            .runtime
-            .pane_bindings
-            .iter()
-            .map(|(layout_terminal_uuid, runtime_pane_id)| {
-                (runtime_pane_id.clone(), layout_terminal_uuid.clone())
-            })
-            .collect::<BTreeMap<_, _>>();
-        let snapshot_restores = snapshot
-            .panes
-            .iter()
-            .filter_map(|pane_snapshot| {
-                let runtime_pane_id = snapshot_pane_id(pane_snapshot)?;
-                let layout_terminal_uuid = layout_by_runtime_pane.get(&runtime_pane_id)?.clone();
-                Some(WorkspacePaneRestore {
-                    layout_terminal_uuid,
-                    title: pane_snapshot.title.clone(),
-                    cwd: pane_snapshot.cwd.clone(),
-                    pane_output_seq: pane_snapshot.pane_output_seq,
-                    scrollback_tail: pane_snapshot.scrollback_tail.clone(),
-                    scrollback_complete: pane_snapshot.scrollback_complete,
-                    cols: pane_snapshot.cols as u16,
-                    rows: pane_snapshot.rows as u16,
-                    terminal_modes: pane_snapshot.terminal_modes,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        // Update layout CWDs from the snapshot so the rebuilt session
-        // carries the daemon's current CWD, not stale client-side values.
-        for restore in &snapshot_restores {
-            if !restore.cwd.is_empty() {
-                session
-                    .layout
-                    .set_terminal_cwd(&restore.layout_terminal_uuid, Some(restore.cwd.clone()));
-            }
-        }
-
         let session_state = session.clone();
         self.rebuild_pane_reverse_index();
 
         Some(ManagedWorkspaceOpenResult {
             session_state,
-            panes_to_create,
-            snapshot_restores,
-            skipped_runtime_panes,
+            panes_to_create: Vec::new(),
+            snapshot_restores: Vec::new(),
+            skipped_runtime_panes: Vec::new(),
             previous_layout_terminals: layout_terminal_uuids,
         })
     }
@@ -623,18 +524,16 @@ impl WindowState {
         let Some(session) = self.workspaces.iter().find(|s| s.uuid == workspace_id) else {
             return Vec::new();
         };
-        let layout_by_runtime_pane: BTreeMap<_, _> = session
-            .runtime
-            .pane_bindings
-            .iter()
-            .map(|(layout_uuid, runtime_pane_id)| (runtime_pane_id.clone(), layout_uuid.clone()))
-            .collect();
         snapshot
             .panes
             .iter()
             .filter_map(|pane_snapshot| {
-                let runtime_pane_id = snapshot_pane_id(pane_snapshot)?;
-                let layout_terminal_uuid = layout_by_runtime_pane.get(&runtime_pane_id)?.clone();
+                // Identity invariant: the snapshot pane id *is* the layout
+                // terminal uuid. Only restore panes the layout still contains.
+                let layout_terminal_uuid = snapshot_pane_id(pane_snapshot)?;
+                if !session.layout.contains_terminal(&layout_terminal_uuid) {
+                    return None;
+                }
                 Some(WorkspacePaneRestore {
                     layout_terminal_uuid,
                     title: pane_snapshot.title.clone(),
@@ -675,9 +574,6 @@ fn recovered_managed_workspace(
             .map(|pane_id| (pane_id, PaneRecovery::empty_shell()))
             .collect();
         session.active_terminal_uuid = pane_ids.first().cloned();
-        session.runtime.pane_bindings =
-            pane_ids.iter().cloned().map(|pane_id| (pane_id.clone(), pane_id)).collect();
-        session.runtime.pending_layout_panes.clear();
     }
 
     Some(session)
@@ -738,8 +634,7 @@ mod tests {
     use crate::runtime::ConnectionStatus;
     use crate::runtime::WorkspacePolicy;
     use crate::test_helpers::{
-        hsplit, managed_session, managed_session_with_runtime, term, term_full, window_state,
-        workspace,
+        hsplit, managed_session, managed_session_with_runtime, term, window_state, workspace,
     };
 
     fn pane_snapshot(pane_id: &str, title: &str, cwd: &str, scrollback: &[u8]) -> v3::PaneSnapshot {
@@ -767,6 +662,20 @@ mod tests {
             workspace_revision: 7,
             client_role: v3::WorkspaceClientRole::Writer as i32,
         }
+    }
+
+    /// A single-pane snapshot carrying the daemon's authoritative single-leaf
+    /// tree, so the client adopts a layout whose terminal uuid equals the
+    /// server pane id (identity invariant).
+    fn single_leaf_snapshot(
+        runtime_id: &str,
+        pane_id: &str,
+        pane: v3::PaneSnapshot,
+    ) -> v3::WorkspaceSnapshot {
+        let mut snap = snapshot(runtime_id, vec![pane]);
+        snap.tree =
+            Some(rttx_proto::v3_tree::pane_tree_leaf(uuid::Uuid::parse_str(pane_id).unwrap()));
+        snap
     }
 
     #[test]
@@ -863,18 +772,11 @@ mod tests {
         }));
 
         let session = &state.workspaces[0];
-        // Bindings degenerate to an identity map over the server pane ids.
-        assert_eq!(
-            session.runtime.pane_bindings.get(&left.to_string()).map(String::as_str),
-            Some(left.to_string().as_str()),
-        );
-        assert_eq!(
-            session.runtime.pane_bindings.get(&right.to_string()).map(String::as_str),
-            Some(right.to_string().as_str()),
-        );
-        // Active pane follows the server's fallback focus, and nothing is pending.
+        // Layout terminals ARE the server pane ids (identity invariant).
+        assert!(session.layout.contains_terminal(&left.to_string()));
+        assert!(session.layout.contains_terminal(&right.to_string()));
+        // Active pane follows the server's fallback focus.
         assert_eq!(session.active_terminal_uuid.as_deref(), Some(right.to_string().as_str()));
-        assert!(!session.runtime.is_layout_pane_pending(&left.to_string()));
     }
 
     #[test]
@@ -985,48 +887,40 @@ mod tests {
     }
 
     #[test]
-    fn managed_terminal_binding_ignores_placeholders_and_uses_explicit_runtime_bindings() {
+    fn managed_terminal_binding_returns_identity_once_runtime_present() {
         let runtime_id = uuid::Uuid::new_v4().to_string();
-        let runtime_pane_id = uuid::Uuid::new_v4().to_string();
-        let mut session = managed_session_with_runtime(
-            "workspace-1",
-            "Workspace",
-            term("pane-1"),
-            RuntimeEndpoint::Local,
-            WorkspacePolicy::Persistent,
-            Some(&runtime_id),
-        );
-        let mut state = window_state(vec![session.clone()]);
+        let session = managed_session("workspace-1", "Workspace", term("pane-1"));
+        let mut state = window_state(vec![session]);
 
         assert!(
             state.managed_terminal_binding("pane-1").is_none(),
-            "self-bindings stay unroutable until the daemon assigns a pane id",
+            "a terminal stays unroutable until the workspace has a live runtime",
         );
 
-        session.runtime.bind_runtime_pane("pane-1", &runtime_pane_id);
-        state.workspaces[0] = session;
+        state.workspaces[0].runtime.runtime_id = Some(runtime_id.clone());
+        state.rebuild_pane_reverse_index();
 
         let binding = state
             .managed_terminal_binding("pane-1")
-            .expect("explicit daemon binding should resolve");
+            .expect("identity binding should resolve once a runtime exists");
         assert_eq!(binding.workspace_id, "workspace-1");
         assert_eq!(binding.endpoint, RuntimeEndpoint::Local);
         assert_eq!(binding.runtime_id, runtime_id);
-        assert_eq!(binding.runtime_pane_id, runtime_pane_id);
+        assert_eq!(binding.runtime_pane_id, "pane-1");
     }
 
     #[test]
     fn runtime_lookup_helpers_resolve_workspace_and_pane_targets() {
         let endpoint = RuntimeEndpoint::remote("builder.example");
-        let mut session = managed_session_with_runtime(
+        let pane_id = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
+        let session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
-            term("pane-1"),
+            term(pane_id),
             endpoint.clone(),
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        session.runtime.bind_runtime_pane("pane-1", "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26");
         let state = window_state(vec![session]);
 
         assert_eq!(
@@ -1034,37 +928,37 @@ mod tests {
             Some("workspace-1".into()),
         );
         assert_eq!(
-            state.runtime_pane_target(&endpoint, "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
-            Some(("workspace-1".into(), "pane-1".into())),
+            state.runtime_pane_target(&endpoint, pane_id),
+            Some(("workspace-1".into(), pane_id.into())),
         );
     }
 
     #[test]
-    fn apply_managed_pane_created_binds_runtime_and_clears_pending_placeholder() {
+    fn apply_managed_pane_created_rekeys_layout_to_server_pane_id() {
         let mut state =
             window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
 
-        assert!(state.apply_managed_pane_created(
-            "workspace-1",
-            "pane-1",
-            "d7d04564-b2bf-4302-9495-e65c4df12ac6",
-            "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
-        ));
+        let rekey = state
+            .apply_managed_pane_created(
+                "workspace-1",
+                "pane-1",
+                "d7d04564-b2bf-4302-9495-e65c4df12ac6",
+                "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
+            )
+            .expect("pane creation for a known layout terminal should apply");
+
+        assert_eq!(rekey.workspace_id, "workspace-1");
+        assert_eq!(rekey.old_uuid, "pane-1");
+        assert_eq!(rekey.new_uuid, "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26");
 
         let session = &state.workspaces[0];
         assert_eq!(
             session.runtime.runtime_id.as_deref(),
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        assert_eq!(
-            session.runtime.pane_bindings.get("pane-1").map(String::as_str),
-            Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
-        );
-        assert!(!session.runtime.is_layout_pane_pending("pane-1"));
-        assert_eq!(
-            session.runtime.runtime_id.as_deref(),
-            Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
-        );
+        // The layout terminal now IS the server pane id (identity invariant).
+        assert!(session.layout.contains_terminal("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"));
+        assert!(!session.layout.contains_terminal("pane-1"));
     }
 
     #[test]
@@ -1073,120 +967,48 @@ mod tests {
             window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
         let before = state.clone();
 
-        assert!(!state.apply_managed_pane_created(
-            "workspace-1",
-            "missing-pane",
-            "d7d04564-b2bf-4302-9495-e65c4df12ac6",
-            "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
-        ));
+        assert!(
+            state
+                .apply_managed_pane_created(
+                    "workspace-1",
+                    "missing-pane",
+                    "d7d04564-b2bf-4302-9495-e65c4df12ac6",
+                    "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
+                )
+                .is_none()
+        );
         assert_eq!(state, before);
     }
 
     #[test]
-    fn apply_managed_pane_closed_prunes_state_and_preserves_remaining_binding() {
+    fn apply_managed_pane_closed_prunes_state_and_preserves_remaining_terminal() {
+        let left = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let right = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
         let mut session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
-            hsplit(term("left"), term("right")),
+            hsplit(term(left), term(right)),
             RuntimeEndpoint::Local,
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        session.runtime.bind_runtime_pane("left", "07fa83b4-9ae3-4354-a1c5-1f685ffab370");
-        session.runtime.bind_runtime_pane("right", "0d88f17f-626d-40b8-a1d3-6a42af628ac9");
-        session.active_terminal_uuid = Some("left".into());
+        session.active_terminal_uuid = Some(left.into());
         let mut state = window_state(vec![session]);
 
         let updated = state
-            .apply_managed_pane_closed("workspace-1", "left")
+            .apply_managed_pane_closed("workspace-1", left)
             .expect("removing one branch of a managed split should preserve the workspace");
 
-        assert_eq!(updated.layout.terminal_uuids(), vec!["right".to_string()]);
-        assert_eq!(updated.active_terminal_uuid.as_deref(), Some("right"));
-        assert_eq!(
-            updated.runtime.pane_bindings.get("right").map(String::as_str),
-            Some("0d88f17f-626d-40b8-a1d3-6a42af628ac9"),
-        );
-        assert!(updated.recovery_for("left").is_none());
-        assert!(updated.recovery_for("right").is_some());
-    }
-
-    #[test]
-    fn apply_managed_workspace_opened_recovers_extra_runtime_panes_in_pure_state() {
-        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-        let first_runtime_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
-        let second_runtime_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
-        let mut session = managed_session_with_runtime(
-            "workspace-1",
-            "Workspace",
-            term_full("left", "/srv/project", "Left"),
-            RuntimeEndpoint::Local,
-            WorkspacePolicy::Persistent,
-            Some(runtime_id),
-        );
-        session.runtime.bind_runtime_pane("left", first_runtime_pane);
-        let mut state = window_state(vec![session]);
-        let snapshot = snapshot(
-            runtime_id,
-            vec![
-                pane_snapshot(first_runtime_pane, "Shell", "/srv/project", b"shell"),
-                pane_snapshot(second_runtime_pane, "Logs", "/srv/project", b"logs"),
-            ],
-        );
-
-        let opened = state
-            .apply_managed_workspace_opened("workspace-1", runtime_id, &snapshot)
-            .expect("managed workspace open should reconcile state");
-
-        assert!(opened.panes_to_create.is_empty());
-        assert!(opened.skipped_runtime_panes.is_empty());
-        assert_eq!(opened.snapshot_restores.len(), 2);
-        assert_eq!(opened.session_state.layout.terminal_count(), 2);
-
-        let recovered_terminal_uuid = opened
-            .session_state
-            .layout
-            .terminal_uuids()
-            .into_iter()
-            .find(|uuid| uuid != "left")
-            .expect("extra runtime pane should synthesize a recovered layout pane");
-        assert_eq!(
-            opened
-                .session_state
-                .runtime
-                .pane_bindings
-                .get(&recovered_terminal_uuid)
-                .map(String::as_str),
-            Some(second_runtime_pane),
-        );
-        assert_eq!(
-            opened.session_state.layout.terminal_cwd(&recovered_terminal_uuid).as_deref(),
-            Some("/srv/project"),
-            "recovered pane should inherit the anchor cwd in pure state",
-        );
-        assert_eq!(
-            opened
-                .session_state
-                .recovery_for(&recovered_terminal_uuid)
-                .expect("recovered pane should have default recovery"),
-            &PaneRecovery::empty_shell(),
-        );
-        assert!(opened.snapshot_restores.iter().any(|restore| {
-            restore.layout_terminal_uuid == "left"
-                && restore.title == "Shell"
-                && restore.cwd == "/srv/project"
-                && restore.scrollback_tail[..] == b"shell"[..]
-        }));
-        assert!(opened.snapshot_restores.iter().any(|restore| {
-            restore.layout_terminal_uuid == recovered_terminal_uuid
-                && restore.title == "Logs"
-                && restore.cwd == "/srv/project"
-                && restore.scrollback_tail[..] == b"logs"[..]
-        }));
+        assert_eq!(updated.layout.terminal_uuids(), vec![right.to_string()]);
+        assert_eq!(updated.active_terminal_uuid.as_deref(), Some(right));
+        assert!(updated.recovery_for(left).is_none());
+        assert!(updated.recovery_for(right).is_some());
     }
 
     #[test]
     fn recover_managed_workspaces_from_inventory_creates_recoverable_layouts() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
         let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
         let first_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
         let second_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
@@ -1215,27 +1037,26 @@ mod tests {
         assert_eq!(session.runtime.policy, WorkspacePolicy::Persistent);
         assert_eq!(session.runtime.runtime_id.as_deref(), Some(runtime_id));
         assert_eq!(session.active_terminal_uuid.as_deref(), Some(first_pane));
+        // The inventory pane ids ARE the layout terminal uuids (identity).
         assert_eq!(
             session.layout.terminal_uuids(),
             vec![first_pane.to_string(), second_pane.to_string()]
         );
-        assert_eq!(
-            session.runtime.pane_bindings.get(first_pane).map(String::as_str),
-            Some(first_pane)
-        );
-        assert_eq!(
-            session.runtime.pane_bindings.get(second_pane).map(String::as_str),
-            Some(second_pane)
-        );
-        assert!(session.runtime.pending_layout_panes.is_empty());
 
-        let snapshot = snapshot(
+        // The daemon sends its authoritative tree on open; the client adopts it.
+        let mut snapshot = snapshot(
             runtime_id,
             vec![
                 pane_snapshot(first_pane, "Shell", "/srv/project", b"shell"),
                 pane_snapshot(second_pane, "Logs", "/srv/project", b"logs"),
             ],
         );
+        snapshot.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(uuid::Uuid::parse_str(first_pane).unwrap()),
+            pane_tree_leaf(uuid::Uuid::parse_str(second_pane).unwrap()),
+        ));
         let opened = state
             .apply_managed_workspace_opened(&session.uuid, runtime_id, &snapshot)
             .expect("inventory-recovered workspace should reattach cleanly");
@@ -1275,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_managed_workspace_opened_creates_initial_pane_for_empty_inventory_runtime() {
+    fn apply_managed_workspace_opened_empty_runtime_keeps_placeholder_layout() {
         let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
         let mut state = window_state(vec![]);
 
@@ -1292,7 +1113,7 @@ mod tests {
 
         let session =
             recovered.first().expect("inventory should synthesize a placeholder workspace");
-        let placeholder_uuid = session.layout.terminal_uuids()[0].clone();
+        let placeholder_uuids = session.layout.terminal_uuids();
         let opened = state
             .apply_managed_workspace_opened(
                 &session.uuid,
@@ -1301,8 +1122,11 @@ mod tests {
             )
             .expect("empty runtime should still reconcile");
 
-        assert_eq!(opened.panes_to_create, vec![placeholder_uuid]);
+        // A tree-less (empty) snapshot yields a minimal result: the client keeps
+        // its placeholder layout and the daemon-bridge bootstrap creates panes.
+        assert!(opened.panes_to_create.is_empty());
         assert!(opened.snapshot_restores.is_empty());
+        assert_eq!(opened.session_state.layout.terminal_uuids(), placeholder_uuids);
     }
 
     #[test]
@@ -1393,28 +1217,36 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_endpoint_event_workspace_opened_rebuilds_restores_and_requests_missing_panes() {
+    fn reconcile_endpoint_event_workspace_opened_adopts_tree_and_restores() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
         let runtime_id = uuid::Uuid::new_v4().to_string();
-        let first_terminal_uuid = uuid::Uuid::new_v4().to_string();
-        let second_terminal_uuid = uuid::Uuid::new_v4().to_string();
+        let left = uuid::Uuid::new_v4();
+        let right = uuid::Uuid::new_v4();
         let mut state = window_state(vec![managed_session(
             "workspace-1",
             "Workspace",
-            hsplit(term(&first_terminal_uuid), term(&second_terminal_uuid)),
+            hsplit(term("client-a"), term("client-b")),
         )]);
+
+        let mut snap = snapshot(
+            &runtime_id,
+            vec![
+                pane_snapshot(&left.to_string(), "Shell", "/srv/project", b"restored output"),
+                pane_snapshot(&right.to_string(), "Logs", "/var/log", b"logs"),
+            ],
+        );
+        snap.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(left),
+            pane_tree_leaf(right),
+        ));
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "workspace-1".into(),
             runtime_id: runtime_id.clone(),
-            snapshot: snapshot(
-                &runtime_id,
-                vec![pane_snapshot(
-                    &first_terminal_uuid,
-                    "Shell",
-                    "/srv/project",
-                    b"restored output",
-                )],
-            ),
+            snapshot: snap,
         });
 
         assert_eq!(
@@ -1424,30 +1256,19 @@ mod tests {
                 session_state: state.workspaces[0].clone(),
             }],
         );
-        assert_eq!(
-            transition.pane_create_requests,
-            vec![ManagedPaneCreateRequest {
-                workspace_id: "workspace-1".into(),
-                endpoint: RuntimeEndpoint::Local,
-                runtime_id: runtime_id.clone(),
-                layout_terminal_uuid: second_terminal_uuid,
-                cwd: None,
-            }],
+        // Pure view: adopting the tree never mints panes to match the daemon.
+        assert!(transition.pane_create_requests.is_empty());
+        // Restores map 1:1 to the adopted (identity) layout terminals.
+        assert_eq!(transition.pane_snapshot_restores.len(), 2);
+        assert!(
+            transition
+                .pane_snapshot_restores
+                .iter()
+                .any(|r| r.layout_terminal_uuid == left.to_string() && r.title == "Shell")
         );
-        assert_eq!(
-            transition.pane_snapshot_restores,
-            vec![WorkspacePaneRestore {
-                layout_terminal_uuid: first_terminal_uuid,
-                title: "Shell".into(),
-                cwd: "/srv/project".into(),
-                pane_output_seq: 0,
-                scrollback_tail: bytes::Bytes::from_static(b"restored output"),
-                scrollback_complete: true,
-                cols: 120,
-                rows: 40,
-                terminal_modes: None,
-            }],
-        );
+        // The stale client terminals are torn down.
+        assert!(transition.removed_layout_terminals.contains(&"client-a".to_string()));
+        assert!(transition.removed_layout_terminals.contains(&"client-b".to_string()));
         assert_eq!(state.workspaces[0].runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
     }
 
@@ -1473,7 +1294,7 @@ mod tests {
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "workspace-1".into(),
             runtime_id: runtime_id.clone(),
-            snapshot: snapshot(&runtime_id, vec![snap]),
+            snapshot: single_leaf_snapshot(&runtime_id, &terminal_uuid, snap),
         });
 
         assert_eq!(transition.pane_snapshot_restores.len(), 1);
@@ -1506,7 +1327,7 @@ mod tests {
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "workspace-1".into(),
             runtime_id: runtime_id.clone(),
-            snapshot: snapshot(&runtime_id, vec![snap]),
+            snapshot: single_leaf_snapshot(&runtime_id, &terminal_uuid, snap),
         });
 
         let modes =
@@ -1517,7 +1338,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_endpoint_event_pane_created_updates_binding_and_requests_recovery() {
+    fn reconcile_endpoint_event_pane_created_rekeys_and_requests_recovery() {
         let mut state =
             window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
 
@@ -1528,8 +1349,23 @@ mod tests {
             runtime_pane_id: "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26".into(),
         });
 
-        assert_eq!(transition.connected_layout_terminals, vec!["pane-1".to_string()]);
-        assert_eq!(transition.layout_terminals_to_recover, vec!["pane-1".to_string()]);
+        // After the re-key the layout terminal IS the server pane id.
+        assert_eq!(
+            transition.connected_layout_terminals,
+            vec!["598b80fe-b96b-4fbf-8e2d-f2610b6f4f26".to_string()]
+        );
+        assert_eq!(
+            transition.layout_terminals_to_recover,
+            vec!["598b80fe-b96b-4fbf-8e2d-f2610b6f4f26".to_string()]
+        );
+        assert_eq!(
+            transition.pane_rekeys,
+            vec![PaneRekey {
+                workspace_id: "workspace-1".into(),
+                old_uuid: "pane-1".into(),
+                new_uuid: "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26".into(),
+            }]
+        );
         assert_eq!(
             transition.connection_status_updates,
             vec![ConnectionStatusUpdate {
@@ -1537,36 +1373,35 @@ mod tests {
                 status: ConnectionStatus::Connected,
             }],
         );
-        assert_eq!(
-            state.workspaces[0].runtime.pane_bindings.get("pane-1").map(String::as_str),
-            Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
+        assert!(
+            state.workspaces[0].layout.contains_terminal("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26")
         );
     }
 
     #[test]
     fn reconcile_endpoint_event_pane_closed_removes_terminal_and_rebuilds_workspace() {
-        let mut session = managed_session_with_runtime(
+        let left = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let right = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+        let session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
-            hsplit(term("left"), term("right")),
+            hsplit(term(left), term(right)),
             RuntimeEndpoint::Local,
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        session.runtime.bind_runtime_pane("left", "07fa83b4-9ae3-4354-a1c5-1f685ffab370");
-        session.runtime.bind_runtime_pane("right", "0d88f17f-626d-40b8-a1d3-6a42af628ac9");
         let mut state = window_state(vec![session]);
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::PaneClosed {
             workspace_id: "workspace-1".into(),
-            layout_terminal_uuid: "right".into(),
+            layout_terminal_uuid: right.into(),
             runtime_id: "d7d04564-b2bf-4302-9495-e65c4df12ac6".into(),
-            runtime_pane_id: "0d88f17f-626d-40b8-a1d3-6a42af628ac9".into(),
+            runtime_pane_id: right.into(),
         });
 
-        assert_eq!(transition.removed_layout_terminals, vec!["right".to_string()]);
+        assert_eq!(transition.removed_layout_terminals, vec![right.to_string()]);
         assert_eq!(transition.rebuilt_workspaces.len(), 1);
-        assert_eq!(state.workspaces[0].layout.terminal_uuids(), vec!["left".to_string()]);
+        assert_eq!(state.workspaces[0].layout.terminal_uuids(), vec![left.to_string()]);
     }
 
     #[test]
@@ -1756,41 +1591,32 @@ mod tests {
 
     #[test]
     fn workspace_opened_preserves_layout_cwd_from_snapshot() {
+        use rttx_proto::v3_tree::pane_tree_leaf;
+
         let runtime_id = uuid::Uuid::new_v4().to_string();
         let pane_id = uuid::Uuid::new_v4().to_string();
+        // The layout terminal IS the server pane id (identity).
         let mut state = window_state(vec![managed_session_with_runtime(
             "ws-1",
             "Work",
-            term("t1"),
+            term(&pane_id),
             RuntimeEndpoint::Local,
             WorkspacePolicy::Persistent,
             Some(&runtime_id),
         )]);
-        state.workspaces[0].layout.set_terminal_cwd("t1", Some("/old/path".into()));
+        state.workspaces[0].layout.set_terminal_cwd(&pane_id, Some("/old/path".into()));
+
+        let mut snap = pane_snapshot(&pane_id, "bash", "/new/project", b"");
+        snap.cols = 80;
+        snap.rows = 24;
+        let mut ws_snap = snapshot(&runtime_id, vec![snap]);
+        ws_snap.workspace_revision = 2;
+        ws_snap.tree = Some(pane_tree_leaf(uuid::Uuid::parse_str(&pane_id).unwrap()));
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "ws-1".into(),
-            runtime_id: runtime_id.clone(),
-            snapshot: v3::WorkspaceSnapshot {
-                tree: None,
-                default_active_pane_id: Vec::new(),
-                runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
-                panes: vec![v3::PaneSnapshot {
-                    pane_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&pane_id).unwrap()),
-                    pane_output_seq: 0,
-                    title: "bash".into(),
-                    cwd: "/new/project".into(),
-                    cols: 80,
-                    rows: 24,
-                    exit_status: None,
-                    terminal_modes: None,
-                    scrollback_tail: bytes::Bytes::new(),
-                    total_scrollback_bytes: 0,
-                    scrollback_complete: true,
-                }],
-                workspace_revision: 2,
-                client_role: v3::WorkspaceClientRole::Writer as i32,
-            },
+            runtime_id,
+            snapshot: ws_snap,
         });
 
         assert!(!transition.pane_snapshot_restores.is_empty());
@@ -1804,135 +1630,6 @@ mod tests {
             Some("/new/project"),
             "layout CWD must be updated from snapshot during workspace opened"
         );
-    }
-
-    /// Pane create requests must carry the layout node's CWD. #297.
-    #[test]
-    fn reconcile_workspace_opened_propagates_layout_cwd_to_pane_create_request() {
-        let runtime_id = uuid::Uuid::new_v4().to_string();
-        let existing_uuid = uuid::Uuid::new_v4().to_string();
-        let new_uuid = uuid::Uuid::new_v4().to_string();
-        let mut state = window_state(vec![managed_session(
-            "ws-1",
-            "Workspace",
-            hsplit(term(&existing_uuid), term_full(&new_uuid, "/srv/project", "Shell")),
-        )]);
-
-        let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
-            workspace_id: "ws-1".into(),
-            runtime_id: runtime_id.clone(),
-            snapshot: snapshot(
-                &runtime_id,
-                vec![pane_snapshot(&existing_uuid, "Shell", "/home", b"")],
-            ),
-        });
-
-        assert_eq!(transition.pane_create_requests.len(), 1);
-        assert_eq!(
-            transition.pane_create_requests[0].cwd.as_deref(),
-            Some("/srv/project"),
-            "pane create request must carry layout CWD"
-        );
-    }
-
-    /// When a workspace has `runtime_id` but only placeholder bindings (e.g.
-    /// state saved before `PaneCreated` events arrived), reattaching to a
-    /// runtime with existing panes must bind disconnected layout terminals
-    /// to unclaimed runtime panes by position instead of leaving them blank.
-    #[test]
-    fn placeholder_bindings_reattach_matches_layout_to_runtime_panes_by_position() {
-        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-        let runtime_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
-        let runtime_pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
-
-        // Workspace has runtime_id but only placeholder bindings (left→left, right→right).
-        let session = managed_session_with_runtime(
-            "workspace-1",
-            "Workspace",
-            hsplit(term("left"), term("right")),
-            RuntimeEndpoint::remote("cdt2"),
-            WorkspacePolicy::Persistent,
-            Some(runtime_id),
-        );
-        // managed_session_with_runtime already calls ensure_placeholder_bindings,
-        // so pane_bindings = { "left": "left", "right": "right" }.
-        assert_eq!(session.runtime.pane_bindings.get("left").map(String::as_str), Some("left"));
-        assert_eq!(session.runtime.pane_bindings.get("right").map(String::as_str), Some("right"));
-
-        let mut state = window_state(vec![session]);
-        let snap = snapshot(
-            runtime_id,
-            vec![
-                pane_snapshot(runtime_pane_a, "Shell", "/home", b"$ ls"),
-                pane_snapshot(runtime_pane_b, "Logs", "/var/log", b"tail"),
-            ],
-        );
-
-        let opened = state
-            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
-            .expect("workspace open should succeed");
-
-        // Both layout terminals should be bound to runtime panes.
-        assert_eq!(
-            opened.session_state.runtime.pane_bindings.get("left").map(String::as_str),
-            Some(runtime_pane_a),
-            "first layout terminal should bind to first runtime pane by position",
-        );
-        assert_eq!(
-            opened.session_state.runtime.pane_bindings.get("right").map(String::as_str),
-            Some(runtime_pane_b),
-            "second layout terminal should bind to second runtime pane by position",
-        );
-
-        // No new panes should be created — the runtime already has matching panes.
-        assert!(
-            opened.panes_to_create.is_empty(),
-            "should not create new panes when runtime already has panes for each layout terminal",
-        );
-
-        // No runtime panes should be skipped or recovered into new layout terminals.
-        assert!(
-            opened.skipped_runtime_panes.is_empty(),
-            "all runtime panes should be claimed by layout terminals",
-        );
-
-        // Snapshot restores should be emitted for both panes.
-        assert_eq!(opened.snapshot_restores.len(), 2);
-    }
-
-    /// When placeholder-only bindings reattach to a runtime with fewer panes
-    /// than layout terminals, the excess layout terminals must request new
-    /// daemon panes so they don't stay blank.
-    #[test]
-    fn placeholder_bindings_reattach_creates_panes_for_excess_layout_terminals() {
-        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-        let runtime_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
-
-        // 2 layout terminals, but runtime only has 1 pane.
-        let session = managed_session_with_runtime(
-            "workspace-1",
-            "Workspace",
-            hsplit(term("left"), term("right")),
-            RuntimeEndpoint::remote("cdt2"),
-            WorkspacePolicy::Persistent,
-            Some(runtime_id),
-        );
-        let mut state = window_state(vec![session]);
-        let snap =
-            snapshot(runtime_id, vec![pane_snapshot(runtime_pane_a, "Shell", "/home", b"$ ls")]);
-
-        let opened = state
-            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
-            .expect("workspace open should succeed");
-
-        // First layout terminal should bind to the runtime pane.
-        assert_eq!(
-            opened.session_state.runtime.pane_bindings.get("left").map(String::as_str),
-            Some(runtime_pane_a),
-        );
-
-        // Second layout terminal should request a new pane.
-        assert_eq!(opened.panes_to_create, vec!["right".to_string()]);
     }
 
     #[test]
@@ -1949,7 +1646,7 @@ mod tests {
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "ws-1".into(),
             runtime_id: runtime_id.clone(),
-            snapshot: snapshot(&runtime_id, vec![snap]),
+            snapshot: single_leaf_snapshot(&runtime_id, &terminal_uuid, snap),
         });
 
         assert_eq!(transition.pane_snapshot_restores.len(), 1);
@@ -1970,19 +1667,17 @@ mod tests {
             Some(&runtime_id),
         );
         session.input_sync = true;
-        session.runtime.bind_runtime_pane("pane-1", "daemon-pane-1");
-        session.runtime.bind_runtime_pane("pane-2", "daemon-pane-2");
         let state = window_state(vec![session]);
 
         let targets = state.input_sync_targets("pane-1");
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].runtime_pane_id, "daemon-pane-2");
+        assert_eq!(targets[0].runtime_pane_id, "pane-2");
     }
 
     #[test]
     fn input_sync_targets_empty_when_disabled() {
         let runtime_id = uuid::Uuid::new_v4().to_string();
-        let mut session = managed_session_with_runtime(
+        let session = managed_session_with_runtime(
             "ws-1",
             "Workspace",
             hsplit(term("pane-1"), term("pane-2")),
@@ -1990,27 +1685,6 @@ mod tests {
             WorkspacePolicy::Persistent,
             Some(&runtime_id),
         );
-        session.runtime.bind_runtime_pane("pane-1", "daemon-pane-1");
-        session.runtime.bind_runtime_pane("pane-2", "daemon-pane-2");
-        let state = window_state(vec![session]);
-
-        assert!(state.input_sync_targets("pane-1").is_empty());
-    }
-
-    #[test]
-    fn input_sync_targets_skips_pending_panes() {
-        let runtime_id = uuid::Uuid::new_v4().to_string();
-        let mut session = managed_session_with_runtime(
-            "ws-1",
-            "Workspace",
-            hsplit(term("pane-1"), term("pane-2")),
-            RuntimeEndpoint::Local,
-            WorkspacePolicy::Persistent,
-            Some(&runtime_id),
-        );
-        session.input_sync = true;
-        session.runtime.bind_runtime_pane("pane-1", "daemon-pane-1");
-        // pane-2 stays pending (placeholder binding only)
         let state = window_state(vec![session]);
 
         assert!(state.input_sync_targets("pane-1").is_empty());
@@ -2023,106 +1697,6 @@ mod tests {
         let state = window_state(vec![session]);
 
         assert!(state.input_sync_targets("pane-1").is_empty());
-    }
-
-    /// Regression test for #547: repeated reconnect cycles must not grow the
-    /// layout. When bindings become stale (e.g. daemon restart assigns new
-    /// pane IDs), disconnected layout terminals should be matched to
-    /// unclaimed runtime panes by position instead of creating new splits.
-    #[test]
-    fn repeated_reconnect_cycles_do_not_grow_layout() {
-        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-
-        let session = managed_session_with_runtime(
-            "workspace-1",
-            "Home",
-            hsplit(term("left"), term("right")),
-            RuntimeEndpoint::Local,
-            WorkspacePolicy::Persistent,
-            Some(runtime_id),
-        );
-        let mut state = window_state(vec![session]);
-
-        // Simulate 5 reconnect cycles, each with fresh daemon pane IDs
-        // (as if the daemon restarted between cycles).
-        for cycle in 0..5 {
-            let pane_a = uuid::Uuid::new_v4().to_string();
-            let pane_b = uuid::Uuid::new_v4().to_string();
-            let snap = snapshot(
-                runtime_id,
-                vec![
-                    pane_snapshot(&pane_a, "Shell", "/home", b"$ ls"),
-                    pane_snapshot(&pane_b, "Logs", "/var/log", b"tail"),
-                ],
-            );
-
-            let opened = state
-                .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
-                .expect("workspace open should succeed");
-
-            assert_eq!(
-                opened.session_state.layout.terminal_count(),
-                2,
-                "cycle {cycle}: layout must stay at 2 terminals",
-            );
-            assert!(
-                opened.skipped_runtime_panes.is_empty(),
-                "cycle {cycle}: no runtime panes should be skipped",
-            );
-        }
-    }
-
-    /// When stale bindings can't match current runtime panes, disconnected
-    /// layout terminals should be positionally matched to unclaimed runtime
-    /// panes — not left blank while new splits are created.
-    #[test]
-    fn stale_bindings_reconnect_matches_by_position() {
-        let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-        let old_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
-        let old_pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
-        let new_pane_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-        let new_pane_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-
-        // Workspace has real (non-placeholder) bindings from a previous connection.
-        let mut session = managed_session_with_runtime(
-            "workspace-1",
-            "Workspace",
-            hsplit(term("left"), term("right")),
-            RuntimeEndpoint::Local,
-            WorkspacePolicy::Persistent,
-            Some(runtime_id),
-        );
-        session.runtime.bind_runtime_pane("left", old_pane_a);
-        session.runtime.bind_runtime_pane("right", old_pane_b);
-        let mut state = window_state(vec![session]);
-
-        // Daemon restarted — new pane IDs.
-        let snap = snapshot(
-            runtime_id,
-            vec![
-                pane_snapshot(new_pane_a, "Shell", "/home", b"$ ls"),
-                pane_snapshot(new_pane_b, "Logs", "/var/log", b"tail"),
-            ],
-        );
-
-        let opened = state
-            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
-            .expect("workspace open should succeed");
-
-        assert_eq!(
-            opened.session_state.layout.terminal_count(),
-            2,
-            "layout must not grow when daemon pane count matches layout terminal count",
-        );
-        assert_eq!(
-            opened.session_state.runtime.pane_bindings.get("left").map(String::as_str),
-            Some(new_pane_a),
-        );
-        assert_eq!(
-            opened.session_state.runtime.pane_bindings.get("right").map(String::as_str),
-            Some(new_pane_b),
-        );
-        assert!(opened.skipped_runtime_panes.is_empty());
     }
 
     #[test]
@@ -2146,9 +1720,10 @@ mod tests {
 
     #[test]
     fn workspace_opened_returns_previous_layout_terminals() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
         let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-        let first_runtime_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
-        let mut session = managed_session_with_runtime(
+        let session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
             hsplit(term("left"), term("right")),
@@ -2156,32 +1731,39 @@ mod tests {
             WorkspacePolicy::Persistent,
             Some(runtime_id),
         );
-        session.runtime.bind_runtime_pane("left", first_runtime_pane);
         let mut state = window_state(vec![session]);
 
+        let server_left = uuid::Uuid::new_v4();
+        let server_right = uuid::Uuid::new_v4();
+        let mut snap = snapshot(
+            runtime_id,
+            vec![
+                pane_snapshot(&server_left.to_string(), "Shell", "/srv", b""),
+                pane_snapshot(&server_right.to_string(), "Logs", "/srv", b""),
+            ],
+        );
+        snap.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(server_left),
+            pane_tree_leaf(server_right),
+        ));
+
         let opened = state
-            .apply_managed_workspace_opened(
-                "workspace-1",
-                runtime_id,
-                &snapshot(
-                    runtime_id,
-                    vec![pane_snapshot(first_runtime_pane, "Shell", "/srv", b"")],
-                ),
-            )
-            .expect("should reconcile");
+            .apply_managed_workspace_opened("workspace-1", runtime_id, &snap)
+            .expect("should adopt the server tree");
 
         assert_eq!(
             opened.previous_layout_terminals,
             vec!["left".to_string(), "right".to_string()],
-            "previous_layout_terminals should capture the pre-reconciliation UUIDs",
+            "previous_layout_terminals should capture the pre-adoption UUIDs",
         );
     }
 
     #[test]
-    fn reconcile_workspace_opened_emits_removed_for_stale_terminals() {
+    fn reconcile_workspace_opened_keeps_layout_for_treeless_snapshot() {
         let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-        let runtime_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
-        let mut session = managed_session_with_runtime(
+        let session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
             hsplit(term("left"), term("right")),
@@ -2189,36 +1771,33 @@ mod tests {
             WorkspacePolicy::Persistent,
             Some(runtime_id),
         );
-        session.runtime.bind_runtime_pane("left", runtime_pane);
         let mut state = window_state(vec![session]);
 
         let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
             workspace_id: "workspace-1".into(),
             runtime_id: runtime_id.into(),
-            snapshot: snapshot(runtime_id, vec![pane_snapshot(runtime_pane, "Shell", "/srv", b"")]),
+            // A tree-less snapshot: the client keeps its existing layout and
+            // removes nothing (the daemon-bridge bootstrap creates panes).
+            snapshot: snapshot(runtime_id, vec![]),
         });
 
-        // Both "left" and "right" were in the previous layout. After
-        // reconciliation, "left" is matched to runtime_pane and "right"
-        // stays disconnected but remains in the layout (it gets a
-        // pane_create_request). So no terminals are removed.
         assert!(
             !transition.removed_layout_terminals.contains(&"left".to_string()),
             "matched terminal should not be marked as removed",
         );
         assert!(
             !transition.removed_layout_terminals.contains(&"right".to_string()),
-            "disconnected terminal stays in layout and should not be removed",
+            "existing terminal stays in layout and should not be removed",
         );
         assert_eq!(
             transition.rebuilt_workspaces.len(),
             1,
-            "workspace should be rebuilt after reconciliation",
+            "workspace should be rebuilt after opening",
         );
         assert_eq!(
             transition.rebuilt_workspaces[0].session_state.layout.terminal_uuids(),
             vec!["left".to_string(), "right".to_string()],
-            "both terminals should remain in the reconciled layout",
+            "both terminals should remain in the layout",
         );
     }
 
@@ -2412,32 +1991,32 @@ mod tests {
     #[test]
     fn reverse_index_matches_linear_scan_for_bound_pane() {
         let endpoint = RuntimeEndpoint::remote("builder.example");
-        let runtime_pane_id = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
-        let mut session = managed_session_with_runtime(
+        let pane_id = "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26";
+        let session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
-            term("pane-1"),
+            term(pane_id),
             endpoint.clone(),
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        session.runtime.bind_runtime_pane("pane-1", runtime_pane_id);
         let state = window_state(vec![session]);
 
         assert_eq!(
-            state.runtime_pane_target(&endpoint, runtime_pane_id),
-            Some(("workspace-1".into(), "pane-1".into())),
+            state.runtime_pane_target(&endpoint, pane_id),
+            Some(("workspace-1".into(), pane_id.into())),
         );
     }
 
     #[test]
-    fn reverse_index_excludes_pending_placeholder_bindings() {
+    fn reverse_index_maps_layout_terminals_by_identity() {
         let state = window_state(vec![managed_session("workspace-1", "Workspace", term("pane-1"))]);
 
-        // Placeholder bindings (self-bindings) are pending — not in the index.
-        assert!(
-            state.runtime_pane_target(&RuntimeEndpoint::Local, "pane-1").is_none(),
-            "pending placeholder bindings must not appear in the reverse index",
+        // Under the identity invariant every managed layout terminal maps to
+        // itself in the reverse index.
+        assert_eq!(
+            state.runtime_pane_target(&RuntimeEndpoint::Local, "pane-1"),
+            Some(("workspace-1".into(), "pane-1".into())),
         );
     }
 
@@ -2453,79 +2032,78 @@ mod tests {
             "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26",
         );
 
+        // After the re-key the layout terminal IS the server pane id.
         assert_eq!(
             state.runtime_pane_target(
                 &RuntimeEndpoint::Local,
                 "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"
             ),
-            Some(("workspace-1".into(), "pane-1".into())),
+            Some(("workspace-1".into(), "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26".into())),
         );
     }
 
     #[test]
     fn reverse_index_consistent_after_pane_close() {
-        let mut session = managed_session_with_runtime(
+        let left = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
+        let right = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
+        let session = managed_session_with_runtime(
             "workspace-1",
             "Workspace",
-            hsplit(term("left"), term("right")),
+            hsplit(term(left), term(right)),
             RuntimeEndpoint::Local,
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        session.runtime.bind_runtime_pane("left", "07fa83b4-9ae3-4354-a1c5-1f685ffab370");
-        session.runtime.bind_runtime_pane("right", "0d88f17f-626d-40b8-a1d3-6a42af628ac9");
         let mut state = window_state(vec![session]);
 
-        state.apply_managed_pane_closed("workspace-1", "left");
+        state.apply_managed_pane_closed("workspace-1", left);
 
         assert!(
-            state
-                .runtime_pane_target(
-                    &RuntimeEndpoint::Local,
-                    "07fa83b4-9ae3-4354-a1c5-1f685ffab370"
-                )
-                .is_none(),
+            state.runtime_pane_target(&RuntimeEndpoint::Local, left).is_none(),
             "closed pane must be removed from the reverse index",
         );
         assert_eq!(
-            state.runtime_pane_target(
-                &RuntimeEndpoint::Local,
-                "0d88f17f-626d-40b8-a1d3-6a42af628ac9"
-            ),
-            Some(("workspace-1".into(), "right".into())),
+            state.runtime_pane_target(&RuntimeEndpoint::Local, right),
+            Some(("workspace-1".into(), right.into())),
         );
     }
 
     #[test]
-    fn reverse_index_consistent_after_workspace_opened_reconciliation() {
+    fn reverse_index_consistent_after_workspace_opened_adoption() {
+        use rttx_proto::v3_tree::{pane_tree_leaf, pane_tree_split};
+
         let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
         let runtime_pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
         let runtime_pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
         let mut state = window_state(vec![managed_session(
             "workspace-1",
             "Workspace",
-            hsplit(term("left"), term("right")),
+            hsplit(term("client-a"), term("client-b")),
         )]);
 
-        state.apply_managed_workspace_opened(
-            "workspace-1",
+        let mut snap = snapshot(
             runtime_id,
-            &snapshot(
-                runtime_id,
-                vec![
-                    pane_snapshot(runtime_pane_a, "Shell", "/home", b""),
-                    pane_snapshot(runtime_pane_b, "Logs", "/var", b""),
-                ],
-            ),
+            vec![
+                pane_snapshot(runtime_pane_a, "Shell", "/home", b""),
+                pane_snapshot(runtime_pane_b, "Logs", "/var", b""),
+            ],
         );
+        snap.tree = Some(pane_tree_split(
+            v3::PaneSplitAxis::Horizontal,
+            0.5,
+            pane_tree_leaf(uuid::Uuid::parse_str(runtime_pane_a).unwrap()),
+            pane_tree_leaf(uuid::Uuid::parse_str(runtime_pane_b).unwrap()),
+        ));
+        state.apply_managed_workspace_opened("workspace-1", runtime_id, &snap);
 
+        // Layout terminals ARE the server pane ids (identity).
         assert_eq!(
             state.runtime_pane_target(&RuntimeEndpoint::Local, runtime_pane_a),
-            Some(("workspace-1".into(), "left".into())),
+            Some(("workspace-1".into(), runtime_pane_a.into())),
         );
         assert_eq!(
             state.runtime_pane_target(&RuntimeEndpoint::Local, runtime_pane_b),
-            Some(("workspace-1".into(), "right".into())),
+            Some(("workspace-1".into(), runtime_pane_b.into())),
         );
     }
 
@@ -2556,15 +2134,14 @@ mod tests {
 
     #[test]
     fn reverse_index_not_serialized() {
-        let mut session = managed_session_with_runtime(
+        let session = managed_session_with_runtime(
             "ws-1",
             "Work",
-            term("t1"),
+            term("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
             RuntimeEndpoint::Local,
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        session.runtime.bind_runtime_pane("t1", "598b80fe-b96b-4fbf-8e2d-f2610b6f4f26");
         let state = window_state(vec![session]);
 
         let json = serde_json::to_string(&state).unwrap();
@@ -2586,35 +2163,34 @@ mod tests {
         let remote_pane = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
         let remote_endpoint = RuntimeEndpoint::remote("builder.example");
 
-        let mut local_session = managed_session_with_runtime(
+        // Layout terminal uuids ARE their server pane ids (identity).
+        let local_session = managed_session_with_runtime(
             "ws-local",
             "Local",
-            term("local-t1"),
+            term(local_pane),
             RuntimeEndpoint::Local,
             WorkspacePolicy::Persistent,
             Some("d7d04564-b2bf-4302-9495-e65c4df12ac6"),
         );
-        local_session.runtime.bind_runtime_pane("local-t1", local_pane);
 
-        let mut remote_session = managed_session_with_runtime(
+        let remote_session = managed_session_with_runtime(
             "ws-remote",
             "Remote",
-            term("remote-t1"),
+            term(remote_pane),
             remote_endpoint.clone(),
             WorkspacePolicy::Persistent,
             Some("598b80fe-b96b-4fbf-8e2d-f2610b6f4f26"),
         );
-        remote_session.runtime.bind_runtime_pane("remote-t1", remote_pane);
 
         let state = window_state(vec![local_session, remote_session]);
 
         assert_eq!(
             state.runtime_pane_target(&RuntimeEndpoint::Local, local_pane),
-            Some(("ws-local".into(), "local-t1".into())),
+            Some(("ws-local".into(), local_pane.into())),
         );
         assert_eq!(
             state.runtime_pane_target(&remote_endpoint, remote_pane),
-            Some(("ws-remote".into(), "remote-t1".into())),
+            Some(("ws-remote".into(), remote_pane.into())),
         );
         // Cross-endpoint lookup must not match.
         assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, remote_pane).is_none());

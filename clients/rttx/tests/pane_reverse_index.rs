@@ -5,7 +5,6 @@
 
 use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 use rttx::workspace::*;
-use std::collections::{BTreeMap, BTreeSet};
 
 fn term(id: &str) -> LayoutNode {
     LayoutNode::Terminal { uuid: id.to_string(), profile: None, cwd: None, custom_title: None }
@@ -32,7 +31,7 @@ fn managed_session(
     let terminal_recovery =
         terminal_uuids.iter().cloned().map(|uuid| (uuid, PaneRecovery::empty_shell())).collect();
     let active_terminal_uuid = terminal_uuids.first().cloned();
-    let mut session = WorkspaceState {
+    WorkspaceState {
         uuid: id.to_string(),
         name: name.to_string(),
         layout,
@@ -44,15 +43,11 @@ fn managed_session(
             endpoint,
             policy,
             runtime_id: runtime_id.map(str::to_string),
-            pane_bindings: BTreeMap::default(),
-            pending_layout_panes: BTreeSet::default(),
         },
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
-    };
-    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
-    session
+    }
 }
 
 fn window_state(workspaces: Vec<WorkspaceState>) -> WindowState {
@@ -107,73 +102,73 @@ fn lifecycle_create_bind_close_keeps_index_consistent() {
         None,
     )]);
 
-    // Before binding: no lookups should resolve.
+    // Before binding: no lookups should resolve to the server pane ids.
     assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, pane_a).is_none());
 
-    // Bind panes via apply_managed_pane_created.
+    // Bind panes via apply_managed_pane_created (re-keys layout to pane ids).
     state.apply_managed_pane_created("ws-1", "left", runtime_id, pane_a);
     state.apply_managed_pane_created("ws-1", "right", runtime_id, pane_b);
 
-    // Both panes should resolve.
+    // After the re-key each layout terminal IS its server pane id (identity).
     assert_eq!(
         state.runtime_pane_target(&RuntimeEndpoint::Local, pane_a),
-        Some(("ws-1".into(), "left".into())),
+        Some(("ws-1".into(), pane_a.into())),
     );
     assert_eq!(
         state.runtime_pane_target(&RuntimeEndpoint::Local, pane_b),
-        Some(("ws-1".into(), "right".into())),
+        Some(("ws-1".into(), pane_b.into())),
     );
 
-    // Close one pane.
-    state.apply_managed_pane_closed("ws-1", "left");
+    // Close one pane (identity: close by its server pane id).
+    state.apply_managed_pane_closed("ws-1", pane_a);
 
     // Closed pane should no longer resolve.
     assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, pane_a).is_none());
     // Remaining pane should still resolve.
     assert_eq!(
         state.runtime_pane_target(&RuntimeEndpoint::Local, pane_b),
-        Some(("ws-1".into(), "right".into())),
+        Some(("ws-1".into(), pane_b.into())),
     );
 }
 
-/// Reconciliation through `workspace_opened` replaces stale bindings and
-/// the index reflects the new state.
+/// A daemon restart delivers a new authoritative tree; the client adopts it
+/// and the index reflects the new (identity) pane ids.
 #[test]
 fn reconciliation_updates_index_after_daemon_restart() {
+    use rttx_proto::v3_tree::pane_tree_leaf;
+
     let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
     let old_pane = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
     let new_pane = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
-    let mut session = managed_session(
+    // The layout terminal IS the old server pane id (identity).
+    let session = managed_session(
         "ws-1",
         "Workspace",
-        term("t1"),
+        term(old_pane),
         RuntimeEndpoint::Local,
         WorkspacePolicy::Persistent,
         Some(runtime_id),
     );
-    session.runtime.bind_runtime_pane("t1", old_pane);
     let mut state = window_state(vec![session]);
 
     // Old pane resolves.
     assert_eq!(
         state.runtime_pane_target(&RuntimeEndpoint::Local, old_pane),
-        Some(("ws-1".into(), "t1".into())),
+        Some(("ws-1".into(), old_pane.into())),
     );
 
-    // Daemon restarts with a new pane ID.
-    state.apply_managed_workspace_opened(
-        "ws-1",
-        runtime_id,
-        &snapshot(runtime_id, vec![pane_snapshot(new_pane, "Shell", "/home")]),
-    );
+    // Daemon restarts and sends a new authoritative single-pane tree.
+    let mut snap = snapshot(runtime_id, vec![pane_snapshot(new_pane, "Shell", "/home")]);
+    snap.tree = Some(pane_tree_leaf(uuid::Uuid::parse_str(new_pane).unwrap()));
+    state.apply_managed_workspace_opened("ws-1", runtime_id, &snap);
 
     // Old pane should no longer resolve.
     assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, old_pane).is_none());
     // New pane should resolve.
     assert_eq!(
         state.runtime_pane_target(&RuntimeEndpoint::Local, new_pane),
-        Some(("ws-1".into(), "t1".into())),
+        Some(("ws-1".into(), new_pane.into())),
     );
 }
 
@@ -210,14 +205,14 @@ fn multi_endpoint_isolation_through_full_lifecycle() {
     // Bind remote pane.
     state.apply_managed_pane_created("ws-remote", "remote-t1", remote_runtime, remote_pane);
 
-    // Each pane resolves only on its own endpoint.
+    // Each pane resolves only on its own endpoint (identity: uuid == pane id).
     assert_eq!(
         state.runtime_pane_target(&RuntimeEndpoint::Local, local_pane),
-        Some(("ws-local".into(), "local-t1".into())),
+        Some(("ws-local".into(), local_pane.into())),
     );
     assert_eq!(
         state.runtime_pane_target(&remote_endpoint, remote_pane),
-        Some(("ws-remote".into(), "remote-t1".into())),
+        Some(("ws-remote".into(), remote_pane.into())),
     );
     assert!(state.runtime_pane_target(&RuntimeEndpoint::Local, remote_pane).is_none());
     assert!(state.runtime_pane_target(&remote_endpoint, local_pane).is_none());

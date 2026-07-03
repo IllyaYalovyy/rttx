@@ -755,6 +755,12 @@ impl Window {
             self.imp().persistent_terminals.borrow_mut().remove(layout_terminal_uuid);
         }
 
+        // Re-key widget maps so they track the identity layout after a
+        // client-minted uuid becomes its server pane id (RFC-031).
+        for rekey in &transition.pane_rekeys {
+            self.rekey_terminal_widgets(rekey);
+        }
+
         for rebuild in &transition.rebuilt_workspaces {
             self.rebuild_session_content(&rebuild.workspace_id, &rebuild.session_state);
         }

@@ -3081,11 +3081,7 @@ fn save_state_persists_detached_workspace_runtime_binding() {
     assert_eq!(saved_session.runtime.endpoint, RuntimeEndpoint::remote("builder.example"));
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id.as_deref(), Some(runtime_id.as_str()));
-    assert_eq!(
-        saved_session.runtime.pane_bindings.get("managed-pane").map(String::as_str),
-        Some("managed-pane")
-    );
-    assert!(saved_session.runtime.pending_layout_panes.contains("managed-pane"));
+    assert!(saved_session.layout.contains_terminal("managed-pane"));
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -3187,11 +3183,7 @@ fn save_state_persists_terminated_workspace_without_runtime_id() {
     assert_eq!(saved_session.runtime.endpoint, RuntimeEndpoint::remote("builder.example"));
     assert_eq!(saved_session.runtime.policy, WorkspacePolicy::Persistent);
     assert_eq!(saved_session.runtime.runtime_id, None);
-    assert_eq!(
-        saved_session.runtime.pane_bindings.get("managed-pane").map(String::as_str),
-        Some("managed-pane")
-    );
-    assert!(saved_session.runtime.pending_layout_panes.contains("managed-pane"));
+    assert!(saved_session.layout.contains_terminal("managed-pane"));
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -3500,9 +3492,9 @@ fn cwd_changed_updates_layout_node() {
 
     let window = Window::new(&app);
 
-    let layout_uuid = "managed-pane-cwd";
-    let runtime_pane_id = uuid::Uuid::new_v4();
-    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+    let layout_uuid = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+    let runtime_pane_id = uuid::Uuid::parse_str(layout_uuid).unwrap();
+    let session_state = crate::test_helpers::managed_session_with_runtime(
         "ws-cwd",
         "CWD Test",
         LayoutNode::new_terminal_with_uuid(layout_uuid),
@@ -3510,10 +3502,6 @@ fn cwd_changed_updates_layout_node() {
         WorkspacePolicy::Persistent,
         Some("runtime-cwd"),
     );
-    session_state
-        .runtime
-        .pane_bindings
-        .insert(layout_uuid.to_string(), runtime_pane_id.to_string());
 
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
@@ -3579,9 +3567,9 @@ fn managed_pane_exit_marks_visible_pane_exited() {
 
     let window = Window::new(&app);
 
-    let layout_uuid = "managed-pane-exit";
-    let runtime_pane_id = uuid::Uuid::new_v4();
-    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+    let layout_uuid = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+    let runtime_pane_id = uuid::Uuid::parse_str(layout_uuid).unwrap();
+    let session_state = crate::test_helpers::managed_session_with_runtime(
         "ws-exit",
         "Exit Test",
         LayoutNode::new_terminal_with_uuid(layout_uuid),
@@ -3589,10 +3577,6 @@ fn managed_pane_exit_marks_visible_pane_exited() {
         WorkspacePolicy::Persistent,
         Some("runtime-exit"),
     );
-    session_state
-        .runtime
-        .pane_bindings
-        .insert(layout_uuid.to_string(), runtime_pane_id.to_string());
 
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
@@ -6730,8 +6714,9 @@ fn managed_binding_for_terminal_resolves_bound_pane() {
     let window = Window::new(&app);
 
     let layout_uuid = "bound-pane";
-    let runtime_pane_id = "runtime-pane-123";
-    let mut session_state = crate::test_helpers::managed_session_with_runtime(
+    // Identity invariant: the runtime pane id IS the layout terminal uuid.
+    let runtime_pane_id = layout_uuid;
+    let session_state = crate::test_helpers::managed_session_with_runtime(
         "ws-binding",
         "Binding Test",
         LayoutNode::new_terminal_with_uuid(layout_uuid),
@@ -6739,10 +6724,6 @@ fn managed_binding_for_terminal_resolves_bound_pane() {
         WorkspacePolicy::Persistent,
         Some("runtime-binding"),
     );
-    session_state
-        .runtime
-        .pane_bindings
-        .insert(layout_uuid.to_string(), runtime_pane_id.to_string());
     window.imp().state.borrow_mut().workspaces.push(session_state);
 
     let binding = window.managed_binding_for_terminal(layout_uuid);

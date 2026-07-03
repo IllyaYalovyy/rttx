@@ -142,10 +142,7 @@ fn attach_adopts_server_tree_through_the_window_state_flow() {
         cwd: None,
         custom_title: None,
     };
-    session.runtime = WorkspaceRuntime::managed_local(
-        WorkspacePolicy::Persistent,
-        &session.layout.terminal_uuids(),
-    );
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
     session.runtime.runtime_id = Some(runtime_id.into());
 
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
@@ -205,10 +202,7 @@ fn close_after_adopt_then_reconnect_keeps_single_pane() {
     let mut session =
         WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
     session.uuid = "ws-1".into();
-    session.runtime = WorkspaceRuntime::managed_local(
-        WorkspacePolicy::Persistent,
-        &session.layout.terminal_uuids(),
-    );
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
     session.runtime.runtime_id = Some(runtime_id.into());
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 

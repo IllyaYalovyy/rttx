@@ -342,6 +342,11 @@ impl TerminalWidget {
         self.imp().uuid.borrow().clone()
     }
 
+    /// Update the pane UUID used by the GTK-side session model.
+    pub fn set_uuid(&self, uuid: &str) {
+        self.imp().uuid.replace(uuid.to_string());
+    }
+
     #[must_use]
     pub fn vte(&self) -> &vte4::Terminal {
         &self.imp().vte

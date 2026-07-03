@@ -59,10 +59,7 @@ fn layout_stays_stable_across_reconnect_cycles_with_fresh_pane_ids() {
         WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
     session.uuid = "ws-1".into();
     session.layout = hsplit(term("left"), term("right"));
-    session.runtime = WorkspaceRuntime::managed_local(
-        WorkspacePolicy::Persistent,
-        &session.layout.terminal_uuids(),
-    );
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
     session.runtime.runtime_id = Some(runtime_id.into());
 
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
