@@ -142,10 +142,7 @@ fn attach_adopts_server_tree_through_the_window_state_flow() {
         cwd: None,
         custom_title: None,
     };
-    session.runtime = WorkspaceRuntime::managed_local(
-        WorkspacePolicy::Persistent,
-        &session.layout.terminal_uuids(),
-    );
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
     session.runtime.runtime_id = Some(runtime_id.into());
 
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
@@ -205,10 +202,7 @@ fn close_after_adopt_then_reconnect_keeps_single_pane() {
     let mut session =
         WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
     session.uuid = "ws-1".into();
-    session.runtime = WorkspaceRuntime::managed_local(
-        WorkspacePolicy::Persistent,
-        &session.layout.terminal_uuids(),
-    );
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
     session.runtime.runtime_id = Some(runtime_id.into());
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
@@ -264,4 +258,57 @@ fn close_after_adopt_then_reconnect_keeps_single_pane() {
         vec![b.to_string()],
         "still one pane after the second reconnect"
     );
+}
+
+/// A managed pane ack (the `CreatePane` bootstrap for a new workspace, or a
+/// `SplitPane` reply) carries the server-minted pane id. The client re-keys its
+/// optimistic, client-minted layout terminal onto that durable id so the
+/// invariant `layout uuid == server pane id` holds everywhere — with no
+/// binding table (RFC-031). The transition carries the re-key so the window
+/// can rename its widget maps, and downstream connect/recover target the new id.
+#[test]
+fn pane_ack_rekeys_client_layout_terminal_to_server_pane_id() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::{WorkspacePolicy, WorkspaceRuntime};
+    use rttx::workspace::{WindowState, WorkspaceState};
+
+    let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
+
+    let mut session =
+        WorkspaceState::new_managed_local("Home".into(), WorkspacePolicy::Persistent, None);
+    session.uuid = "ws-1".into();
+    // The optimistic split (or new-workspace bootstrap) added a client-minted
+    // layout terminal that is not yet a server pane id.
+    session.layout = LayoutNode::Terminal {
+        uuid: "client-minted-pane".into(),
+        profile: None,
+        cwd: None,
+        custom_title: None,
+    };
+    session.active_terminal_uuid = Some("client-minted-pane".into());
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
+    session.runtime.runtime_id = Some(runtime_id.into());
+    let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
+
+    let server_pane = Uuid::new_v4();
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::PaneCreated {
+        workspace_id: "ws-1".into(),
+        layout_terminal_uuid: "client-minted-pane".into(),
+        runtime_id: runtime_id.into(),
+        runtime_pane_id: server_pane.to_string(),
+    });
+
+    // The layout terminal (and active pointer) are re-keyed to the server id.
+    assert_eq!(state.workspaces[0].layout.terminal_uuids(), vec![server_pane.to_string()]);
+    assert_eq!(
+        state.workspaces[0].active_terminal_uuid.as_deref(),
+        Some(server_pane.to_string().as_str())
+    );
+
+    // The transition reports the re-key (so the window renames its widget maps)
+    // and targets the new identity uuid downstream.
+    assert_eq!(transition.pane_rekeys.len(), 1);
+    assert_eq!(transition.pane_rekeys[0].old_uuid, "client-minted-pane");
+    assert_eq!(transition.pane_rekeys[0].new_uuid, server_pane.to_string());
+    assert_eq!(transition.connected_layout_terminals, vec![server_pane.to_string()]);
 }

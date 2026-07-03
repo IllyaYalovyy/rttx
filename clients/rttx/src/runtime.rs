@@ -1,7 +1,6 @@
 use crate::daemon::DaemonError;
 use rttx_proto::v3;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 
 /// Retention policy for a managed workspace runtime.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,89 +104,29 @@ pub struct WorkspaceRuntime {
     /// Live daemon runtime ID, if known.
     #[serde(default)]
     pub runtime_id: Option<String>,
-    /// Stable layout-terminal UUID -> runtime-pane UUID bindings.
-    #[serde(default)]
-    pub pane_bindings: BTreeMap<String, String>,
-    /// Layout panes that still need a daemon pane assignment.
-    #[serde(default)]
-    pub pending_layout_panes: BTreeSet<String>,
 }
 
 impl WorkspaceRuntime {
     /// Create managed local runtime metadata for a new workspace.
     #[must_use]
-    pub fn managed_local(policy: WorkspacePolicy, layout_terminal_uuids: &[String]) -> Self {
-        Self::managed(RuntimeEndpoint::Local, policy, layout_terminal_uuids)
+    pub const fn managed_local(policy: WorkspacePolicy) -> Self {
+        Self::managed(RuntimeEndpoint::Local, policy)
     }
 
     /// Create managed remote runtime metadata for a new workspace.
     #[must_use]
-    pub fn managed_remote(
-        host: &str,
-        policy: WorkspacePolicy,
-        layout_terminal_uuids: &[String],
-    ) -> Self {
-        Self::managed(RuntimeEndpoint::remote(host), policy, layout_terminal_uuids)
+    pub fn managed_remote(host: &str, policy: WorkspacePolicy) -> Self {
+        Self::managed(RuntimeEndpoint::remote(host), policy)
     }
 
-    fn managed(
-        endpoint: RuntimeEndpoint,
-        policy: WorkspacePolicy,
-        layout_terminal_uuids: &[String],
-    ) -> Self {
-        let mut runtime = Self {
-            managed: true,
-            endpoint,
-            policy,
-            runtime_id: None,
-            pane_bindings: BTreeMap::new(),
-            pending_layout_panes: BTreeSet::new(),
-        };
-        runtime.ensure_placeholder_bindings(layout_terminal_uuids);
-        runtime
+    const fn managed(endpoint: RuntimeEndpoint, policy: WorkspacePolicy) -> Self {
+        Self { managed: true, endpoint, policy, runtime_id: None }
     }
 
     /// True when this workspace should use the daemon-backed terminal path.
     #[must_use]
     pub const fn is_managed(&self) -> bool {
         self.managed
-    }
-
-    /// Ensure every layout terminal has at least a self-binding placeholder.
-    pub fn ensure_placeholder_bindings(&mut self, layout_terminal_uuids: &[String]) {
-        for terminal_uuid in layout_terminal_uuids {
-            if !self.pane_bindings.contains_key(terminal_uuid) {
-                self.pane_bindings.insert(terminal_uuid.clone(), terminal_uuid.clone());
-                self.pending_layout_panes.insert(terminal_uuid.clone());
-            }
-        }
-        self.pane_bindings.retain(|layout_uuid, _| layout_terminal_uuids.contains(layout_uuid));
-        self.pending_layout_panes.retain(|layout_uuid| layout_terminal_uuids.contains(layout_uuid));
-    }
-
-    /// Replace a layout terminal UUID while preserving runtime bindings.
-    pub fn replace_layout_terminal_uuid(&mut self, old_uuid: &str, new_uuid: &str) {
-        if old_uuid == new_uuid {
-            return;
-        }
-        if let Some(bound_runtime_uuid) = self.pane_bindings.remove(old_uuid) {
-            self.pane_bindings.insert(new_uuid.to_string(), bound_runtime_uuid);
-        }
-        if self.pending_layout_panes.remove(old_uuid) {
-            self.pending_layout_panes.insert(new_uuid.to_string());
-        }
-    }
-
-    /// Bind a layout pane to a runtime pane.
-    pub fn bind_runtime_pane(&mut self, layout_uuid: &str, runtime_pane_uuid: &str) {
-        self.pane_bindings.insert(layout_uuid.to_string(), runtime_pane_uuid.to_string());
-        self.pending_layout_panes.remove(layout_uuid);
-    }
-
-    /// Whether the layout pane is still waiting for a daemon pane assignment.
-    #[must_use]
-    pub fn is_layout_pane_pending(&self, layout_uuid: &str) -> bool {
-        self.pending_layout_panes.contains(layout_uuid)
     }
 }
 
@@ -583,110 +522,17 @@ fn is_generic_title(title: &str) -> bool {
         || lower == "fish"
 }
 
-/// Deterministic, non-destructive binding reconciliation result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BindingReconciliation {
-    /// Valid layout -> runtime bindings after reconciliation.
-    pub bindings: BTreeMap<String, String>,
-    /// Workspace panes that still need recovered GUI panes.
-    pub recovered_runtime_panes: Vec<String>,
-    /// Layout panes that have no live runtime pane.
-    pub disconnected_layout_panes: Vec<String>,
-}
-
-/// Reconcile persisted bindings against the live runtime pane inventory.
-///
-/// This never infers bindings by position alone. If a binding is missing,
-/// only an exact same-ID match is accepted automatically.
-#[must_use]
-pub fn reconcile_bindings(
-    layout_terminal_uuids: &[String],
-    persisted_bindings: &BTreeMap<String, String>,
-    runtime_pane_uuids: &[String],
-) -> BindingReconciliation {
-    let layout_set: BTreeSet<_> = layout_terminal_uuids.iter().cloned().collect();
-    let runtime_set: BTreeSet<_> = runtime_pane_uuids.iter().cloned().collect();
-    let mut bindings = BTreeMap::new();
-    let mut claimed_runtime_panes = BTreeSet::new();
-
-    for layout_uuid in layout_terminal_uuids {
-        if let Some(runtime_uuid) = persisted_bindings.get(layout_uuid)
-            && runtime_set.contains(runtime_uuid)
-            && claimed_runtime_panes.insert(runtime_uuid.clone())
-        {
-            bindings.insert(layout_uuid.clone(), runtime_uuid.clone());
-            continue;
-        }
-
-        if runtime_set.contains(layout_uuid) && claimed_runtime_panes.insert(layout_uuid.clone()) {
-            bindings.insert(layout_uuid.clone(), layout_uuid.clone());
-        }
-    }
-
-    let recovered_runtime_panes =
-        runtime_set.difference(&claimed_runtime_panes).cloned().collect::<Vec<_>>();
-    let disconnected_layout_panes =
-        layout_set.difference(&bindings.keys().cloned().collect()).cloned().collect::<Vec<_>>();
-
-    BindingReconciliation { bindings, recovered_runtime_panes, disconnected_layout_panes }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn managed_runtime_initializes_placeholder_bindings() {
-        let runtime = WorkspaceRuntime::managed_local(
-            WorkspacePolicy::Ephemeral,
-            &["pane-a".into(), "pane-b".into()],
-        );
+    fn managed_runtime_sets_managed_flag_and_policy() {
+        let runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Ephemeral);
 
         assert!(runtime.is_managed());
         assert_eq!(runtime.policy, WorkspacePolicy::Ephemeral);
-        assert_eq!(runtime.pane_bindings["pane-a"], "pane-a");
-        assert_eq!(runtime.pane_bindings["pane-b"], "pane-b");
-        assert!(runtime.is_layout_pane_pending("pane-a"));
-        assert!(runtime.is_layout_pane_pending("pane-b"));
-    }
-
-    #[test]
-    fn replacing_layout_terminal_uuid_preserves_binding() {
-        let mut runtime =
-            WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent, &["old".into()]);
-        runtime.bind_runtime_pane("old", "daemon-pane");
-
-        runtime.replace_layout_terminal_uuid("old", "new");
-
-        assert_eq!(runtime.pane_bindings.get("old"), None);
-        assert_eq!(runtime.pane_bindings.get("new").map(String::as_str), Some("daemon-pane"));
-        assert!(!runtime.is_layout_pane_pending("new"));
-    }
-
-    #[test]
-    fn reconciliation_keeps_explicit_bindings_and_marks_missing_objects() {
-        let layout = vec!["left".into(), "right".into()];
-        let bindings = BTreeMap::from([
-            ("left".into(), "pane-1".into()),
-            ("right".into(), "missing-pane".into()),
-        ]);
-        let runtime_panes = vec!["pane-1".into(), "pane-2".into()];
-
-        let reconciled = reconcile_bindings(&layout, &bindings, &runtime_panes);
-
-        assert_eq!(reconciled.bindings.len(), 1);
-        assert_eq!(reconciled.bindings["left"], "pane-1");
-        assert_eq!(reconciled.recovered_runtime_panes, vec!["pane-2"]);
-        assert_eq!(reconciled.disconnected_layout_panes, vec!["right"]);
-    }
-
-    #[test]
-    fn reconciliation_accepts_same_id_match_without_position_inference() {
-        let layout = vec!["pane-a".into()];
-        let reconciled = reconcile_bindings(&layout, &BTreeMap::new(), &["pane-a".into()]);
-        assert_eq!(reconciled.bindings["pane-a"], "pane-a");
-        assert!(reconciled.recovered_runtime_panes.is_empty());
-        assert!(reconciled.disconnected_layout_panes.is_empty());
+        assert_eq!(runtime.runtime_id, None);
     }
 
     #[test]
@@ -1092,63 +938,11 @@ mod tests {
 
     #[test]
     fn managed_remote_sets_endpoint_and_policy() {
-        let uuids = vec!["t1".into()];
-        let runtime = WorkspaceRuntime::managed_remote(
-            "server.example.com",
-            WorkspacePolicy::Persistent,
-            &uuids,
-        );
+        let runtime =
+            WorkspaceRuntime::managed_remote("server.example.com", WorkspacePolicy::Persistent);
         assert!(runtime.is_managed());
         assert_eq!(runtime.endpoint, RuntimeEndpoint::remote("server.example.com"));
         assert_eq!(runtime.policy, WorkspacePolicy::Persistent);
-        assert!(runtime.pending_layout_panes.contains("t1"));
-    }
-
-    #[test]
-    fn ensure_placeholder_bindings_adds_new_pane_to_remote_runtime() {
-        let mut runtime =
-            WorkspaceRuntime::managed_remote("host", WorkspacePolicy::Persistent, &["t1".into()]);
-
-        runtime.ensure_placeholder_bindings(&["t1".into(), "t2".into()]);
-
-        assert!(runtime.pane_bindings.contains_key("t2"));
-        assert!(runtime.pending_layout_panes.contains("t2"));
-        assert_eq!(runtime.endpoint, RuntimeEndpoint::remote("host"));
-    }
-
-    #[test]
-    fn ensure_placeholder_bindings_removes_closed_pane() {
-        let mut runtime = WorkspaceRuntime::managed_remote(
-            "host",
-            WorkspacePolicy::Persistent,
-            &["t1".into(), "t2".into()],
-        );
-
-        runtime.ensure_placeholder_bindings(&["t1".into()]);
-
-        assert!(!runtime.pane_bindings.contains_key("t2"));
-        assert!(!runtime.pending_layout_panes.contains("t2"));
-        assert!(runtime.pane_bindings.contains_key("t1"));
-    }
-
-    // ── bind_runtime_pane / is_layout_pane_pending ──────────────
-
-    #[test]
-    fn bind_runtime_pane_clears_pending_and_sets_binding() {
-        let mut runtime =
-            WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent, &["t1".into()]);
-        assert!(runtime.is_layout_pane_pending("t1"));
-
-        runtime.bind_runtime_pane("t1", "runtime-pane-abc");
-
-        assert!(!runtime.is_layout_pane_pending("t1"));
-        assert_eq!(runtime.pane_bindings.get("t1").unwrap(), "runtime-pane-abc");
-    }
-
-    #[test]
-    fn is_layout_pane_pending_false_for_unknown_uuid() {
-        let runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent, &["t1".into()]);
-        assert!(!runtime.is_layout_pane_pending("unknown"));
     }
 
     // ── advance_connection_status ───────────────────────────────

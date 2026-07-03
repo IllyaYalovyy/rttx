@@ -415,20 +415,15 @@ impl WorkspaceRecord {
         };
 
         let layout: crate::workspace::layout::LayoutNode = (&self.layout).into();
-        let layout_terminal_uuids = layout.terminal_uuids();
 
         let managed = self.endpoint_key != "local" || self.runtime_ref.is_some();
 
-        let mut runtime = WorkspaceRuntime {
+        let runtime = WorkspaceRuntime {
             managed,
             endpoint,
             policy: (&self.policy).into(),
             runtime_id: self.runtime_ref.as_ref().map(|r| r.runtime_id.clone()),
-            ..WorkspaceRuntime::default()
         };
-        if managed {
-            runtime.ensure_placeholder_bindings(&layout_terminal_uuids);
-        }
 
         let mut ws = state::WorkspaceState {
             uuid: self.id.clone(),

@@ -26,7 +26,7 @@ use crate::workspace::{
     self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, SplitOrientation,
     StartupStep, WindowState, WorkspaceColor, WorkspaceState,
 };
-use crate::workspace_state::{EndpointEventTransition, WorkspacePaneRestore};
+use crate::workspace_state::{EndpointEventTransition, PaneRekey, WorkspacePaneRestore};
 use std::collections::HashMap;
 use std::time::Duration;
 

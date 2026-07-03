@@ -108,7 +108,7 @@ pub fn managed_session_with_runtime(
         .map(|terminal_uuid| (terminal_uuid, PaneRecovery::empty_shell()))
         .collect();
     let active_terminal_uuid = terminal_uuids.first().cloned();
-    let mut session = WorkspaceState {
+    WorkspaceState {
         uuid: id.to_string(),
         name: name.to_string(),
         layout,
@@ -120,15 +120,11 @@ pub fn managed_session_with_runtime(
             endpoint,
             policy,
             runtime_id: runtime_id.map(str::to_string),
-            pane_bindings: std::collections::BTreeMap::default(),
-            pending_layout_panes: std::collections::BTreeSet::default(),
         },
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
-    };
-    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
-    session
+    }
 }
 
 /// Build a window state from workspaces.

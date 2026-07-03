@@ -64,7 +64,7 @@ fn managed_workspace(id: &str, layout: LayoutNode, runtime_id: Option<&str>) -> 
         .map(|uuid| (uuid, rttx::workspace::PaneRecovery::empty_shell()))
         .collect();
     let active_terminal_uuid = terminal_uuids.first().cloned();
-    let mut session = WorkspaceState {
+    WorkspaceState {
         uuid: id.to_string(),
         name: id.to_string(),
         layout,
@@ -76,15 +76,11 @@ fn managed_workspace(id: &str, layout: LayoutNode, runtime_id: Option<&str>) -> 
             endpoint: RuntimeEndpoint::Local,
             policy: WorkspacePolicy::Persistent,
             runtime_id: runtime_id.map(str::to_string),
-            pane_bindings: std::collections::BTreeMap::default(),
-            pending_layout_panes: std::collections::BTreeSet::default(),
         },
         color: WorkspaceColor::default(),
         zoomed_terminal_uuid: None,
         user_renamed: false,
-    };
-    session.runtime.ensure_placeholder_bindings(&terminal_uuids);
-    session
+    }
 }
 
 /// Resync on a multi-pane workspace restores all bound panes without
@@ -191,7 +187,6 @@ fn repeated_resyncs_are_idempotent() {
         assert!(transition.rebuilt_workspaces.is_empty());
     }
 
-    // Layout and bindings unchanged after 5 resyncs.
+    // Layout unchanged after 5 resyncs.
     assert_eq!(state.workspaces[0].layout.terminal_uuids().len(), 1);
-    assert_eq!(state.workspaces[0].runtime.pane_bindings.len(), 1);
 }

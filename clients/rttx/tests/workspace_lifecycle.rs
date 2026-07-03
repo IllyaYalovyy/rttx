@@ -523,7 +523,6 @@ fn new_managed_remote_produces_remote_persistent_session() {
     assert!(session.runtime.is_managed());
     assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("dev-box.internal"));
     assert!(!session.layout.terminal_uuids().is_empty());
-    assert!(!session.runtime.pending_layout_panes.is_empty());
 }
 
 /// Remote managed session must round-trip through serialization.
@@ -588,9 +587,9 @@ fn update_remote_endpoint_changes_host() {
 }
 
 /// Splitting a pane in a remote managed session must preserve the remote
-/// endpoint and add the new pane to pending bindings. Issue #246.
+/// endpoint and add the new pane to the layout. Issue #246.
 #[test]
-fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
+fn split_remote_session_preserves_endpoint_and_adds_pane() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
     use rttx::workspace::layout::SplitOrientation;
     use rttx::workspace::{PaneRecovery, WorkspaceState};
@@ -603,7 +602,7 @@ fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
     );
 
     let original_uuid = session.layout.terminal_uuids()[0].clone();
-    assert_eq!(session.runtime.pending_layout_panes.len(), 1);
+    assert_eq!(session.layout.terminal_count(), 1);
 
     // Split — mirrors the logic in window/mod.rs split_terminal().
     let (new_layout, new_uuid) = session
@@ -612,7 +611,6 @@ fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
         .unwrap();
     session.layout = new_layout;
     session.set_recovery(&new_uuid, PaneRecovery::empty_shell());
-    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
 
     // Endpoint must still be remote.
     assert_eq!(
@@ -621,18 +619,15 @@ fn split_remote_session_preserves_endpoint_and_adds_pending_pane() {
         "split must not change the workspace endpoint"
     );
 
-    // Both panes must be in pending bindings.
-    assert!(
-        session.runtime.pending_layout_panes.contains(&new_uuid),
-        "new pane must be in pending_layout_panes"
-    );
+    // Both panes must be in the layout.
+    assert!(session.layout.contains_terminal(&new_uuid), "new pane must be in the layout");
     assert_eq!(session.layout.terminal_count(), 2);
     assert!(session.runtime.is_managed());
 }
 
-/// Splitting twice must keep all panes pending and endpoint unchanged.
+/// Splitting twice must keep all panes in the layout and endpoint unchanged.
 #[test]
-fn double_split_remote_session_keeps_all_panes_pending() {
+fn double_split_remote_session_keeps_all_panes() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
     use rttx::workspace::layout::SplitOrientation;
     use rttx::workspace::{PaneRecovery, WorkspaceState};
@@ -650,18 +645,16 @@ fn double_split_remote_session_keeps_all_panes_pending() {
         session.layout.split_terminal_with_new_uuid(&t1, SplitOrientation::Horizontal).unwrap();
     session.layout = layout;
     session.set_recovery(&t2, PaneRecovery::empty_shell());
-    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
 
     let (layout, t3) =
         session.layout.split_terminal_with_new_uuid(&t2, SplitOrientation::Vertical).unwrap();
     session.layout = layout;
     session.set_recovery(&t3, PaneRecovery::empty_shell());
-    session.runtime.ensure_placeholder_bindings(&session.layout.terminal_uuids());
 
     assert_eq!(session.runtime.endpoint, RuntimeEndpoint::remote("gpu-box"));
     assert_eq!(session.layout.terminal_count(), 3);
-    assert!(session.runtime.pending_layout_panes.contains(&t2));
-    assert!(session.runtime.pending_layout_panes.contains(&t3));
+    assert!(session.layout.contains_terminal(&t2));
+    assert!(session.layout.contains_terminal(&t3));
 }
 
 /// Closing a remote workspace and then receiving inventory must not
@@ -725,7 +718,7 @@ fn remote_managed_session_is_ready_for_inventory_binding() {
     assert!(remote_session.runtime.is_managed());
     assert_eq!(remote_session.runtime.endpoint, endpoint);
     assert!(remote_session.runtime.runtime_id.is_none());
-    assert!(!remote_session.runtime.pending_layout_panes.is_empty());
+    assert!(!remote_session.layout.terminal_uuids().is_empty());
 }
 
 /// `active_workspace_index` must be clamped to valid range on restore.
@@ -893,29 +886,30 @@ fn ctrl_arrow_encodes_with_modifier_param() {
     );
 }
 
-/// Split pane CWD must propagate through reconciliation pane create requests. #297.
+/// Split pane CWD must propagate to a pane create request. #297.
+///
+/// Removed with RFC-031: the client no longer reconciles a tree-less snapshot
+/// into pane-create requests. Pane creation is bootstrapped by the daemon
+/// bridge and pane identity is assigned by the `PaneCreated` re-key.
 #[test]
-fn split_pane_cwd_propagates_through_reconciliation_create_request() {
-    use rttx::daemon_bridge::EndpointEvent;
+fn split_remote_session_cwd_survives_layout_round_trip() {
     use rttx::runtime::WorkspacePolicy;
     use rttx::workspace::*;
 
     let first_uuid = uuid::Uuid::new_v4().to_string();
     let second_uuid = uuid::Uuid::new_v4().to_string();
-    let runtime_id = uuid::Uuid::new_v4().to_string();
 
-    // Build a managed workspace with two panes, second has a CWD from a prior split.
     let layout = LayoutNode::Split {
         orientation: SplitOrientation::Horizontal,
         ratio: 0.5,
         first: Box::new(LayoutNode::Terminal {
-            uuid: first_uuid.clone(),
+            uuid: first_uuid,
             profile: None,
             cwd: None,
             custom_title: None,
         }),
         second: Box::new(LayoutNode::Terminal {
-            uuid: second_uuid,
+            uuid: second_uuid.clone(),
             profile: None,
             cwd: Some("/srv/project".into()),
             custom_title: None,
@@ -926,41 +920,9 @@ fn split_pane_cwd_propagates_through_reconciliation_create_request() {
         WorkspaceState::new_managed_local("Workspace".into(), WorkspacePolicy::Persistent, None);
     session.layout = layout;
 
-    let mut state = WindowState { workspaces: vec![session], ..Default::default() };
-
-    // Simulate daemon reporting only the first pane exists.
-    let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
-        workspace_id: state.workspaces[0].uuid.clone(),
-        runtime_id: runtime_id.clone(),
-        snapshot: rttx_proto::v3::WorkspaceSnapshot {
-            tree: None,
-            default_active_pane_id: Vec::new(),
-            runtime_id: rttx_proto::uuid_to_bytes(runtime_id.parse().unwrap()),
-            panes: vec![rttx_proto::v3::PaneSnapshot {
-                pane_id: rttx_proto::uuid_to_bytes(first_uuid.parse().unwrap()),
-                pane_output_seq: 0,
-                title: "Shell".into(),
-                cwd: "/home".into(),
-                scrollback_tail: bytes::Bytes::new(),
-                cols: 80,
-                rows: 24,
-                exit_status: None,
-                terminal_modes: None,
-                total_scrollback_bytes: 0,
-                scrollback_complete: true,
-            }],
-            workspace_revision: 0,
-            client_role: 0,
-        },
-    });
-
-    // The second pane should be requested with the layout CWD.
-    assert_eq!(transition.pane_create_requests.len(), 1);
-    assert_eq!(
-        transition.pane_create_requests[0].cwd.as_deref(),
-        Some("/srv/project"),
-        "reconciliation must carry layout CWD to pane create request"
-    );
+    // The layout node carries the CWD for the second pane; this is what a
+    // subsequent CreatePane bootstrap reads to seed the daemon pane.
+    assert_eq!(session.layout.terminal_cwd(&second_uuid).as_deref(), Some("/srv/project"),);
 }
 
 // ── Zoom state ──────────────────────────────────────────────────
@@ -1173,7 +1135,6 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
 
     let layout = hsplit(term("pane-1"), hsplit(term("pane-2"), term("pane-3")));
-    let terminal_uuids = layout.terminal_uuids();
     let mut session = WorkspaceState::new("Sync test".into());
     session.uuid = "ws-sync".into();
     session.layout = layout;
@@ -1183,13 +1144,7 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
         endpoint: RuntimeEndpoint::Local,
         policy: WorkspacePolicy::Persistent,
         runtime_id: Some("rt-1".into()),
-        pane_bindings: std::collections::BTreeMap::default(),
-        pending_layout_panes: std::collections::BTreeSet::default(),
     };
-    session.runtime.ensure_placeholder_bindings(&terminal_uuids);
-    session.runtime.bind_runtime_pane("pane-1", "daemon-1");
-    session.runtime.bind_runtime_pane("pane-2", "daemon-2");
-    session.runtime.bind_runtime_pane("pane-3", "daemon-3");
 
     let state = WindowState {
         active_workspace_index: 0,
@@ -1197,11 +1152,12 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
         ..WindowState::default()
     };
 
+    // Identity invariant: each sibling's runtime pane id IS its layout uuid.
     let targets = state.input_sync_targets("pane-1");
     assert_eq!(targets.len(), 2);
     let target_pane_ids: Vec<&str> = targets.iter().map(|t| t.runtime_pane_id.as_str()).collect();
-    assert!(target_pane_ids.contains(&"daemon-2"));
-    assert!(target_pane_ids.contains(&"daemon-3"));
+    assert!(target_pane_ids.contains(&"pane-2"));
+    assert!(target_pane_ids.contains(&"pane-3"));
 
     // Verify no targets when input sync is off.
     let mut state_off = state.clone();
@@ -1300,6 +1256,8 @@ fn default_window_state_has_reasonable_sidebar_widths() {
 
 #[test]
 fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
+    use rttx::workspace::LayoutNode;
+
     let runtime_id = uuid::Uuid::new_v4().to_string();
     let pane_id = uuid::Uuid::new_v4().to_string();
     let mut state = WindowState {
@@ -1310,10 +1268,17 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
         )],
         ..WindowState::default()
     };
+    // The layout terminal IS the server pane id (identity invariant).
+    state.workspaces[0].layout = LayoutNode::Terminal {
+        uuid: pane_id.clone(),
+        profile: None,
+        cwd: None,
+        custom_title: None,
+    };
     let ws_id = state.workspaces[0].uuid.clone();
 
     let snapshot = rttx_proto::v3::WorkspaceSnapshot {
-        tree: None,
+        tree: Some(rttx_proto::v3_tree::pane_tree_leaf(uuid::Uuid::parse_str(&pane_id).unwrap())),
         default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
         panes: vec![rttx_proto::v3::PaneSnapshot {
@@ -1367,7 +1332,7 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
 /// through reconciliation so the restore path can re-apply them. #765.
 #[test]
 fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
-    use rttx::workspace::{WindowState, WorkspaceState};
+    use rttx::workspace::{LayoutNode, WindowState, WorkspaceState};
 
     let runtime_id = uuid::Uuid::new_v4().to_string();
     let pane_id = uuid::Uuid::new_v4().to_string();
@@ -1379,10 +1344,17 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
         )],
         ..WindowState::default()
     };
+    // The layout terminal IS the server pane id (identity invariant).
+    state.workspaces[0].layout = LayoutNode::Terminal {
+        uuid: pane_id.clone(),
+        profile: None,
+        cwd: None,
+        custom_title: None,
+    };
     let ws_id = state.workspaces[0].uuid.clone();
 
     let snapshot = rttx_proto::v3::WorkspaceSnapshot {
-        tree: None,
+        tree: Some(rttx_proto::v3_tree::pane_tree_leaf(uuid::Uuid::parse_str(&pane_id).unwrap())),
         default_active_pane_id: Vec::new(),
         runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::parse_str(&runtime_id).unwrap()),
         panes: vec![rttx_proto::v3::PaneSnapshot {

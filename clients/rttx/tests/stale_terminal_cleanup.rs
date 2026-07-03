@@ -54,10 +54,7 @@ fn managed_session(layout: LayoutNode, runtime_id: &str) -> WorkspaceState {
         WorkspaceState::new_managed_local("Test".into(), WorkspacePolicy::Persistent, None);
     session.uuid = "ws-1".into();
     session.layout = layout;
-    session.runtime = WorkspaceRuntime::managed_local(
-        WorkspacePolicy::Persistent,
-        &session.layout.terminal_uuids(),
-    );
+    session.runtime = WorkspaceRuntime::managed_local(WorkspacePolicy::Persistent);
     session.runtime.runtime_id = Some(runtime_id.into());
     session
 }
@@ -78,13 +75,9 @@ fn stale_uuids_from_transition(transition: &EndpointEventTransition) -> Vec<Stri
 #[test]
 fn reconnect_cycles_never_leak_terminal_uuids() {
     let runtime_id = "d7d04564-b2bf-4302-9495-e65c4df12ac6";
-    let initial_pane = uuid::Uuid::new_v4().to_string();
 
     let session = managed_session(term("initial"), runtime_id);
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
-
-    // Bind the initial terminal to a runtime pane.
-    state.workspaces[0].runtime.bind_runtime_pane("initial", &initial_pane);
 
     let mut all_ever_created: std::collections::BTreeSet<String> =
         state.workspaces[0].layout.terminal_uuids().into_iter().collect();
@@ -137,9 +130,7 @@ fn workspace_opened_transition_accounts_for_all_previous_terminals() {
     let pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
     let pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
 
-    let mut session = managed_session(hsplit(term("left"), term("right")), runtime_id);
-    session.runtime.bind_runtime_pane("left", pane_a);
-    session.runtime.bind_runtime_pane("right", pane_b);
+    let session = managed_session(hsplit(term("left"), term("right")), runtime_id);
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
     let transition = state.reconcile_endpoint_event(&EndpointEvent::WorkspaceOpened {
@@ -173,9 +164,7 @@ fn pane_closed_then_workspace_opened_does_not_double_remove() {
     let pane_a = "07fa83b4-9ae3-4354-a1c5-1f685ffab370";
     let pane_b = "0d88f17f-626d-40b8-a1d3-6a42af628ac9";
 
-    let mut session = managed_session(hsplit(term("left"), term("right")), runtime_id);
-    session.runtime.bind_runtime_pane("left", pane_a);
-    session.runtime.bind_runtime_pane("right", pane_b);
+    let session = managed_session(hsplit(term("left"), term("right")), runtime_id);
     let mut state = WindowState { workspaces: vec![session], ..WindowState::default() };
 
     // Close "left" pane.
