@@ -241,10 +241,10 @@ async fn corrupt_v2_workspace_skipped_not_fatal() {
 }
 
 /// The daemon understands only the current storage schema. A `workspace.json`
-/// written by the previous iteration (an older `schema_version`) is skipped on
-/// load — not deserialized, not migrated, not loaded.
+/// carrying an unsupported `schema_version` is skipped on load — not
+/// deserialized, not migrated, not loaded.
 #[test]
-fn older_schema_workspace_file_is_ignored_on_load() {
+fn unsupported_schema_workspace_file_is_ignored_on_load() {
     let tmp = tempfile::TempDir::new().unwrap();
     let state_dir = tmp.path().join("state/rttx/daemon");
     std::fs::create_dir_all(&state_dir).unwrap();
@@ -256,9 +256,9 @@ fn older_schema_workspace_file_is_ignored_on_load() {
     if let Some(parent) = old_path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
-    std::fs::write(&old_path, r#"{"schema_version": 1, "spec": {}, "instance": {}}"#).unwrap();
+    std::fs::write(&old_path, r#"{"schema_version": 99, "spec": {}, "instance": {}}"#).unwrap();
 
     let result = persistence::load_all(&state_dir).expect("state dir loads");
-    assert!(result.workspaces.is_empty(), "a previous-iteration workspace file must not load");
+    assert!(result.workspaces.is_empty(), "an unsupported-schema workspace file must not load");
     assert_eq!(result.failed_ids, vec![old_id], "it is skipped as an unsupported file");
 }

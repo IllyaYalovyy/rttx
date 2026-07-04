@@ -329,7 +329,7 @@ mod tests {
     }
 
     /// A workspace file whose `schema_version` is not the current one is skipped
-    /// on load — there is no migration (RFC-031 clean break).
+    /// on load — there is no migration path.
     #[test]
     fn unsupported_schema_workspace_is_skipped() {
         let tmp = TempDir::new().unwrap();
@@ -341,7 +341,7 @@ mod tests {
         std::fs::create_dir_all(&old_dir).unwrap();
         std::fs::write(
             layout::runtime_file(state_dir, old_id),
-            r#"{"schema_version": 1, "spec": {}, "instance": {}}"#,
+            r#"{"schema_version": 99, "spec": {}, "instance": {}}"#,
         )
         .unwrap();
         save_daemon_index(state_dir, &[old_id]).unwrap();
@@ -366,7 +366,7 @@ mod tests {
         std::fs::create_dir_all(&old_dir).unwrap();
         std::fs::write(
             layout::runtime_file(state_dir, old_id),
-            r#"{"schema_version": 1, "spec": {}, "instance": {}}"#,
+            r#"{"schema_version": 99, "spec": {}, "instance": {}}"#,
         )
         .unwrap();
 

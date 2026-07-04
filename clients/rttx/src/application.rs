@@ -382,7 +382,7 @@ fn import_config_confirm(win: &Window) {
     let dialog = adw::AlertDialog::builder()
         .heading("Replace Configuration?")
         .body(
-            "This will replace all current settings, bookmarks, hosts, and workspaces \
+            "This will replace all current settings, hosts, and workspaces \
              with the contents of the imported file. This cannot be undone.",
         )
         .close_response("cancel")

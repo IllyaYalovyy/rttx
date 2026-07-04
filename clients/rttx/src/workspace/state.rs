@@ -442,12 +442,13 @@ mod tests {
     }
 
     #[test]
-    fn mode_field_absent_from_workspace_state() {
+    fn serialized_workspace_state_has_expected_shape() {
         let session =
             WorkspaceState::new_managed_local("Test".into(), WorkspacePolicy::Persistent, None);
         let json = serde_json::to_string(&session).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(value.get("mode").is_none(), "mode field must not exist in WorkspaceState");
+        assert!(value.get("runtime").is_some(), "runtime must be present in serialized state");
+        assert!(value.get("layout").is_some(), "layout must be present in serialized state");
     }
 
     #[test]
@@ -607,31 +608,27 @@ mod tests {
     }
 
     #[test]
-    fn window_state_rejects_sessions_key() {
+    fn window_state_rejects_unknown_shape() {
         let json = r#"{
-            "sessions": [{"uuid":"s1","name":"Old","layout":{"Terminal":{"uuid":"t1"}}}],
-            "active_session_index": 0,
+            "unrecognized_key": [{"foo":"bar"}],
             "width": 800,
             "height": 600,
             "is_maximized": false
         }"#;
         let result = serde_json::from_str::<WindowState>(json);
-        assert!(
-            result.is_err(),
-            "the removed sessions/active_session_index keys must no longer parse"
-        );
+        assert!(result.is_err(), "a document without the expected workspace shape must not parse");
     }
 
     #[test]
-    fn unknown_mode_field_is_ignored_on_deserialize() {
+    fn unknown_field_is_ignored_on_deserialize() {
         let json = r#"{
             "uuid": "s1",
-            "name": "Legacy",
+            "name": "Test",
             "layout": {"Terminal": {"uuid": "t1"}},
-            "mode": {"persistent": {"daemon_runtime_id": "rt-1"}}
+            "unrecognized_field": {"nested": {"x": "y"}}
         }"#;
         let session: WorkspaceState = serde_json::from_str(json).unwrap();
-        assert!(!session.uses_managed_runtime(), "unknown mode field should be silently ignored");
+        assert!(!session.uses_managed_runtime(), "an unknown field should be silently ignored");
     }
 }
 

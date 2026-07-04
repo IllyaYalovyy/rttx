@@ -1680,10 +1680,10 @@ mod search_tests {
     }
 
     /// Removed `PaneSource` variants must fail to deserialize now that the
-    /// removed variant is rejected on load.
+    /// an unknown source variant is rejected on load.
     #[test]
-    fn removed_pane_source_variant_rejects_on_deserialize() {
-        let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":null,"startup":[]}"#;
+    fn unknown_pane_source_variant_rejects_on_deserialize() {
+        let json = r#"{"source":{"unrecognized_source":{"name":"X"}},"target":null,"startup":[]}"#;
         assert!(serde_json::from_str::<crate::workspace::PaneRecovery>(json).is_err());
     }
 

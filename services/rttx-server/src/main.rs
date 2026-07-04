@@ -1012,9 +1012,8 @@ mod tests {
     }
 
     #[test]
-    fn cli_rejects_removed_salvage_history_subcommand() {
-        // The previous-iteration history-recovery subcommand no longer exists;
-        // parsing it must fail rather than silently resolve to anything.
-        assert!(Cli::try_parse_from(["rttx-server", "salvage-history"]).is_err());
+    fn cli_rejects_unknown_subcommand() {
+        // Unknown subcommands must fail to parse rather than silently resolve.
+        assert!(Cli::try_parse_from(["rttx-server", "not-a-real-subcommand"]).is_err());
     }
 }

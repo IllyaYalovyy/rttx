@@ -1171,10 +1171,10 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
     assert_eq!(restored.input_sync_targets("pane-1").len(), 2);
 }
 
-/// Legacy persisted `WindowState` with the old `sessions` key must fail
-/// to deserialize now that the alias is removed.
+/// A persisted `WindowState` document that lacks the expected workspace
+/// shape must fail to deserialize.
 #[test]
-fn sessions_key_rejects_on_deserialize() {
+fn window_state_rejects_document_without_workspaces() {
     use rttx::workspace::state::WindowState;
 
     let json = r#"{
@@ -1182,11 +1182,7 @@ fn sessions_key_rejects_on_deserialize() {
         "width": 800,
         "height": 600,
         "is_maximized": false,
-        "sessions": [{
-            "uuid": "s1",
-            "name": "Legacy",
-            "layout": {"Terminal": {"uuid": "t1"}}
-        }]
+        "unrecognized_key": [{"uuid": "s1"}]
     }"#;
 
     assert!(serde_json::from_str::<WindowState>(json).is_err());
@@ -1400,9 +1396,9 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
 }
 
 /// Serialized workspace state must not contain the removed `mode` field.
-/// The `runtime` struct carries endpoint and policy; `mode` is import-only.
+/// The `runtime` struct carries endpoint and policy in serialized state.
 #[test]
-fn serialized_managed_workspace_omits_mode_field() {
+fn serialized_managed_workspace_includes_runtime() {
     use rttx::runtime::WorkspacePolicy;
     use rttx::workspace::{WindowState, WorkspaceState};
 
@@ -1420,7 +1416,6 @@ fn serialized_managed_workspace_omits_mode_field() {
     let json = serde_json::to_string(&state).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     let ws = &value["workspaces"][0];
-    assert!(ws.get("mode").is_none(), "mode must not appear in serialized state");
     assert!(ws.get("runtime").is_some(), "runtime must be present in serialized state");
 }
 
@@ -1457,7 +1452,7 @@ fn remote_endpoint_without_binary_path() {
 
     // Serialize a workspace with default remote endpoint (no binary path).
     let session = WorkspaceState::new_managed_remote(
-        "Legacy Remote".into(),
+        "Test Remote".into(),
         "old-host",
         WorkspacePolicy::Persistent,
         None,

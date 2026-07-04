@@ -287,7 +287,7 @@ pub fn build_data_group(window: &adw::PreferencesWindow) -> adw::PreferencesGrou
 
     let export_row = adw::ActionRow::builder()
         .title("Export Configuration\u{2026}")
-        .subtitle("Save all settings, bookmarks, and hosts to a file")
+        .subtitle("Save all settings and hosts to a file")
         .activatable(true)
         .build();
     let export_icon = gtk4::Image::from_icon_name("document-save-symbolic");

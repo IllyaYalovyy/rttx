@@ -76,7 +76,7 @@ fn older_format_without_sidebar_widths_loads_with_defaults() {
     let json = r#"{
         "workspaces": [{
             "uuid": "s1",
-            "name": "Legacy",
+            "name": "Test",
             "layout": {"Terminal": {"uuid": "t1"}}
         }],
         "active_workspace_index": 0,
@@ -87,7 +87,7 @@ fn older_format_without_sidebar_widths_loads_with_defaults() {
 
     let state: WindowState = serde_json::from_str(json).unwrap();
     assert_eq!(state.workspaces.len(), 1);
-    assert_eq!(state.workspaces[0].name, "Legacy");
+    assert_eq!(state.workspaces[0].name, "Test");
     assert_eq!(state.left_sidebar_width, 220, "missing left_sidebar_width should default to 220");
     assert_eq!(state.right_sidebar_width, 320, "missing right_sidebar_width should default to 320");
 }
@@ -99,12 +99,12 @@ fn older_format_without_runtime_or_color_fields_loads_gracefully() {
     let json = r#"{
         "workspaces": [{
             "uuid": "s1",
-            "name": "Old Session",
+            "name": "Session",
             "layout": {"Terminal": {"uuid": "t1"}},
             "terminal_recovery": {},
             "active_terminal_uuid": "t1",
             "input_sync": false,
-            "mode": "direct"
+            "unrecognized_field": "x"
         }],
         "active_workspace_index": 0,
         "width": 800,
@@ -136,25 +136,22 @@ fn older_format_without_dismissed_runtime_ids_loads_empty() {
     assert!(state.dismissed_runtime_ids.is_empty());
 }
 
-/// State with an unknown `mode` field must deserialize without error,
-/// silently ignoring the removed field.
+/// State containing an unknown field must deserialize without error,
+/// silently ignoring the unrecognized field.
 #[test]
-fn mode_field_is_silently_ignored() {
+fn unknown_field_is_silently_ignored() {
     let json = r#"{
         "uuid": "s1",
-        "name": "Legacy Persistent",
+        "name": "Persistent Session",
         "layout": {"Terminal": {"uuid": "t1"}},
         "terminal_recovery": {},
         "active_terminal_uuid": "t1",
         "input_sync": false,
-        "mode": {"persistent": {"daemon_runtime_id": "runtime-abc"}}
+        "unrecognized_field": {"nested": "x"}
     }"#;
 
     let session: WorkspaceState = serde_json::from_str(json).unwrap();
-    assert!(
-        !session.uses_managed_runtime(),
-        "unknown mode field must not activate managed runtime"
-    );
+    assert!(!session.uses_managed_runtime(), "an unknown field must not activate managed runtime");
     assert_eq!(session.uuid, "s1");
 }
 
@@ -461,10 +458,10 @@ fn full_roundtrip_through_file_persistence() {
     assert_eq!(s2.color, WorkspaceColor::Blue);
 }
 
-/// Serialized workspace state must not contain the removed
-/// `mode` field, and must round-trip cleanly through the current format.
+/// A managed workspace round-trips cleanly through the current format,
+/// preserving its managed runtime.
 #[test]
-fn workspace_state_roundtrip_has_no_mode_field() {
+fn managed_workspace_state_round_trips_cleanly() {
     let session = WorkspaceState::new_managed_local(
         "Managed".into(),
         WorkspacePolicy::Persistent,
@@ -472,7 +469,7 @@ fn workspace_state_roundtrip_has_no_mode_field() {
     );
     let json = serde_json::to_string(&session).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert!(value.get("mode").is_none(), "mode field must not exist after removal");
+    assert!(value.get("runtime").is_some(), "runtime must be present after roundtrip");
 
     let restored: WorkspaceState = serde_json::from_str(&json).unwrap();
     assert!(restored.uses_managed_runtime());

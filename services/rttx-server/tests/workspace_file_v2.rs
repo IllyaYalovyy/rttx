@@ -1,4 +1,4 @@
-//! Behavior tests for `WorkspaceFileV2` durable persistence and the clean-break
+//! Behavior tests for `WorkspaceFileV2` durable persistence and the unsupported-version
 //! loader (RFC-031 Step 2).
 //!
 //! These exercise the public persistence API end-to-end: the authoritative pane
@@ -72,7 +72,7 @@ fn multi_pane_tree_survives_save_and_load() {
 
 #[test]
 fn unsupported_schema_runtime_file_is_skipped() {
-    // Legacy-free load: a workspace.json with any non-current schema_version is
+    // A workspace.json with any non-current schema_version is
     // unsupported — it does not load and is skipped (not migrated, not loaded).
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path();
