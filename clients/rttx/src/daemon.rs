@@ -70,7 +70,7 @@ pub enum DaemonError {
         retryable: bool,
     },
 
-    /// Server returned a legacy v2 error message.
+    /// Structured error returned by the server.
     #[error("server error ({code}): {message}")]
     ServerError {
         /// Error code from the server.

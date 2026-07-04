@@ -81,7 +81,7 @@ fn render_is_a_pure_function_of_the_server_tree() {
 
 #[test]
 fn snapshot_without_tree_yields_no_layout() {
-    // A pre-tree daemon or empty workspace carries no tree; the caller falls
+    // An empty workspace carries no tree; the caller keeps its placeholder
     // back to its existing path rather than fabricating structure.
     assert!(render_layout_from_snapshot(&snapshot_with_tree(None)).is_none());
 }

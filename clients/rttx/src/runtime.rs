@@ -1066,7 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_endpoint_serde_backward_compat_without_daemon_binary_path() {
+    fn remote_endpoint_serde_without_daemon_binary_path() {
         let json = r#"{"kind":"remote","host":"example.com"}"#;
         let endpoint: RuntimeEndpoint = serde_json::from_str(json).unwrap();
         assert_eq!(endpoint.daemon_binary_path(), None);

@@ -329,7 +329,7 @@ Key rules:
 
 - Use `ClientStore::load_*` / `save_*` methods, not raw file I/O.
 - Store paths are injectable via `StorePaths` for tests.
-- New persisted fields must use `#[serde(default)]` for backward compatibility.
+- New persisted fields must use `#[serde(default)]` so files written before the field existed still load.
 - New documents require a schema identifier and version in the envelope.
 
 See `designs/RFC-023-client-configuration-state-store.md` for the full design.

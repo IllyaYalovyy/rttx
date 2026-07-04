@@ -1,7 +1,7 @@
 //! End-to-end session persistence tests.
 //!
 //! These tests exercise the full save → load cycle through serde and
-//! file I/O, covering backward compatibility with older JSON formats,
+//! file I/O, covering tolerance of older files that omit newer optional fields,
 //! graceful recovery from corrupted state files, and correctness under
 //! large/complex layouts.
 
@@ -136,10 +136,10 @@ fn older_format_without_dismissed_runtime_ids_loads_empty() {
     assert!(state.dismissed_runtime_ids.is_empty());
 }
 
-/// State with a legacy `mode` field must deserialize without error,
+/// State with an unknown `mode` field must deserialize without error,
 /// silently ignoring the removed field.
 #[test]
-fn legacy_mode_field_is_silently_ignored() {
+fn mode_field_is_silently_ignored() {
     let json = r#"{
         "uuid": "s1",
         "name": "Legacy Persistent",
@@ -461,10 +461,10 @@ fn full_roundtrip_through_file_persistence() {
     assert_eq!(s2.color, WorkspaceColor::Blue);
 }
 
-/// Workspace state serialized after legacy removal must not contain a
+/// Serialized workspace state must not contain the removed
 /// `mode` field, and must round-trip cleanly through the current format.
 #[test]
-fn workspace_state_roundtrip_has_no_legacy_mode_field() {
+fn workspace_state_roundtrip_has_no_mode_field() {
     let session = WorkspaceState::new_managed_local(
         "Managed".into(),
         WorkspacePolicy::Persistent,

@@ -114,7 +114,7 @@ fn preferences_input_sync_persists_in_session_state() {
 }
 
 #[test]
-fn preferences_backward_compat_missing_input_sync() {
+fn preferences_missing_input_sync() {
     // Old session state JSON without input_sync or active_terminal_uuid should default safely.
     let json = r#"{
         "workspaces": [{
@@ -169,7 +169,7 @@ fn custom_title_persists_in_layout() {
 }
 
 #[test]
-fn custom_title_backward_compat_null() {
+fn custom_title_null() {
     // Old JSON without custom_title should deserialize as None
     let json = r#"{
         "workspaces": [{
@@ -209,7 +209,7 @@ fn paste_guard_roundtrips() {
 }
 
 #[test]
-fn paste_guard_backward_compat_missing_fields() {
+fn paste_guard_missing_fields() {
     let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(loaded.paste_guard);
     assert_eq!(loaded.paste_guard_threshold, 1024);
@@ -232,7 +232,7 @@ fn trim_trailing_whitespace_on_copy_roundtrips() {
 }
 
 #[test]
-fn trim_trailing_whitespace_on_copy_backward_compat_missing_field() {
+fn trim_trailing_whitespace_on_copy_missing_field() {
     let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(!loaded.trim_trailing_whitespace_on_copy);
 }
@@ -259,7 +259,7 @@ fn keyboard_shortcuts_roundtrips() {
 }
 
 #[test]
-fn keyboard_shortcuts_backward_compat_missing_field() {
+fn keyboard_shortcuts_missing_field() {
     let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(loaded.keyboard_shortcuts.is_empty());
 }

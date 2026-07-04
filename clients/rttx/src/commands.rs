@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_json_without_host_tags_deserializes_with_empty_vec() {
+    fn json_without_host_tags_deserializes_with_empty_vec() {
         let json = r#"[{
             "uuid": "abc",
             "title": "Old",
@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_json_without_new_fields_deserializes_with_defaults() {
+    fn json_without_new_fields_deserializes_with_defaults() {
         let json = r#"[{
             "uuid": "abc",
             "title": "Old",
@@ -702,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_parameter_json_without_description_deserializes() {
+    fn parameter_json_without_description_deserializes() {
         let json = r#"{
             "name": "ENV",
             "label": "Environment",

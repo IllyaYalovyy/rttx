@@ -1,13 +1,13 @@
 //! One-time orphaned-histfile salvage utility (RFC-031 §9 / Step 7).
 //!
 //! Standalone, opt-in recovery for shell-history files left unreferenced by the
-//! pre-RFC-031 random-pane-id bug, where durable state keyed on a
+//! earlier random-pane-id bug, where durable state keyed on a
 //! process-ephemeral pane id was silently orphaned when the id changed.
 //!
 //! This is **not** a daemon workspace code path. It is invoked only by the
 //! `rttx-server salvage-history` subcommand. It performs a read-only scan of the
 //! daemon state directory and copies orphaned history into a *separate* recovery
-//! directory. It never mutates, removes, or reconciles live workspace state, so it
+//! directory. It never mutates, removes, or rewrites live workspace state, so it
 //! cannot interfere with a running daemon and reintroduces no compatibility code
 //! into normal operation.
 
@@ -48,11 +48,11 @@ pub struct SalvageReport {
 ///
 /// A `history/<pane_id>.hist` file is orphaned when its `<pane_id>` is not
 /// referenced by the workspace's current-schema pane tree. Workspaces whose
-/// `workspace.json` is old-schema, corrupt, or missing reference no panes, so all
-/// of their history files are reported. Empty files are skipped — there is
-/// nothing to recover.
+/// `workspace.json` is an unsupported older version, is corrupt, or references
+/// no panes have all of their history files reported. Empty files are skipped —
+/// there is nothing to recover.
 ///
-/// The scan is strictly read-only: it never removes old-schema workspaces the way
+/// The scan is strictly read-only: it never removes unsupported older-version workspaces the way
 /// the daemon's clean-break loader does.
 #[must_use]
 pub fn scan_orphans(state_dir: &Path) -> Vec<OrphanHistfile> {
@@ -238,11 +238,11 @@ mod tests {
     }
 
     #[test]
-    fn old_schema_workspace_orphans_all_history() {
+    fn workspace_without_panes_orphans_all_history() {
         let tmp = TempDir::new().unwrap();
         let state = tmp.path();
         let rt = Uuid::new_v4();
-        // A v1 (old-schema) workspace.json: clean-break, references no panes.
+        // A v1 (unsupported older-version) workspace.json: clean-break, references no panes.
         let path = layout::runtime_file(state, rt);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, r#"{"schema_version":1,"spec":{},"instance":{}}"#).unwrap();
@@ -255,7 +255,10 @@ mod tests {
         ids.sort();
         let mut expected = vec![p1, p2];
         expected.sort();
-        assert_eq!(ids, expected, "every history file under an old-schema workspace is orphaned");
+        assert_eq!(
+            ids, expected,
+            "every history file under a workspace that references no panes is orphaned"
+        );
     }
 
     #[test]

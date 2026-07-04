@@ -3,7 +3,7 @@
 //!
 //! Builds a synthetic daemon state directory that mirrors a real upgrade: one
 //! current-schema workspace that still has a live pane plus a stale history file
-//! left by the pre-RFC-031 random-pane-id bug, and one old-schema workspace whose
+//! orphaned when a workspace.json references no panes, whose
 //! `workspace.json` references no current panes. The salvage scan must find every
 //! orphan, ignore the live pane's history, and export recovered files into a
 //! separate recovery directory without disturbing the source state.
@@ -71,7 +71,7 @@ fn salvage_recovers_every_orphan_without_touching_live_state() {
     let stale = Uuid::new_v4();
     write_hist(&state_dir, rt_a, stale, "echo orphaned by reconnect\n");
 
-    // Workspace B: old-schema workspace.json (clean-break) with two history files
+    // Workspace B: a workspace.json (schema v1) that references no panes, with two history files
     // that the daemon would otherwise discard on first start.
     let rt_b = Uuid::new_v4();
     let rt_b_file = layout::runtime_file(&state_dir, rt_b);

@@ -583,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn zoom_state_defaults_to_none_for_backward_compat() {
+    fn zoom_state_defaults_to_none_when_absent() {
         let json = r#"{"uuid":"s1","name":"W","layout":{"Terminal":{"uuid":"t1"}}}"#;
         let session: WorkspaceState = serde_json::from_str(json).unwrap();
         assert!(session.zoomed_terminal_uuid.is_none());
@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn window_state_loads_legacy_sessions_key() {
+    fn window_state_rejects_sessions_key() {
         let json = r#"{
             "sessions": [{"uuid":"s1","name":"Old","layout":{"Terminal":{"uuid":"t1"}}}],
             "active_session_index": 0,
@@ -616,7 +616,10 @@ mod tests {
             "is_maximized": false
         }"#;
         let result = serde_json::from_str::<WindowState>(json);
-        assert!(result.is_err(), "legacy sessions/active_session_index keys must no longer parse");
+        assert!(
+            result.is_err(),
+            "the removed sessions/active_session_index keys must no longer parse"
+        );
     }
 
     #[test]

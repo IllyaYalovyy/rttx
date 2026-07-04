@@ -56,7 +56,6 @@ async fn v1_state_json_in_cache_is_not_loaded() {
                 "name": "v1-ghost",
                 "panes": [],
                 "active_pane_id": null,
-                "command_history": [],
                 "policy": "persistent",
                 "revision": 1,
                 "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},

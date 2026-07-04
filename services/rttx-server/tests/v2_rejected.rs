@@ -1,4 +1,4 @@
-//! Integration test: the daemon no longer supports the legacy v2 protocol.
+//! Integration test: the daemon accepts only the v3 protocol.
 //!
 //! Regression for #980 Phase 2. A client that sends a v2 `ClientMessage` as
 //! its first frame (instead of a v3 `ClientHello`) must be rejected: the
@@ -20,8 +20,8 @@ async fn non_v3_first_frame_is_rejected() {
     let mut stream = tokio::net::UnixStream::connect(&sock).await.unwrap();
 
     // Send a length-prefixed frame that is NOT a valid v3 ClientHello — a
-    // stand-in for a legacy v2 frame now that v2 message types are gone.
-    let payload = b"legacy v2 frame / arbitrary bytes";
+    // stand-in for an arbitrary non-v3 frame.
+    let payload = b"non-v3 frame / arbitrary bytes";
     let mut frame = BytesMut::new();
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     frame.extend_from_slice(payload);

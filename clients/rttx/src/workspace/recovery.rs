@@ -2,7 +2,7 @@
 //!
 //! These types describe *what* a pane was doing so it can be reconstructed
 //! after restart. They are persisted inside `WorkspaceState.terminal_recovery`
-//! and must remain backward-compatible.
+//! and tolerate files that omit optional recovery fields.
 
 use serde::{Deserialize, Serialize};
 

@@ -2740,8 +2740,8 @@ fn parse_v3_client_hello(payload: &[u8]) -> Option<v3::ClientHello> {
 ///
 /// On success, sends `ServerHello` and registers the client protocol.
 /// On failure (the frame is not a valid v3 `ClientHello`), returns `false`
-/// so the caller can reject the connection — the legacy v2 protocol is no
-/// longer supported.
+/// so the caller can reject the connection — non-v3 clients are not
+/// supported.
 async fn try_v3_handshake<S>(
     server: &Arc<Mutex<Server>>,
     client_id: Uuid,

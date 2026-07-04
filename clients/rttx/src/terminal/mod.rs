@@ -1680,7 +1680,7 @@ mod search_tests {
     }
 
     /// Removed `PaneSource` variants must fail to deserialize now that the
-    /// legacy backward-compat layer is gone.
+    /// removed variant is rejected on load.
     #[test]
     fn removed_pane_source_variant_rejects_on_deserialize() {
         let json = r#"{"source":{"bookmark":{"name":"Prod"}},"target":null,"startup":[]}"#;

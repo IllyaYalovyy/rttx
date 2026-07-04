@@ -63,7 +63,6 @@ pub fn build_workspace_diagnostics_info(
         name,
         active_pane_count,
         exited_pane_count,
-        command_history_len: 0,
         attached_client_count,
         panes,
     }
@@ -83,7 +82,6 @@ pub fn build_diagnostics_report(args: DiagnosticsReportArgs) -> v3::DiagnosticsR
         pty_writer_count: args.pty_writer_count,
         total_raw_bytes: args.total_raw_bytes,
         total_pending_flush: args.total_pending_flush,
-        total_command_history: 0,
         workspaces: args.workspaces,
     }
 }
@@ -511,5 +509,33 @@ mod tests {
             v3::Capability::OptDiagnostics as i32,
         ];
         assert!(is_supported(&caps));
+    }
+
+    #[test]
+    fn diagnostics_builders_expose_only_current_fields() {
+        // The command_history diagnostics counters were removed (RFC-031); the
+        // builders populate exactly the current field set, with no such counter.
+        let pane = build_pane_diagnostics_info(pn(), 100, 5, false);
+        let ws = build_workspace_diagnostics_info(rt(), "ws".into(), 2, 1, 3, vec![pane]);
+        assert_eq!(ws.active_pane_count, 2);
+        assert_eq!(ws.exited_pane_count, 1);
+        assert_eq!(ws.attached_client_count, 3);
+        assert_eq!(ws.panes.len(), 1);
+
+        let report = build_diagnostics_report(DiagnosticsReportArgs {
+            workspace_count: 1,
+            total_pane_count: 1,
+            total_active_panes: 2,
+            total_exited_panes: 1,
+            client_count: 3,
+            pty_writer_count: 1,
+            total_raw_bytes: 100,
+            total_pending_flush: 5,
+            workspaces: vec![ws],
+        });
+        assert_eq!(report.workspace_count, 1);
+        assert_eq!(report.total_pane_count, 1);
+        assert_eq!(report.total_pending_flush, 5);
+        assert_eq!(report.workspaces.len(), 1);
     }
 }

@@ -2,7 +2,7 @@
 //! loader (RFC-031 Step 2).
 //!
 //! These exercise the public persistence API end-to-end: the authoritative pane
-//! tree survives a save/load round trip, and old-schema (v1) state is detected,
+//! tree survives a save/load round trip, and unsupported earlier-version (v1) state is detected,
 //! ignored, and removed on load with no migration path.
 
 use rttx_server::pane_tree::{PaneId, SplitAxis, WorkspaceTree};
@@ -84,7 +84,7 @@ fn unsupported_schema_runtime_file_is_skipped() {
         "schema_version": 1,
         "spec": {
             "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "name": "legacy-ws",
+            "name": "old-ws",
             "policy": "persistent",
             "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},
             "panes": [{
@@ -95,10 +95,7 @@ fn unsupported_schema_runtime_file_is_skipped() {
                 "cols": 80,
                 "rows": 24
             }],
-            "active_pane_id": null,
-            "command_history": [
-                {"command": "cargo build", "cwd": "/home/user/project"}
-            ]
+            "active_pane_id": null
         },
         "instance": {
             "revision": 5,
@@ -171,7 +168,7 @@ fn good_v2_workspace_survives_alongside_unsupported_sibling() {
 #[test]
 fn newer_schema_runtime_file_is_skipped() {
     // A workspace.json whose schema_version is newer than this daemon supports
-    // must be skipped, not loaded — the legacy-free loader reads exactly one
+    // must be skipped, not loaded — the loader reads exactly one
     // schema version and refuses everything else.
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path();

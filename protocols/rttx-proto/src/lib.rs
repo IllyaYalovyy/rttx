@@ -793,7 +793,6 @@ mod v3_envelope_tests {
                         pty_writer_count: 1,
                         total_raw_bytes: 1024,
                         total_pending_flush: 0,
-                        total_command_history: 0,
                         workspaces: vec![],
                     },
                 )),
