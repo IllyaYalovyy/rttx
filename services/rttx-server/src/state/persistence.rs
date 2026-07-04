@@ -582,4 +582,14 @@ mod tests {
         let result = load_screen_snapshot(state_dir, rt_id, pane_id);
         assert!(result.is_none());
     }
+
+    #[test]
+    fn load_all_with_empty_index_yields_no_workspaces() {
+        let tmp = TempDir::new().unwrap();
+        save_daemon_index(tmp.path(), &[]).unwrap();
+
+        let result = load_all(tmp.path()).expect("an empty state dir loads");
+        assert!(result.workspaces.is_empty());
+        assert!(result.failed_ids.is_empty());
+    }
 }

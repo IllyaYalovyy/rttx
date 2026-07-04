@@ -262,3 +262,30 @@ fn unsupported_schema_workspace_file_is_ignored_on_load() {
     assert!(result.workspaces.is_empty(), "an unsupported-schema workspace file must not load");
     assert_eq!(result.failed_ids, vec![old_id], "it is skipped as an unsupported file");
 }
+
+/// A persisted workspace file is written with the current schema version.
+#[tokio::test]
+async fn persisted_workspace_file_carries_current_schema_version() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, handle) = start_test_server(tmp.path()).await;
+    let mut c = TestClient::connect(&sock).await;
+    c.handshake().await;
+
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+            name: "schema-version-test".into(),
+            policy: v3::WorkspacePolicy::Persistent as i32,
+        })),
+    })
+    .await;
+    let _ = c.recv().await;
+
+    wait_for_state_containing(tmp.path(), "schema-version-test", Duration::from_secs(10)).await;
+    handle.abort();
+
+    let state_dir = tmp.path().join("state/rttx/daemon");
+    let result = persistence::load_all(&state_dir).expect("state loads");
+    let ws = result.workspaces.iter().find(|r| r.spec.name == "schema-version-test").unwrap();
+    assert_eq!(ws.schema_version, RUNTIME_FILE_SCHEMA_VERSION);
+}
