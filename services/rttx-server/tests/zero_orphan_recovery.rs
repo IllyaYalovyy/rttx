@@ -1,6 +1,6 @@
 //! Zero-orphan crash-recovery integration test (RFC-031 §8, Step 6, issue #1003).
 //!
-//! The pre-RFC-031 model keyed durable pane state on randomly-minted,
+//! Durable pane state must key on stable server pane ids, not randomly-minted,
 //! process-ephemeral pane ids. A reconnect or a respawn could change the id and
 //! silently orphan the pane's history/scrollback/screen; a startup orphan-sweep
 //! then *hid* that data loss by quietly relocating the unreferenced directories.

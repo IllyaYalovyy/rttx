@@ -182,7 +182,7 @@ fn empty_shortcut_keys_not_serialized() {
 }
 
 #[test]
-fn legacy_json_without_shortcut_keys_deserializes_with_empty_vec() {
+fn json_without_shortcut_keys_deserializes_with_empty_vec() {
     let json = r#"[{
         "uuid": "abc",
         "title": "Old",
@@ -212,9 +212,9 @@ fn parameter_description_roundtrip_through_store() {
 }
 
 #[test]
-fn legacy_parameters_without_description_load_with_empty_string() {
+fn parameters_without_description_load_with_empty_string() {
     // Verify that CommandParameter without a description field deserializes
-    // with an empty string (backward compatibility).
+    // with an empty string (defaulted when absent).
     let json = r#"{
         "name": "ENV",
         "label": "Environment",

@@ -495,7 +495,7 @@ impl WindowState {
         }
 
         // Tree-less snapshot: an empty workspace whose daemon runtime has no
-        // panes yet (a pre-tree daemon no longer occurs). There is nothing to
+        // panes yet. There is nothing to
         // adopt — keep the session's existing placeholder layout and record the
         // runtime id. The daemon-bridge CreatePane bootstrap creates the first
         // pane and the subsequent PaneCreated re-key assigns identity.
@@ -617,10 +617,11 @@ fn snapshot_pane_id(pane_snapshot: &v3::PaneSnapshot) -> Option<String> {
 /// Build the client render layout from a workspace snapshot's authoritative
 /// server tree (RFC-031 §3, Step 4).
 ///
-/// Returns `None` when the snapshot carries no tree — an empty workspace, or a
-/// pre-tree daemon — in which case the caller falls back to its existing
-/// reconciliation path. The returned [`LayoutNode`] keys every leaf by the
-/// durable server pane id, so the render tree and the daemon share one
+/// Returns `None` when the snapshot carries no tree (an empty workspace whose
+/// daemon runtime has no panes yet); the caller then keeps its placeholder
+/// layout until the daemon mints the first pane. The returned [`LayoutNode`]
+/// keys every leaf by the durable server pane id, so the render tree and the
+/// daemon share one
 /// identity with no client-side binding indirection.
 #[must_use]
 pub fn render_layout_from_snapshot(snapshot: &v3::WorkspaceSnapshot) -> Option<LayoutNode> {

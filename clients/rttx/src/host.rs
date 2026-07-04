@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(resolved.ssh_target.as_deref(), Some("unknown.example.com"));
     }
 
-    // ── Serde backward compatibility ────────────────────────────
+    // ── Serde defaults for absent fields ───────────────────────
 
     #[test]
     fn deserialize_without_ssh_target_defaults_to_none() {

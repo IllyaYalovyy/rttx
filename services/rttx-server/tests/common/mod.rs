@@ -492,7 +492,7 @@ pub async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
         .await;
 }
 
-/// Alias for backward compatibility with tests that imported `TestV3Client`.
+/// Alias retained for tests that refer to `TestV3Client`.
 pub type TestV3Client = TestClient;
 
 // ── RFC-031 §5 tree-protocol helpers ────────────────────────────────

@@ -535,7 +535,7 @@ message WorkspaceDiagnosticsInfo {
   string name = 2;
   uint32 active_pane_count = 3;
   uint32 exited_pane_count = 4;
-  uint32 command_history_len = 5;
+  reserved 5;  // was command_history_len (removed with RFC-031)
   uint32 attached_client_count = 6;
   repeated PaneDiagnosticsInfo panes = 7;
 }
@@ -549,7 +549,7 @@ message DiagnosticsReport {
   uint32 pty_writer_count = 6;
   uint64 total_raw_bytes = 7;
   uint64 total_pending_flush = 8;
-  uint32 total_command_history = 9;
+  reserved 9;  // was total_command_history (removed with RFC-031)
   repeated WorkspaceDiagnosticsInfo workspaces = 10;
 }
 

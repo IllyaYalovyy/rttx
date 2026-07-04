@@ -272,7 +272,7 @@ fn contract_forward_compat_missing_fields() {
 /// Violation would cause: app crashes if we add fields in a future version
 /// and the user downgrades.
 #[test]
-fn contract_backward_compat_extra_fields() {
+fn contract_extra_fields() {
     let future_json = r#"{
         "workspaces": [{
             "uuid": "s1", "name": "Future",
@@ -946,9 +946,9 @@ fn daemon_binary_is_non_empty() {
 /// Contract: auto_start_daemon defaults to true and survives roundtrip.
 ///
 /// Existing preferences files without this field must load with auto-start
-/// enabled (backward compat). Files with it set to false must preserve that.
+/// enabled (defaulted when absent). Files with it set to false must preserve that.
 #[test]
-fn auto_start_daemon_backward_compat_and_roundtrip() {
+fn auto_start_daemon_and_roundtrip() {
     use rttx::preferences::Preferences;
     use rttx::store::{ClientStore, StorePaths};
 
@@ -971,9 +971,9 @@ fn auto_start_daemon_backward_compat_and_roundtrip() {
 /// Contract: reconnect_delay_secs defaults to 10 and survives roundtrip.
 ///
 /// Existing preferences files without this field must load with 10s default
-/// (backward compat). Custom values must persist.
+/// (defaulted when absent). Custom values must persist.
 #[test]
-fn reconnect_delay_secs_backward_compat_and_roundtrip() {
+fn reconnect_delay_secs_and_roundtrip() {
     use rttx::preferences::Preferences;
     use rttx::store::{ClientStore, StorePaths};
 

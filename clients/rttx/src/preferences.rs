@@ -196,10 +196,10 @@ impl From<PreferencesDisk> for Preferences {
     }
 }
 
-/// Parse a raw JSON string into `Preferences`, applying legacy migrations.
+/// Parse a raw JSON string into `Preferences` (test helper).
 ///
-/// Used only by unit tests to verify backward-compatible deserialization
-/// without going through `ClientStore`.
+/// Used only by unit tests to verify deserialization when optional fields
+/// are absent, without going through `ClientStore`.
 #[cfg(test)]
 fn parse_preferences_json(data: &str) -> Preferences {
     serde_json::from_str::<PreferencesDisk>(data).map(Into::into).unwrap_or_default()

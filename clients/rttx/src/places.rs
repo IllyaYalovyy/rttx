@@ -253,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_json_without_host_tags_deserializes_with_empty_vec() {
+    fn json_without_host_tags_deserializes_with_empty_vec() {
         let json = r#"[{
             "uuid": "abc",
             "name": "Work",

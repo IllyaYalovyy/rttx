@@ -1,7 +1,7 @@
 //! Integration tests for the pane reverse index.
 //!
 //! Verifies that `runtime_pane_target()` returns correct results through
-//! full workspace lifecycle scenarios: create, bind, reconcile, close.
+//! full workspace lifecycle scenarios: create, split, close.
 
 use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy, WorkspaceRuntime};
 use rttx::workspace::*;

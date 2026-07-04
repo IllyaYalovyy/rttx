@@ -888,8 +888,8 @@ fn ctrl_arrow_encodes_with_modifier_param() {
 
 /// Split pane CWD must propagate to a pane create request. #297.
 ///
-/// Removed with RFC-031: the client no longer reconciles a tree-less snapshot
-/// into pane-create requests. Pane creation is bootstrapped by the daemon
+/// For a tree-less snapshot the client keeps its placeholder layout instead
+/// of requesting pane creation. Pane creation is bootstrapped by the daemon
 /// bridge and pane identity is assigned by the `PaneCreated` re-key.
 #[test]
 fn split_remote_session_cwd_survives_layout_round_trip() {
@@ -1174,7 +1174,7 @@ fn input_sync_fan_out_targets_all_bound_managed_siblings() {
 /// Legacy persisted `WindowState` with the old `sessions` key must fail
 /// to deserialize now that the alias is removed.
 #[test]
-fn legacy_sessions_key_rejects_on_deserialize() {
+fn sessions_key_rejects_on_deserialize() {
     use rttx::workspace::state::WindowState;
 
     let json = r#"{
@@ -1399,10 +1399,10 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
     assert!(modes.cursor_hidden, "cursor_hidden must propagate");
 }
 
-/// Serialized workspace state must not contain the legacy `mode` field.
+/// Serialized workspace state must not contain the removed `mode` field.
 /// The `runtime` struct carries endpoint and policy; `mode` is import-only.
 #[test]
-fn serialized_managed_workspace_omits_legacy_mode_field() {
+fn serialized_managed_workspace_omits_mode_field() {
     use rttx::runtime::WorkspacePolicy;
     use rttx::workspace::{WindowState, WorkspaceState};
 
@@ -1451,7 +1451,7 @@ fn remote_endpoint_with_custom_binary_path_persists() {
 /// Remote endpoint without custom binary path must deserialize from JSON
 /// that lacks the `daemon_binary_path` field. Regression test for #956.
 #[test]
-fn remote_endpoint_without_binary_path_backward_compat() {
+fn remote_endpoint_without_binary_path() {
     use rttx::runtime::{RuntimeEndpoint, WorkspacePolicy};
     use rttx::workspace::WorkspaceState;
 
@@ -1464,7 +1464,7 @@ fn remote_endpoint_without_binary_path_backward_compat() {
     );
     let mut json_value: serde_json::Value = serde_json::to_value(&session).unwrap();
 
-    // Strip daemon_binary_path from the endpoint to simulate legacy data.
+    // Strip daemon_binary_path to simulate a file written by an older version.
     if let Some(endpoint) = json_value.get_mut("runtime").and_then(|r| r.get_mut("endpoint")) {
         endpoint.as_object_mut().unwrap().remove("daemon_binary_path");
     }

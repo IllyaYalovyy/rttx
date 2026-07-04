@@ -63,7 +63,6 @@ pub fn build_workspace_diagnostics_info(
         name,
         active_pane_count,
         exited_pane_count,
-        command_history_len: 0,
         attached_client_count,
         panes,
     }
@@ -83,7 +82,6 @@ pub fn build_diagnostics_report(args: DiagnosticsReportArgs) -> v3::DiagnosticsR
         pty_writer_count: args.pty_writer_count,
         total_raw_bytes: args.total_raw_bytes,
         total_pending_flush: args.total_pending_flush,
-        total_command_history: 0,
         workspaces: args.workspaces,
     }
 }

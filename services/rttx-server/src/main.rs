@@ -54,7 +54,7 @@ enum Command {
     Diagnostics,
     /// Show resolved paths and configuration
     Config,
-    /// Recover orphaned shell-history files left by the pre-RFC-031 layout
+    /// Recover orphaned shell-history files left by an earlier state layout
     ///
     /// One-time, opt-in utility. Scans the daemon state directory read-only for
     /// history files no longer referenced by any current pane and copies them

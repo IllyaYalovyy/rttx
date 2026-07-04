@@ -90,13 +90,13 @@ fn parse_v3_client_hello_accepts_valid_v3_hello() {
     assert!(parsed.is_some(), "a valid v3 ClientHello must be accepted");
 }
 
-/// Regression for #980: a frame that is not a valid v3 `ClientHello` (e.g. a
-/// legacy v2 frame or arbitrary bytes) must be rejected by the detector,
+/// Regression for #980: a frame that is not a valid v3 `ClientHello` (e.g. an
+/// older v2 frame or arbitrary bytes) must be rejected by the detector,
 /// which makes `handle_client` drop the connection.
 #[test]
 fn parse_v3_client_hello_rejects_non_v3_frame() {
     // Arbitrary bytes that do not form a valid v3 ClientHello (no 16-byte
-    // client_id, no protocol version). Stand-in for a legacy v2 frame now
+    // client_id, no protocol version). Stand-in for an older v2 frame now
     // that the v2 message types no longer exist.
     let garbage: &[u8] = b"not a v3 client hello frame";
     let parsed = parse_v3_client_hello(garbage);
@@ -1158,7 +1158,6 @@ fn v1_state_json_in_cache_dir_is_ignored() {
                 "name": "v1-ghost",
                 "panes": [],
                 "active_pane_id": null,
-                "command_history": [],
                 "policy": "persistent",
                 "revision": 1,
                 "created_at": {"secs_since_epoch": 1700000000, "nanos_since_epoch": 0},

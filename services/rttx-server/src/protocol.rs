@@ -334,7 +334,6 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
                 name: s.name.clone(),
                 active_pane_count: s.active_pane_count as u32,
                 exited_pane_count: s.exited_pane_count as u32,
-                command_history_len: 0,
                 attached_client_count: s.attached_client_count as u32,
                 panes,
             }
@@ -349,7 +348,6 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
         pty_writer_count: report.pty_writer_count as u32,
         total_raw_bytes: report.total_raw_bytes as u64,
         total_pending_flush: report.total_pending_flush as u64,
-        total_command_history: 0,
         workspaces,
     }
 }
