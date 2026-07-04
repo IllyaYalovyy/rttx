@@ -1,9 +1,8 @@
 //! Zero-orphan crash-recovery integration test (RFC-031 §8, Step 6, issue #1003).
 //!
-//! Durable pane state must key on stable server pane ids, not randomly-minted,
-//! process-ephemeral pane ids. A reconnect or a respawn could change the id and
-//! silently orphan the pane's history/scrollback/screen; a startup orphan-sweep
-//! then *hid* that data loss by quietly relocating the unreferenced directories.
+//! Durable pane state keys on the stable, server-authoritative `PaneId`, which
+//! never changes across shell respawn, daemon crash, or reconnect — so a pane's
+//! history/scrollback/screen can never be silently orphaned.
 //!
 //! With a server-authoritative, immutable `PaneId`, every durable artifact is
 //! keyed on an id that never changes across shell respawn, daemon crash, or

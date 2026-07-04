@@ -1,9 +1,9 @@
 //! Close-driven pane cleanup (RFC-031 §8, issue #1014).
 //!
-//! The orphan-sweep that masked the history-loss bug is gone. Its replacement
-//! is explicit, close-driven cleanup keyed on pane-tree membership: when a pane
-//! leaves the tree via `ClosePane`, its durable artifacts (history, scrollback,
-//! screen snapshot) are removed. Panes that remain in the tree keep theirs.
+//! Pane cleanup is explicit and close-driven, keyed on pane-tree membership:
+//! when a pane leaves the tree via `ClosePane`, its durable artifacts (history,
+//! scrollback, screen snapshot) are removed. Panes that remain in the tree keep
+//! theirs.
 
 mod common;
 

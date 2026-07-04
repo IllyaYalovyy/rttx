@@ -31,7 +31,7 @@ pub enum ClientProtocol {
     V3 { effective_caps: Vec<i32> },
 }
 
-/// A message sent to a client. With v2 removed, every client message is a
+/// A message sent to a client. Every client message is a
 /// v3 `ServerEnvelope`.
 pub type ClientMsg = v3::ServerEnvelope;
 
@@ -431,8 +431,8 @@ impl Server {
         }
     }
 
-    /// Send a message to the provided clients, converting v2 push messages
-    /// to v3 envelopes for v3 clients.
+    /// Send a message to the provided clients, converting internal push messages
+    /// to v3 envelopes.
     ///
     /// On push channel overflow:
     /// - V3 + `OPT_RESYNC`: sends `StreamOverflow` via the response channel
@@ -2678,9 +2678,9 @@ where
         v3_client_reader(server.clone(), client_id, &client_short, reader, resp_tx, metrics.clone())
             .await
     } else {
-        // The v2 protocol is no longer supported. A first frame that is not a
+        // Only the v3 protocol is supported. A first frame that is not a
         // valid v3 ClientHello is rejected and the connection is dropped.
-        tracing::warn!("Client {client_short} rejected — v2 protocol no longer supported");
+        tracing::warn!("Client {client_short} rejected — not a valid v3 handshake");
         (Ok(()), false)
     };
 
@@ -2724,7 +2724,7 @@ where
 /// Parse and validate a length-prefix-stripped frame as a v3 `ClientHello`.
 ///
 /// Returns `Some` only for a structurally valid v3 hello (16-byte client id
-/// and a non-zero `max_protocol_version`). Legacy v2 `ClientMessage` frames —
+/// and a non-zero `max_protocol_version`). Any other first frame —
 /// which are no longer supported — fail this check and yield `None`, so the
 /// caller rejects the connection.
 fn parse_v3_client_hello(payload: &[u8]) -> Option<v3::ClientHello> {

@@ -328,8 +328,8 @@ mod tests {
         assert_eq!(loaded.spec.panes.len(), 3);
     }
 
-    /// Old-schema (v1) workspace state is detected, ignored, and removed from
-    /// disk on load — no migration (RFC-031 clean break).
+    /// A workspace file whose `schema_version` is not the current one is skipped
+    /// on load — there is no migration (RFC-031 clean break).
     #[test]
     fn unsupported_schema_workspace_is_skipped() {
         let tmp = TempDir::new().unwrap();

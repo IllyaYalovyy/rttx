@@ -62,7 +62,7 @@ fn v2_paths_never_overlap_v1_cache_paths() {
     let v2_scrollback = layout::scrollback_log(&state, rt, pane);
     let v2_history = layout::history_file(&state, rt, pane);
 
-    // v2 paths must not fall under the v1 cache directory.
+    // State paths must not fall under the old cache directory.
     assert!(!v2_index.starts_with(&cache));
     assert!(!v2_scrollback.starts_with(&cache));
     assert!(!v2_history.starts_with(&cache));

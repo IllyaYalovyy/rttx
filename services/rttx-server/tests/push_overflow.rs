@@ -1,4 +1,4 @@
-//! Integration test: push channel overflow triggers disconnect for v2
+//! Integration test: push channel overflow triggers disconnect for a slow
 //! clients instead of silently dropping messages.
 //!
 //! Exercises the production overflow path by saturating a slow client's
@@ -11,7 +11,7 @@ use common::{attach_rw, create_workspace, start_test_server};
 use rttx_proto::v3;
 use std::time::Duration;
 
-/// A v2 slow client that overflows its push channel gets disconnected
+/// A slow client that overflows its push channel gets disconnected
 /// instead of silently losing messages. The fast client remains healthy.
 #[tokio::test]
 async fn v2_slow_client_gets_disconnected_on_overflow() {

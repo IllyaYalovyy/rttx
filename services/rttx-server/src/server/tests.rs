@@ -91,13 +91,12 @@ fn parse_v3_client_hello_accepts_valid_v3_hello() {
 }
 
 /// Regression for #980: a frame that is not a valid v3 `ClientHello` (e.g. an
-/// older v2 frame or arbitrary bytes) must be rejected by the detector,
+/// non-v3 frame or arbitrary bytes) must be rejected by the detector,
 /// which makes `handle_client` drop the connection.
 #[test]
 fn parse_v3_client_hello_rejects_non_v3_frame() {
     // Arbitrary bytes that do not form a valid v3 ClientHello (no 16-byte
-    // client_id, no protocol version). Stand-in for an older v2 frame now
-    // that the v2 message types no longer exist.
+    // client_id, no protocol version). Stand-in for a non-v3 frame.
     let garbage: &[u8] = b"not a v3 client hello frame";
     let parsed = parse_v3_client_hello(garbage);
     assert!(parsed.is_none(), "a non-v3 frame must not be accepted as a v3 hello");
@@ -214,12 +213,12 @@ async fn broadcast_overflow_removes_v2_sender_instead_of_silent_drop() {
         broadcast_to_workspace(&server, runtime_id, &msg).await;
     }
 
-    // Next broadcast should trigger overflow handling (disconnect v2 client).
+    // Next broadcast should trigger overflow handling (disconnect the slow client).
     broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     // Channel should have exactly PUSH_CHANNEL_BOUND messages (overflow was not silently added).
     let s = server.lock().await;
-    assert!(!s.has_client_sender(client_id), "v2 client sender should be removed on overflow");
+    assert!(!s.has_client_sender(client_id), "the client sender should be removed on overflow");
     drop(s);
     let mut count = 0;
     let mut rx = rx;
@@ -526,7 +525,7 @@ async fn broadcast_overflow_v2_removes_sender() {
     broadcast_to_workspace(&server, runtime_id, &msg).await;
 
     let sender_removed = !server.lock().await.has_client_sender(client_id);
-    assert!(sender_removed, "v2 client sender should be removed on overflow");
+    assert!(sender_removed, "the client sender should be removed on overflow");
 }
 
 #[tokio::test]

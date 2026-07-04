@@ -319,7 +319,7 @@ impl ModeState {
             application_cursor_keys: snap.terminal_modes.as_ref().unwrap().application_cursor_keys,
             application_keypad: snap.terminal_modes.as_ref().unwrap().application_keypad,
             bracketed_paste: snap.terminal_modes.as_ref().unwrap().bracketed_paste,
-            focus_reporting: false, // v2 proto does not expose focus_reporting
+            focus_reporting: false, // the v3 snapshot proto does not expose focus_reporting
             mouse_tracking_mode: snap.terminal_modes.as_ref().unwrap().mouse_mode as u16,
             sgr_mouse: snap.terminal_modes.as_ref().unwrap().sgr_mouse,
         }
@@ -420,7 +420,7 @@ async fn parity_focus_reporting_set() {
     let commands = &["SET focus_reporting"];
     let direct = direct_mode_state(commands).await;
     assert!(direct.focus_reporting, "direct: focus reporting must be on");
-    // Managed path: v2 proto does not expose focus_reporting in PaneSnapshot,
+    // Managed path: the v3 snapshot proto does not expose focus_reporting in PaneSnapshot,
     // so we verify the direct path only. v3 proto covers this via TerminalModeState.
 }
 
@@ -469,7 +469,7 @@ async fn parity_all_modes_combined() {
     assert_eq!(direct.mouse_tracking_mode, v3::MouseMode::Any as u16);
     assert!(direct.sgr_mouse);
 
-    // Managed parity (excluding focus_reporting which v2 proto lacks).
+    // Managed parity (excluding focus_reporting, which the v3 snapshot proto lacks).
     assert_eq!(direct.application_cursor_keys, managed.application_cursor_keys);
     assert_eq!(direct.application_keypad, managed.application_keypad);
     assert_eq!(direct.bracketed_paste, managed.bracketed_paste);

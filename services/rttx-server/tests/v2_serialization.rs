@@ -98,7 +98,7 @@ async fn serialization_creates_backup_symlink() {
     assert!(prev_path.exists(), ".prev file should exist");
 }
 
-/// Restart loads from v2 state (not v1) when both exist.
+/// Restart loads current-schema state and ignores an older-version file.
 #[tokio::test]
 async fn restart_prefers_v2_over_v1() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -128,7 +128,7 @@ async fn restart_prefers_v2_over_v1() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Phase 2: restart — should load from v2 successfully.
+    // Phase 2: restart — should load current-schema state successfully.
     {
         let (sock, _handle) = start_test_server(tmp.path()).await;
         let mut c = TestClient::connect(&sock).await;
