@@ -513,8 +513,7 @@ mod tests {
 
     #[test]
     fn diagnostics_builders_expose_only_current_fields() {
-        // The command_history diagnostics counters were removed (RFC-031); the
-        // builders populate exactly the current field set, with no such counter.
+        // The builders populate exactly the current diagnostics field set.
         let pane = build_pane_diagnostics_info(pn(), 100, 5, false);
         let ws = build_workspace_diagnostics_info(rt(), "ws".into(), 2, 1, 3, vec![pane]);
         assert_eq!(ws.active_pane_count, 2);
@@ -537,5 +536,26 @@ mod tests {
         assert_eq!(report.total_pane_count, 1);
         assert_eq!(report.total_pending_flush, 5);
         assert_eq!(report.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn diagnostics_report_wire_roundtrip_preserves_current_fields() {
+        let report = build_diagnostics_report(DiagnosticsReportArgs {
+            workspace_count: 3,
+            total_pane_count: 7,
+            total_active_panes: 5,
+            total_exited_panes: 2,
+            client_count: 4,
+            pty_writer_count: 6,
+            total_raw_bytes: 4096,
+            total_pending_flush: 128,
+            workspaces: Vec::new(),
+        });
+        let mut buf = BytesMut::new();
+        encode_frame(&report, &mut buf).unwrap();
+        let decoded: v3::DiagnosticsReport = decode_frame(&mut buf).unwrap();
+        assert_eq!(report, decoded);
+        assert_eq!(decoded.total_pane_count, 7);
+        assert_eq!(decoded.total_pending_flush, 128);
     }
 }
