@@ -1,4 +1,4 @@
-.TH RTTX-SERVER 1 "2026-05-26" "rttx 0.9.0" "rttx Manual"
+.TH RTTX-SERVER 1 "2026-07-04" "rttx 1.0.0" "rttx Manual"
 .SH NAME
 rttx-server \- daemon runtime service for the rttx terminal emulator
 .SH SYNOPSIS
@@ -108,8 +108,8 @@ Daemon state directory containing runtime metadata, scrollback logs, and screen
 snapshots. Default:
 .IR ~/.local/state/rttx/daemon/ .
 .TP
-.I $XDG_STATE_HOME/rttx/daemon/runtimes/<id>/runtime.json
-Per-runtime metadata (pane CWD, title, dimensions). Written on dirty-flag.
+.I $XDG_STATE_HOME/rttx/daemon/runtimes/<id>/workspace.json
+Workspace pane tree and per-pane metadata (CWD, title, dimensions). Written on dirty-flag.
 .TP
 .I $XDG_STATE_HOME/rttx/daemon/runtimes/<id>/scrollback/<pane>.log
 Append-only raw terminal byte log per pane, rotated periodically.
