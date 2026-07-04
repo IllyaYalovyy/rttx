@@ -15,7 +15,6 @@ pub mod profile;
 pub mod profiling;
 pub mod protocol;
 pub mod pty;
-pub mod salvage;
 pub mod screen;
 pub mod server;
 pub mod shell_init;

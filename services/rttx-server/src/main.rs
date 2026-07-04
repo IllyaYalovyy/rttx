@@ -54,20 +54,6 @@ enum Command {
     Diagnostics,
     /// Show resolved paths and configuration
     Config,
-    /// Recover orphaned shell-history files left by an earlier state layout
-    ///
-    /// One-time, opt-in utility. Scans the daemon state directory read-only for
-    /// history files no longer referenced by any current pane and copies them
-    /// into a recovery directory. Never modifies live workspace state.
-    SalvageHistory {
-        /// Recovery directory to copy salvaged history into
-        /// (default: <cache>/salvaged-history)
-        #[arg(long)]
-        dest: Option<std::path::PathBuf>,
-        /// List what would be salvaged without copying anything
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Show profiling report from flight recorder data
     Profile {
         /// Dump all ring buffer events chronologically
@@ -104,7 +90,6 @@ fn main() -> anyhow::Result<()> {
             config();
             Ok(())
         }
-        Command::SalvageHistory { dest, dry_run } => salvage_history(dest, dry_run),
         Command::Profile { dump, last_crash, json, watch } => {
             profile(&ProfileOpts { dump, last_crash, json, watch })
         }
@@ -286,47 +271,6 @@ fn config() {
     println!("Scrollback: {}", scrollback.display());
     println!("Logs: {}", log_dir.display());
     println!("Protocol version: {}", rttx_proto::v3_handshake::V3_PROTOCOL_VERSION);
-}
-
-/// Recover orphaned shell-history files (RFC-031 §9 / Step 7).
-///
-/// Read-only scan of the daemon state directory; copies unreferenced history
-/// into a recovery directory. Safe to run while the daemon is up — it never
-/// touches live workspace files.
-fn salvage_history(dest: Option<std::path::PathBuf>, dry_run: bool) -> anyhow::Result<()> {
-    let os = UnixOs;
-    let state_dir = os.state_dir();
-
-    let orphans = rttx_server::salvage::scan_orphans(&state_dir);
-    if orphans.is_empty() {
-        println!("No orphaned history files found in {}", state_dir.display());
-        return Ok(());
-    }
-
-    println!("Found {} orphaned history file(s):", orphans.len());
-    for orphan in &orphans {
-        println!(
-            "  workspace {} pane {} ({} bytes)",
-            &orphan.runtime_id.to_string()[..8],
-            &orphan.pane_id.to_string()[..8],
-            orphan.bytes,
-        );
-    }
-
-    if dry_run {
-        println!("Dry run: nothing copied. Re-run without --dry-run to recover.");
-        return Ok(());
-    }
-
-    let dest = dest.unwrap_or_else(|| os.cache_dir().join("salvaged-history"));
-    let report = rttx_server::salvage::export_orphans(&orphans, &dest)?;
-    println!(
-        "Recovered {} file(s) ({} bytes) into {}",
-        report.exported.len(),
-        report.total_bytes,
-        report.dest.display(),
-    );
-    Ok(())
 }
 
 /// Connect to the daemon socket and perform a v3 handshake.
@@ -922,37 +866,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_salvage_history_defaults() {
-        let cli = Cli::try_parse_from(["rttx-server", "salvage-history"]).unwrap();
-        match cli.command {
-            Some(Command::SalvageHistory { dest, dry_run }) => {
-                assert!(dest.is_none());
-                assert!(!dry_run);
-            }
-            _ => panic!("expected SalvageHistory command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_salvage_history_with_dest_and_dry_run() {
-        let cli = Cli::try_parse_from([
-            "rttx-server",
-            "salvage-history",
-            "--dest",
-            "/tmp/recovery",
-            "--dry-run",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Command::SalvageHistory { dest, dry_run }) => {
-                assert_eq!(dest, Some(std::path::PathBuf::from("/tmp/recovery")));
-                assert!(dry_run);
-            }
-            _ => panic!("expected SalvageHistory command"),
-        }
-    }
-
-    #[test]
     fn cli_parses_kill_command_with_uuid() {
         let cli =
             Cli::try_parse_from(["rttx-server", "kill", "d7d04564-b2bf-4302-9495-e65c4df12ac6"])
@@ -1096,5 +1009,12 @@ mod tests {
         assert_eq!(hello.min_protocol_version, v3_handshake::V3_PROTOCOL_VERSION);
         assert_eq!(hello.max_protocol_version, v3_handshake::V3_PROTOCOL_VERSION);
         assert_eq!(hello.client_name, "rttx-server-cli");
+    }
+
+    #[test]
+    fn cli_rejects_removed_salvage_history_subcommand() {
+        // The previous-iteration history-recovery subcommand no longer exists;
+        // parsing it must fail rather than silently resolve to anything.
+        assert!(Cli::try_parse_from(["rttx-server", "salvage-history"]).is_err());
     }
 }

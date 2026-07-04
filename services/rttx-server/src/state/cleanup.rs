@@ -7,7 +7,7 @@
 //!   scrollback log, history file, generated shell-init dir) in a background
 //!   task. A pane that leaves the tree leaves nothing behind.
 //!
-//! There is no startup orphan sweep. With server-authoritative, immutable
+//! Cleanup is driven entirely by explicit pane and workspace lifecycle events.
 //! `PaneId`s (RFC-031) nothing is ever left unreferenced, so a sweep would only
 //! mask bugs rather than fix them.
 

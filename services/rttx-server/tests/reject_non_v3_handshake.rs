@@ -1,7 +1,7 @@
 //! Integration test: the daemon accepts only the v3 protocol.
 //!
-//! Regression for #980 Phase 2. A client that sends a v2 `ClientMessage` as
-//! its first frame (instead of a v3 `ClientHello`) must be rejected: the
+//! Regression for #980 Phase 2. A client whose first frame is not a valid
+//! v3 `ClientHello` must be rejected: the
 //! server sends no `ServerHello` and drops the connection.
 
 mod common;

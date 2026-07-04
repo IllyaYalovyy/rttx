@@ -13,7 +13,7 @@ async fn v3_dispatch_create_and_list_workspaces() {
     let mut client = common::TestClient::connect(&socket_path).await;
     client.handshake().await;
 
-    // Create a workspace via v2 protocol (v3 dispatch is wired but v2 still works).
+    // Create a workspace via the v3 protocol.
     let runtime_id = common::create_workspace(
         &mut client,
         "v3-test",

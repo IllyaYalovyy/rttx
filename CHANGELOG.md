@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+- The `rttx-server salvage-history` subcommand and its one-time orphaned-history
+  recovery scan — the last code that engaged with the previous iteration's
+  on-disk data. The daemon now carries no handling for the previous iteration's
+  storage format/location or wire protocol; only the current
+  server-authoritative workspace format and the v3 protocol are supported, and
+  any other on-disk state or handshake is simply ignored/rejected.
+
 ## [1.0.0] - 2026-06-29
 
 First stable release. Completes the RFC-031 migration to server-authoritative

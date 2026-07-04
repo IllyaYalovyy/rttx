@@ -358,7 +358,7 @@ async fn terminated_workspace_does_not_become_orphan_on_restart() {
         // created. A terminated workspace is simply removed.
         let state_dir = tmp.path().join("state/rttx/daemon");
         let orphans = state_dir.join("workspaces/.orphans");
-        assert!(!orphans.exists(), "the removed orphan sweep must never create .orphans/");
+        assert!(!orphans.exists(), "the daemon must never create an .orphans/ directory");
     }
 }
 

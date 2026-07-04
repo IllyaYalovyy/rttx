@@ -1,6 +1,6 @@
 //! Integration test for the v3-native broadcast pipeline.
 //!
-//! Regression for #980: after removing the v2 protocol, the daemon builds
+//! Regression for #980: with the v3 protocol, the daemon builds
 //! broadcast events (`OutputDelta`, etc.) as v3 `ServerEnvelope`s directly,
 //! without any v2-to-v3 conversion. This verifies that PTY output reaches an
 //! attached client as a v3 `OutputDelta` carrying a monotonic
