@@ -153,11 +153,48 @@ async fn diagnostics_workspace_reports_current_pane_fields() {
 
     // The workspace diagnostics carry exactly the current field set (active /
     // exited pane counts and attached-client count) — one attached client and
-    // one live pane, with no removed command-history counter.
+    // one live pane.
     assert_eq!(report.workspaces.len(), 1);
     let ws = &report.workspaces[0];
     assert_eq!(ws.name, "diag-fields");
     assert!(ws.active_pane_count >= 1);
     assert_eq!(ws.attached_client_count, 1);
     assert!(!ws.panes.is_empty());
+}
+
+#[tokio::test]
+async fn diagnostics_totals_track_multiple_workspaces() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    client.handshake().await;
+
+    let a = create_workspace(&mut client, "diag-a", v3::WorkspacePolicy::Persistent).await;
+    attach_rw(&mut client, &a).await;
+    let _pa = create_pane(&mut client, &a).await;
+
+    let b = create_workspace(&mut client, "diag-b", v3::WorkspacePolicy::Persistent).await;
+    attach_rw(&mut client, &b).await;
+    let _pb = create_pane(&mut client, &b).await;
+
+    client.drain(std::time::Duration::from_millis(200)).await;
+
+    client
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::GetDiagnostics(v3::GetDiagnostics {})),
+        })
+        .await;
+    let report = loop {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("expected DiagnosticsReport, got {other:?}"),
+        }
+    };
+
+    assert_eq!(report.workspace_count, 2);
+    assert!(report.total_pane_count >= 2);
+    assert_eq!(report.workspaces.len(), 2);
 }
