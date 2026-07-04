@@ -17,10 +17,9 @@ modern GNOME desktop.
 - Drag pane headers to rearrange a workspace layout
 - Broadcast keystrokes to all panes in a workspace (input sync)
 
-### Bookmarks and commands
+### Places and commands
 
-- Save folder, SSH, tmux, or combined bookmarks for quick access
-- Run bookmarks in the current pane or open them as new workspaces
+- Save launch targets (local folders and SSH hosts) as Places, and open them in the current pane or a new workspace
 - Save and search reusable commands in the right sidebar
 - Clone commands, add descriptions and labels for organization
 - Use env-var parameters for dynamic command values
@@ -32,9 +31,7 @@ modern GNOME desktop.
 
 - Workspace layouts, split sizes, and working directories persist automatically
 - Periodic auto-save ensures no state loss on unexpected exit
-- Bookmark-driven panes restore as explicit targets (local folder, SSH, tmux, or combined)
-- Failed SSH/tmux pane recovery offers in-pane retry — no modal dialogs
-- tmux recovery reattaches to existing sessions, never creates new ones silently
+- Per-pane shell history, scrollback, and the visible screen are preserved and restored on reconnect
 - Daemon-backed workspaces reconnect explicitly instead of silently degrading
 
 ### Terminal
@@ -211,16 +208,16 @@ rttx (GTK GUI)                         rttx-server (daemon)
     |                                      |
     |--- Unix socket ----> rttx-server     |--- PTYs (bash, zsh, ...)
     |    (local daemon)        |           |
-    |                          |           |--- runtimes/<id>/runtime.json
+    |                          |           |--- runtimes/<id>/workspace.json
     |--- SSH tunnel -------->(protocol)    |--- runtimes/<id>/scrollback/*.log
 ```
 
 `rttx-server` decouples runtime lifetime from GUI lifetime. rttx workspaces attach and detach
 freely while runtimes continue according to their policy and endpoint availability.
 
-The daemon owns all PTYs and runtime state. The GUI owns workspace layout and presentation.
-Bindings map workspace panes to daemon pane ids. One daemon per host serves multiple runtimes and
-clients.
+The daemon owns all PTYs, runtime state, and the workspace pane tree. The GUI is a view that
+renders the daemon's tree — each rendered pane is keyed directly by its durable server pane id,
+with no separate binding table. One daemon per host serves multiple runtimes and clients.
 
 ### Runtime model
 
@@ -235,13 +232,13 @@ the GUI shows explicit connection state and retries transient failures automatic
 A single rttx window may contain multiple workspaces targeting different endpoints and policies.
 Multiple windows may connect to the same endpoint.
 
-### Reconciliation contract
+### Server-authoritative model
 
-Reconciliation between the GUI and daemon is non-destructive:
+The daemon is the single source of truth for a workspace's pane tree and identity:
 
-- If a runtime exists without GUI metadata, rttx recovers a workspace for it.
-- If GUI metadata exists without a live runtime, rttx keeps a disconnected placeholder.
-- Missing GUI state never implicitly deletes a daemon runtime or pane.
+- On attach, the client adopts the daemon's pane tree wholesale and renders it; it mints no pane identity of its own.
+- Splits and closes are requests the daemon applies to its tree and then broadcasts to every attached client.
+- Inventory recovery: if a runtime exists without client-side metadata, rttx recovers a workspace for it. Missing client state never implicitly deletes a daemon runtime or pane.
 
 ### Persistence model
 
@@ -260,9 +257,10 @@ disposable runtime data that can be deleted without data loss.
 
 **Daemon** (`rttx-server`) — writes state continuously, not just on shutdown:
 
-- **`runtimes/<id>/runtime.json`** (dirty-flag driven) — per-runtime metadata, pane CWD/title/dimensions
+- **`runtimes/<id>/workspace.json`** (dirty-flag driven) — the pane tree and per-pane metadata (CWD, title, dimensions)
 - **`runtimes/<id>/scrollback/<pane>.log`** (append-only, rotated) — raw terminal bytes
 - **`runtimes/<id>/screen/<pane>.snap`** — deterministic screen snapshot for reconnect
+- **`runtimes/<id>/history/<pane>.hist`** — durable per-pane shell history
 
 Daemon state lives under `$XDG_STATE_HOME/rttx/daemon/` (default `~/.local/state/rttx/daemon/`),
 not in the cache directory, so it survives cache cleanup.
@@ -276,10 +274,12 @@ containing the restored screen plus live output from the new shell.
 Protobuf over 4-byte little-endian length-prefixed frames. Same protocol for Unix socket and SSH
 stdio transports.
 
-Key messages: `Hello`/`HelloAck` (handshake), `CreateSession`/`AttachSession`/`DetachSession`,
-`CreatePane`/`ClosePane`, `Input`/`Resize`, `Snapshot`/`Delta`/`PaneExited`.
+Key messages: `ClientHello`/`ServerHello` (handshake with capability negotiation),
+`CreateWorkspace`/`AttachWorkspace`/`DetachWorkspace`/`TerminateWorkspace`,
+`CreatePane`/`SplitPane`/`ClosePane`, `TerminalInput`/`ResizePane`/`SetFocus`,
+`WorkspaceSnapshot`/`OutputDelta`/`PaneSplit`/`PaneClosed`/`FocusChanged`, `GetDiagnostics`.
 
-Protocol version is checked during handshake. Incompatible versions disconnect cleanly.
+The protocol version is negotiated during the handshake; a client that does not speak the current version is rejected.
 
 ### Remote access via SSH
 
@@ -456,7 +456,7 @@ configuration, state, and cache directories.
 # Stop the daemon (terminates all running sessions)
 rttx-server stop 2>/dev/null; pkill -f "rttx-server" 2>/dev/null
 
-# Remove configuration (preferences, hosts, bookmarks, color schemes)
+# Remove configuration (preferences, hosts, saved commands, color schemes)
 rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/rttx/"
 
 # Remove client state (workspace layouts, UI state, backups)
@@ -490,8 +490,7 @@ default preferences and no saved workspaces.
 To reset only specific parts:
 - **Preferences only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/preferences.json`
 - **Workspace layouts only:** remove `${XDG_STATE_HOME:-$HOME/.local/state}/rttx/client/workspaces.json`
-- **Bookmarks only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/library.json`
-- **Saved commands only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/library.json` (commands and bookmarks share this file)
+- **Saved commands only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/library.json`
 - **Color schemes only:** remove `${XDG_CONFIG_HOME:-$HOME/.config}/rttx/schemes/`
 
 ## Flatpak Packaging
@@ -548,22 +547,24 @@ Commit the regenerated file alongside the lockfile change.
 - **Layout** — the arrangement of panes and split ratios inside a workspace
 - **Endpoint** — the local daemon or one remote host daemon that serves runtimes
 - **Policy** — the runtime retention model: `ephemeral` or `persistent`; both are daemon-backed
-- **Bookmark** — a saved launch target such as a folder, SSH host, tmux session, or a combination
+- **Place** — a saved launch target such as a folder or SSH host, openable in a pane or a new workspace
 - **Command** — a saved command snippet you can run or insert into a pane
 
-Current Rust code still uses `Session*` names in several modules and persisted types. In product
-docs and UI, `Workspace` and `Runtime` are the preferred terms.
+A few connection-status names still use `Session` (e.g. `SessionMissing`). In product docs and
+UI, `Workspace` and `Runtime` are the preferred terms.
 
 ## Design Documents
 
-Architecture RFCs and design notes live in `designs/`. RFC-001 (manifesto) and RFC-013 (persistent
-host sessions) define the current product direction. RFC-014 (cloud relay service) is the
-forward-looking design for internet-accessible endpoints.
+Architecture RFCs and design notes live in `designs/`. RFC-001 (manifesto), RFC-013 (persistent host
+sessions), and RFC-031 (server-authoritative workspace tree) define the current product direction
+and architecture. RFC-014 (cloud relay service) is the forward-looking design for
+internet-accessible endpoints.
 
 When reading older RFCs, note that some architecture assumptions have been superseded:
 
-- RFC-007 (session recovery) — recipe-based recovery and retry UX remain relevant, but L3/L4
-  recovery is now delegated to the daemon per RFC-013
+- RFC-007 (session recovery) and RFC-018 (connection state machine) — the client-owned layout and
+  client↔daemon reconciliation they describe are superseded by RFC-031, which makes the daemon
+  authoritative for the pane tree; per-pane history/scrollback/screen restore is delegated to the daemon
 - RFC-010 (maintainability refactor) — fully implemented; `window.rs` is now a module directory
   with 8 submodules, `session/layout.rs` is split into layout, recovery, and state modules
 - RFC-011 (Flatpak) — packaging and host integration model remains relevant, but daemon-related

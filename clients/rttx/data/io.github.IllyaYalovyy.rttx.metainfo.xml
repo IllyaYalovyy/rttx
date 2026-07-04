@@ -11,10 +11,12 @@
   <description>
     <p>
       rttx is a tiling terminal emulator built with GTK4 and Libadwaita,
-      organized around named workspaces and split panes. It features
-      daemon-backed persistent sessions, workspace recovery, input
-      synchronization, reusable command snippets, and drag-and-drop
-      layout rearrangement.
+      organized around named workspaces and split panes. The rttx-server
+      daemon owns each workspace's pane tree and durable state, so
+      persistent workspaces, per-pane shell history, and the visible
+      screen survive detach, reconnect, and daemon restart. It also
+      features input synchronization, saved places and reusable command
+      snippets, and drag-and-drop layout rearrangement.
     </p>
   </description>
   <launchable type="desktop-id">io.github.IllyaYalovyy.rttx.desktop</launchable>

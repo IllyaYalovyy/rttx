@@ -78,9 +78,9 @@ This repository is a monorepo with role-based top-level directories:
 
 **In scope:**
 - Features that serve developers and sysadmins who live in a GNOME terminal all day
-- Improvements to workspace recovery, split management, and bookmark/command workflows
+- Improvements to workspace recovery, split management, and places/command workflows
 - Improvements to daemon-backed runtime lifecycle, endpoint connection management, and safe
-  workspace/runtime reconciliation
+  workspace reconnect and restore
 - GNOME HIG compliance and Libadwaita integration
 - Test coverage for existing or new crash categories (see `designs/RFC-003-testing-strategy.md`)
 - Bug fixes with regression tests
@@ -392,7 +392,7 @@ are safe to run while rttx is open for normal work — the dev instance uses a s
 - **Bug fixes** must include a regression test that fails before the fix and passes after.
 - **New features** must include tests covering the primary success path and any GTK-boundary
   interactions the feature introduces.
-- **Runtime-affecting changes** to daemon/runtime/reconnect/restore/reconciliation paths must add
+- **Runtime-affecting changes** to daemon/runtime/reconnect/restore paths must add
   both:
   - at least one new pure-state regression test in a unit-style source test host
   - at least one new integration, GTK boundary/widget, or AT-SPI behavioral regression test for
@@ -486,7 +486,7 @@ Refs #57
 1. **Open an issue first** for any non-trivial change. Align on scope before writing code.
 2. **One PR, one concern.** Do not bundle unrelated changes.
 3. **All checks must pass:**
-   - PRs that touch tracked daemon/runtime/restore/reconciliation code must satisfy the runtime
+   - PRs that touch tracked daemon/runtime/restore code must satisfy the runtime
      behavior gate by adding both a pure-state regression test and an integration or behavioral
      regression test
    - `cargo build --workspace`
