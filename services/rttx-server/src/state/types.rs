@@ -20,7 +20,7 @@ pub const DAEMON_INDEX_SCHEMA_VERSION: u32 = 1;
 ///
 /// Version 2 (RFC-031 §6) persists the authoritative [`WorkspaceTree`] —
 /// structure, logical split ratios, and default-active pane — as durable state.
-/// It is a clean break from version 1: unsupported older-version files are detected, ignored,
+/// Unsupported older-version files are detected, ignored,
 /// and removed on load with no migration path.
 pub const RUNTIME_FILE_SCHEMA_VERSION: u32 = 2;
 
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn workspace_spec_serialization_omits_removed_fields() {
-        // The clean break removes the standalone `active_pane_id`; it is
+        // The workspace spec has no standalone `active_pane_id`; it is
         // subsumed by the tree's default-active pane.
         let spec = sample_workspace_spec();
         let json = serde_json::to_string(&spec).unwrap();

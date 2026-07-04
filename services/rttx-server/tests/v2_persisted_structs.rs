@@ -3,7 +3,7 @@
 //!
 //! Verifies that the daemon index and screen snapshots round-trip through the
 //! migration chain, including forward compatibility with unknown fields and
-//! future-version rejection. Workspace-file persistence and the clean-break
+//! future-version rejection. Workspace-file persistence and the unsupported-version
 //! loader are covered in `workspace_file_v2.rs`.
 
 use rttx_server::state::migrations::{

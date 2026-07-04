@@ -329,7 +329,7 @@ mod tests {
     }
 
     /// A workspace file whose `schema_version` is not the current one is skipped
-    /// on load — there is no migration (RFC-031 clean break).
+    /// on load — there is no migration path.
     #[test]
     fn unsupported_schema_workspace_is_skipped() {
         let tmp = TempDir::new().unwrap();
@@ -341,7 +341,7 @@ mod tests {
         std::fs::create_dir_all(&old_dir).unwrap();
         std::fs::write(
             layout::runtime_file(state_dir, old_id),
-            r#"{"schema_version": 1, "spec": {}, "instance": {}}"#,
+            r#"{"schema_version": 99, "spec": {}, "instance": {}}"#,
         )
         .unwrap();
         save_daemon_index(state_dir, &[old_id]).unwrap();
@@ -366,7 +366,7 @@ mod tests {
         std::fs::create_dir_all(&old_dir).unwrap();
         std::fs::write(
             layout::runtime_file(state_dir, old_id),
-            r#"{"schema_version": 1, "spec": {}, "instance": {}}"#,
+            r#"{"schema_version": 99, "spec": {}, "instance": {}}"#,
         )
         .unwrap();
 
@@ -581,5 +581,15 @@ mod tests {
 
         let result = load_screen_snapshot(state_dir, rt_id, pane_id);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_all_with_empty_index_yields_no_workspaces() {
+        let tmp = TempDir::new().unwrap();
+        save_daemon_index(tmp.path(), &[]).unwrap();
+
+        let result = load_all(tmp.path()).expect("an empty state dir loads");
+        assert!(result.workspaces.is_empty());
+        assert!(result.failed_ids.is_empty());
     }
 }

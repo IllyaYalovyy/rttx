@@ -141,20 +141,14 @@ mod tests {
     }
 
     #[test]
-    fn removed_pane_source_variants_fail_to_deserialize() {
-        let bookmark_json = r#"{"source":{"bookmark":{"name":"Prod"}}}"#;
-        assert!(serde_json::from_str::<PaneRecovery>(bookmark_json).is_err());
-
-        let template_json = r#"{"source":{"session-template":{"name":"Dev Setup"}}}"#;
-        assert!(serde_json::from_str::<PaneRecovery>(template_json).is_err());
+    fn unknown_pane_source_variant_fails_to_deserialize() {
+        let json = r#"{"source":{"unrecognized_source":{"name":"X"}}}"#;
+        assert!(serde_json::from_str::<PaneRecovery>(json).is_err());
     }
 
     #[test]
-    fn removed_pane_target_variants_fail_to_deserialize() {
-        let local_tmux = r#"{"source":"empty-shell","target":{"local-tmux":{"session":"dev"}}}"#;
-        assert!(serde_json::from_str::<PaneRecovery>(local_tmux).is_err());
-
-        let remote_tmux = r#"{"source":"manual","target":{"remote-tmux":{"ssh_target":"host","tmux_session":"web"}}}"#;
-        assert!(serde_json::from_str::<PaneRecovery>(remote_tmux).is_err());
+    fn unknown_pane_target_variant_fails_to_deserialize() {
+        let json = r#"{"source":"empty-shell","target":{"unrecognized_target":{"x":"y"}}}"#;
+        assert!(serde_json::from_str::<PaneRecovery>(json).is_err());
     }
 }

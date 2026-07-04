@@ -2724,8 +2724,8 @@ where
 /// Parse and validate a length-prefix-stripped frame as a v3 `ClientHello`.
 ///
 /// Returns `Some` only for a structurally valid v3 hello (16-byte client id
-/// and a non-zero `max_protocol_version`). Any other first frame —
-/// which are no longer supported — fail this check and yield `None`, so the
+/// and a non-zero `max_protocol_version`). Any other first frame fails
+/// this check and yields `None`, so the
 /// caller rejects the connection.
 fn parse_v3_client_hello(payload: &[u8]) -> Option<v3::ClientHello> {
     use prost::Message;

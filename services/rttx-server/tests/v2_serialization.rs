@@ -241,10 +241,10 @@ async fn corrupt_v2_workspace_skipped_not_fatal() {
 }
 
 /// The daemon understands only the current storage schema. A `workspace.json`
-/// written by the previous iteration (an older `schema_version`) is skipped on
-/// load — not deserialized, not migrated, not loaded.
+/// carrying an unsupported `schema_version` is skipped on load — not
+/// deserialized, not migrated, not loaded.
 #[test]
-fn older_schema_workspace_file_is_ignored_on_load() {
+fn unsupported_schema_workspace_file_is_ignored_on_load() {
     let tmp = tempfile::TempDir::new().unwrap();
     let state_dir = tmp.path().join("state/rttx/daemon");
     std::fs::create_dir_all(&state_dir).unwrap();
@@ -256,9 +256,36 @@ fn older_schema_workspace_file_is_ignored_on_load() {
     if let Some(parent) = old_path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
-    std::fs::write(&old_path, r#"{"schema_version": 1, "spec": {}, "instance": {}}"#).unwrap();
+    std::fs::write(&old_path, r#"{"schema_version": 99, "spec": {}, "instance": {}}"#).unwrap();
 
     let result = persistence::load_all(&state_dir).expect("state dir loads");
-    assert!(result.workspaces.is_empty(), "a previous-iteration workspace file must not load");
+    assert!(result.workspaces.is_empty(), "an unsupported-schema workspace file must not load");
     assert_eq!(result.failed_ids, vec![old_id], "it is skipped as an unsupported file");
+}
+
+/// A persisted workspace file is written with the current schema version.
+#[tokio::test]
+async fn persisted_workspace_file_carries_current_schema_version() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, handle) = start_test_server(tmp.path()).await;
+    let mut c = TestClient::connect(&sock).await;
+    c.handshake().await;
+
+    c.send(&v3::ClientEnvelope {
+        request_id: 0,
+        command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
+            name: "schema-version-test".into(),
+            policy: v3::WorkspacePolicy::Persistent as i32,
+        })),
+    })
+    .await;
+    let _ = c.recv().await;
+
+    wait_for_state_containing(tmp.path(), "schema-version-test", Duration::from_secs(10)).await;
+    handle.abort();
+
+    let state_dir = tmp.path().join("state/rttx/daemon");
+    let result = persistence::load_all(&state_dir).expect("state loads");
+    let ws = result.workspaces.iter().find(|r| r.spec.name == "schema-version-test").unwrap();
+    assert_eq!(ws.schema_version, RUNTIME_FILE_SCHEMA_VERSION);
 }

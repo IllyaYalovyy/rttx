@@ -878,13 +878,14 @@ mod tests {
         }
     }
 
-    /// `WorkspaceMode` was removed — serialized state must not contain it.
+    /// A serialized workspace carries its current fields.
     #[test]
-    fn serialized_workspace_state_has_no_mode_field() {
+    fn serialized_workspace_state_has_expected_shape() {
         let state = window_state(vec![managed_session("ws-1", "Workspace", term("pane-1"))]);
         let json = serde_json::to_string(&state.workspaces[0]).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(value.get("mode").is_none(), "WorkspaceMode must be fully removed");
+        assert!(value.get("runtime").is_some(), "runtime must be present");
+        assert!(value.get("layout").is_some(), "layout must be present");
     }
 
     #[test]

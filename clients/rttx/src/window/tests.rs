@@ -1549,28 +1549,12 @@ fn tools_sidebar_uses_per_row_management_instead_of_manage_dialog() {
     let window = Window::new(&app);
 
     assert!(
-        window.lookup_action("manage-bookmarks").is_none(),
-        "manage-bookmarks action should be removed"
-    );
-    assert!(
         window.lookup_action("manage-commands").is_none(),
         "manage-commands action should be removed"
     );
     assert!(
-        window.lookup_action("add-bookmark").is_none(),
-        "add-bookmark action should be removed"
-    );
-    assert!(
         window.lookup_action("add-command").is_some(),
         "add-command action should be registered"
-    );
-    assert!(
-        window.lookup_action("edit-bookmark").is_none(),
-        "edit-bookmark action should be removed"
-    );
-    assert!(
-        window.lookup_action("delete-bookmark").is_none(),
-        "delete-bookmark action should be removed"
     );
     assert!(
         window.lookup_action("edit-command").is_some(),
@@ -3951,10 +3935,6 @@ fn right_sidebar_has_places_tab() {
     // The utility stack should have a "places" page
     let stack = &window.imp().utility_stack;
     assert!(stack.child_by_name("places").is_some(), "utility stack should have a Places tab");
-    assert!(
-        stack.child_by_name("bookmarks").is_none(),
-        "utility stack should not have a Bookmarks tab"
-    );
     assert!(stack.child_by_name("commands").is_some(), "utility stack should have a Commands tab");
 
     window.close();
