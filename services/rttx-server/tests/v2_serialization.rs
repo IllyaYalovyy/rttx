@@ -100,7 +100,7 @@ async fn serialization_creates_backup_symlink() {
 
 /// Restart loads current-schema state and ignores an older-version file.
 #[tokio::test]
-async fn restart_prefers_v2_over_v1() {
+async fn restart_loads_persisted_current_state() {
     let tmp = tempfile::TempDir::new().unwrap();
 
     // Phase 1: create workspace, let serialization write v2 state.
@@ -238,4 +238,27 @@ async fn corrupt_v2_workspace_skipped_not_fatal() {
         assert_eq!(workspaces[0].id, rt1_id);
         assert_eq!(workspaces[0].name, "good-workspace");
     }
+}
+
+/// The daemon understands only the current storage schema. A `workspace.json`
+/// written by the previous iteration (an older `schema_version`) is skipped on
+/// load — not deserialized, not migrated, not loaded.
+#[test]
+fn older_schema_workspace_file_is_ignored_on_load() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let state_dir = tmp.path().join("state/rttx/daemon");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    let old_id = uuid::Uuid::new_v4();
+    persistence::save_daemon_index(&state_dir, &[old_id]).unwrap();
+
+    let old_path = layout::runtime_file(&state_dir, old_id);
+    if let Some(parent) = old_path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&old_path, r#"{"schema_version": 1, "spec": {}, "instance": {}}"#).unwrap();
+
+    let result = persistence::load_all(&state_dir).expect("state dir loads");
+    assert!(result.workspaces.is_empty(), "a previous-iteration workspace file must not load");
+    assert_eq!(result.failed_ids, vec![old_id], "it is skipped as an unsupported file");
 }

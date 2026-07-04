@@ -1010,4 +1010,11 @@ mod tests {
         assert_eq!(hello.max_protocol_version, v3_handshake::V3_PROTOCOL_VERSION);
         assert_eq!(hello.client_name, "rttx-server-cli");
     }
+
+    #[test]
+    fn cli_rejects_removed_salvage_history_subcommand() {
+        // The previous-iteration history-recovery subcommand no longer exists;
+        // parsing it must fail rather than silently resolve to anything.
+        assert!(Cli::try_parse_from(["rttx-server", "salvage-history"]).is_err());
+    }
 }
