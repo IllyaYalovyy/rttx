@@ -328,6 +328,10 @@ the user explicitly closes it.
 
 ## Development Plan
 
+> **Reconciliation (2026-07):** Steps 1–2 shipped in v1.0.0. Steps 3–7
+> (`ListSessions`-based reconciliation, the refresh action, and the orphan cleanup
+> dialog) remain open and are tracked in **#1056**.
+
 - [x] **Step 1** — Add `ConnectionStatus::SessionMissing` and its CSS/icon presentation
   *(prerequisite: —)*
 - [x] **Step 2** — Classify `ERR_SESSION_NOT_FOUND` (code 4) as

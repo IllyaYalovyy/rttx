@@ -2,7 +2,7 @@
 
 | Field         | Value          |
 |---------------|----------------|
-| Status        | Accepted       |
+| Status        | Implemented    |
 | Author(s)     | Illya Yalovyy  |
 | Supersedes    | —              |
 | Superseded by | —              |
@@ -470,11 +470,28 @@ scrollback_rotate_keep = 3
 
 ## Implementation Snapshot
 
-This RFC is in Accepted status. None of the proposed changes have been implemented.
-The sections below document the current v1 state as a baseline for future
-implementation work.
+**Implemented (shipped in v1.0.0).** The storage redesign landed as designed, then
+evolved under RFC-031 (server-authoritative workspaces), which *extends* this RFC.
+Two naming/behavioral deviations resulted:
 
-### Current source locations
+- **`Runtime` → `Workspace`** everywhere. `RuntimeFileV1` became `WorkspaceFileV2`
+  (schema version 2), `RuntimeSpecV1` → `WorkspaceSpecV2`, `RuntimeInstanceV1` →
+  `WorkspaceInstanceV1`. All per-pane durable state is now keyed on an immutable
+  server-assigned `PaneId` (RFC-031), not a random per-process id.
+- **Orphan sweep (§7) was superseded.** RFC-031 §8 replaced the startup orphan
+  sweep with explicit **close-driven cleanup** keyed on pane-tree membership: with
+  a server-owned tree nothing is ever left unreferenced, so a sweep is unnecessary.
+  See `services/rttx-server/src/state/cleanup.rs`.
+- **`command_history` was removed**, not persisted in `WorkspaceSpecV2`. Durable
+  history is now shell-init injection keyed on `PaneId` (RFC-031 §7).
+
+The "Current source locations" table below is retained as the **pre-implementation
+baseline**; those files (`serialization.rs`, `runtime.rs`, `PersistedRuntime`,
+`ServerState`, `state.json`, `cache_dir()`) no longer exist. The current state code
+lives under `services/rttx-server/src/state/` (`layout.rs`, `types.rs`,
+`persistence.rs`, `migrations.rs`, `io.rs`, `cleanup.rs`).
+
+### Current source locations *(pre-implementation baseline — since renamed/removed)*
 
 | Component | File |
 | --- | --- |
@@ -500,23 +517,26 @@ implementation work.
 | Backward-compat round-trips | Integration | `tests/persistence_compat.rs` |
 | `scrollback_flushed_to_disk_after_serialization_tick` | Integration | `tests/scrollback.rs` |
 
-### What exists vs what RFC-022 proposes
+### What RFC-022 proposed vs what shipped (v1.0.0)
 
-| RFC Feature | Current Status |
+Implemented via this RFC and its RFC-031 evolution (`Runtime` → `Workspace`).
+
+| RFC Feature | Status |
 | --- | --- |
-| XDG_STATE_HOME | ❌ Uses `$XDG_CACHE_HOME/rttx-server/` via `OsInterface::cache_dir()` |
-| Per-runtime files | ❌ Monolithic `state.json` with all runtimes |
-| `schema_version` field | ❌ Only `server_version: String` (Cargo package version) |
-| Schema migration module | ❌ No `state/` module; ad-hoc `#[serde(default)]` on individual fields |
-| Dirty-flag writes | ❌ Full rewrite every 1-second tick; `revision` exists but no `persisted_revision` |
-| Screen snapshot type | ❌ Raw byte tails via `PaneScreen::snapshot_bytes()` |
-| Scrollback rotation | ❌ `truncate_log_tail` slices at byte boundary (can corrupt escape sequences) |
-| Corruption containment | ❌ One bad byte in `state.json` loses all runtimes |
-| `.bak` symlink backup | ❌ Atomic tmp+rename only, no backup copy |
-| Dead runtime cleanup | ❌ Scrollback/history directories accumulate on disk |
-| Durable/transient split | ❌ Mixed in `PersistedRuntime` (durable + semi-durable fields together) |
-| Orphan sweep | ❌ Not implemented |
-| `no_persist` pane flag | ❌ Not implemented |
+| XDG_STATE_HOME | ✅ `OsInterface::state_dir()` → `$XDG_STATE_HOME/rttx/daemon/` (`os/unix.rs`) |
+| Per-workspace files | ✅ `workspaces/<id>/workspace.json` (`state/layout.rs`, `state/persistence.rs`) |
+| `schema_version` field | ✅ `DAEMON_INDEX_SCHEMA_VERSION`, `RUNTIME_FILE_SCHEMA_VERSION = 2`, `SCREEN_SNAPSHOT_SCHEMA_VERSION` (`state/types.rs`) |
+| Schema migration module | ✅ `state/migrations.rs` — total forward migration chain |
+| Dirty-flag writes | ✅ `persisted_revision` on `Workspace`; write gated on `revision > persisted_revision` (`workspace.rs`, `server.rs`) |
+| Screen snapshot type | ✅ `ScreenSnapshotV1` (`state/types.rs`) |
+| Scrollback rotation | ✅ `rotate_scrollback_log`, `SCROLLBACK_ROTATE_KEEP = 3` (`pane.rs`) |
+| Corruption containment | ✅ Per-file primary/backup fallback; a corrupt file is logged and dropped, not fatal (`state/persistence.rs`, `state/io.rs`) |
+| `.bak` backup | ✅ `write_with_backup` / `read_backup` (`state/io.rs`) |
+| Dead workspace cleanup | ✅ Close-driven, keyed on pane-tree membership (`state/cleanup.rs`, `server.rs`) |
+| Durable/transient split | ✅ `WorkspaceSpecV2` (durable) + `WorkspaceInstanceV1` (semi-durable) (`state/types.rs`) |
+| Orphan sweep | ⚠️ **Superseded** by RFC-031 §8 — close-driven cleanup keys on tree membership, so nothing is left unreferenced and a startup sweep is unnecessary (`state/cleanup.rs`) |
+| `no_persist` pane flag | ✅ Per-pane "Confidential mode" toggle action (`window/actions.rs`); ⚠️ surfaced as a per-pane toggle only, **not** in the workspace-creation dialog |
+| `command_history` field | ⚠️ **Removed** under RFC-031 — durable history is now shell-init keyed on `PaneId`, not a persisted field |
 
 ### Deviations from original text
 
@@ -576,34 +596,36 @@ code. This is Step 0 in the development plan.
 
 ## Development Plan
 
-- [ ] **Step 0** — Coordinate with RFC-023 on shared `$XDG_STATE_HOME/rttx/`
+- [x] **Step 0** — Coordinate with RFC-023 on shared `$XDG_STATE_HOME/rttx/`
   directory layout: `daemon/` vs `client/` subdirectories *(prerequisite: —)*
-- [ ] **Step 1** — Introduce `state::layout` module: path helpers for the new
-  directory tree, feature-gated alongside v1 paths *(prerequisite: Step 0)*
-- [ ] **Step 2** — Define `DaemonIndexV1`, `RuntimeFileV1`, `PaneSpecV1`,
-  `ScreenSnapshotV1` structs with `schema_version` *(prerequisite: Step 1)*
-- [ ] **Step 3** — Swap `load_persisted_state` and `serialization_loop` to use
-  per-runtime files with symlink-based `.bak` backup; on first startup with no
-  v2 state, start clean and log the change *(prerequisite: Step 2)*
-- [ ] **Step 4** — Add `persisted_revision` to `Runtime` and skip clean-runtime
-  writes *(prerequisite: Step 3)*
-- [ ] **Step 5** — Implement `ScreenSnapshotV1` serialization from `PaneScreen`
-  and replace the raw-bytes reconstruction path; keep scrollback logs but switch
-  truncation to rotation *(prerequisite: Step 3)*
-- [ ] **Step 6** — Implement runtime-directory removal on delete and the
-  startup orphan sweep *(prerequisite: Step 3)*
-- [ ] **Step 7** — Add `no_persist` pane flag, surface in workspace creation
-  dialog and pane context menu, plumb to flush/snapshot *(prerequisite: Step 5)*
-- [ ] **Step 8** — Tests: corrupt `runtime.json` does not kill the daemon,
-  dirty-flag skips writes, rotation keeps N segments, orphan sweep quarantines
-  unreferenced directories, `ScreenSnapshotV1` round-trip
-  *(prerequisite: Steps 3–6)*
-- [ ] **Step 9** — Update packaging docs and the first-run log line to
-  announce the new state location *(prerequisite: Step 3)*
+- [x] **Step 1** — Introduce `state::layout` module: path helpers for the new
+  directory tree *(prerequisite: Step 0)* — `state/layout.rs`
+- [x] **Step 2** — Define `DaemonIndexV1`, `WorkspaceFileV2` (was `RuntimeFileV1`),
+  `PaneSpecV2`, `ScreenSnapshotV1` structs with `schema_version` *(prerequisite: Step 1)*
+  — `state/types.rs`
+- [x] **Step 3** — Swap load/serialization to per-workspace files with `.bak`
+  backup; on first startup with no v2 state, start clean and log the change
+  *(prerequisite: Step 2)* — `state/persistence.rs`, `state/io.rs`; #1008, #1028
+- [x] **Step 4** — Add `persisted_revision` to `Workspace` and skip clean-workspace
+  writes *(prerequisite: Step 3)* — `workspace.rs`, `server.rs`
+- [x] **Step 5** — Implement `ScreenSnapshotV1` serialization from `PaneScreen`
+  and replace the raw-bytes reconstruction path; switch scrollback truncation to
+  rotation *(prerequisite: Step 3)* — `pane.rs` (`rotate_scrollback_log`)
+- [x] **Step 6** — Workspace-directory removal on delete. *(prerequisite: Step 3)*
+  — ⚠️ the **startup orphan sweep was superseded** by RFC-031 §8 close-driven
+  cleanup (`state/cleanup.rs`); nothing is left unreferenced, so no sweep runs.
+- [x] **Step 7** — `no_persist` pane flag plumbed to flush/snapshot, surfaced as a
+  per-pane "Confidential mode" toggle *(prerequisite: Step 5)* — `window/actions.rs`,
+  `shell_init.rs`. ⚠️ Not surfaced in the workspace-creation dialog (per-pane only).
+- [x] **Step 8** — Tests: corrupt file does not kill the daemon, dirty-flag skips
+  writes, rotation keeps N segments, `ScreenSnapshotV1` round-trip
+  *(prerequisite: Steps 3–6)* — `state/persistence.rs`, `state/cleanup.rs`
+- [x] **Step 9** — Packaging/dev docs updated with the new `$XDG_STATE_HOME/rttx/`
+  location; first-run clean-start log line *(prerequisite: Step 3)* — `CONTRIBUTING.md`, #1054
 
-Steps 1–3 can land as a single PR behind a feature flag. Steps 4–7 are
-additive. Step 8 is gating. Step 9 ships with the release that removes the
-v1 flag.
+Shipped in v1.0.0. Implemented in coordination with RFC-031, which extended the
+schema (`Runtime` → `Workspace`) and replaced the orphan sweep with close-driven
+cleanup.
 
 ---
 
