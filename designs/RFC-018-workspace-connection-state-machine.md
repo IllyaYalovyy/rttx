@@ -2,7 +2,7 @@
 
 | Field         | Value                                                       |
 |---------------|-------------------------------------------------------------|
-| Status        | Implemented                                                 |
+| Status        | Implemented (steps 7–9 pending — see #1058)                  |
 | Author(s)     | jd2023                                                      |
 | Supersedes    | —                                                           |
 | Superseded by | —                                                           |
@@ -312,6 +312,10 @@ connection status and encounters a serialized `Recovered` variant, loading must 
 ---
 
 ## Development Plan
+
+> **Reconciliation (2026-07):** Steps 1–6 shipped in v1.0.0. Steps 7–9 (replace
+> durable `Recovered` with `Connected` + a transient signal) remain open and are
+> tracked in **#1058**.
 
 - [x] **Step 1** — Implement the pure connection state machine (`ConnectionStatus`,
   `ConnectionEvent`, `advance_connection_status`) — *done: `runtime.rs`*

@@ -2,10 +2,21 @@
 
 | Field         | Value                                                                        |
 |---------------|------------------------------------------------------------------------------|
-| Status        | Draft                                                                        |
+| Status        | Implemented                                                                  |
 | Author(s)     | yalovyyi                                                                      |
 | Supersedes    | RFC-026 (pane-state-clone-on-split); structural parts of RFC-016, RFC-018    |
 | Superseded by | —                                                                            |
+
+---
+
+> **Implementation status (2026-07): Implemented.** This RFC shipped as the
+> flagship of the **v1.0.0** release (see `CHANGELOG.md`). The server-authoritative
+> workspace tree (`services/rttx-server/src/pane_tree.rs`, `workspace.rs`),
+> immutable server-assigned `PaneId`, per-shell durable history
+> (`shell_init.rs`), the `AttachWorkspace`/`WorkspaceSnapshot` protocol, and the
+> deletion of the client-side `pane_bindings`/reconciliation layer (#1049) all
+> landed on `mainline`. The Development Plan below is checked against the merged
+> code. Multi-window interaction (Q3) remains a V2 follow-up under RFC-029.
 
 ---
 
@@ -295,21 +306,23 @@ no compatibility shims.
 
 ## Development Plan
 
-- [ ] **Step 1** — Server: `Workspace` + `PaneTree` + immutable `PaneId` as
+- [x] **Step 1** — Server: `Workspace` + `PaneTree` + immutable `PaneId` as
   durable tree nodes; ratios and default-active server-side. *(prereq: —)*
-- [ ] **Step 2** — Persistence: `WorkspaceFileV2` (tree + per-pane); clean-break
-  load (ignore/remove old schema). *(prereq: Step 1)*
-- [ ] **Step 3** — Protocol: `AttachWorkspace`/`WorkspaceSnapshot` with tree;
+- [x] **Step 2** — Persistence: `WorkspaceFileV2` (tree + per-pane); clean-break
+  load (ignore/remove old schema). *(prereq: Step 1)* — #1008, #1028
+- [x] **Step 3** — Protocol: `AttachWorkspace`/`WorkspaceSnapshot` with tree;
   `SplitPane`/`ClosePane`/`ResizeSplit` mutations; viewport messages; remove
   client-identity `CreatePane`. *(prereq: Step 1)*
-- [ ] **Step 4** — Client: render from server tree; per-client viewport; delete
-  `pane_bindings`, `reconcile_bindings`, client layout persistence. *(prereq: Step 3)*
+- [x] **Step 4** — Client: render from server tree; per-client viewport; delete
+  `pane_bindings`, `reconcile_bindings`, client layout persistence. *(prereq: Step 3)* — #1049
 - [x] **Step 5** — Shell history: per-shell rc/ZDOTDIR injection keyed on
-  `PaneId`; crash-survival integration tests for bash/zsh/fish. *(prereq: Step 1)*
-- [ ] **Step 6** — Delete dead paths (§8); `Runtime`→`Workspace` rename;
-  crash-recovery integration test asserting **zero** orphaned state. *(prereq: 1–5)*
+  `PaneId`; crash-survival integration tests for bash/zsh/fish. *(prereq: Step 1)* — #1011
+- [x] **Step 6** — Delete dead paths (§8); `Runtime`→`Workspace` rename;
+  crash-recovery integration test asserting **zero** orphaned state. *(prereq: 1–5)* — #1017, #1018, #1050–#1053
 - [x] **Step 7** — One-time histfile salvage utility (separate binary/subcommand,
   not a runtime code path) for users upgrading from the old layout. *(prereq: Step 2)*
+  — implemented pre-1.0, then **removed in #1052**: the clean-break reset made
+  salvage unnecessary, so no runtime code path remains.
 
 ---
 
@@ -317,8 +330,9 @@ no compatibility shims.
 
 - [x] **Q1 — Shared structure vs mirrored pixels.** Resolved: server owns the
   logical tree; per-client viewport owns size/focus/scroll (Design §3).
-- [ ] **Q2 — Multi-client PTY sizing refinement.** Min-size for now (§4); a
-  "controlling client" model can refine later. Acceptable for v1?
+- [x] **Q2 — Multi-client PTY sizing refinement.** Resolved: shipped in v1.0.0
+  with the min-size policy (§4). A "controlling client" refinement is deferred to
+  RFC-029.
 - [ ] **Q3 — RFC-029 multi-window.** Each window is a client/viewport; a window
   hosts one workspace; the same workspace may appear in multiple windows
   (shared tree, independent viewports). Confirm this is the intended interaction.
