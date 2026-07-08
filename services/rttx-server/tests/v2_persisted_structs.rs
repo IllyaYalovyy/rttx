@@ -65,6 +65,7 @@ fn screen_snapshot_persists_and_loads_via_migration_chain() {
             mouse_tracking_mode: 1000,
             sgr_mouse: true,
             focus_reporting: false,
+            alternate_screen: false,
         },
         screen_bytes: vec![0x1b, b'[', b'2', b'J'],
         confidential: false,

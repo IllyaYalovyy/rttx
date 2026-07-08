@@ -300,6 +300,7 @@ impl Pane {
                 mouse_tracking_mode: self.screen.mouse_tracking_mode(),
                 sgr_mouse: self.screen.sgr_mouse_mode(),
                 focus_reporting: self.screen.focus_event_mode(),
+                alternate_screen: self.screen.alternate_screen(),
             },
             screen_bytes,
             confidential: self.no_persist,
@@ -308,16 +309,41 @@ impl Pane {
 
     /// Restore canonical pane state from a persisted screen snapshot.
     ///
-    /// Feeds `screen_bytes` through the parser, then overwrites mode flags,
-    /// cursor visibility, and output sequence from the snapshot metadata.
-    /// This ensures restart reconstruction is deterministic from the
-    /// persisted metadata rather than depending on mode-setting escape
-    /// sequences being present in the retained byte tail.
+    /// A daemon restart destroyed the process that owned this pane. Any
+    /// full-screen TUI (Claude, Codex, vim, htop, …) that had put the terminal
+    /// into alternate-screen / mouse-tracking / bracketed-paste mode is gone,
+    /// and the pane is about to be handed to a freshly respawned shell.
+    /// Faithfully restoring the dead app's modes leaves that shell in a broken
+    /// input state — most visibly, stuck mouse tracking makes every pointer
+    /// movement inject `\x1b[<btn;col;rowM` reports onto the command line, and a
+    /// replayed alt-screen frame scatters absolutely-positioned text across the
+    /// buffer. So reconstruction is treated like a clean process exit: the
+    /// transient app frame is dropped and the terminal is reset to an
+    /// interactive baseline via [`terminal_cleanup_bytes`].
+    ///
+    /// The reset is applied to the screen state itself, so it also propagates to
+    /// clients that attach after reconstruction — their snapshot is rebuilt from
+    /// this screen's live mode flags and byte tail.
+    ///
+    /// [`terminal_cleanup_bytes`]: crate::screen::terminal_cleanup_bytes
     pub fn restore_from_snapshot(&mut self, snap: &ScreenSnapshotV1) {
-        let clean = crate::screen::restart_safe_scrollback(&snap.screen_bytes);
-        self.screen.feed(clean);
-        self.screen.restore_modes(&snap.modes);
-        self.screen.restore_cursor_visible(snap.cursor_visible);
+        // A TUI owned the screen if it was in the alternate buffer or had mouse
+        // tracking enabled. Its on-screen content is transient app UI, not
+        // scrollback worth replaying.
+        let tui_owned_screen = snap.modes.alternate_screen || snap.modes.mouse_tracking_mode != 0;
+
+        if !tui_owned_screen {
+            // Normal shell: the retained tail is real scrollback worth showing.
+            let clean = crate::screen::restart_safe_scrollback(&snap.screen_bytes);
+            self.screen.feed(clean);
+        }
+
+        // Reset alt-screen, mouse tracking, bracketed paste, application cursor
+        // keys, and cursor visibility to a sane baseline. Feeding the cleanup
+        // bytes through the parser also clears the corresponding mode flags, so
+        // the reconstructed screen reports a clean state to attaching clients.
+        self.screen.feed(crate::screen::terminal_cleanup_bytes());
+
         self.output_seq = snap.pane_output_seq;
     }
 }
@@ -870,36 +896,60 @@ mod tests {
                 mouse_tracking_mode: 1003,
                 sgr_mouse: true,
                 focus_reporting: true,
+                alternate_screen: false,
             },
             screen_bytes: b"line1\r\nline2\r\n".to_vec(),
             confidential: false,
         }
     }
 
-    #[test]
-    fn restore_from_snapshot_restores_modes() {
-        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
-        let snap = snapshot_with_modes(pane.id);
-
-        pane.restore_from_snapshot(&snap);
-
-        assert!(pane.screen.bracketed_paste_mode());
-        assert!(pane.screen.application_cursor_keys());
-        assert!(pane.screen.application_keypad());
-        assert_eq!(pane.screen.mouse_tracking_mode(), 1003);
-        assert!(pane.screen.sgr_mouse_mode());
-        assert!(pane.screen.focus_event_mode());
+    /// Return a normal-shell snapshot: no alt-screen, no mouse tracking, with
+    /// real scrollback in `screen_bytes`.
+    fn normal_shell_snapshot(pane_id: Uuid, screen_bytes: &[u8]) -> ScreenSnapshotV1 {
+        let mut snap = snapshot_with_modes(pane_id);
+        snap.modes = TerminalModeSnapshot {
+            bracketed_paste: false,
+            application_cursor_keys: false,
+            application_keypad: false,
+            mouse_tracking_mode: 0,
+            sgr_mouse: false,
+            focus_reporting: false,
+            alternate_screen: false,
+        };
+        snap.screen_bytes = screen_bytes.to_vec();
+        snap
     }
 
     #[test]
-    fn restore_from_snapshot_restores_cursor_visibility() {
+    fn restore_from_snapshot_resets_tui_modes_to_baseline() {
+        // Regression: a daemon restart kills the TUI (Claude/Codex/vim) that
+        // enabled mouse tracking. Reconstruction must NOT restore those modes —
+        // otherwise the respawned shell inherits mouse tracking and every
+        // pointer movement injects `\x1b[<btn;col;rowM` reports onto the prompt.
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
-        assert!(pane.screen.cursor_visible());
+        let snap = snapshot_with_modes(pane.id); // mouse_tracking_mode: 1003
 
-        let snap = snapshot_with_modes(pane.id);
         pane.restore_from_snapshot(&snap);
 
-        assert!(!pane.screen.cursor_visible());
+        assert_eq!(pane.screen.mouse_tracking_mode(), 0, "mouse tracking must be reset");
+        assert!(!pane.screen.sgr_mouse_mode());
+        assert!(!pane.screen.bracketed_paste_mode());
+        assert!(!pane.screen.application_cursor_keys());
+        assert!(!pane.screen.application_keypad());
+        assert!(!pane.screen.focus_event_mode());
+        assert!(!pane.screen.alternate_screen());
+    }
+
+    #[test]
+    fn restore_from_snapshot_forces_cursor_visible() {
+        // TUI apps often hide the cursor; the reconstructed baseline shows it so
+        // the fresh shell prompt is usable.
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let snap = snapshot_with_modes(pane.id); // cursor_visible: false
+
+        pane.restore_from_snapshot(&snap);
+
+        assert!(pane.screen.cursor_visible());
     }
 
     #[test]
@@ -914,45 +964,60 @@ mod tests {
     }
 
     #[test]
-    fn restore_from_snapshot_feeds_screen_bytes() {
+    fn restore_from_snapshot_skips_transient_frame_for_tui_app() {
+        // The alt-screen / mouse-driven frame is transient app UI, not
+        // scrollback. Replaying its absolute-positioned redraw bytes would
+        // scatter text across the reconstructed buffer, so it must be dropped.
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
-        let snap = snapshot_with_modes(pane.id);
+        let snap = snapshot_with_modes(pane.id); // mouse 1003, bytes "line1\r\nline2\r\n"
 
         pane.restore_from_snapshot(&snap);
 
-        assert!(!pane.screen.raw_bytes().is_empty());
+        assert!(
+            !pane.screen.raw_bytes().windows(5).any(|w| w == b"line1"),
+            "transient TUI frame should not be replayed"
+        );
     }
 
     #[test]
-    fn restore_from_snapshot_modes_override_replay() {
+    fn restore_from_snapshot_detects_tui_via_alternate_screen() {
+        // A full-screen app with mouse tracking off but the alternate buffer
+        // active (e.g. `less`, `man`) is still transient — skip its frame.
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
-        // screen_bytes enable bracketed paste, but snapshot metadata says off.
-        let snap = ScreenSnapshotV1 {
-            schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
-            pane_id: pane.id,
-            cols: 80,
-            rows: 24,
-            cursor_row: 0,
-            cursor_col: 0,
-            cursor_visible: true,
-            title: None,
-            cwd: None,
-            pane_output_seq: 0,
-            modes: TerminalModeSnapshot {
-                bracketed_paste: false,
-                application_cursor_keys: false,
-                application_keypad: false,
-                mouse_tracking_mode: 0,
-                sgr_mouse: false,
-                focus_reporting: false,
-            },
-            screen_bytes: b"\x1b[?2004h\x1b[?1hsome text\r\n".to_vec(),
-            confidential: false,
-        };
+        let mut snap = snapshot_with_modes(pane.id);
+        snap.modes.mouse_tracking_mode = 0;
+        snap.modes.alternate_screen = true;
 
         pane.restore_from_snapshot(&snap);
 
-        // Metadata wins over replay-derived state.
+        assert!(!pane.screen.raw_bytes().windows(5).any(|w| w == b"line1"));
+    }
+
+    #[test]
+    fn restore_from_snapshot_replays_scrollback_for_normal_shell() {
+        // A normal shell (no alt-screen, no mouse) has real scrollback worth
+        // showing on reconnect.
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let snap = normal_shell_snapshot(pane.id, b"hello world\r\n$ \r\n");
+
+        pane.restore_from_snapshot(&snap);
+
+        assert!(
+            pane.screen.raw_bytes().windows(11).any(|w| w == b"hello world"),
+            "normal-shell scrollback should be replayed"
+        );
+    }
+
+    #[test]
+    fn restore_from_snapshot_resets_modes_left_by_replayed_bytes() {
+        // Even for a normal-shell replay, mode-setting sequences embedded in the
+        // retained bytes (bracketed paste, application cursor keys) must be
+        // neutralized so the reconstructed baseline is clean.
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        let snap = normal_shell_snapshot(pane.id, b"\x1b[?2004h\x1b[?1hsome text\r\n");
+
+        pane.restore_from_snapshot(&snap);
+
         assert!(!pane.screen.bracketed_paste_mode());
         assert!(!pane.screen.application_cursor_keys());
     }

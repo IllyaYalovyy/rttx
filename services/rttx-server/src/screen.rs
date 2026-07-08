@@ -1422,6 +1422,7 @@ mod tests {
             mouse_tracking_mode: 1003,
             sgr_mouse: true,
             focus_reporting: true,
+            alternate_screen: false,
         });
 
         assert!(screen.bracketed_paste_mode());
@@ -1449,6 +1450,7 @@ mod tests {
             mouse_tracking_mode: 0,
             sgr_mouse: false,
             focus_reporting: false,
+            alternate_screen: false,
         });
 
         assert!(!screen.bracketed_paste_mode());
