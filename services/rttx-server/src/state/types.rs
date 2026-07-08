@@ -184,6 +184,11 @@ pub struct TerminalModeSnapshot {
     pub sgr_mouse: bool,
     /// Focus event reporting (DECSET 1004).
     pub focus_reporting: bool,
+    /// Alternate screen buffer (DECSET 1049/1047) active — a full-screen TUI
+    /// (e.g. Claude, Codex, vim, htop) owned the terminal at snapshot time.
+    /// Added after the initial schema; older snapshots default to `false`.
+    #[serde(default)]
+    pub alternate_screen: bool,
 }
 
 // ── Version envelope for dispatch ───────────────────────────────────
@@ -283,6 +288,7 @@ mod tests {
                 mouse_tracking_mode: 0,
                 sgr_mouse: false,
                 focus_reporting: false,
+                alternate_screen: false,
             },
             screen_bytes: b"hello world\r\n".to_vec(),
             confidential: false,
@@ -457,6 +463,7 @@ mod tests {
                 mouse_tracking_mode: 0,
                 sgr_mouse: false,
                 focus_reporting: false,
+                alternate_screen: false,
             },
             screen_bytes: vec![],
             confidential: false,
@@ -486,6 +493,7 @@ mod tests {
                 mouse_tracking_mode: 1003,
                 sgr_mouse: true,
                 focus_reporting: true,
+                alternate_screen: false,
             },
             screen_bytes: vec![0x1b, b'[', b'H'],
             confidential: false,

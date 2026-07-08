@@ -337,7 +337,14 @@ impl Server {
                     if let Some(pane) = rt.panes.get_mut(&pane_id) {
                         match data {
                             ReplayData::Snapshot(snap) => pane.restore_from_snapshot(&snap),
-                            ReplayData::Scrollback { clean, .. } => pane.screen.feed(&clean),
+                            ReplayData::Scrollback { clean, .. } => {
+                                pane.screen.feed(&clean);
+                                // The app that owned this pane is gone. Reset any
+                                // TUI modes the captured scrollback left active
+                                // so the respawned shell starts from a clean,
+                                // interactive baseline (mirrors the snapshot path).
+                                pane.screen.feed(crate::screen::terminal_cleanup_bytes());
+                            }
                             ReplayData::None => {}
                         }
                     }

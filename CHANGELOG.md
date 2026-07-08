@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Restarting the daemon no longer leaves panes that were running a full-screen
+  TUI (e.g. Claude, Codex, vim, htop) in a broken, garbage-spewing state. A
+  daemon restart kills the app that owned the terminal, so reconstruction now
+  resets the pane to a clean interactive baseline instead of restoring the dead
+  app's interaction modes. Previously the persisted mouse-tracking / alt-screen
+  modes were re-applied onto the freshly respawned shell, so every mouse
+  movement injected `\x1b[<btn;col;rowM` reports onto the prompt and the
+  replayed alt-screen frame scattered text across the buffer. The transient TUI
+  frame is now dropped (detected via alternate-screen or mouse-tracking state)
+  and only genuine shell scrollback is replayed.
+
 ### Removed
 - The `rttx-server salvage-history` subcommand and its one-time orphaned-history
   recovery scan — the last code that engaged with the previous iteration's

@@ -142,6 +142,7 @@ mod tests {
                 mouse_tracking_mode: 0,
                 sgr_mouse: false,
                 focus_reporting: false,
+                alternate_screen: false,
             },
             screen_bytes: vec![],
             confidential: false,
