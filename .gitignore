@@ -10,6 +10,7 @@
 /repo
 /rttx.flatpak
 .claude
+.ktask/
 .kiro
 /.codex
 __pycache__/
