@@ -270,6 +270,26 @@ async fn printable_ascii_echoes_through_daemon_pty() {
     shutdown_server(&mut client, &mut server).await;
 }
 
+#[tokio::test]
+async fn shell_evaluated_result_streams_through_daemon() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, mut server) = start_binary_server(&tmp).await;
+
+    let mut client = TestClient::connect(&sock).await;
+    let (sid, pid) = setup_attached_pane(&mut client).await;
+
+    // The command must be evaluated by the shell and its result streamed back
+    // through the daemon PTY path — not merely have the typed bytes echoed.
+    send_input(&mut client, &sid, &pid, b"echo $((6 * 7))\r").await;
+    let output = collect_output(&mut client, Duration::from_secs(2)).await;
+    assert!(
+        output.contains("42"),
+        "shell-evaluated result must stream through the daemon: {output:?}"
+    );
+
+    shutdown_server(&mut client, &mut server).await;
+}
+
 // ── Control keys through daemon ─────────────────────────────────
 
 #[tokio::test]
