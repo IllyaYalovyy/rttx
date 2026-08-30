@@ -245,6 +245,30 @@ mod tests {
     }
 
     #[test]
+    fn spawned_pty_child_config_env_overrides_default_term() {
+        // `config.env` is applied after the built-in TERM/COLORTERM defaults,
+        // so a caller-supplied value must win. This is the contract that lets a
+        // profile pin a specific terminal type; regression-guard it here.
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let config = PtyConfig {
+                command: vec!["/bin/sleep".into(), "60".into()],
+                env: vec![("TERM".into(), "linux".into())],
+                ..PtyConfig::default()
+            };
+            let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
+            let pid = pty.pid().expect("child must be running");
+            let environ = wait_for_environ(pid, "TERM=linux");
+            assert!(environ.contains("TERM=linux"), "config env must override the default TERM");
+            assert!(
+                !environ.contains("TERM=xterm-256color"),
+                "an overridden default TERM must be replaced, not duplicated"
+            );
+            pty.kill().expect("kill must succeed");
+        });
+    }
+
+    #[test]
     fn dropping_pty_kills_child_process() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
