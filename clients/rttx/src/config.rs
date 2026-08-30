@@ -9,6 +9,7 @@ pub const DEV_ICON_NAME: &str = "io.github.IllyaYalovyy.rttx.Devel";
 pub const DEVELOPER_NAME: &str = "Illya Yalovyy";
 pub const PROJECT_WEBSITE: &str = "https://github.com/IllyaYalovyy/rttx";
 pub const ISSUE_TRACKER: &str = "https://github.com/IllyaYalovyy/rttx/issues";
+pub const SPONSORS_URL: &str = "https://github.com/sponsors/IllyaYalovyy";
 pub const DEV_MODE_ENV: &str = "RTTX_DEV_MODE";
 
 /// `GSettings` schema IDs
