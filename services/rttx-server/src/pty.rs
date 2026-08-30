@@ -182,18 +182,35 @@ fn resolve_cwd(path: &PathBuf) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Read `/proc/<pid>/environ` until it contains `needle` (or a short
+    /// timeout expires). Immediately after spawn the child may still be inside
+    /// execve, where the kernel exposes an empty or partial environment, so a
+    /// single read is racy under load (a source of intermittent CI failures).
+    fn wait_for_environ(pid: u32, needle: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let environ = std::fs::read_to_string(format!("/proc/{pid}/environ"))
+                .expect("read /proc environ");
+            if environ.contains(needle) || std::time::Instant::now() >= deadline {
+                return environ;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn spawned_pty_child_inherits_colorterm() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
+            // Exec `sleep` directly rather than via `sh -c`, so there is no
+            // second execve for the environ read to race against.
             let config = PtyConfig {
-                command: vec!["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+                command: vec!["/bin/sleep".into(), "60".into()],
                 ..PtyConfig::default()
             };
             let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
             let pid = pty.pid().expect("child must be running");
-            let environ = std::fs::read_to_string(format!("/proc/{pid}/environ"))
-                .expect("read /proc environ");
+            let environ = wait_for_environ(pid, "TERM=xterm-256color");
             assert!(
                 environ.contains("COLORTERM=truecolor"),
                 "PTY child must have COLORTERM=truecolor in its environment"
@@ -210,15 +227,15 @@ mod tests {
     fn spawned_pty_child_inherits_custom_env_vars() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
+            // Direct exec, see spawned_pty_child_inherits_colorterm.
             let config = PtyConfig {
-                command: vec!["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+                command: vec!["/bin/sleep".into(), "60".into()],
                 env: vec![("PROMPT_COMMAND".into(), "history -a".into())],
                 ..PtyConfig::default()
             };
             let mut pty = Pty::spawn(Uuid::new_v4(), &config).expect("spawn must succeed");
             let pid = pty.pid().expect("child must be running");
-            let environ = std::fs::read_to_string(format!("/proc/{pid}/environ"))
-                .expect("read /proc environ");
+            let environ = wait_for_environ(pid, "PROMPT_COMMAND=history -a");
             assert!(
                 environ.contains("PROMPT_COMMAND=history -a"),
                 "PTY child must have PROMPT_COMMAND=history -a in its environment"
