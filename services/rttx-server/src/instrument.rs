@@ -56,6 +56,16 @@ impl<T> Drop for InstrumentedMutexGuard<'_, T> {
     }
 }
 
+/// Record a mutex-wait sample, incrementing the contention counter when the
+/// wait exceeded [`CONTENTION_THRESHOLD_US`]. Centralises the check shared by
+/// [`lock_server`] and [`lock_workspace`] so it can be unit-tested without
+/// relying on wall-clock timing.
+fn note_contention(metrics: &DaemonMetrics, wait_us: u64) {
+    if wait_us > CONTENTION_THRESHOLD_US {
+        metrics.mutex_contentions.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Acquire the server mutex with profiling instrumentation.
 ///
 /// Records wait time via a `tracing` profiling span and hold time via
@@ -73,9 +83,7 @@ pub async fn lock_server<'a>(
     );
     let guard = mutex.lock().instrument(span).await;
     let wait_us = wait_start.elapsed().as_micros() as u64;
-    if wait_us > CONTENTION_THRESHOLD_US {
-        metrics.mutex_contentions.fetch_add(1, Ordering::Relaxed);
-    }
+    note_contention(metrics, wait_us);
     InstrumentedMutexGuard {
         guard,
         acquired_at: Instant::now(),
@@ -101,9 +109,7 @@ pub async fn lock_workspace<'a>(
     );
     let guard = mutex.lock().instrument(span).await;
     let wait_us = wait_start.elapsed().as_micros() as u64;
-    if wait_us > CONTENTION_THRESHOLD_US {
-        metrics.mutex_contentions.fetch_add(1, Ordering::Relaxed);
-    }
+    note_contention(metrics, wait_us);
     InstrumentedMutexGuard {
         guard,
         acquired_at: Instant::now(),
@@ -248,26 +254,19 @@ mod tests {
         assert_eq!(metrics.mutex_long_holds.load(Ordering::Relaxed), 0);
     }
 
-    #[tokio::test]
-    async fn contention_increments_metric_on_slow_acquire() {
-        let metrics = Arc::new(DaemonMetrics::new());
-        let rt = crate::workspace::Workspace::new("test".to_string());
-        let mutex = Arc::new(tokio::sync::Mutex::new(rt));
+    #[test]
+    fn note_contention_counts_only_above_threshold() {
+        let metrics = DaemonMetrics::new();
 
-        // Hold the lock in another task to create contention.
-        let mutex_clone = Arc::clone(&mutex);
-        let hold_task = tokio::spawn(async move {
-            let _guard = mutex_clone.lock().await;
-            tokio::time::sleep(std::time::Duration::from_millis(3)).await;
-        });
+        // At or below the threshold: not counted as contention.
+        note_contention(&metrics, 0);
+        note_contention(&metrics, CONTENTION_THRESHOLD_US - 1);
+        note_contention(&metrics, CONTENTION_THRESHOLD_US);
+        assert_eq!(metrics.mutex_contentions.load(Ordering::Relaxed), 0);
 
-        // Give the hold task time to acquire.
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-
-        // This acquisition should be contended (wait > 1ms).
-        let _guard = lock_workspace(&mutex, &metrics).await;
-        hold_task.await.unwrap();
-
-        assert!(metrics.mutex_contentions.load(Ordering::Relaxed) >= 1);
+        // Strictly above the threshold: one contention recorded per call.
+        note_contention(&metrics, CONTENTION_THRESHOLD_US + 1);
+        note_contention(&metrics, 10 * CONTENTION_THRESHOLD_US);
+        assert_eq!(metrics.mutex_contentions.load(Ordering::Relaxed), 2);
     }
 }

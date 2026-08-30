@@ -100,3 +100,40 @@ fn histogram_percentile_accuracy_across_distribution() {
     // p99 threshold = 990, cumulative at bucket 3 = 1000 >= 990
     assert_eq!(h.percentile(99.0), Some(10_000));
 }
+
+#[tokio::test]
+async fn lock_contention_increments_mutex_contention_metric() {
+    use rttx_server::instrument::lock_workspace;
+    use rttx_server::workspace::Workspace;
+    use tokio::sync::{Mutex, oneshot};
+
+    let metrics = Arc::new(DaemonMetrics::new());
+    let mutex = Arc::new(Mutex::new(Workspace::new("contended".to_string())));
+
+    // Hold the lock in another task and signal once it is *actually* held, so
+    // the contended acquisition below is guaranteed to wait — no reliance on
+    // sleep timing to win the race (the source of earlier flakiness under
+    // coverage instrumentation). The holder keeps the lock well past the 1ms
+    // contention threshold.
+    let (acquired_tx, acquired_rx) = oneshot::channel();
+    let holder = {
+        let mutex = Arc::clone(&mutex);
+        tokio::spawn(async move {
+            let guard = mutex.lock().await;
+            let _ = acquired_tx.send(());
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            drop(guard);
+        })
+    };
+
+    // Only attempt the contended acquire once the holder truly owns the lock.
+    acquired_rx.await.unwrap();
+    let guard = lock_workspace(&mutex, &metrics).await;
+    drop(guard);
+    holder.await.unwrap();
+
+    assert!(
+        metrics.mutex_contentions.load(Ordering::Relaxed) >= 1,
+        "a lock wait past the contention threshold must be recorded"
+    );
+}
