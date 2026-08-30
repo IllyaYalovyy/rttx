@@ -414,6 +414,7 @@ impl Window {
         about.set_developers(&[config::DEVELOPER_NAME]);
         about.set_website(config::PROJECT_WEBSITE);
         about.set_issue_url(config::ISSUE_TRACKER);
+        about.add_link("Support rttx", config::SPONSORS_URL);
         about.set_license_type(gtk4::License::Gpl30);
         about.present();
     }

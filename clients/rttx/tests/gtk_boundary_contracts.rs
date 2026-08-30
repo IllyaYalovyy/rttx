@@ -1234,3 +1234,19 @@ fn workspace_menu_force_reconnect_available_during_connecting() {
     });
     assert!(!connected.show_reconnect, "Force Reconnect must be hidden when already connected");
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// 8. ABOUT WINDOW LINK CONTRACTS
+//
+// `show_about_window` hands these constants to adw::AboutWindow, which
+// opens them through the portal without validating them. A typo here
+// ships a dead or wrong external link in the released About dialog.
+// ═══════════════════════════════════════════════════════════════════
+
+/// Contract: the "Support rttx" About link points at the maintainer's
+/// GitHub Sponsors page.
+/// Violation would cause: the About window sending users to the wrong URL.
+#[test]
+fn sponsors_url_targets_github_sponsors_page() {
+    assert_eq!(rttx::config::SPONSORS_URL, "https://github.com/sponsors/IllyaYalovyy");
+}
