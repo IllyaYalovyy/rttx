@@ -116,9 +116,23 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
             })),
         })
         .await;
-    match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
+    let snapshot = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => snap,
         other => panic!("expected Snapshot, got {other:?}"),
+    };
+
+    // The shell's first prompt can be emitted before this client finishes
+    // attaching, in which case it lands in the snapshot's raw scrollback
+    // instead of arriving as a live OutputDelta. Only fall back to waiting on
+    // the live stream when the prompt has not been seen yet — otherwise the
+    // wait blocks until its 30s timeout, which was the source of intermittent
+    // CI failures (a race between shell startup and attach).
+    let prompt_already_visible = snapshot
+        .panes
+        .iter()
+        .any(|pane| String::from_utf8_lossy(&pane.scrollback_tail).contains(PROMPT));
+    if !prompt_already_visible {
+        wait_for_prompt(client).await;
     }
 
     (runtime_id, pane_id)
@@ -246,7 +260,6 @@ async fn printable_ascii_echoes_through_daemon_pty() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     send_input(&mut client, &sid, &pid, b"echo hello123\r").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -266,7 +279,6 @@ async fn ctrl_c_interrupts_running_command() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Start a long sleep, then interrupt with Ctrl+C (0x03).
     send_input(&mut client, &sid, &pid, b"sleep 999\r").await;
@@ -296,7 +308,6 @@ async fn arrow_keys_navigate_shell_history() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Run a command, then use Up arrow to recall it.
     send_input(&mut client, &sid, &pid, b"echo ARROW_TEST\r").await;
@@ -321,7 +332,6 @@ async fn bracketed_paste_wraps_content_correctly() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Bash enables bracketed paste by default. Send paste-wrapped content.
     // Bracketed paste: ESC[200~ <content> ESC[201~
@@ -347,7 +357,6 @@ async fn snapshot_includes_bracketed_paste_mode() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Bash enables bracketed paste by default. Detach and reattach to get a snapshot.
     client
@@ -402,7 +411,6 @@ async fn reconnect_preserves_command_output_in_scrollback() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     send_input(&mut client, &sid, &pid, b"echo PERSIST_CHECK\r").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -423,7 +431,6 @@ async fn reconnect_allows_continued_input_after_reattach() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     send_input(&mut client, &sid, &pid, b"echo BEFORE\r").await;
     wait_for_prompt(&mut client).await;
@@ -453,7 +460,6 @@ async fn fkey_bytes_reach_pty_application() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Pipe F1 escape sequence through cat -v to make it visible.
     send_input(&mut client, &sid, &pid, b"printf '\\033OP' | cat -v\r").await;
@@ -510,7 +516,6 @@ async fn snapshot_includes_application_cursor_keys_mode() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Enable application cursor keys (DECSET 1) via printf.
     send_input(&mut client, &sid, &pid, b"printf '\\033[?1h'\r").await;
@@ -534,7 +539,6 @@ async fn snapshot_includes_application_keypad_mode() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Enable application keypad (DECKPAM = ESC =) via printf.
     send_input(&mut client, &sid, &pid, b"printf '\\033='\r").await;
@@ -558,7 +562,6 @@ async fn snapshot_includes_mouse_tracking_mode() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Enable SGR mouse tracking (DECSET 1003 + 1006) via printf.
     send_input(&mut client, &sid, &pid, b"printf '\\033[?1003h\\033[?1006h'\r").await;
@@ -587,7 +590,6 @@ async fn snapshot_modes_reset_when_disabled() {
 
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Enable then disable application cursor keys.
     send_input(&mut client, &sid, &pid, b"printf '\\033[?1h'\r").await;
