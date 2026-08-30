@@ -113,9 +113,23 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
             })),
         })
         .await;
-    match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::WorkspaceSnapshot(_)) => {}
+    let snapshot = match client.recv_or_timeout().await.payload {
+        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => snap,
         other => panic!("expected Snapshot, got {other:?}"),
+    };
+
+    // The shell's first prompt can be emitted before this client finishes
+    // attaching, in which case it lands in the snapshot's raw scrollback
+    // instead of arriving as a live OutputDelta. Only fall back to waiting on
+    // the live stream when the prompt has not been seen yet — otherwise the
+    // wait blocks until its 30s timeout, which was the source of intermittent
+    // CI failures (a race between shell startup and attach).
+    let prompt_already_visible = snapshot
+        .panes
+        .iter()
+        .any(|pane| String::from_utf8_lossy(&pane.scrollback_tail).contains(PROMPT));
+    if !prompt_already_visible {
+        wait_for_prompt(client).await;
     }
 
     (runtime_id, pane_id)
@@ -309,7 +323,6 @@ async fn shell_line_editing_bytes_render_expected_output_after_snapshot_restore(
 
     let mut client = TestClient::connect(&socket_path).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Type `echo abxd`, move left once, backspace the `x`, insert `c`,
     // then press Return. This should execute `echo abcd`.
@@ -333,7 +346,6 @@ async fn shell_line_editing_survives_detach_mid_command_and_executes_after_reatt
 
     let mut client = TestClient::connect(&socket_path).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     send_input(&mut client, &runtime_id, &pane_id, b"echo abxd\x1b[D\x7f").await;
     tokio::time::sleep(Duration::from_millis(250)).await;
@@ -364,7 +376,6 @@ async fn wrapped_shell_line_editing_survives_detach_and_reattach() {
 
     let mut client = TestClient::connect(&socket_path).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
     resize_pane(&mut client, &runtime_id, &pane_id, 12, 24).await;
 
     send_input(&mut client, &runtime_id, &pane_id, b"echo 0123456789abxd\x1b[D\x7f").await;
@@ -391,7 +402,6 @@ async fn formatted_output_survives_reattach_and_allows_follow_up_input() {
 
     let mut client = TestClient::connect(&socket_path).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     send_input(&mut client, &runtime_id, &pane_id, b"printf $'\\033[31mRED\\033[0m\\n'\r").await;
     tokio::time::sleep(Duration::from_millis(600)).await;
@@ -423,7 +433,6 @@ fn graceful_restart_does_not_fossilize_stale_prompt_lines() {
 
         let mut client = TestClient::connect(&socket_path).await;
         let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
-        wait_for_prompt(&mut client).await;
 
         send_input(&mut client, &runtime_id, &pane_id, b"echo cycle-0\r").await;
         wait_for_prompt(&mut client).await;
@@ -472,7 +481,6 @@ async fn reattach_without_resize_does_not_duplicate_prompt() {
 
     let mut client = TestClient::connect(&socket_path).await;
     let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
-    wait_for_prompt(&mut client).await;
 
     // Detach and reattach without sending a resize.
     let scrollback = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
