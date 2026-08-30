@@ -49,7 +49,7 @@ fn profile_report_from_flight_file() {
     assert_eq!(report.pid, Some(42));
     assert!(report.total_events > 0);
     assert!(report.mutex_latency.count > 0);
-    assert!(report.slow_ops.len() == 1);
+    assert_eq!(report.slow_ops.len(), 1);
     assert_eq!(report.slow_ops[0].span_kind, SpanKind::IoFlush);
 }
 

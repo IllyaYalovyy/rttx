@@ -173,7 +173,7 @@ fn workflow_persist_and_restore_with_cwds() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
     // CWDs survived
-    if let LayoutNode::Terminal { cwd: _, custom_title: _, .. } = &loaded.workspaces[0].layout {
+    if let LayoutNode::Terminal { .. } = &loaded.workspaces[0].layout {
         panic!("Expected Split at root, got Terminal");
     } else if let LayoutNode::Split { first, second, .. } = &loaded.workspaces[0].layout {
         if let LayoutNode::Terminal { cwd, custom_title, .. } = first.as_ref() {
