@@ -1,5 +1,7 @@
 # rttx
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/IllyaYalovyy)
+
 A tiling terminal environment for GNOME, built with Rust, GTK4, and Libadwaita, organized around
 named workspaces and split panes.
 
