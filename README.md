@@ -8,7 +8,7 @@ named workspaces and split panes.
 Spiritual successor to [Tilix](https://github.com/gnunn1/tilix), rewritten from scratch for the
 modern GNOME desktop.
 
-![rttx screenshot](clients/rttx/data/screenshots/rttx-main.png)
+![rttx showing named workspaces, a three-pane split layout, and the Places panel](clients/rttx/data/screenshots/rttx-workspaces.png)
 
 ## Features
 
@@ -28,6 +28,8 @@ modern GNOME desktop.
 - Run commands in the current pane or a new split pane
 - Copy raw command text to clipboard
 - Assign per-command keyboard shortcuts via leader prefix (Ctrl+;)
+
+![The Commands panel with saved, searchable commands organized by label](clients/rttx/data/screenshots/rttx-commands.png)
 
 ### Recovery and reconnect
 
