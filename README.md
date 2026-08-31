@@ -56,7 +56,7 @@ modern GNOME desktop.
 ### Fedora (COPR)
 
 ```bash
-sudo dnf copr enable illya/rttx
+sudo dnf copr enable etf2026/rttx
 sudo dnf install rttx
 ```
 
