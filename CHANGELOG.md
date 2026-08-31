@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Fedora packaging is now a proper source package: `packaging/rttx/rttx.spec`
+  uses Fedora's `cargo-rpm-macros` with a vendored-crates tarball (offline
+  build), ships `rttx-server` and its man page alongside the client, and
+  validates the desktop/AppStream files in `%check`. New
+  `packaging/rttx/rpm/build-srpm.sh` builds the SRPM (and optionally rebuilds
+  it in `mock` for several Fedora releases); the release pipeline builds the
+  SRPM in a Fedora container and submits *that* to COPR, which rebuilds it per
+  enabled chroot. The previous `cargo-generate-rpm` binary RPM (built on
+  Ubuntu) is gone. `build.rs` honours `RTTX_GIT_HASH` so tarball builds still
+  report their commit. Guide: `packaging/rttx/rpm/README.md`.
+
 ### Fixed
 - Restarting the daemon no longer leaves panes that were running a full-screen
   TUI (e.g. Claude, Codex, vim, htop) in a broken, garbage-spewing state. A

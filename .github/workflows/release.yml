@@ -116,61 +116,48 @@ jobs:
           if-no-files-found: error
 
   build-rpm:
-    name: Build RPM package
+    name: Build RPM (SRPM + Fedora binary)
     runs-on: ubuntu-latest
     needs: quality
+    # Build inside Fedora so the RPM links against Fedora's GTK/VTE/glibc and
+    # the SRPM is produced with Fedora's cargo-rpm-macros. The SRPM is the
+    # artifact COPR rebuilds for every enabled Fedora release/arch.
+    container: registry.fedoraproject.org/fedora:latest
     steps:
+      - name: Install packaging toolchain
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git cargo rust rpm-build rpmdevtools dnf5-plugins xz
+          # git-archive/describe must work on the runner-owned checkout.
+          git config --global --add safe.directory '*'
+
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-release-
+          # Full history + tags: build-srpm.sh checks HEAD against the v<version> tag.
+          fetch-depth: 0
 
-      - name: Install system dependencies
+      - name: Install spec BuildRequires
+        run: dnf builddep -y packaging/rttx/rttx.spec
+
+      - name: Build SRPM
+        run: ./packaging/rttx/rpm/build-srpm.sh --outdir dist/rpm
+
+      - name: Build binary RPM for the GitHub release
+        # `--without check`: the quality gate already ran the full suite on this
+        # commit, and COPR runs %check again in every chroot.
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev \
-            libadwaita-1-dev \
-            libvte-2.91-gtk4-dev \
-            protobuf-compiler \
-            rpm
+          rpmbuild --rebuild dist/rpm/*.src.rpm --without check \
+            --define "_topdir ${PWD}/dist/rpmbuild"
+          find dist/rpmbuild/RPMS -name '*.rpm' -not -name '*debuginfo*' -not -name '*debugsource*' \
+            -exec cp -v {} dist/rpm/ \;
 
-      - name: Install cargo-generate-rpm
-        run: cargo install cargo-generate-rpm
-
-      - name: Build release binaries
-        run: |
-          # vte4-sys requires vte >= 0.78 by default; fall back to the vte-0_76
-          # feature when the runner ships an older vte (mirrors the quality CI).
-          vte_version=$(pkg-config --modversion vte-2.91-gtk4 2>/dev/null || echo "0.78")
-          if printf '%s\n' "0.78" "${vte_version}" | sort -V | head -n1 | grep -q "^0\.78"; then
-            client_features=()
-          else
-            client_features=(--no-default-features --features vte-0_76)
-          fi
-          cargo build --release -p rttx-server
-          cargo build --release -p rttx "${client_features[@]}"
-
-      - name: Strip binaries
-        run: strip target/release/rttx target/release/rttx-server
-
-      - name: Build RPM
-        working-directory: clients/rttx
-        run: cargo generate-rpm
-
-      - name: Upload RPM
+      - name: Upload RPMs
         uses: actions/upload-artifact@v4
         with:
           name: rpm-package
-          path: clients/rttx/target/generate-rpm/*.rpm
+          path: |
+            dist/rpm/*.src.rpm
+            dist/rpm/*.x86_64.rpm
           if-no-files-found: error
 
   github-release:
@@ -210,11 +197,15 @@ jobs:
       - name: Install copr-cli
         run: pip install copr-cli
 
-      - name: Submit build to COPR
+      # COPR rebuilds the SRPM once per chroot enabled in the project settings
+      # (fedora-43/44/rawhide x86_64/aarch64, ...); the binary RPM built above
+      # is only the GitHub-release convenience asset.
+      - name: Submit SRPM build to COPR
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_USERNAME: ${{ secrets.COPR_USERNAME }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+          COPR_PROJECT: ${{ vars.COPR_PROJECT || 'etf2026/rttx' }}
         run: |
           if [ -z "${COPR_TOKEN}" ]; then
             echo "COPR secrets are not configured; skipping COPR submission."
@@ -229,4 +220,4 @@ jobs:
           token = ${COPR_TOKEN}
           copr_url = https://copr.fedorainfracloud.org
           EOF
-          copr-cli build --nowait illya/rttx dist/*.rpm
+          copr-cli build --nowait "${COPR_PROJECT}" dist/*.src.rpm

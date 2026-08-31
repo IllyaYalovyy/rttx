@@ -103,9 +103,9 @@ Version tag v*
     ├── quality         reuses quality.yml via workflow_call
     ├── build-flatpak   flatpak-builder → bundle
     ├── build-deb       cargo-deb → .deb
-    ├── build-rpm       cargo-generate-rpm → .rpm
+    ├── build-rpm       Fedora container: build-srpm.sh → .src.rpm, rpmbuild --rebuild → .rpm
     ├── github-release  upload all artifacts
-    └── copr-submit     submit RPM to COPR
+    └── copr-submit     submit SRPM to COPR
 ```
 
 ---
@@ -255,15 +255,16 @@ Requires `[package.metadata.deb]` in `clients/rttx/Cargo.toml` (see Development 
 
 #### `build-rpm`
 
-Runner: `ubuntu-latest` (builds RPM on Ubuntu using `cargo-generate-rpm`).
+Runner: `ubuntu-latest` with `container: registry.fedoraproject.org/fedora:latest` — the RPM must be
+built on Fedora so it links against Fedora's GTK/VTE/glibc and uses `cargo-rpm-macros`.
 
-Install: `cargo install cargo-generate-rpm`
+Install: `dnf install rpm-build rpmdevtools cargo rust dnf5-plugins` + `dnf builddep packaging/rttx/rttx.spec`
 
-Command: `cargo build --release && cargo generate-rpm`
+Command: `packaging/rttx/rpm/build-srpm.sh --outdir dist/rpm` then
+`rpmbuild --rebuild dist/rpm/*.src.rpm --without check`
 
-Output artifact: `target/generate-rpm/rttx-*.rpm`
-
-Requires `[package.metadata.generate-rpm]` in `clients/rttx/Cargo.toml` (see Development Plan).
+Output artifacts: `dist/rpm/rttx-*.src.rpm` (what COPR consumes) and `dist/rpm/rttx-*.x86_64.rpm`
+(GitHub-release convenience asset). See `packaging/rttx/rpm/README.md`.
 
 #### `github-release`
 
@@ -283,7 +284,9 @@ Uses `copr-cli` with credentials stored in three repository secrets:
 - `secrets.COPR_USERNAME`
 - `secrets.COPR_TOKEN`
 
-These are written to `~/.config/copr` at runtime and used by `copr-cli build`.
+These are written to `~/.config/copr` at runtime and used by `copr-cli build <project> <srpm>`.
+COPR rebuilds the SRPM for every chroot enabled in the project; the optional repository variable
+`COPR_PROJECT` overrides the default `etf2026/rttx`.
 
 ---
 
@@ -313,7 +316,7 @@ cache). All steps are within the free tier.
 ## Development Plan
 
 - [x] **W1** — Add `[package.metadata.deb]` to `clients/rttx/Cargo.toml` for `cargo-deb` — PR #873
-- [x] **W2** — Add `[package.metadata.generate-rpm]` to `clients/rttx/Cargo.toml` for `cargo-generate-rpm` — PR #873
+- [x] **W2** — ~~Add `[package.metadata.generate-rpm]`~~ Replaced (2026-08) by the SRPM flow: `packaging/rttx/rttx.spec` + `build-srpm.sh` — PR #873
 - [x] **W3** — Create `.github/workflows/quality.yml` — fmt, clippy, test, manifest validation
 - [x] **W4** — Create `.github/workflows/release.yml` — scaffold with build-flatpak, build-deb, build-rpm, github-release, copr-submit jobs
 - [x] **W5** — Set COPR credentials as repository secrets
