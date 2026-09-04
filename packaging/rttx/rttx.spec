@@ -11,7 +11,7 @@
 %global app_id io.github.IllyaYalovyy.rttx
 
 Name:           rttx
-Version:        1.0.0
+Version:        1.0.1
 # build-srpm.sh injects `%%global snapinfo .YYYYMMDDgitHASH` (and %%rttx_commit)
 # at the top of the spec it packs into the SRPM for untagged snapshot builds.
 Release:        1%{?snapinfo}%{?dist}
@@ -110,6 +110,11 @@ RUST_TEST_THREADS=5 %cargo_test -- -p rttx-proto -p rttx-server
 %{_mandir}/man1/rttx-server.1*
 
 %changelog
+* Thu Sep 03 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.0.1-1
+- Add a "Support rttx" About-window link and an AppStream donation URL
+- Ship the reworked Fedora source package (cargo-rpm-macros, vendored crates)
+- Fix daemon-restart terminal-mode reset for panes that ran a full-screen TUI
+
 * Wed Aug 26 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.0.0-1
 - Rebuild as a source package: vendored crates, offline cargo-rpm-macros build,
   rttx-server daemon and man page included, desktop/AppStream validation in %%check
