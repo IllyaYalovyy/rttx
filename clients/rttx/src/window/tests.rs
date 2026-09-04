@@ -2509,6 +2509,57 @@ fn split_inherits_cwd_from_source_terminal() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
+fn lease_lost_demotes_the_workspace_to_read_only_and_says_why() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.lease-lost-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let runtime_id = uuid::Uuid::new_v4();
+    let window = Window::new(&app);
+    let session_state = crate::test_helpers::managed_session_with_runtime(
+        "workspace-seized",
+        "Seized Workspace",
+        LayoutNode::new_terminal_with_uuid("managed-pane"),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some(&runtime_id.to_string()),
+    );
+    window.imp().state.borrow_mut().workspaces.push(session_state.clone());
+    window.build_session(&session_state, false);
+    window.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connected);
+
+    window.dispatch_managed_runtime_message(
+        &RuntimeEndpoint::Local,
+        &rttx_proto::v3_takeover::build_lease_lost_envelope(
+            rttx_proto::v3_takeover::build_lease_lost(runtime_id, 9, uuid::Uuid::new_v4()),
+        ),
+    );
+
+    assert_eq!(
+        window.imp().workspace_connection_status.borrow().get(&session_state.uuid),
+        Some(&ConnectionStatus::Blocked(crate::runtime::ConnectionProblem::TakenOver)),
+    );
+
+    let pane = window
+        .imp()
+        .persistent_terminals
+        .borrow()
+        .get("managed-pane")
+        .cloned()
+        .expect("managed pane should be present");
+    assert!(!pane.input_enabled_for_test(), "a demoted reader cannot type");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
 fn blocked_remote_workspace_shows_edit_retry_and_disables_input() {
     require_display!();
 

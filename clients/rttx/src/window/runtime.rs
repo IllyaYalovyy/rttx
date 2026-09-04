@@ -213,7 +213,15 @@ impl Window {
 
     /// Attach to an existing runtime on a host by creating a new workspace
     /// bound to that runtime ID.
-    pub(crate) fn attach_to_existing_runtime(&self, host: &crate::host::Host, runtime_id: &str) {
+    ///
+    /// With `take_over`, the runtime's current write owner is demoted to
+    /// reader so this client can drive it.
+    pub(crate) fn attach_to_existing_runtime(
+        &self,
+        host: &crate::host::Host,
+        runtime_id: &str,
+        take_over: bool,
+    ) {
         let imp = self.imp();
         let count = imp.state.borrow().workspaces.len() + 1;
         let name = format!("Workspace {count}");
@@ -229,7 +237,7 @@ impl Window {
         imp.state.borrow_mut().workspaces.push(session_state.clone());
         self.build_session(&session_state, false);
         self.set_workspace_connection_status(&session_state.uuid, &ConnectionStatus::Connecting);
-        self.connect_managed_workspace(&session_state);
+        self.connect_managed_workspace_with_takeover(&session_state, take_over);
 
         let index = imp.state.borrow().workspaces.len() as i32 - 1;
         if let Some(row) = imp.sidebar_list.row_at_index(index) {
@@ -324,6 +332,16 @@ impl Window {
     }
 
     pub(super) fn connect_managed_workspace(&self, session_state: &WorkspaceState) {
+        self.connect_managed_workspace_with_takeover(session_state, false);
+    }
+
+    /// Connect a managed workspace, optionally seizing the write lease from
+    /// the client that currently owns its runtime.
+    pub(super) fn connect_managed_workspace_with_takeover(
+        &self,
+        session_state: &WorkspaceState,
+        take_over: bool,
+    ) {
         if !session_state.uses_managed_runtime() || !self.ensure_connection_manager() {
             return;
         }
@@ -341,6 +359,7 @@ impl Window {
                 session_state.runtime.runtime_id.as_deref(),
                 placeholder_terminal_uuid.as_deref(),
                 cwd.as_deref(),
+                take_over,
             );
         }
     }
@@ -692,6 +711,20 @@ impl Window {
             EndpointEvent::WorkspaceMessage { endpoint, message } => {
                 self.dispatch_managed_runtime_message(&endpoint, &message);
             }
+            EndpointEvent::WorkspaceTakenOver { workspace_id, .. } => {
+                let name = {
+                    let state = self.imp().state.borrow();
+                    state
+                        .workspaces
+                        .iter()
+                        .find(|session| session.uuid == workspace_id)
+                        .map(|session| session.name.clone())
+                };
+                self.show_toast(&name.map_or_else(
+                    || "Took over the workspace from another client".to_string(),
+                    |name| format!("Took over “{name}” from another client"),
+                ));
+            }
             EndpointEvent::WorkspaceError { workspace_id, detail, .. } => {
                 tracing::warn!("Workspace {workspace_id} runtime error: {detail}");
                 if !workspace_id.starts_with("inventory:") {
@@ -1034,6 +1067,11 @@ impl Window {
             return;
         }
 
+        if let Payload::LeaseLost(lost) = inner {
+            self.handle_lease_lost(endpoint, lost);
+            return;
+        }
+
         if let Payload::WorkspaceTerminated(terminated) = inner {
             let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&terminated.runtime_id) else {
                 return;
@@ -1143,6 +1181,25 @@ impl Window {
         }
 
         let _ = workspace_id;
+    }
+
+    /// Another client seized this workspace's write lease: the daemon has
+    /// already demoted us to reader, so block input and say why.
+    fn handle_lease_lost(&self, endpoint: &RuntimeEndpoint, lost: &v3::LeaseLost) {
+        let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&lost.runtime_id) else {
+            return;
+        };
+        let runtime_id = runtime_id.to_string();
+        let Some(workspace_id) = ({
+            let state = self.imp().state.borrow();
+            state.workspace_for_runtime(endpoint, &runtime_id)
+        }) else {
+            return;
+        };
+        let status = ConnectionStatus::Blocked(ConnectionProblem::TakenOver);
+        let detail = status.label();
+        self.set_workspace_connection_status(&workspace_id, &status);
+        self.show_toast(&detail);
     }
 
     pub(super) fn workspace_action_presentation(
