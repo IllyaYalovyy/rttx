@@ -681,6 +681,12 @@ impl Window {
         if let Some(session_row) = self.sidebar_workspace_row(session_uuid) {
             session_row.set_workspace_name(new_name);
         }
+
+        // Persist immediately rather than waiting for the auto-save timer or a
+        // clean window close: a rename is a deliberate, cheap-to-save user
+        // action, and losing it to a crash or a session-manager kill is the
+        // "name reverts after restart" symptom of issue #1084.
+        self.save_state();
     }
 
     /// Extract the SSH target from the active session's remote endpoint.

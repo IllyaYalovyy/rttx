@@ -248,6 +248,9 @@ message WorkspaceInfo {
   bool takeover_eligible = 11;
   string disabled_reason = 12;
   repeated PaneInfo panes = 13;
+  // True when the workspace name was set by an explicit user rename rather
+  // than by a client-side automatic name (RFC-031, issue #1084).
+  bool user_renamed = 14;
 }
 
 message PaneInfo {

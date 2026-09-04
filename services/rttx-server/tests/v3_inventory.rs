@@ -62,6 +62,7 @@ fn v3_inventory_list_roundtrip_with_enriched_fields() {
             current_client_role: v3::WorkspaceClientRole::Writer,
             workspace_revision: 42,
             reconstructed: false,
+            user_renamed: false,
         },
         WorkspaceInfoEnrichedFields {
             active_pane_summary: summary,
@@ -110,6 +111,7 @@ fn v3_inventory_capability_gating_strips_enriched_fields_end_to_end() {
             current_client_role: v3::WorkspaceClientRole::Writer,
             workspace_revision: 5,
             reconstructed: false,
+            user_renamed: false,
         },
         WorkspaceInfoEnrichedFields {
             active_pane_summary: "bash".into(),
@@ -159,6 +161,7 @@ fn v3_inventory_disabled_workspace_visible_with_explanation() {
             current_client_role: v3::WorkspaceClientRole::Unattached,
             workspace_revision: 10,
             reconstructed: false,
+            user_renamed: false,
         },
         WorkspaceInfoEnrichedFields {
             active_pane_summary: "vim".into(),
@@ -196,6 +199,7 @@ fn enriched_inventory_capability_is_wire_stable_after_rename() {
             current_client_role: v3::WorkspaceClientRole::Writer,
             workspace_revision: 1,
             reconstructed: false,
+            user_renamed: false,
         },
         WorkspaceInfoEnrichedFields {
             active_pane_summary: "bash".into(),

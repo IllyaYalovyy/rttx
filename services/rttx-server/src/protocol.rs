@@ -271,6 +271,7 @@ pub fn v3_workspace_info_for(
         current_client_role: current_role,
         workspace_revision: rt.revision(),
         reconstructed: rt.reconstructed,
+        user_renamed: rt.user_renamed,
     };
 
     if has_enriched_inventory {

@@ -887,6 +887,7 @@ mod v3_envelope_tests {
             current_client_role: v3::WorkspaceClientRole::Writer as i32,
             workspace_revision: 42,
             reconstructed: false,
+            user_renamed: false,
             active_pane_summary: "bash, vim, htop".into(),
             takeover_eligible: true,
             disabled_reason: String::new(),

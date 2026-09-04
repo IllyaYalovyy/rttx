@@ -372,6 +372,7 @@ fn close_managed_workspace_prevents_inventory_resurrection() {
             policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: false,
             workspace_revision: 1,
+            user_renamed: false,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -436,6 +437,7 @@ fn new_workspace_does_not_resurrect_unrelated_workspaces() {
             policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: false,
             workspace_revision: 1,
+            user_renamed: false,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -1227,6 +1229,7 @@ fn dismissed_runtime_ids_pruned_when_absent_from_inventory() {
             policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: false,
             workspace_revision: 1,
+            user_renamed: false,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),
@@ -1467,4 +1470,114 @@ fn remote_endpoint_without_binary_path() {
     let restored: WorkspaceState = serde_json::from_value(json_value).unwrap();
     assert_eq!(restored.runtime.endpoint, RuntimeEndpoint::remote("old-host"));
     assert_eq!(restored.runtime.endpoint.daemon_binary_path(), None);
+}
+
+// ── Workspace rename durability (issue #1084) ────────────────────
+
+/// Build a minimal inventory entry for a daemon workspace.
+fn inventory_workspace(
+    runtime_id: &uuid::Uuid,
+    name: &str,
+    user_renamed: bool,
+) -> rttx_proto::v3::WorkspaceInfo {
+    rttx_proto::v3::WorkspaceInfo {
+        id: runtime_id.as_bytes().to_vec(),
+        name: name.into(),
+        pane_count: 0,
+        has_write_owner: false,
+        read_only_client_count: 0,
+        current_client_role: 0,
+        panes: Vec::new(),
+        policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
+        reconstructed: false,
+        workspace_revision: 1,
+        user_renamed,
+        active_pane_summary: String::new(),
+        takeover_eligible: false,
+        disabled_reason: String::new(),
+    }
+}
+
+/// A renamed workspace must come back with both its name and its
+/// `user_renamed` marker after a client restart. Losing the marker is as bad
+/// as losing the name: the next `CwdChanged` would auto-rename the workspace
+/// back to the working directory's basename.
+#[test]
+fn renamed_workspace_survives_client_store_roundtrip() {
+    use rttx::runtime::WorkspacePolicy;
+    use rttx::store::models::workspaces::WorkspaceStore;
+    use rttx::store::{ClientStore, StorePaths};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = ClientStore::new(StorePaths::new(
+        dir.path().join("config"),
+        dir.path().join("state"),
+        dir.path().join("cache"),
+    ));
+
+    let mut session =
+        WorkspaceState::new_managed_local("Workspace 1".into(), WorkspacePolicy::Persistent, None);
+    // What Window::rename_runtime does to the session.
+    session.name = "Payments".into();
+    session.user_renamed = true;
+
+    store
+        .save_workspaces(&WorkspaceStore {
+            active_workspace_id: Some(session.uuid.clone()),
+            workspaces: vec![(&session).into()],
+        })
+        .unwrap();
+
+    let restored = store.load_workspaces().into_value().unwrap();
+    let record = &restored.workspaces[0];
+    assert_eq!(record.name, "Payments");
+    assert!(record.user_renamed, "workspaces.json must record the rename as user-chosen");
+
+    let session = record.to_workspace_state();
+    assert_eq!(session.name, "Payments");
+    assert!(session.user_renamed, "a restored workspace must not be auto-renamed away");
+}
+
+/// When the client rebuilds a workspace it no longer knows about from daemon
+/// inventory, it must adopt the daemon's `user_renamed` marker along with the
+/// name — otherwise the deliberate name is auto-renamed to the cwd basename.
+#[test]
+fn inventory_recovery_preserves_daemon_user_rename() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::RuntimeEndpoint;
+
+    let runtime_id = uuid::Uuid::new_v4();
+    let mut state = WindowState::default();
+
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+        endpoint: RuntimeEndpoint::Local,
+        workspaces: vec![inventory_workspace(&runtime_id, "Payments", true)],
+    });
+
+    assert_eq!(transition.recovered_workspaces.len(), 1);
+    let recovered = &transition.recovered_workspaces[0];
+    assert_eq!(recovered.name, "Payments");
+    assert!(recovered.user_renamed, "the daemon's user-rename marker must cross the wire");
+    assert!(state.workspaces.iter().any(|s| s.uuid == recovered.uuid && s.user_renamed));
+}
+
+/// The mirror case: a workspace that was never renamed stays auto-nameable, so
+/// the marker cannot simply be hard-coded to `true` on recovery.
+#[test]
+fn inventory_recovery_leaves_auto_named_workspace_renameable() {
+    use rttx::daemon_bridge::EndpointEvent;
+    use rttx::runtime::RuntimeEndpoint;
+
+    let runtime_id = uuid::Uuid::new_v4();
+    let mut state = WindowState::default();
+
+    let transition = state.reconcile_endpoint_event(&EndpointEvent::InventoryLoaded {
+        endpoint: RuntimeEndpoint::Local,
+        workspaces: vec![inventory_workspace(&runtime_id, "Projects", false)],
+    });
+
+    assert_eq!(transition.recovered_workspaces.len(), 1);
+    let recovered = &transition.recovered_workspaces[0];
+    assert_eq!(recovered.name, "Projects");
+    assert!(!recovered.user_renamed, "a creation-time name is not a user rename");
 }

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Renaming a workspace now survives a full client and daemon restart. Two
+  separate gaps could each revert the name to its default. The client applied a
+  rename to its in-memory state only, so the new name reached
+  `workspaces.json` just via the 30-second auto-save timer or a clean window
+  close — a crash, a logout, or a session-manager kill in between lost it;
+  renames are now persisted immediately. Separately, when the client rebuilt a
+  workspace from the daemon's inventory it always treated the name as
+  auto-generated, so the first working-directory change auto-renamed the
+  workspace back to that directory's basename. The daemon now records whether a
+  name came from an explicit rename, persists that marker in
+  `runtimes/<id>/workspace.json`, and reports it in inventory, so a deliberately
+  named workspace is left alone. Workspace files written before this change load
+  unchanged and are treated as auto-named.
+
 ## [1.0.1] - 2026-09-03
 
 ### Added

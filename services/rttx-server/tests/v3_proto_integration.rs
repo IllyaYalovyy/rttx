@@ -1559,6 +1559,7 @@ fn v3_wire_compat_workspace_info_without_enriched_fields() {
         read_only_client_count: 0,
         current_client_role: v3::WorkspaceClientRole::Writer as i32,
         workspace_revision: 5,
+        user_renamed: false,
         reconstructed: false,
         // enriched fields left at defaults
         active_pane_summary: String::new(),
@@ -1902,6 +1903,7 @@ fn v3_opt_enriched_inventory_absent_strips_extended_fields() {
         read_only_client_count: 0,
         current_client_role: v3::WorkspaceClientRole::Writer as i32,
         workspace_revision: 5,
+        user_renamed: false,
         reconstructed: false,
         active_pane_summary: String::new(),
         takeover_eligible: false,
@@ -2072,6 +2074,7 @@ fn v3_list_workspaces_end_to_end() {
                 read_only_client_count: 0,
                 current_client_role: v3::WorkspaceClientRole::Unattached as i32,
                 workspace_revision: 10,
+                user_renamed: false,
                 reconstructed: false,
                 active_pane_summary: String::new(),
                 takeover_eligible: false,

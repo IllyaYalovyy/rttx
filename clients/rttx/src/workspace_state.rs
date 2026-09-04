@@ -562,6 +562,9 @@ fn recovered_managed_workspace(
 
     let mut session = WorkspaceState::new_managed_local(rt_info.name.clone(), policy, None);
     session.uuid = inventory_workspace_id(endpoint, &runtime_id);
+    // Carry the daemon's user-rename marker across so a deliberately named
+    // workspace is not auto-renamed back to its CWD default (issue #1084).
+    session.user_renamed = rt_info.user_renamed;
     session.runtime.endpoint = endpoint.clone();
     session.runtime.runtime_id = Some(runtime_id);
 
@@ -868,6 +871,7 @@ mod tests {
             panes,
             policy: policy as i32,
             reconstructed: true,
+            user_renamed: false,
             workspace_revision: 7,
             current_client_role: v3::WorkspaceClientRole::Unattached as i32,
             has_write_owner: false,

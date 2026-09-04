@@ -263,6 +263,7 @@ mod tests {
             current_client_role: 0,
             workspace_revision: 1,
             reconstructed: false,
+            user_renamed: false,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),

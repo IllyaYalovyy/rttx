@@ -91,6 +91,7 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id,
                 name: "test".into(),
+                user_renamed: false,
                 policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree: crate::pane_tree::WorkspaceTree::new(),

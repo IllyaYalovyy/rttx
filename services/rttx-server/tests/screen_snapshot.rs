@@ -98,6 +98,7 @@ async fn corrupt_screen_snapshot_does_not_block_workspace_load() {
         spec: rttx_server::state::types::WorkspaceSpecV2 {
             id: runtime_id,
             name: "corrupt-snap-test".into(),
+            user_renamed: false,
             policy: rttx_server::workspace::WorkspacePolicy::Persistent,
             created_at: std::time::SystemTime::now(),
             tree,

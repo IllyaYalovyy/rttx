@@ -147,6 +147,13 @@ pub struct Workspace {
     pub id: Uuid,
     /// Human-readable workspace name.
     pub name: String,
+    /// Whether [`name`](Self::name) came from an explicit user rename rather
+    /// than a name the client picked automatically.
+    ///
+    /// Persisted so a client that lost its own workspace store can tell a
+    /// deliberate name from an auto-generated one when it rebuilds workspaces
+    /// from the daemon inventory (issue #1084).
+    pub user_renamed: bool,
     /// Panes in this workspace, keyed by pane ID.
     pub panes: HashMap<Uuid, Pane>,
     /// The currently focused pane.
@@ -182,6 +189,7 @@ impl Workspace {
         Self {
             id: Uuid::new_v4(),
             name,
+            user_renamed: false,
             panes: HashMap::new(),
             active_pane_id: None,
             tree: WorkspaceTree::new(),
@@ -416,9 +424,13 @@ impl Workspace {
     }
 
     /// Rename this workspace and return the resulting revision.
+    ///
+    /// A rename always marks the workspace as user-renamed: the command only
+    /// ever originates from an explicit user action.
     pub fn rename(&mut self, name: String) -> u64 {
-        if self.name != name {
+        if self.name != name || !self.user_renamed {
             self.name = name;
+            self.user_renamed = true;
             self.bump_revision();
         }
         self.revision()
@@ -527,6 +539,7 @@ impl Workspace {
             spec: WorkspaceSpecV2 {
                 id: self.id,
                 name: self.name.clone(),
+                user_renamed: self.user_renamed,
                 policy: self.policy,
                 created_at: self.created_at,
                 tree: self.tree.clone(),
@@ -567,6 +580,7 @@ impl Workspace {
         Self {
             id: rf.spec.id,
             name: rf.spec.name.clone(),
+            user_renamed: rf.spec.user_renamed,
             active_pane_id,
             tree: rf.spec.tree.clone(),
             policy: rf.spec.policy,
@@ -665,8 +679,11 @@ mod tests {
         assert_eq!(workspace.set_pane_exit_status(pane_id, Some(7)), Some(5));
         assert_eq!(workspace.set_pane_exit_status(pane_id, None), Some(6));
         assert_eq!(workspace.set_pane_cwd(pane_id, "/tmp"), Some(7));
-        assert_eq!(workspace.rename("test".into()), 7);
-        assert_eq!(workspace.rename("renamed".into()), 8);
+        // The first rename bumps even for an identical name — it records that
+        // the name is user-chosen (issue #1084) — the second identical one does not.
+        assert_eq!(workspace.rename("test".into()), 8);
+        assert_eq!(workspace.rename("test".into()), 8);
+        assert_eq!(workspace.rename("renamed".into()), 9);
     }
 
     #[test]
@@ -834,6 +851,9 @@ mod tests {
         let pane_id = pane.id;
         workspace.add_pane(pane);
         workspace.set_pane_title(pane_id, "shell".into());
+        // The first rename is a real change even to an identical name: it
+        // records that the name is user-chosen (issue #1084).
+        workspace.rename("test".into());
         workspace.mark_persisted();
         assert!(!workspace.is_dirty());
 
@@ -842,6 +862,69 @@ mod tests {
         workspace.set_pane_title(pane_id, "shell".into());
         workspace.rename("test".into());
         assert!(!workspace.is_dirty(), "no-op mutations should not dirty the workspace");
+    }
+
+    // ── User-rename marker (issue #1084) ────────────────────────
+
+    #[test]
+    fn new_workspace_is_not_user_renamed() {
+        let workspace = Workspace::new("Workspace 1".into());
+        assert!(
+            !workspace.user_renamed,
+            "a name chosen at creation time is not an explicit user rename"
+        );
+    }
+
+    #[test]
+    fn rename_marks_workspace_user_renamed() {
+        let mut workspace = Workspace::new("Workspace 1".into());
+        let rev_before = workspace.revision();
+
+        let rev = workspace.rename("Payments".into());
+
+        assert_eq!(workspace.name, "Payments");
+        assert!(workspace.user_renamed, "an explicit rename must record user intent");
+        assert!(rev > rev_before, "rename must bump the revision so the workspace persists");
+    }
+
+    #[test]
+    fn rename_to_identical_name_still_records_user_intent() {
+        let mut workspace = Workspace::new("Payments".into());
+        let rev_before = workspace.revision();
+
+        let rev = workspace.rename("Payments".into());
+
+        assert!(workspace.user_renamed);
+        assert!(
+            rev > rev_before,
+            "confirming the existing name is durable state and must be persisted"
+        );
+        assert!(workspace.is_dirty());
+    }
+
+    #[test]
+    fn user_renamed_survives_workspace_file_roundtrip() {
+        let mut workspace = Workspace::new("Workspace 1".into());
+        workspace.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        workspace.rename("Payments".into());
+
+        let rf = workspace.to_workspace_file();
+        assert_eq!(rf.spec.name, "Payments");
+        assert!(rf.spec.user_renamed, "the marker belongs in the durable spec");
+
+        let restored = Workspace::from_workspace_file(&rf);
+        assert_eq!(restored.name, "Payments");
+        assert!(restored.user_renamed, "a daemon restart must not forget the user rename");
+    }
+
+    #[test]
+    fn auto_named_workspace_roundtrips_as_not_user_renamed() {
+        let mut workspace = Workspace::new("Projects".into());
+        workspace.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+
+        let rf = workspace.to_workspace_file();
+        assert!(!rf.spec.user_renamed);
+        assert!(!Workspace::from_workspace_file(&rf).user_renamed);
     }
 
     #[test]

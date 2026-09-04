@@ -44,6 +44,7 @@ fn multi_pane_tree_survives_save_and_load() {
         spec: WorkspaceSpecV2 {
             id: rt_id,
             name: "workspace-1".into(),
+            user_renamed: false,
             policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
@@ -127,6 +128,7 @@ fn good_v2_workspace_survives_alongside_unsupported_sibling() {
         spec: WorkspaceSpecV2 {
             id: good_id,
             name: "current".into(),
+            user_renamed: false,
             policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
