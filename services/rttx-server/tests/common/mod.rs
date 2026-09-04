@@ -103,11 +103,20 @@ impl TestClient {
             v3::Capability::OptDiagnostics,
             v3::Capability::OptWorkspaceTakeover,
         ];
+        self.handshake_with_caps(ALL_CAPABILITIES).await
+    }
+
+    /// Handshake advertising only `capabilities`, for tests that need to
+    /// observe how the server behaves when an optional capability is absent.
+    pub async fn handshake_with_caps(
+        &mut self,
+        capabilities: &[v3::Capability],
+    ) -> v3::ServerHello {
         let hello = v3_handshake::build_client_hello(
             uuid::Uuid::new_v4(),
             "test-client",
             "0.0.0",
-            ALL_CAPABILITIES,
+            capabilities,
         );
         let mut buf = BytesMut::new();
         encode_frame(&hello, &mut buf).expect("encode ClientHello");

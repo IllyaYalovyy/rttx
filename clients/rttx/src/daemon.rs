@@ -456,6 +456,26 @@ impl DaemonConnection {
         }
     }
 
+    /// Seize the write lease for a runtime already owned by another client.
+    ///
+    /// The daemon demotes the previous owner to reader and pushes it a
+    /// `LeaseLost` event. A subsequent read-write attach then succeeds.
+    pub async fn take_over_runtime(
+        &mut self,
+        runtime_id: Uuid,
+    ) -> Result<v3::TakeoverCompleted, DaemonError> {
+        let response = self
+            .request(v3::client_envelope::Command::TakeoverWorkspace(v3::TakeoverWorkspace {
+                runtime_id: uuid_to_bytes(runtime_id),
+            }))
+            .await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::TakeoverCompleted(completed)) => Ok(completed),
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error(e)),
+            _ => Err(DaemonError::UnexpectedMessage),
+        }
+    }
+
     /// Create a pane in a runtime and return the new pane UUID.
     pub async fn create_pane(
         &mut self,

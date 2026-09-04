@@ -231,13 +231,14 @@ pub fn v3_workspace_inventory_for<'a, I>(
     client_id: Uuid,
     workspaces: I,
     has_enriched_inventory: bool,
+    has_takeover: bool,
 ) -> Vec<v3::WorkspaceInfo>
 where
     I: IntoIterator<Item = &'a Workspace>,
 {
     let mut inventory: Vec<_> = workspaces
         .into_iter()
-        .map(|rt| v3_workspace_info_for(client_id, rt, has_enriched_inventory))
+        .map(|rt| v3_workspace_info_for(client_id, rt, has_enriched_inventory, has_takeover))
         .collect();
     inventory.sort_by(|left, right| left.id.cmp(&right.id));
     inventory
@@ -246,12 +247,15 @@ where
 /// Build a v3 `WorkspaceInfo` for a single workspace.
 ///
 /// Public so callers with per-workspace locks can build inventory entries
-/// one at a time.
+/// one at a time. `has_takeover` is the client's negotiated
+/// `OPT_WORKSPACE_TAKEOVER`: without it the client cannot issue
+/// `TakeoverWorkspace`, so no workspace is ever reported as eligible.
 #[must_use]
 pub fn v3_workspace_info_for(
     client_id: Uuid,
     rt: &Workspace,
     has_enriched_inventory: bool,
+    has_takeover: bool,
 ) -> v3::WorkspaceInfo {
     let policy = match rt.policy {
         crate::workspace::WorkspacePolicy::Persistent => v3::WorkspacePolicy::Persistent,
@@ -298,7 +302,7 @@ pub fn v3_workspace_info_for(
             params,
             rttx_proto::v3_inventory::WorkspaceInfoEnrichedFields {
                 active_pane_summary: String::new(),
-                takeover_eligible: !rt.has_write_owner(),
+                takeover_eligible: has_takeover && rt.takeover_eligible_for(client_id),
                 disabled_reason: String::new(),
                 panes,
             },

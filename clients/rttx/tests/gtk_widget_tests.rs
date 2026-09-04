@@ -1911,6 +1911,29 @@ fn new_workspace_dialog_search_filters_places() {
 
 // ── Connect to Existing dialog ──────────────────────────────────
 
+fn busy_workspace_info(
+    id: uuid::Uuid,
+    name: &str,
+    takeover_eligible: bool,
+) -> rttx_proto::v3::WorkspaceInfo {
+    rttx_proto::v3::WorkspaceInfo {
+        id: rttx_proto::uuid_to_bytes(id),
+        name: name.into(),
+        pane_count: 1,
+        has_write_owner: true,
+        read_only_client_count: 0,
+        current_client_role: 0,
+        panes: vec![],
+        policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
+        reconstructed: false,
+        workspace_revision: 1,
+        user_renamed: false,
+        active_pane_summary: String::new(),
+        takeover_eligible,
+        disabled_reason: String::new(),
+    }
+}
+
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn connect_existing_dialog_classifies_available_session() {
@@ -2010,6 +2033,29 @@ fn connect_existing_dialog_classifies_already_open_session() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
+fn connect_existing_dialog_offers_takeover_for_an_eligible_busy_session() {
+    require_display!();
+
+    let eligible = uuid::Uuid::new_v4();
+    let ineligible = uuid::Uuid::new_v4();
+    let workspaces = vec![
+        busy_workspace_info(eligible, "seizable", true),
+        busy_workspace_info(ineligible, "locked", false),
+    ];
+    let entries = rttx::connect_existing_dialog::classify_workspaces(&workspaces, &[]);
+
+    assert!(
+        rttx::connect_existing_dialog::offers_takeover(&entries[0]),
+        "a busy workspace the daemon marks eligible gets a Take over action",
+    );
+    assert!(
+        !rttx::connect_existing_dialog::offers_takeover(&entries[1]),
+        "a busy workspace the daemon marks ineligible gets no action",
+    );
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
 fn connect_existing_dialog_search_filters_sessions() {
     require_display!();
 
@@ -2020,6 +2066,7 @@ fn connect_existing_dialog_search_filters_sessions() {
             pane_count: 2,
             availability: rttx::connect_existing_dialog::RuntimeAvailability::Available,
             status_label: "2 panes".into(),
+            takeover_eligible: false,
         },
         rttx::connect_existing_dialog::RuntimeEntry {
             id: "b".into(),
@@ -2027,6 +2074,7 @@ fn connect_existing_dialog_search_filters_sessions() {
             pane_count: 1,
             availability: rttx::connect_existing_dialog::RuntimeAvailability::Available,
             status_label: "1 pane".into(),
+            takeover_eligible: false,
         },
     ];
 

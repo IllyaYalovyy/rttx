@@ -645,6 +645,7 @@ impl Server {
             v3::client_envelope::Command::ListWorkspaces(_) => {
                 let s = crate::instrument::lock_server(server, metrics).await;
                 let has_enriched_inventory = rttx_proto::v3_inventory::is_supported(effective_caps);
+                let has_takeover = rttx_proto::v3_takeover::is_supported(effective_caps);
                 let mut infos = Vec::with_capacity(s.workspaces.len());
                 for rt_lock in s.workspaces.values() {
                     let rt = crate::instrument::lock_workspace(rt_lock, metrics).await;
@@ -652,6 +653,7 @@ impl Server {
                         client_id,
                         &rt,
                         has_enriched_inventory,
+                        has_takeover,
                     ));
                 }
                 drop(s);
@@ -967,41 +969,58 @@ impl Server {
                         ));
                     }
                 };
-                let rt_lock = {
-                    let s = crate::instrument::lock_server(server, metrics).await;
-                    match s.workspaces.get(&runtime_id) {
-                        Some(rt) => Arc::clone(rt),
-                        None => {
-                            return Some(rttx_proto::v3_error::build_error_response(
-                                request_id,
-                                rttx_proto::v3_error::build_error(
-                                    v3::ErrorKind::WorkspaceNotFound,
-                                    "workspace not found",
-                                    "TakeoverWorkspace",
-                                ),
-                            ));
+                let mut s = crate::instrument::lock_server(server, metrics).await;
+                let Some(rt_lock) = s.workspaces.get(&runtime_id).cloned() else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::WorkspaceNotFound,
+                            "workspace not found",
+                            "TakeoverWorkspace",
+                        ),
+                    ));
+                };
+                let seized = {
+                    let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
+                    let previous_writer = rt.writer_client_id();
+                    let outcome = rt.attach_client(client_id, AttachMode::TakeOver);
+                    match (previous_writer, outcome) {
+                        (Some(previous), Ok(AttachOutcome::Attached { revision, .. })) => {
+                            Some((previous, revision))
                         }
+                        _ => None,
                     }
                 };
-                let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
-                match rt.attach_client(client_id, AttachMode::TakeOver) {
-                    Ok(AttachOutcome::Attached { revision, .. }) => {
-                        Some(rttx_proto::v3_takeover::build_takeover_completed_response(
-                            request_id,
-                            rttx_proto::v3_takeover::build_takeover_completed(runtime_id, revision),
-                        ))
-                    }
-                    Ok(AttachOutcome::Blocked { .. }) | Err(AttachError::UnsupportedTakeOver) => {
-                        Some(rttx_proto::v3_error::build_error_response(
-                            request_id,
-                            rttx_proto::v3_error::build_error(
-                                v3::ErrorKind::OwnershipConflict,
-                                "takeover failed",
-                                "TakeoverWorkspace",
-                            ),
-                        ))
-                    }
-                }
+                let Some((previous_writer, revision)) = seized else {
+                    return Some(rttx_proto::v3_error::build_error_response(
+                        request_id,
+                        rttx_proto::v3_error::build_error(
+                            v3::ErrorKind::OwnershipConflict,
+                            "workspace cannot be taken over",
+                            "TakeoverWorkspace",
+                        ),
+                    ));
+                };
+                // The demoted writer learns why it lost input before the new
+                // owner is told the takeover succeeded.
+                s.broadcast_to_clients(
+                    [previous_writer],
+                    None,
+                    &rttx_proto::v3_takeover::build_lease_lost_envelope(
+                        rttx_proto::v3_takeover::build_lease_lost(runtime_id, revision, client_id),
+                    ),
+                );
+                drop(s);
+                tracing::info!(
+                    "Client {} took the write lease for workspace {} from client {}",
+                    short_id(client_id),
+                    short_id(runtime_id),
+                    short_id(previous_writer),
+                );
+                Some(rttx_proto::v3_takeover::build_takeover_completed_response(
+                    request_id,
+                    rttx_proto::v3_takeover::build_takeover_completed(runtime_id, revision),
+                ))
             }
 
             v3::client_envelope::Command::Shutdown(_) => None,
@@ -1069,7 +1088,7 @@ impl Server {
         let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
         let attach_outcome = match rt.attach_client(client_id, attach_mode) {
             Ok(outcome) => outcome,
-            Err(AttachError::UnsupportedTakeOver) => {
+            Err(AttachError::TakeoverNotEligible) => {
                 return Some(rttx_proto::v3_error::build_error_response(
                     request_id,
                     rttx_proto::v3_error::build_error(

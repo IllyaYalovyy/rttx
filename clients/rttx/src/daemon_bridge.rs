@@ -118,6 +118,11 @@ pub enum EndpointEvent {
         problem: ConnectionProblem,
         detail: String,
     },
+    /// This client seized the write lease for a workspace another client held.
+    WorkspaceTakenOver {
+        workspace_id: String,
+        runtime_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -129,6 +134,8 @@ enum EndpointCommand {
         runtime_id: Option<String>,
         placeholder_terminal_uuid: Option<String>,
         cwd: Option<String>,
+        /// Seize the write lease from the current owner before attaching.
+        take_over: bool,
     },
     CreatePane {
         workspace_id: String,
@@ -290,6 +297,9 @@ impl EndpointConnectionManager {
     }
 
     /// Create or attach a managed workspace runtime asynchronously.
+    ///
+    /// With `take_over`, an existing runtime owned by another client is
+    /// seized before attaching, demoting the previous owner to reader.
     #[allow(clippy::too_many_arguments)] // CWD must travel alongside the placeholder UUID
     pub fn open_workspace(
         &self,
@@ -300,6 +310,7 @@ impl EndpointConnectionManager {
         runtime_id: Option<&str>,
         placeholder_terminal_uuid: Option<&str>,
         cwd: Option<&str>,
+        take_over: bool,
     ) {
         let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::OpenWorkspace {
             workspace_id: workspace_id.to_string(),
@@ -308,6 +319,7 @@ impl EndpointConnectionManager {
             runtime_id: runtime_id.map(str::to_string),
             placeholder_terminal_uuid: placeholder_terminal_uuid.map(str::to_string),
             cwd: cwd.map(str::to_string),
+            take_over,
         });
     }
 
@@ -742,6 +754,7 @@ impl EndpointActor {
                 runtime_id,
                 placeholder_terminal_uuid,
                 cwd,
+                take_over,
             } => {
                 self.emit_status(&workspace_id, ConnectionStatus::Connecting);
                 if let Err(problem) = self.ensure_connected(&workspace_id).await {
@@ -763,6 +776,7 @@ impl EndpointActor {
                         &name,
                         policy,
                         runtime_id.as_deref(),
+                        take_over,
                     ),
                 )
                 .await;
@@ -1699,16 +1713,25 @@ impl EndpointActor {
     /// falls back to creating a fresh runtime so "Retry Connection" works.
     /// Ownership conflicts, transport errors, and missing sessions are
     /// reported immediately.
+    ///
+    /// With `take_over`, the write lease is seized before attaching, so a
+    /// runtime that would otherwise answer `AttachBlocked` becomes ours.
     async fn resolve_and_attach_runtime(
         &mut self,
         workspace_id: &str,
         name: &str,
         policy: WorkspacePolicy,
         existing_runtime_id: Option<&str>,
+        take_over: bool,
     ) -> Result<(String, v3::WorkspaceSnapshot), ()> {
         if let Some(runtime_id) = existing_runtime_id
             && let Ok(runtime_uuid) = runtime_id.parse::<uuid::Uuid>()
         {
+            if take_over
+                && self.take_over_runtime(workspace_id, runtime_id, runtime_uuid).await.is_err()
+            {
+                return Err(());
+            }
             match self.attach_runtime_via_active_channel(runtime_uuid).await {
                 Ok(snapshot) => return Ok((runtime_id.to_string(), snapshot)),
                 // Ownership conflict or transport failure — report, don't retry.
@@ -1771,6 +1794,54 @@ impl EndpointActor {
             Some(v3::server_envelope::Payload::WorkspaceCreated(created)) => {
                 rttx_proto::bytes_to_uuid(&created.runtime_id).map_err(DaemonError::Frame)
             }
+            Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error_to_daemon(e)),
+            _ => Err(DaemonError::UnexpectedMessage),
+        }
+    }
+
+    /// Seize the write lease for `runtime_uuid`, reporting failure as a
+    /// workspace error so the user learns the takeover was refused.
+    async fn take_over_runtime(
+        &mut self,
+        workspace_id: &str,
+        runtime_id: &str,
+        runtime_uuid: Uuid,
+    ) -> Result<(), ()> {
+        match self.take_over_runtime_via_active_channel(runtime_uuid).await {
+            Ok(completed) => {
+                tracing::info!(
+                    workspace_id,
+                    runtime_id,
+                    revision = completed.workspace_revision,
+                    "Took over workspace from another client"
+                );
+                let _ = self.event_tx.try_send(EndpointEvent::WorkspaceTakenOver {
+                    workspace_id: workspace_id.to_string(),
+                    runtime_id: runtime_id.to_string(),
+                });
+                Ok(())
+            }
+            Err(error) => {
+                self.handle_command_error(workspace_id, ManagerOperation::OpenWorkspace, &error);
+                Err(())
+            }
+        }
+    }
+
+    async fn take_over_runtime_via_active_channel(
+        &mut self,
+        runtime_uuid: Uuid,
+    ) -> Result<v3::TakeoverCompleted, DaemonError> {
+        if let Some(connection) = self.connection.as_mut() {
+            return connection.take_over_runtime(runtime_uuid).await;
+        }
+
+        let msg = v3::client_envelope::Command::TakeoverWorkspace(v3::TakeoverWorkspace {
+            runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
+        });
+        let response = self.send_and_read(msg, false).await?;
+        match response.payload {
+            Some(v3::server_envelope::Payload::TakeoverCompleted(completed)) => Ok(completed),
             Some(v3::server_envelope::Payload::Error(e)) => Err(protocol_error_to_daemon(e)),
             _ => Err(DaemonError::UnexpectedMessage),
         }
@@ -2719,6 +2790,7 @@ mod tests {
                 "Test Workspace",
                 WorkspacePolicy::Ephemeral,
                 Some(&stale_runtime.to_string()),
+                false,
             )
             .await;
 
@@ -2797,6 +2869,7 @@ mod tests {
                 "Test Workspace",
                 WorkspacePolicy::Persistent,
                 Some(&runtime_id.to_string()),
+                false,
             )
             .await;
 

@@ -41,6 +41,7 @@ fn backpressure_flag_toggle_does_not_block_manager_commands() {
         None,
         None,
         None,
+        false,
     );
 
     // Release backpressure.

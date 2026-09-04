@@ -198,6 +198,8 @@ pub enum ConnectionProblem {
     DaemonNotInstalled(String),
     VersionMismatch,
     OwnershipConflict,
+    /// Another client seized the write lease while this one held it.
+    TakenOver,
     PermissionDenied,
     SessionMissing,
     Protocol(String),
@@ -219,6 +221,7 @@ impl ConnectionProblem {
             Self::DaemonDied => "Daemon stopped".into(),
             Self::VersionMismatch => "Version mismatch".into(),
             Self::OwnershipConflict => "Workspace already owned".into(),
+            Self::TakenOver => "Another client took over this workspace".into(),
             Self::PermissionDenied => "Permission denied".into(),
             Self::SessionMissing => "Session no longer exists".into(),
             Self::DaemonNotInstalled(detail)
@@ -999,11 +1002,22 @@ mod tests {
     }
 
     #[test]
+    fn taken_over_workspace_blocks_input_and_names_the_cause() {
+        let status = ConnectionStatus::Blocked(ConnectionProblem::TakenOver);
+        let presentation = present_connection_status(&status);
+
+        assert!(!presentation.input_enabled, "a demoted reader must not type into the runtime");
+        assert!(!ConnectionProblem::TakenOver.is_transient(), "takeover is never auto-retried");
+        assert_eq!(status.label(), "Action Required: Another client took over this workspace");
+    }
+
+    #[test]
     fn connection_problem_labels_are_nonempty() {
         for problem in [
             ConnectionProblem::DaemonUnavailable,
             ConnectionProblem::VersionMismatch,
             ConnectionProblem::OwnershipConflict,
+            ConnectionProblem::TakenOver,
             ConnectionProblem::PermissionDenied,
             ConnectionProblem::Protocol("test".into()),
             ConnectionProblem::UserActionRequired("test".into()),

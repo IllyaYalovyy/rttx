@@ -29,6 +29,18 @@ pub struct RuntimeEntry {
     pub pane_count: u32,
     pub availability: RuntimeAvailability,
     pub status_label: String,
+    /// The daemon reports this workspace's write lease as seizable by us.
+    pub takeover_eligible: bool,
+}
+
+/// Whether the dialog should offer a "Take over" action for an entry.
+///
+/// Only a workspace held by another client can be seized, and only when the
+/// daemon says so — it gates on policy and on the negotiated takeover
+/// capability, so the client never has to guess.
+#[must_use]
+pub fn offers_takeover(entry: &RuntimeEntry) -> bool {
+    entry.availability == RuntimeAvailability::BusyElsewhere && entry.takeover_eligible
 }
 
 /// Classify daemon workspaces into available/busy entries.
@@ -65,6 +77,7 @@ pub fn classify_workspaces(
                 pane_count: info.pane_count,
                 availability,
                 status_label,
+                takeover_eligible: info.takeover_eligible,
             })
         })
         .collect()
@@ -216,11 +229,19 @@ fn populate_workspaces(
             let runtime_id = entry.id.clone();
             button.connect_clicked(move |_| {
                 dialog_ref.close();
-                win.attach_to_existing_runtime(&host_clone, &runtime_id);
+                win.attach_to_existing_runtime(&host_clone, &runtime_id, false);
             });
         }
 
-        container.append(&button);
+        if offers_takeover(entry) {
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+            button.set_hexpand(true);
+            row.append(&button);
+            row.append(&takeover_button(entry, window, host, dialog));
+            container.append(&row);
+        } else {
+            container.append(&button);
+        }
     }
 
     if !has_available && !has_busy {
@@ -230,6 +251,53 @@ fn populate_workspaces(
         empty.set_margin_bottom(24);
         container.append(&empty);
     }
+}
+
+fn takeover_button(
+    entry: &RuntimeEntry,
+    window: &Window,
+    host: &Host,
+    dialog: &adw::Dialog,
+) -> gtk4::Button {
+    let button = gtk4::Button::with_label("Take over");
+    button.add_css_class("flat");
+    button.set_valign(gtk4::Align::Center);
+    button.set_tooltip_text(Some("Disconnect the other client and take control"));
+    button.update_property(&[gtk4::accessible::Property::Label(&format!(
+        "Take over {}",
+        entry.name
+    ))]);
+
+    let win = window.clone();
+    let host = host.clone();
+    let dialog = dialog.clone();
+    let runtime_id = entry.id.clone();
+    let name = entry.name.clone();
+    button.connect_clicked(move |_| {
+        let confirm = adw::AlertDialog::new(
+            Some(&format!("Take over “{name}”?")),
+            Some("The client using this workspace becomes read-only and loses input."),
+        );
+        confirm.add_response("cancel", "Cancel");
+        confirm.add_response("takeover", "Take Over");
+        confirm.set_response_appearance("takeover", adw::ResponseAppearance::Destructive);
+        confirm.set_default_response(Some("cancel"));
+        confirm.set_close_response("cancel");
+
+        let confirmed_win = win.clone();
+        let host = host.clone();
+        let dialog = dialog.clone();
+        let runtime_id = runtime_id.clone();
+        confirm.connect_response(None, move |_, response| {
+            if response == "takeover" {
+                dialog.close();
+                confirmed_win.attach_to_existing_runtime(&host, &runtime_id, true);
+            }
+        });
+        confirm.present(Some(&win));
+    });
+
+    button
 }
 
 fn append_section_label(container: &gtk4::Box, text: &str) {
@@ -253,6 +321,16 @@ mod tests {
         pane_count: u32,
         has_write_owner: bool,
     ) -> v3::WorkspaceInfo {
+        make_session_info_with_takeover(id, name, pane_count, has_write_owner, false)
+    }
+
+    fn make_session_info_with_takeover(
+        id: uuid::Uuid,
+        name: &str,
+        pane_count: u32,
+        has_write_owner: bool,
+        takeover_eligible: bool,
+    ) -> v3::WorkspaceInfo {
         v3::WorkspaceInfo {
             id: rttx_proto::uuid_to_bytes(id),
             name: name.into(),
@@ -265,7 +343,7 @@ mod tests {
             reconstructed: false,
             user_renamed: false,
             active_pane_summary: String::new(),
-            takeover_eligible: false,
+            takeover_eligible,
             disabled_reason: String::new(),
             panes: vec![],
         }
@@ -355,6 +433,7 @@ mod tests {
             pane_count: 1,
             availability: RuntimeAvailability::Available,
             status_label: "1 pane".into(),
+            takeover_eligible: false,
         };
         assert!(matches_query(&entry, ""));
         assert!(matches_query(&entry, "  "));
@@ -368,10 +447,54 @@ mod tests {
             pane_count: 1,
             availability: RuntimeAvailability::Available,
             status_label: "1 pane".into(),
+            takeover_eligible: false,
         };
         assert!(matches_query(&entry, "my"));
         assert!(matches_query(&entry, "WORKSPACE"));
         assert!(matches_query(&entry, "My Work"));
+    }
+
+    #[test]
+    fn busy_session_offers_takeover_when_the_daemon_says_it_is_eligible() {
+        let id = uuid::Uuid::new_v4();
+        let workspaces = vec![make_session_info_with_takeover(id, "busy-ws", 1, true, true)];
+        let entries = classify_workspaces(&workspaces, &[]);
+
+        assert_eq!(entries[0].availability, RuntimeAvailability::BusyElsewhere);
+        assert!(entries[0].takeover_eligible);
+        assert!(offers_takeover(&entries[0]));
+    }
+
+    #[test]
+    fn busy_session_without_eligibility_offers_no_takeover() {
+        let id = uuid::Uuid::new_v4();
+        let workspaces = vec![make_session_info_with_takeover(id, "busy-ws", 1, true, false)];
+        let entries = classify_workspaces(&workspaces, &[]);
+
+        assert_eq!(entries[0].availability, RuntimeAvailability::BusyElsewhere);
+        assert!(!offers_takeover(&entries[0]));
+    }
+
+    #[test]
+    fn available_session_offers_no_takeover() {
+        let id = uuid::Uuid::new_v4();
+        // A daemon that reports an unowned workspace as eligible would still
+        // not warrant the action: a plain attach already works.
+        let workspaces = vec![make_session_info_with_takeover(id, "free-ws", 1, false, true)];
+        let entries = classify_workspaces(&workspaces, &[]);
+
+        assert_eq!(entries[0].availability, RuntimeAvailability::Available);
+        assert!(!offers_takeover(&entries[0]));
+    }
+
+    #[test]
+    fn already_open_session_offers_no_takeover() {
+        let id = uuid::Uuid::new_v4();
+        let workspaces = vec![make_session_info_with_takeover(id, "mine", 1, true, true)];
+        let entries = classify_workspaces(&workspaces, &[id.to_string()]);
+
+        assert_eq!(entries[0].availability, RuntimeAvailability::AlreadyOpen);
+        assert!(!offers_takeover(&entries[0]));
     }
 
     #[test]
@@ -382,6 +505,7 @@ mod tests {
             pane_count: 1,
             availability: RuntimeAvailability::Available,
             status_label: "1 pane".into(),
+            takeover_eligible: false,
         };
         assert!(!matches_query(&entry, "redis"));
     }

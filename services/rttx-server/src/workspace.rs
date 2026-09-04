@@ -60,7 +60,7 @@ pub enum AttachMode {
     ReadWrite,
     /// Request a read-only attachment.
     ReadOnly,
-    /// Reserve room for a future explicit takeover flow.
+    /// Seize the write lease from the current owner, demoting it to reader.
     TakeOver,
 }
 
@@ -116,8 +116,8 @@ pub enum AttachOutcome {
 /// Errors that can occur while processing an attach request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachError {
-    /// The future takeover mode is not implemented yet.
-    UnsupportedTakeOver,
+    /// A takeover was requested for a workspace this client cannot seize.
+    TakeoverNotEligible,
 }
 
 /// Result of detaching a client.
@@ -355,6 +355,19 @@ impl Workspace {
         self.attached_clients.len()
     }
 
+    /// Whether `client_id` may seize the write lease from the current owner.
+    ///
+    /// Only a persistent workspace can be taken over: an ephemeral workspace
+    /// exists for as long as its clients stay attached, so seizing one would
+    /// hand over a runtime that is already on its way out. A client that
+    /// already holds the lease has nothing to seize, and a workspace with no
+    /// write owner is reachable through an ordinary read-write attach.
+    #[must_use]
+    pub fn takeover_eligible_for(&self, client_id: Uuid) -> bool {
+        self.policy == WorkspacePolicy::Persistent
+            && self.writer_client_id().is_some_and(|writer| writer != client_id)
+    }
+
     /// Whether the given client can mutate workspace state.
     #[must_use]
     pub fn client_has_write_access(&self, client_id: Uuid) -> bool {
@@ -399,7 +412,17 @@ impl Workspace {
                 }
                 Ok(AttachOutcome::Attached { role: ClientRole::Writer, revision: self.revision() })
             }
-            AttachMode::TakeOver => Err(AttachError::UnsupportedTakeOver),
+            AttachMode::TakeOver => {
+                if !self.takeover_eligible_for(client_id) {
+                    return Err(AttachError::TakeoverNotEligible);
+                }
+                if let Some(previous_writer) = self.writer_client_id() {
+                    self.attached_clients.insert(previous_writer, ClientRole::Reader);
+                }
+                self.attached_clients.insert(client_id, ClientRole::Writer);
+                self.bump_revision();
+                Ok(AttachOutcome::Attached { role: ClientRole::Writer, revision: self.revision() })
+            }
         }
     }
 
@@ -756,14 +779,88 @@ mod tests {
     }
 
     #[test]
-    fn take_over_attach_is_reserved_for_future_work() {
+    fn takeover_is_ineligible_without_a_write_owner() {
+        let mut workspace = Workspace::new("test".into());
+        let reader = Uuid::new_v4();
+        let _ = workspace.attach_client(reader, AttachMode::ReadOnly);
+
+        assert!(!workspace.takeover_eligible_for(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn takeover_is_eligible_for_a_client_that_is_not_the_write_owner() {
+        let mut workspace = Workspace::new("test".into());
+        let owner = Uuid::new_v4();
+        let _ = workspace.attach_client(owner, AttachMode::ReadWrite);
+
+        assert!(workspace.takeover_eligible_for(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn takeover_is_ineligible_for_the_current_write_owner() {
+        let mut workspace = Workspace::new("test".into());
+        let owner = Uuid::new_v4();
+        let _ = workspace.attach_client(owner, AttachMode::ReadWrite);
+
+        assert!(!workspace.takeover_eligible_for(owner));
+    }
+
+    #[test]
+    fn takeover_is_ineligible_for_an_ephemeral_workspace() {
+        let mut workspace = Workspace::new("test".into());
+        workspace.policy = WorkspacePolicy::Ephemeral;
+        let owner = Uuid::new_v4();
+        let _ = workspace.attach_client(owner, AttachMode::ReadWrite);
+
+        assert!(!workspace.takeover_eligible_for(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn takeover_demotes_the_previous_writer_to_reader() {
+        let mut workspace = Workspace::new("test".into());
+        let owner = Uuid::new_v4();
+        let challenger = Uuid::new_v4();
+        let _ = workspace.attach_client(owner, AttachMode::ReadWrite);
+        let revision_before = workspace.revision();
+
+        assert_eq!(
+            workspace.attach_client(challenger, AttachMode::TakeOver),
+            Ok(AttachOutcome::Attached { role: ClientRole::Writer, revision: revision_before + 1 })
+        );
+        assert_eq!(workspace.client_role(challenger), Some(ClientRole::Writer));
+        assert_eq!(workspace.client_role(owner), Some(ClientRole::Reader));
+        assert_eq!(workspace.writer_client_id(), Some(challenger));
+        assert_eq!(workspace.read_only_client_count(), 1);
+        assert!(workspace.client_has_write_access(challenger));
+        assert!(!workspace.client_has_write_access(owner));
+    }
+
+    #[test]
+    fn takeover_without_a_write_owner_is_rejected() {
         let mut workspace = Workspace::new("test".into());
         let client = Uuid::new_v4();
+
         assert_eq!(
             workspace.attach_client(client, AttachMode::TakeOver),
-            Err(AttachError::UnsupportedTakeOver)
+            Err(AttachError::TakeoverNotEligible)
         );
         assert_eq!(workspace.revision(), 1);
+        assert!(!workspace.has_write_owner());
+    }
+
+    #[test]
+    fn takeover_of_an_ephemeral_workspace_is_rejected() {
+        let mut workspace = Workspace::new("test".into());
+        workspace.policy = WorkspacePolicy::Ephemeral;
+        let owner = Uuid::new_v4();
+        let challenger = Uuid::new_v4();
+        let _ = workspace.attach_client(owner, AttachMode::ReadWrite);
+
+        assert_eq!(
+            workspace.attach_client(challenger, AttachMode::TakeOver),
+            Err(AttachError::TakeoverNotEligible)
+        );
+        assert_eq!(workspace.writer_client_id(), Some(owner));
     }
 
     #[test]

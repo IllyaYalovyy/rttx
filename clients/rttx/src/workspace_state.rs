@@ -239,7 +239,9 @@ impl WindowState {
                 let restores = self.build_resync_restores(workspace_id, snapshot);
                 transition.pane_snapshot_restores = restores;
             }
-            EndpointEvent::WorkspaceMessage { .. } | EndpointEvent::WorkspaceError { .. } => {}
+            EndpointEvent::WorkspaceMessage { .. }
+            | EndpointEvent::WorkspaceError { .. }
+            | EndpointEvent::WorkspaceTakenOver { .. } => {}
         }
 
         transition
