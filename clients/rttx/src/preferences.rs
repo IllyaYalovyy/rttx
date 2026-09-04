@@ -12,6 +12,38 @@ pub enum TerminalThemeMode {
     Dark,
 }
 
+impl TerminalThemeMode {
+    /// Next mode in the quick-toggle cycle: system → light → dark → system.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::System => Self::Light,
+            Self::Light => Self::Dark,
+            Self::Dark => Self::System,
+        }
+    }
+
+    /// Whether terminals render dark under this mode, given the system setting.
+    #[must_use]
+    pub const fn resolves_dark(self, system_dark: bool) -> bool {
+        match self {
+            Self::System => system_dark,
+            Self::Light => false,
+            Self::Dark => true,
+        }
+    }
+
+    /// Human-readable label matching the Preferences "Terminal theme mode" combo.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::System => "Follow system",
+            Self::Light => "Always light",
+            Self::Dark => "Always dark",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DefaultSessionFolder {
@@ -117,16 +149,10 @@ impl Default for Preferences {
 impl Preferences {
     #[must_use]
     pub fn effective_color_scheme_name(&self, is_dark: bool) -> &str {
-        match self.terminal_theme_mode {
-            TerminalThemeMode::System => {
-                if is_dark {
-                    &self.dark_color_scheme
-                } else {
-                    &self.light_color_scheme
-                }
-            }
-            TerminalThemeMode::Light => &self.light_color_scheme,
-            TerminalThemeMode::Dark => &self.dark_color_scheme,
+        if self.terminal_theme_mode.resolves_dark(is_dark) {
+            &self.dark_color_scheme
+        } else {
+            &self.light_color_scheme
         }
     }
 }

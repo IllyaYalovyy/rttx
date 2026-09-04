@@ -3094,3 +3094,126 @@ fn copy_cyrillic_text_preserves_unicode_on_clipboard() {
     );
     window.close();
 }
+
+fn collect_vte_terminals(root: &impl gtk4::prelude::IsA<gtk4::Widget>) -> Vec<vte4::Terminal> {
+    let mut found = Vec::new();
+    walk_widget_tree(root.as_ref(), |widget| {
+        if let Ok(vte) = widget.clone().downcast::<vte4::Terminal>() {
+            found.push(vte);
+        }
+    });
+    found
+}
+
+fn builtin_scheme_background(name: &str) -> gtk4::gdk::RGBA {
+    rttx::color_scheme::builtin_color_schemes()
+        .into_iter()
+        .find(|scheme| scheme.name == name)
+        .expect("builtin scheme must exist")
+        .background_rgba()
+        .expect("builtin scheme must define a background colour")
+}
+
+/// #1086: the header-bar theme button must switch the terminal theme without
+/// opening Preferences — repainting open panes, staying in sync with the
+/// preference the Preferences combo writes, and surviving a restart.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn theme_button_cycles_terminal_theme_and_repaints_open_panes() {
+    use rttx::preferences::TerminalThemeMode;
+
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    set_env("XDG_CONFIG_HOME", tmp.path());
+    set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let style_manager = adw::StyleManager::default();
+    let original_scheme = style_manager.color_scheme();
+    style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
+
+    let app = adw::Application::builder()
+        .application_id("io.github.IllyaYalovyy.rttx.test.theme_quick_toggle")
+        .build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = rttx::window::Window::new(&app);
+    window.present();
+    pump_events(100);
+
+    let stored_mode = || {
+        rttx::store::default_store()
+            .load_preferences()
+            .into_value()
+            .unwrap_or_default()
+            .terminal_theme_mode
+    };
+    let theme_button = window.imp().theme_button.clone();
+    let light_background = builtin_scheme_background(rttx::color_scheme::BUILTIN_LIGHT_SCHEME_NAME);
+    let dark_background = builtin_scheme_background(rttx::color_scheme::BUILTIN_DARK_SCHEME_NAME);
+
+    assert_eq!(stored_mode(), TerminalThemeMode::System, "fresh profile follows the system");
+    assert_eq!(
+        theme_button.icon_name().as_deref(),
+        Some("display-brightness-symbolic"),
+        "the button must show the mode it will change away from"
+    );
+    assert!(
+        theme_button.tooltip_text().is_some(),
+        "the button needs a tooltip for discoverability"
+    );
+
+    let panes = collect_vte_terminals(&window);
+    assert!(!panes.is_empty(), "the window must open with at least one pane to repaint");
+    for pane in &panes {
+        assert_eq!(
+            pane.color_background_for_draw(),
+            dark_background,
+            "a system-mode pane under a dark system must use the dark palette"
+        );
+    }
+
+    theme_button.emit_clicked();
+    pump_events(100);
+
+    assert_eq!(stored_mode(), TerminalThemeMode::Light, "one click must force light");
+    assert_eq!(theme_button.icon_name().as_deref(), Some("weather-clear-symbolic"));
+    for pane in &collect_vte_terminals(&window) {
+        assert_eq!(
+            pane.color_background_for_draw(),
+            light_background,
+            "open panes must repaint with the light palette while the system stays dark"
+        );
+    }
+
+    theme_button.emit_clicked();
+    pump_events(100);
+
+    assert_eq!(stored_mode(), TerminalThemeMode::Dark, "a second click must force dark");
+    assert_eq!(theme_button.icon_name().as_deref(), Some("weather-clear-night-symbolic"));
+
+    theme_button.emit_clicked();
+    pump_events(100);
+
+    assert_eq!(stored_mode(), TerminalThemeMode::System, "a third click must return to system");
+
+    // A restart reads the persisted mode back into the button.
+    theme_button.emit_clicked();
+    pump_events(100);
+    window.close();
+    pump_events(50);
+
+    let restarted = rttx::window::Window::new(&app);
+    restarted.present();
+    pump_events(100);
+    assert_eq!(
+        restarted.imp().theme_button.icon_name().as_deref(),
+        Some("weather-clear-symbolic"),
+        "the button must reflect the persisted mode after a restart"
+    );
+    restarted.close();
+
+    style_manager.set_color_scheme(original_scheme);
+    remove_env("RTTX_DISABLE_SHELL_SPAWN");
+    remove_env("XDG_CONFIG_HOME");
+}

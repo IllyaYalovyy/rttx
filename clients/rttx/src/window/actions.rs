@@ -102,6 +102,14 @@ impl Window {
         });
         self.add_action(&no_persist_action);
 
+        let theme_action = gtk4::gio::SimpleAction::new("cycle-terminal-theme", None);
+        let win = self.clone();
+        theme_action.connect_activate(move |_, _| {
+            win.cycle_terminal_theme_mode();
+        });
+        self.add_action(&theme_action);
+        self.sync_theme_button(prefs.terminal_theme_mode);
+
         let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
         let win = self.clone();
         prefs_action.connect_activate(move |_, _| {
