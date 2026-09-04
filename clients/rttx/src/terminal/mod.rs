@@ -36,6 +36,36 @@ pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
     }
 }
 
+/// The palette names a pane resolves, in order: the palette configured for the
+/// effective theme mode, then the builtin fallback for that same mode.
+///
+/// The fallback follows the effective mode rather than the system dark setting,
+/// so an "Always light" pane whose configured palette is missing falls back to
+/// the light builtin instead of the dark one.
+pub(crate) fn pane_scheme_candidates(
+    prefs: &crate::preferences::Preferences,
+    system_dark: bool,
+) -> (&str, &'static str) {
+    let dark = prefs.terminal_theme_mode.resolves_dark(system_dark);
+    let fallback = if dark {
+        crate::color_scheme::BUILTIN_DARK_SCHEME_NAME
+    } else {
+        crate::color_scheme::BUILTIN_LIGHT_SCHEME_NAME
+    };
+    (prefs.effective_color_scheme_name(system_dark), fallback)
+}
+
+/// Load the palette a pane must use, falling back to the builtin for the
+/// effective theme mode when the configured palette no longer exists.
+pub(crate) fn resolve_pane_color_scheme(
+    prefs: &crate::preferences::Preferences,
+    system_dark: bool,
+) -> Option<crate::color_scheme::ColorScheme> {
+    let (configured, fallback) = pane_scheme_candidates(prefs, system_dark);
+    crate::color_scheme::load_color_scheme_by_name(configured)
+        .or_else(|| crate::color_scheme::load_color_scheme_by_name(fallback))
+}
+
 /// Context menu alignment: Start so the left edge aligns with the pointer,
 /// preventing immediate item activation on button release (#480).
 pub(crate) const CONTEXT_MENU_HALIGN: gtk4::Align = gtk4::Align::Start;
@@ -485,11 +515,67 @@ fn terminal_key_action(
 mod tests {
     use super::{
         TerminalInputBackend, TerminalKeyAction, TerminalModes, encode_terminal_key_input,
-        terminal_key_action,
+        pane_scheme_candidates, terminal_key_action,
     };
+    use crate::color_scheme::{BUILTIN_DARK_SCHEME_NAME, BUILTIN_LIGHT_SCHEME_NAME};
+    use crate::preferences::{Preferences, TerminalThemeMode};
 
     const DEFAULT_MODES: TerminalModes =
         TerminalModes { application_cursor_keys: false, application_keypad: false };
+
+    fn prefs_with_mode(mode: TerminalThemeMode) -> Preferences {
+        Preferences {
+            terminal_theme_mode: mode,
+            light_color_scheme: "Deleted Light".into(),
+            dark_color_scheme: "Deleted Dark".into(),
+            ..Preferences::default()
+        }
+    }
+
+    /// The quick toggle can force light while the system is dark. A missing
+    /// palette must then fall back to the light builtin, not the dark one.
+    #[test]
+    fn forced_light_panes_fall_back_to_the_light_builtin_under_a_dark_system() {
+        let prefs = prefs_with_mode(TerminalThemeMode::Light);
+        let (configured, fallback) = pane_scheme_candidates(&prefs, true);
+
+        assert_eq!(configured, "Deleted Light");
+        assert_eq!(fallback, BUILTIN_LIGHT_SCHEME_NAME);
+    }
+
+    #[test]
+    fn forced_dark_panes_fall_back_to_the_dark_builtin_under_a_light_system() {
+        let prefs = prefs_with_mode(TerminalThemeMode::Dark);
+        let (configured, fallback) = pane_scheme_candidates(&prefs, false);
+
+        assert_eq!(configured, "Deleted Dark");
+        assert_eq!(fallback, BUILTIN_DARK_SCHEME_NAME);
+    }
+
+    #[test]
+    fn system_mode_panes_track_the_system_dark_setting() {
+        let prefs = prefs_with_mode(TerminalThemeMode::System);
+
+        assert_eq!(
+            pane_scheme_candidates(&prefs, true),
+            ("Deleted Dark", BUILTIN_DARK_SCHEME_NAME)
+        );
+        assert_eq!(
+            pane_scheme_candidates(&prefs, false),
+            ("Deleted Light", BUILTIN_LIGHT_SCHEME_NAME)
+        );
+    }
+
+    /// The quick toggle cycles the same setting the Preferences combo writes,
+    /// so three activations must return to the starting mode.
+    #[test]
+    fn theme_mode_cycle_returns_to_the_starting_mode() {
+        let start = TerminalThemeMode::System;
+
+        assert_eq!(start.next(), TerminalThemeMode::Light);
+        assert_eq!(start.next().next(), TerminalThemeMode::Dark);
+        assert_eq!(start.next().next().next(), start);
+    }
 
     #[test]
     fn direct_and_managed_share_clipboard_policy() {

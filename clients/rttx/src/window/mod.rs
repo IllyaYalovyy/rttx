@@ -12,7 +12,7 @@ use crate::commands::{self, CommandRunMode, SavedCommand};
 use crate::config;
 use crate::host;
 use crate::places;
-use crate::preferences::{self, Preferences};
+use crate::preferences::{self, Preferences, TerminalThemeMode};
 use crate::runtime::{
     ConnectionPresentation, ConnectionProblem, ConnectionStatus, RuntimeEndpoint,
     WorkspaceActionPresentation, WorkspacePolicy, connection_icon, pane_description,
@@ -68,6 +68,7 @@ mod imp {
         pub new_button: gtk4::MenuButton,
         pub connect_button: gtk4::MenuButton,
         pub new_direct_button: gtk4::Button,
+        pub theme_button: gtk4::Button,
         pub state: RefCell<WindowState>,
         pub terminals: RefCell<HashMap<String, TerminalWidget>>,
         pub persistent_terminals: RefCell<HashMap<String, PersistentPaneView>>,
@@ -171,6 +172,10 @@ mod imp {
             menu_button.set_menu_model(Some(&menu));
 
             header.pack_end(&menu_button);
+
+            self.theme_button.set_action_name(Some("win.cycle-terminal-theme"));
+            self.theme_button.add_css_class("flat");
+            header.pack_end(&self.theme_button);
 
             self.sidebar_list.set_selection_mode(gtk4::SelectionMode::Single);
             self.sidebar_list.add_css_class("navigation-sidebar");

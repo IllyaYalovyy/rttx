@@ -139,16 +139,10 @@ impl Window {
             let prefs =
                 crate::store::default_store().load_preferences().into_value().unwrap_or_default();
             let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
-            let is_dark = adw::StyleManager::default().is_dark();
-            let effective_name = prefs.effective_color_scheme_name(is_dark);
-            let scheme = color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
-                let fallback = if is_dark {
-                    color_scheme::BUILTIN_DARK_SCHEME_NAME
-                } else {
-                    color_scheme::BUILTIN_LIGHT_SCHEME_NAME
-                };
-                color_scheme::load_color_scheme_by_name(fallback)
-            });
+            let scheme = crate::terminal::resolve_pane_color_scheme(
+                &prefs,
+                adw::StyleManager::default().is_dark(),
+            );
             Self::apply_preferences_to_terminal(term, &prefs, &font_desc, scheme.as_ref());
         }
 

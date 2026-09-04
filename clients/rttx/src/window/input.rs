@@ -63,17 +63,13 @@ impl Window {
             }
         }
 
+        self.sync_theme_button(prefs.terminal_theme_mode);
+
         let font_desc = gtk4::pango::FontDescription::from_string(&prefs.font);
-        let is_dark = adw::StyleManager::default().is_dark();
-        let effective_name = prefs.effective_color_scheme_name(is_dark);
-        let scheme = color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
-            let fallback = if is_dark {
-                color_scheme::BUILTIN_DARK_SCHEME_NAME
-            } else {
-                color_scheme::BUILTIN_LIGHT_SCHEME_NAME
-            };
-            color_scheme::load_color_scheme_by_name(fallback)
-        });
+        let scheme = crate::terminal::resolve_pane_color_scheme(
+            &prefs,
+            adw::StyleManager::default().is_dark(),
+        );
         let terminals: Vec<TerminalWidget> =
             self.imp().terminals.borrow().values().cloned().collect();
         for term in terminals {
@@ -97,19 +93,38 @@ impl Window {
         pane.set_visual_bell(prefs.visual_bell);
         pane.set_smart_clipboard(prefs.smart_clipboard);
 
-        let is_dark = adw::StyleManager::default().is_dark();
-        let effective_name = prefs.effective_color_scheme_name(is_dark);
-        if let Some(scheme) =
-            color_scheme::load_color_scheme_by_name(effective_name).or_else(|| {
-                let fallback = if is_dark {
-                    color_scheme::BUILTIN_DARK_SCHEME_NAME
-                } else {
-                    color_scheme::BUILTIN_LIGHT_SCHEME_NAME
-                };
-                color_scheme::load_color_scheme_by_name(fallback)
-            })
-        {
+        if let Some(scheme) = crate::terminal::resolve_pane_color_scheme(
+            &prefs,
+            adw::StyleManager::default().is_dark(),
+        ) {
             pane.apply_color_scheme(&scheme);
         }
+    }
+
+    /// Advance the terminal theme mode one step, persist it, and repaint every
+    /// open pane. Writes the same preference the Preferences combo writes.
+    pub(super) fn cycle_terminal_theme_mode(&self) {
+        let store = crate::store::default_store();
+        let mut prefs = store.load_preferences().into_value().unwrap_or_default();
+        prefs.terminal_theme_mode = prefs.terminal_theme_mode.next();
+        if let Err(e) = store.save_preferences(&prefs) {
+            tracing::error!("Failed to save terminal theme mode: {e}");
+        }
+        self.reapply_terminal_preferences();
+    }
+
+    /// Point the header-bar theme button at `mode` so it stays in sync with
+    /// whatever last wrote the preference.
+    pub(super) fn sync_theme_button(&self, mode: TerminalThemeMode) {
+        let icon = match mode {
+            TerminalThemeMode::System => "display-brightness-symbolic",
+            TerminalThemeMode::Light => "weather-clear-symbolic",
+            TerminalThemeMode::Dark => "weather-clear-night-symbolic",
+        };
+        let description = format!("Terminal theme: {}", mode.label());
+        let button = &self.imp().theme_button;
+        button.set_icon_name(icon);
+        button.set_tooltip_text(Some(&description));
+        button.update_property(&[gtk4::accessible::Property::Label(&description)]);
     }
 }

@@ -33,7 +33,11 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     appearance_group.add(&font_row);
 
     let mode_row = adw::ComboRow::builder().title("Terminal theme mode").build();
-    let mode_names = ["Follow system", "Always light", "Always dark"];
+    let mode_names = [
+        TerminalThemeMode::System.label(),
+        TerminalThemeMode::Light.label(),
+        TerminalThemeMode::Dark.label(),
+    ];
     let mode_model = gtk4::StringList::new(&mode_names);
     mode_row.set_model(Some(&mode_model));
     mode_row.set_selected(match prefs.terminal_theme_mode {
