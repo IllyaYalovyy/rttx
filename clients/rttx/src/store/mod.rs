@@ -410,8 +410,15 @@ fn load_if_present<T: for<'de> serde::Deserialize<'de> + Default>(
     }
 }
 
-/// Read the envelope version recorded in a document without deserializing it.
+/// Read the envelope version a document was stored at, without deserializing it.
+///
+/// Falls back to the last-good backup so a document recovered from `.bak` is
+/// migrated on the same load that recovers it.
 fn stored_document_version(path: &std::path::Path) -> Option<u32> {
+    document_version(path).or_else(|| document_version(&path.with_extension("bak")))
+}
+
+fn document_version(path: &std::path::Path) -> Option<u32> {
     let json = std::fs::read_to_string(path).ok()?;
     envelope::peek_header(&json).ok().map(|header| header.version)
 }

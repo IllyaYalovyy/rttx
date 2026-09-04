@@ -358,3 +358,15 @@ fn fresh_config_defaults_to_distinct_palettes() {
     assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
     assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
 }
+
+#[test]
+fn palettes_recovered_from_backup_are_migrated() {
+    let (_tmp, store) = test_store();
+    let path = write_v1_document(&store, "Daybreak", "Nightfall");
+    std::fs::rename(&path, path.with_extension("bak")).unwrap();
+    std::fs::write(&path, "corrupted").unwrap();
+
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
+}
