@@ -6,7 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- A header-bar quick toggle for the terminal theme. One button cycles the
+  terminal palette between following the system, always light, and always dark,
+  and repaints every open pane immediately — switching no longer means opening
+  Preferences. It writes the same preference the Preferences combo writes, so
+  the two always agree, and the button reflects the persisted mode after a
+  restart.
+- Taking over a workspace that is already connected elsewhere. A persistent
+  workspace whose write lease is held by another client used to appear as
+  "Connected elsewhere" in the connect-existing dialog with no way in; it now
+  offers a confirmed "Take over" action. The previous writer is demoted to a
+  read-only view, has its input blocked, and is told that another client took
+  the workspace. Ephemeral workspaces are never offered for take-over — they
+  live only as long as their clients stay attached.
+
 ### Fixed
+- The light and dark terminal palettes are now distinct. Both Preferences rows
+  defaulted to scheme names that matched no builtin scheme, so each row fell
+  back to the first entry in the list and closing the window persisted that one
+  scheme for both modes — light and dark rendered identically. Existing
+  preferences are migrated: the legacy names are canonicalized and a collapsed
+  pair is split back into the light and dark defaults, including when the
+  document has to be recovered from its `.bak` backup. A stored scheme name
+  that no longer exists now resolves to the builtin default for its mode
+  instead of whatever happens to be first in the list.
 - Renaming a workspace now survives a full client and daemon restart. Two
   separate gaps could each revert the name to its default. The client applied a
   rename to its in-memory state only, so the new name reached

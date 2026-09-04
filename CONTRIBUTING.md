@@ -504,6 +504,21 @@ Refs #57
    codebase — do not leave compile errors for the reviewer to fix.
 7. A PR that breaks any existing test will not be merged.
 
+### Changelog
+
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A PR with a
+user-visible effect — a new feature, a behaviour change, a bug a user could hit, a removal — adds
+its entry to the `[Unreleased]` section in the same PR, under `Added`, `Changed`, `Removed`, or
+`Fixed` (create the heading if it is not there yet).
+
+- Describe the user-facing effect, not the implementation: what changed for someone using rttx,
+  and what happens to their existing state (persisted workspaces, preferences) if anything.
+- No entry is needed for internal refactors, test-only changes, CI, or documentation.
+- Do not put PR or issue numbers in entries — `git log` already carries them.
+- Releases move `[Unreleased]` into a versioned section, and that text becomes the AppStream
+  `<release>` description shown in software centres. A missing entry is a missing line in the
+  release notes users read.
+
 ---
 
 ## Design process (RFCs)
