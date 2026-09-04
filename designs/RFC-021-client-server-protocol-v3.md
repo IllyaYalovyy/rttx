@@ -649,6 +649,28 @@ enum RuntimePolicy {
 }
 ```
 
+```protobuf
+message TakeoverWorkspace {
+  bytes runtime_id = 1;
+}
+
+message TakeoverCompleted {
+  bytes runtime_id = 1;
+  uint64 workspace_revision = 2;
+}
+
+message LeaseLost {
+  bytes runtime_id = 1;
+  uint64 workspace_revision = 2;
+  bytes new_owner_id = 3;
+}
+
+message OwnerDisconnected {
+  bytes runtime_id = 1;
+  uint64 workspace_revision = 2;
+}
+```
+
 Rules:
 - One writer lease per runtime, zero or more readers.
 - Takeover is an explicit command (requires `OPT_RUNTIME_TAKEOVER`), not a side effect of
@@ -656,6 +678,74 @@ Rules:
 - `AttachBlocked` is returned when a read-write attach fails due to an existing writer.
 - Lease loss, owner disconnect, and forced takeover are typed events when
   `OPT_RUNTIME_TAKEOVER` is active.
+
+#### Takeover semantics (as built)
+
+Takeover shipped in #1090. The wire capability is spelled `OPT_WORKSPACE_TAKEOVER` in
+`rttx-v3.proto` — the same value 101 as `OPT_RUNTIME_TAKEOVER` above, renamed by the
+`Session`/`Runtime` → `Workspace` terminology pass. This section records the behavior the
+daemon and client actually implement.
+
+**Challenger flow.** Takeover is never implicit and never a retry of a failed attach:
+
+1. The connect-existing dialog offers a "Take over" button for a runtime only when the
+   daemon reports it as busy elsewhere *and* `takeover_eligible` is true
+   (`OPT_RUNTIME_INVENTORY_V2`, Section 9). Without the takeover capability the row is
+   simply disabled with its `disabled_reason`.
+2. The button opens an `adw::AlertDialog` whose confirm response is styled
+   `Destructive` and whose **default and close response is Cancel** — a stray Enter or
+   Escape never steals someone else's workspace.
+3. On confirm the client sends `TakeoverWorkspace { runtime_id }`, and only after
+   `TakeoverCompleted` does it send `AttachWorkspace` in read-write mode. Seizing the
+   lease first means the subsequent attach cannot lose a race against the previous owner.
+
+**The previous owner is demoted, not disconnected.** This is the central semantic:
+
+- The daemon moves the previous writer from `RUNTIME_CLIENT_ROLE_WRITER` to
+  `RUNTIME_CLIENT_ROLE_READER`. It stays attached. Its pane widgets, scrollback, and
+  window layout are untouched.
+- It keeps receiving `OutputDelta`, `CwdChanged`, `TitleChanged`, and tree deltas, because
+  push fan-out targets every attached client regardless of role. The demoted client
+  therefore becomes a **live read-only mirror** of the workspace it just lost, which is
+  what makes the handoff observable rather than merely destructive.
+- The client maps `LeaseLost` to `ConnectionStatus::Blocked(ConnectionProblem::TakenOver)`
+  — header label *"Action Required"*, detail *"Another client took over this
+  workspace"* — and raises a toast so the demotion is not silent.
+- Input is refused on **both** sides. Client-side, `ConnectionStatus::accepts_input()` is
+  true only for `Connected` and `Recovered`, so a `Blocked` workspace sends nothing.
+  Server-side, `handle_v3_terminal_input` drops input unless the sending client has write
+  access, as do all structural commands (`SplitPane`, `ClosePane`, `ResizeSplit`,
+  `RenameWorkspace`, …), which return `ERROR_KIND_OWNERSHIP_CONFLICT`. The single-writer
+  invariant therefore holds even against a stale or racing client that has not yet
+  processed its `LeaseLost`.
+
+**Ordering.** The daemon pushes `LeaseLost` to the demoted writer **before** it returns
+`TakeoverCompleted` to the challenger. The client that is losing input always learns why
+first; the client that gains it is told only once the demotion is on the wire.
+
+**Non-transience.** `ConnectionProblem::TakenOver` is not transient: `is_transient()`
+matches only `DaemonUnavailable`, so a taken-over workspace is never auto-retried. Without
+this rule two clients would trade the lease back and forth indefinitely. Recovery is
+manual and symmetric — the demoted user either keeps watching the mirror, retries the
+connection explicitly, or takes the workspace back through the same confirmed takeover
+flow.
+
+**Guards.** `TakeoverWorkspace` is rejected with `ERROR_KIND_OWNERSHIP_CONFLICT` when:
+
+| Condition | Why |
+|---|---|
+| The runtime has no current write owner | An ordinary read-write attach already succeeds; takeover would be a needlessly destructive way to ask. |
+| The requester already holds the lease | There is nothing to seize, and a bumped revision would report a handoff that did not happen. |
+| The runtime policy is `EPHEMERAL` | An ephemeral runtime lives only as long as its clients stay attached, so handing it over would transfer a runtime already on its way out. |
+
+The same three conditions drive `takeover_eligible` in `RuntimeInfo`, so an ineligible
+runtime never shows the button in the first place; the server-side check exists because a
+client's inventory can be stale.
+
+`OwnerDisconnected` is reserved for the unforced case — the writer leaving on its own, so
+readers know the lease is free. The message and its builders exist on the wire, but the
+daemon does not emit it yet: a reader currently discovers the free lease by retrying its
+attach. Emitting it is a follow-up, not a protocol change.
 
 ### 11. Error Model
 
@@ -808,7 +898,10 @@ handshake, not at the transport level.
 - [ ] **Step 9** — Implement `OPT_CHUNKED_SCROLLBACK` (`GetScrollback`/`ScrollbackChunk`)
 - [ ] **Step 10** — Implement `OPT_RESYNC` (`StreamOverflow`/`ResyncRuntime`)
 - [ ] **Step 11** — Implement `OPT_RUNTIME_INVENTORY_V2` (rich inventory fields)
-- [ ] **Step 12** — Implement `OPT_RUNTIME_TAKEOVER` (explicit takeover and lease events)
+- [x] **Step 12** — Implement `OPT_RUNTIME_TAKEOVER` (explicit takeover and lease events)
+  — shipped as `OPT_WORKSPACE_TAKEOVER` with `TakeoverWorkspace`, `TakeoverCompleted`, and
+  `LeaseLost`; semantics recorded in Section 10. `OwnerDisconnected` is defined but not
+  yet emitted.
 - [ ] **Step 13** — Implement `OPT_DIAGNOSTICS`
 - [ ] **Step 14** — Remove all v2 protocol code
 - [ ] **Step 15** — Full integration test suite for v3 protocol. Test matrix: latest GUI
