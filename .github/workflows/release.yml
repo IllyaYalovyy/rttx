@@ -122,7 +122,14 @@ jobs:
     # Build inside Fedora so the RPM links against Fedora's GTK/VTE/glibc and
     # the SRPM is produced with Fedora's cargo-rpm-macros. The SRPM is the
     # artifact COPR rebuilds for every enabled Fedora release/arch.
-    container: registry.fedoraproject.org/fedora:latest
+    #
+    # Pinned to the oldest supported Fedora (not `latest`, which drifts with
+    # every Fedora release and silently changed the attached RPM's dist tag
+    # from .fc43 to .fc44). The binary RPM is a convenience asset that must
+    # install on every supported release, so it is built against the oldest
+    # one; COPR remains the supported path for the other releases/arches.
+    # Bump this when Fedora 43 goes EOL (see packaging/rttx/rpm/README.md §5.5).
+    container: registry.fedoraproject.org/fedora:43
     steps:
       - name: Install packaging toolchain
         run: |
