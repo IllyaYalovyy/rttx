@@ -39,6 +39,8 @@ impl Window {
             ("zoom-out", |w| w.zoom_focused(-1)),
             ("zoom-reset", |w| w.zoom_focused(0)),
             ("toggle-pane-zoom", Self::toggle_pane_zoom),
+            ("next-pane", |w| w.cycle_focused_pane(true)),
+            ("prev-pane", |w| w.cycle_focused_pane(false)),
             ("rotate-layout", Self::rotate_layout),
             ("repair-terminal", Self::repair_focused_terminal),
             ("rename-pane", Self::rename_focused_pane),
@@ -265,19 +267,32 @@ impl Window {
     }
 
     pub(super) fn navigate_focused(&self, direction: Direction) {
+        self.move_focused_pane(|layout, current| layout.find_adjacent(current, direction));
+    }
+
+    /// Move the focus to the next (or previous) pane in layout order, wrapping
+    /// at the ends. Cycling reaches every pane regardless of geometry, which
+    /// matters while zoomed because the layout is not visible.
+    pub(super) fn cycle_focused_pane(&self, forward: bool) {
+        self.move_focused_pane(|layout, current| layout.cycle_terminal(current, forward));
+    }
+
+    /// Shared move path for pane navigation: while zoomed the zoom follows the
+    /// target pane, otherwise only the focus moves.
+    fn move_focused_pane(&self, resolve_target: impl Fn(&LayoutNode, &str) -> Option<String>) {
         let Some(current_uuid) = self.focused_terminal_uuid() else { return };
 
-        let (adjacent_uuid, is_zoomed, session_uuid) = {
+        let (target, is_zoomed, session_uuid) = {
             let state = self.imp().state.borrow();
             let session =
                 state.workspaces.iter().find(|s| s.layout.contains_terminal(&current_uuid));
-            let adjacent = session.and_then(|s| s.layout.find_adjacent(&current_uuid, direction));
+            let target = session.and_then(|s| resolve_target(&s.layout, &current_uuid));
             let zoomed = session.is_some_and(WorkspaceState::is_zoomed);
             let sess_uuid = session.map(|s| s.uuid.clone());
-            (adjacent, zoomed, sess_uuid)
+            (target, zoomed, sess_uuid)
         };
 
-        let Some(target_uuid) = adjacent_uuid else { return };
+        let Some(target_uuid) = target else { return };
         let Some(session_uuid) = session_uuid else { return };
 
         if is_zoomed {
@@ -287,9 +302,13 @@ impl Window {
                 else {
                     return;
                 };
-                session.zoomed_terminal_uuid = Some(target_uuid);
+                session.zoomed_terminal_uuid = Some(target_uuid.clone());
+                session.active_terminal_uuid = Some(target_uuid.clone());
                 session.clone()
             };
+            // The previously focused pane leaves the widget tree on rebuild, so
+            // its focus-enter handler can never move the focus for us.
+            self.set_focused_terminal(Some(&target_uuid));
             self.rebuild_session_content(&session_uuid, &session_state);
             self.focus_session_terminal(&session_uuid);
             return;

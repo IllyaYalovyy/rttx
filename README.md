@@ -197,11 +197,19 @@ workspaces will fail to connect.
 | Rotate layout | Ctrl+Shift+R |
 | Repair terminal | Ctrl+Shift+X |
 | Navigate panes | Alt+Arrow (configurable) |
+| Next / previous pane | Alt+] / Alt+[ (configurable) |
 | Connect to existing workspace | Ctrl+Shift+A |
 | New direct terminal | Ctrl+Shift+D |
 | Commands leader key | Ctrl+; |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |
+
+Pane navigation preserves zoom: with a pane maximized (Ctrl+Shift+Z), Alt+Arrow
+and Alt+] / Alt+[ move the zoom to the target pane instead of unzooming, and the
+pane header shows an `n/total` counter. Alt+Arrow is spatial and stops at the
+edge of the layout; Alt+] / Alt+[ cycle through every pane in layout order and
+wrap around, so they always reach the next pane even when the layout is hidden
+behind a zoomed pane.
 
 ## Architecture
 

@@ -101,6 +101,16 @@ pub static DEFAULT_SHORTCUTS: &[ShortcutDef] = &[
     ShortcutDef { action: "navigate-up", label: "Navigate up", default_accels: &["<Alt>Up"] },
     ShortcutDef { action: "navigate-down", label: "Navigate down", default_accels: &["<Alt>Down"] },
     ShortcutDef {
+        action: "next-pane",
+        label: "Next pane (keeps zoom)",
+        default_accels: &["<Alt>bracketright"],
+    },
+    ShortcutDef {
+        action: "prev-pane",
+        label: "Previous pane (keeps zoom)",
+        default_accels: &["<Alt>bracketleft"],
+    },
+    ShortcutDef {
         action: "commands-leader",
         label: "Commands leader key",
         default_accels: &["<Ctrl>semicolon"],
@@ -197,6 +207,21 @@ mod tests {
     fn rename_workspace_shortcut_registered() {
         let accels = default_accels("rename-workspace");
         assert_eq!(accels, vec!["F2"]);
+    }
+
+    /// Pane cycling must ship with accelerators that do not collide with the
+    /// spatial navigation, workspace switching, or leader-key bindings. #1095.
+    #[test]
+    fn pane_cycling_shortcuts_registered_without_collisions() {
+        assert_eq!(default_accels("next-pane"), vec!["<Alt>bracketright"]);
+        assert_eq!(default_accels("prev-pane"), vec!["<Alt>bracketleft"]);
+
+        let mut seen = std::collections::HashSet::new();
+        for def in DEFAULT_SHORTCUTS {
+            for accel in def.default_accels {
+                assert!(seen.insert(*accel), "accelerator {accel} bound twice");
+            }
+        }
     }
 
     #[test]
