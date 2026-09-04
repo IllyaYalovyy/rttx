@@ -49,16 +49,20 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
 
     let light_scheme_row = adw::ComboRow::builder().title("Light terminal palette").build();
     light_scheme_row.set_model(Some(&scheme_model));
-    if let Some(pos) = scheme_names.iter().position(|s| s == &prefs.light_color_scheme) {
-        light_scheme_row.set_selected(pos as u32);
-    }
+    light_scheme_row.set_selected(scheme_selection(
+        &scheme_names,
+        &prefs.light_color_scheme,
+        color_scheme::BUILTIN_LIGHT_SCHEME_NAME,
+    ));
     appearance_group.add(&light_scheme_row);
 
     let dark_scheme_row = adw::ComboRow::builder().title("Dark terminal palette").build();
     dark_scheme_row.set_model(Some(&scheme_model));
-    if let Some(pos) = scheme_names.iter().position(|s| s == &prefs.dark_color_scheme) {
-        dark_scheme_row.set_selected(pos as u32);
-    }
+    dark_scheme_row.set_selected(scheme_selection(
+        &scheme_names,
+        &prefs.dark_color_scheme,
+        color_scheme::BUILTIN_DARK_SCHEME_NAME,
+    ));
     appearance_group.add(&dark_scheme_row);
 
     let terminal_group = adw::PreferencesGroup::new();
@@ -332,6 +336,19 @@ pub fn build_data_group(window: &adw::PreferencesWindow) -> adw::PreferencesGrou
     group
 }
 
+/// Resolve the combo index for a stored palette name.
+///
+/// A stored name that no longer exists must not leave the row on whatever entry
+/// happens to sort first, because closing the window would then persist that
+/// entry for both palettes (#1085).
+fn scheme_selection(names: &[String], stored: &str, fallback: &str) -> u32 {
+    names
+        .iter()
+        .position(|name| name == stored)
+        .or_else(|| names.iter().position(|name| name == fallback))
+        .unwrap_or(0) as u32
+}
+
 fn load_scheme_names() -> Vec<String> {
     let mut names: Vec<String> =
         color_scheme::load_color_schemes().into_iter().map(|scheme| scheme.name).collect();
@@ -415,4 +432,31 @@ fn show_shortcut_capture_dialog(
 
     dialog.add_controller(controller);
     dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scheme_selection;
+
+    #[test]
+    fn scheme_selection_prefers_the_stored_name() {
+        let names =
+            vec!["Rttx Daybreak".to_string(), "Rttx Nightfall".to_string(), "Zed".to_string()];
+        assert_eq!(scheme_selection(&names, "Rttx Nightfall", "Rttx Daybreak"), 1);
+    }
+
+    #[test]
+    fn scheme_selection_falls_back_when_stored_name_is_unknown() {
+        let names =
+            vec!["Rttx Daybreak".to_string(), "Rttx Nightfall".to_string(), "Zed".to_string()];
+        // "Nightfall" is the legacy bare name that no scheme carries (#1085);
+        // the dark row must land on Nightfall, not on the first entry.
+        assert_eq!(scheme_selection(&names, "Nightfall", "Rttx Nightfall"), 1);
+    }
+
+    #[test]
+    fn scheme_selection_uses_first_entry_when_nothing_matches() {
+        let names = vec!["Zed".to_string()];
+        assert_eq!(scheme_selection(&names, "Nightfall", "Rttx Nightfall"), 0);
+    }
 }

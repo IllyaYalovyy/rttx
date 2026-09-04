@@ -54,15 +54,29 @@ impl ClientStore {
     // ── Preferences ─────────────────────────────────────────
 
     /// Load preferences through the envelope-aware loader with malformed-file recovery.
+    ///
+    /// Documents written at an older version are migrated in memory and rewritten
+    /// at the current version (RFC-023 §2).
     #[must_use]
     pub fn load_preferences(&self) -> LoadOutcome<Preferences> {
         let path = self.paths.config().join("preferences.json");
-        let outcome: LoadOutcome<models::preferences::PreferencesV1> = atomic_load(
+        let stored_version = stored_document_version(&path);
+        let mut outcome: LoadOutcome<models::preferences::PreferencesV1> = atomic_load(
             &path,
             models::preferences::SCHEMA,
             models::preferences::CURRENT_VERSION,
             &self.paths.backups(),
         );
+
+        if stored_version.is_some_and(|v| v < models::preferences::CURRENT_VERSION)
+            && let LoadOutcome::Loaded(doc) | LoadOutcome::Recovered(doc) = &mut outcome
+        {
+            doc.migrate_color_scheme_names();
+            if let Err(e) = save_preferences_document(&path, doc) {
+                tracing::error!("Failed to rewrite migrated preferences: {e}");
+            }
+        }
+
         outcome.map(Into::into)
     }
 
@@ -73,13 +87,8 @@ impl ClientStore {
     /// Returns an I/O error if the atomic write fails.
     pub fn save_preferences(&self, prefs: &Preferences) -> std::io::Result<()> {
         let path = self.paths.config().join("preferences.json");
-        let v1: models::preferences::PreferencesV1 = prefs.into();
-        let envelope = DocumentEnvelope::new(
-            models::preferences::SCHEMA,
-            models::preferences::CURRENT_VERSION,
-            v1,
-        );
-        atomic_save(&path, &envelope)
+        let document: models::preferences::PreferencesV1 = prefs.into();
+        save_preferences_document(&path, &document)
     }
 
     // ── Hosts ───────────────────────────────────────────────
@@ -399,6 +408,31 @@ fn load_if_present<T: for<'de> serde::Deserialize<'de> + Default>(
         LoadOutcome::Loaded(v) | LoadOutcome::Recovered(v) => Some(v),
         _ => None,
     }
+}
+
+/// Read the envelope version a document was stored at, without deserializing it.
+///
+/// Falls back to the last-good backup so a document recovered from `.bak` is
+/// migrated on the same load that recovers it.
+fn stored_document_version(path: &std::path::Path) -> Option<u32> {
+    document_version(path).or_else(|| document_version(&path.with_extension("bak")))
+}
+
+fn document_version(path: &std::path::Path) -> Option<u32> {
+    let json = std::fs::read_to_string(path).ok()?;
+    envelope::peek_header(&json).ok().map(|header| header.version)
+}
+
+fn save_preferences_document(
+    path: &std::path::Path,
+    document: &models::preferences::PreferencesV1,
+) -> std::io::Result<()> {
+    let envelope = DocumentEnvelope::new(
+        models::preferences::SCHEMA,
+        models::preferences::CURRENT_VERSION,
+        document,
+    );
+    atomic_save(path, &envelope)
 }
 
 impl<T> LoadOutcome<T> {

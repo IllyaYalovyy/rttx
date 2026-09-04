@@ -263,3 +263,110 @@ fn keyboard_shortcuts_missing_field() {
     let loaded = parse_raw(r#"{"font": "Mono 12"}"#);
     assert!(loaded.keyboard_shortcuts.is_empty());
 }
+
+// ── Palette-name migration (#1085) ───────────────────────────────────
+
+/// Write a raw version 1 preferences document with the given palette names.
+fn write_v1_document(store: &ClientStore, light: &str, dark: &str) -> std::path::PathBuf {
+    let path = store.paths().config().join("preferences.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let json = format!(
+        r#"{{
+            "schema": "rttx.client.preferences",
+            "version": 1,
+            "app_version": "1.0.1",
+            "written_at": "2026-01-01T00:00:00Z",
+            "data": {{
+                "font": "Monospace 12",
+                "light_color_scheme": "{light}",
+                "dark_color_scheme": "{dark}"
+            }}
+        }}"#
+    );
+    std::fs::write(&path, json).unwrap();
+    path
+}
+
+fn stored_palettes(path: &std::path::Path) -> (String, String, u64) {
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    (
+        json["data"]["light_color_scheme"].as_str().unwrap().to_string(),
+        json["data"]["dark_color_scheme"].as_str().unwrap().to_string(),
+        json["version"].as_u64().unwrap(),
+    )
+}
+
+#[test]
+fn legacy_bare_palette_names_are_migrated_on_load() {
+    let (_tmp, store) = test_store();
+    let path = write_v1_document(&store, "Daybreak", "Nightfall");
+
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
+
+    let (light, dark, version) = stored_palettes(&path);
+    assert_eq!(light, "Rttx Daybreak");
+    assert_eq!(dark, "Rttx Nightfall");
+    assert_eq!(version, 2, "migrated document must be rewritten at the current version");
+}
+
+#[test]
+fn collapsed_palettes_are_split_on_load() {
+    let (_tmp, store) = test_store();
+    let path = write_v1_document(&store, "Rttx Daybreak", "Rttx Daybreak");
+
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
+
+    let (light, dark, _) = stored_palettes(&path);
+    assert_eq!(light, "Rttx Daybreak");
+    assert_eq!(dark, "Rttx Nightfall");
+}
+
+#[test]
+fn distinct_v1_palettes_survive_migration() {
+    let (_tmp, store) = test_store();
+    write_v1_document(&store, "Solarized Light", "Solarized Dark");
+
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Solarized Light");
+    assert_eq!(loaded.dark_color_scheme, "Solarized Dark");
+}
+
+#[test]
+fn current_version_documents_keep_matching_palettes() {
+    let (_tmp, store) = test_store();
+    let prefs = Preferences {
+        light_color_scheme: "Rttx Nightfall".into(),
+        dark_color_scheme: "Rttx Nightfall".into(),
+        ..Default::default()
+    };
+    store.save_preferences(&prefs).unwrap();
+
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Rttx Nightfall");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
+}
+
+#[test]
+fn fresh_config_defaults_to_distinct_palettes() {
+    let (_tmp, store) = test_store();
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
+}
+
+#[test]
+fn palettes_recovered_from_backup_are_migrated() {
+    let (_tmp, store) = test_store();
+    let path = write_v1_document(&store, "Daybreak", "Nightfall");
+    std::fs::rename(&path, path.with_extension("bak")).unwrap();
+    std::fs::write(&path, "corrupted").unwrap();
+
+    let loaded = store.load_preferences().into_value().unwrap();
+    assert_eq!(loaded.light_color_scheme, "Rttx Daybreak");
+    assert_eq!(loaded.dark_color_scheme, "Rttx Nightfall");
+}
