@@ -237,6 +237,7 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id,
                 name: "test-rt".into(),
+                user_renamed: false,
                 policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree,
@@ -305,6 +306,7 @@ mod tests {
             spec: WorkspaceSpecV2 {
                 id: rt_id,
                 name: "tree-ws".into(),
+                user_renamed: false,
                 policy: WorkspacePolicy::Persistent,
                 created_at: SystemTime::now(),
                 tree,

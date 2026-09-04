@@ -57,6 +57,7 @@ pub struct WorkspaceInfoParams {
     pub current_client_role: v3::WorkspaceClientRole,
     pub workspace_revision: u64,
     pub reconstructed: bool,
+    pub user_renamed: bool,
 }
 
 /// Enriched fields for `WorkspaceInfo`.
@@ -80,6 +81,7 @@ pub fn build_workspace_info(params: WorkspaceInfoParams) -> v3::WorkspaceInfo {
         current_client_role: params.current_client_role as i32,
         workspace_revision: params.workspace_revision,
         reconstructed: params.reconstructed,
+        user_renamed: params.user_renamed,
         active_pane_summary: String::new(),
         takeover_eligible: false,
         disabled_reason: String::new(),
@@ -103,6 +105,7 @@ pub fn build_workspace_info_enriched(
         current_client_role: params.current_client_role as i32,
         workspace_revision: params.workspace_revision,
         reconstructed: params.reconstructed,
+        user_renamed: params.user_renamed,
         active_pane_summary: enriched.active_pane_summary,
         takeover_eligible: enriched.takeover_eligible,
         disabled_reason: enriched.disabled_reason,
@@ -214,6 +217,7 @@ mod tests {
             current_client_role: v3::WorkspaceClientRole::Unattached,
             workspace_revision: 0,
             reconstructed: false,
+            user_renamed: false,
         }
     }
 
@@ -329,6 +333,7 @@ mod tests {
             current_client_role: v3::WorkspaceClientRole::Writer,
             workspace_revision: 42,
             reconstructed: false,
+            user_renamed: false,
         });
         assert_eq!(info.id, uuid_to_bytes(r));
         assert_eq!(info.name, "workspace-1");
@@ -358,6 +363,7 @@ mod tests {
             current_client_role: v3::WorkspaceClientRole::Unattached,
             workspace_revision: 0,
             reconstructed: true,
+            user_renamed: false,
         });
         let mut buf = BytesMut::new();
         encode_frame(&info, &mut buf).unwrap();
@@ -382,6 +388,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Writer,
                 workspace_revision: 10,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
@@ -410,6 +417,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Unattached,
                 workspace_revision: 5,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "vim".into(),
@@ -436,6 +444,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Reader,
                 workspace_revision: 99,
                 reconstructed: true,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "htop".into(),
@@ -466,6 +475,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Writer,
                 workspace_revision: 1,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
@@ -567,6 +577,7 @@ mod tests {
             current_client_role: v3::WorkspaceClientRole::Writer,
             workspace_revision: 5,
             reconstructed: false,
+            user_renamed: false,
         });
         let list = build_workspace_list(vec![info]);
         let mut buf = BytesMut::new();
@@ -619,6 +630,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Writer,
                 workspace_revision: 10,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
@@ -683,6 +695,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Writer,
                 workspace_revision: 1,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),
@@ -724,6 +737,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Reader,
                 workspace_revision: 5,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "vim".into(),
@@ -784,6 +798,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Writer,
                 workspace_revision: 42,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: summary,
@@ -827,6 +842,7 @@ mod tests {
                 current_client_role: v3::WorkspaceClientRole::Writer,
                 workspace_revision: 1,
                 reconstructed: false,
+                user_renamed: false,
             },
             WorkspaceInfoEnrichedFields {
                 active_pane_summary: "bash".into(),

@@ -1526,7 +1526,8 @@ fn rename_runtime_updates_sidebar_and_saved_state() {
     assert_eq!(session_row.workspace_name(), "Renamed Session");
     assert_eq!(session_row.title().as_str(), "Renamed Session");
 
-    window.save_state();
+    // No explicit save_state() here: renaming must persist on its own, or the
+    // name is lost when the client exits without a clean close (issue #1084).
     let saved_state = load_saved_window_state();
     assert_eq!(saved_state.workspaces[0].name, "Renamed Session");
     assert!(saved_state.workspaces[0].user_renamed);
@@ -2705,6 +2706,7 @@ fn inventory_loaded_recovers_missing_managed_workspace() {
             }],
             policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: true,
+            user_renamed: false,
             workspace_revision: 7,
         }],
     });
@@ -2799,6 +2801,7 @@ fn inventory_loaded_skips_workspace_for_known_runtime() {
             }],
             policy: rttx_proto::v3::WorkspacePolicy::Persistent as i32,
             reconstructed: true,
+            user_renamed: false,
             workspace_revision: 7,
         }],
     });

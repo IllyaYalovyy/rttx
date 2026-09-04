@@ -791,6 +791,7 @@ mod tests {
             current_client_role: v3::WorkspaceClientRole::Writer as i32,
             workspace_revision: 7,
             reconstructed: false,
+            user_renamed: false,
             active_pane_summary: String::new(),
             takeover_eligible: false,
             disabled_reason: String::new(),

@@ -74,6 +74,12 @@ pub struct WorkspaceSpecV2 {
     pub id: Uuid,
     /// Human-readable workspace name.
     pub name: String,
+    /// Whether [`name`](Self::name) came from an explicit user rename.
+    ///
+    /// Defaults to `false` so workspace files written before this field
+    /// existed still load (issue #1084).
+    #[serde(default)]
+    pub user_renamed: bool,
     /// Retention policy.
     pub policy: WorkspacePolicy,
     /// When this workspace was created.
@@ -236,6 +242,7 @@ mod tests {
         WorkspaceSpecV2 {
             id: Uuid::new_v4(),
             name: "dev".into(),
+            user_renamed: false,
             policy: WorkspacePolicy::Persistent,
             created_at: SystemTime::now(),
             tree,
@@ -409,10 +416,38 @@ mod tests {
     }
 
     #[test]
+    fn workspace_spec_defaults_user_renamed_for_pre_1084_files() {
+        // Workspace files written before the marker existed must still load.
+        let json = r#"{
+            "id": "d7d04564-b2bf-4302-9495-e65c4df12ac6",
+            "name": "Projects",
+            "policy": "persistent",
+            "created_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+            "tree": {"root": null, "default_active": null},
+            "panes": []
+        }"#;
+
+        let spec: WorkspaceSpecV2 = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.name, "Projects");
+        assert!(!spec.user_renamed, "a legacy file has no recorded user rename");
+    }
+
+    #[test]
+    fn workspace_spec_roundtrips_user_renamed() {
+        let mut spec = sample_workspace_spec();
+        spec.user_renamed = true;
+
+        let json = serde_json::to_string(&spec).unwrap();
+        let restored: WorkspaceSpecV2 = serde_json::from_str(&json).unwrap();
+        assert!(restored.user_renamed);
+    }
+
+    #[test]
     fn workspace_spec_with_no_panes() {
         let spec = WorkspaceSpecV2 {
             id: Uuid::new_v4(),
             name: "empty".into(),
+            user_renamed: false,
             policy: WorkspacePolicy::Ephemeral,
             created_at: SystemTime::now(),
             tree: WorkspaceTree::new(),

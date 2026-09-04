@@ -266,4 +266,46 @@ async fn rename_workspace_persists_across_restart() {
     let workspaces = common::list_workspaces(&mut client2).await;
     assert_eq!(workspaces.len(), 1);
     assert_eq!(workspaces[0].name, "after");
+    assert!(
+        workspaces[0].user_renamed,
+        "inventory must still mark the restored name as user-chosen so a client \
+         rebuilding from inventory does not auto-rename it away (issue #1084)"
+    );
+}
+
+/// A workspace that was never renamed reports `user_renamed = false` in
+/// inventory, so clients stay free to auto-name it (issue #1084).
+#[tokio::test]
+async fn never_renamed_workspace_is_not_marked_user_renamed_across_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (socket_path, handle) = start_test_server(tmp.path()).await;
+    let mut client = TestClient::connect(&socket_path).await;
+    client.handshake().await;
+
+    let runtime_id =
+        common::create_workspace(&mut client, "Projects", v3::WorkspacePolicy::Persistent).await;
+    common::attach_rw(&mut client, &runtime_id).await;
+
+    let workspaces = common::list_workspaces(&mut client).await;
+    assert_eq!(workspaces.len(), 1);
+    assert!(!workspaces[0].user_renamed, "a creation-time name is not a user rename");
+
+    common::wait_for_state_containing(tmp.path(), "Projects", Duration::from_secs(5)).await;
+
+    client
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::Shutdown(v3::Shutdown {})),
+        })
+        .await;
+    let _ = handle.await;
+
+    let (socket_path2, _handle2) = start_test_server(tmp.path()).await;
+    let mut client2 = TestClient::connect(&socket_path2).await;
+    client2.handshake().await;
+
+    let workspaces = common::list_workspaces(&mut client2).await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].name, "Projects");
+    assert!(!workspaces[0].user_renamed);
 }
