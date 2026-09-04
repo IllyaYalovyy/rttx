@@ -90,7 +90,7 @@ fn preferences_rejects_future_version() {
 
     let outcome: LoadOutcome<PreferencesV1> =
         atomic_load(&path, preferences::SCHEMA, preferences::CURRENT_VERSION, &backups);
-    assert!(matches!(outcome, LoadOutcome::UnsupportedVersion { found: 99, max_supported: 1 }));
+    assert!(matches!(outcome, LoadOutcome::UnsupportedVersion { found: 99, max_supported: 2 }));
     assert!(path.exists(), "file must not be deleted");
 }
 

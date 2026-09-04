@@ -3,10 +3,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::color_scheme::{BUILTIN_DARK_SCHEME_NAME, BUILTIN_LIGHT_SCHEME_NAME};
 use crate::store::envelope::Schema;
 
 pub const SCHEMA: Schema = Schema::Preferences;
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
+
+/// Bare palette names written by version 1 documents. They never matched a real
+/// scheme, so both palette combos silently collapsed onto the same entry (#1085).
+const LEGACY_LIGHT_SCHEME_NAME: &str = "Daybreak";
+const LEGACY_DARK_SCHEME_NAME: &str = "Nightfall";
 
 /// Terminal theme mode selection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,6 +33,10 @@ pub enum DefaultSessionFolder {
 }
 
 /// Durable user preferences — no workspace layout, connection status, or runtime inventory.
+///
+/// The payload shape is identical for document versions 1 and 2; version 2 only
+/// narrows which palette names are considered valid (see
+/// [`PreferencesV1::migrate_color_scheme_names`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PreferencesV1 {
     #[serde(default = "default_font")]
@@ -101,11 +111,11 @@ const fn default_terminal_theme_mode() -> TerminalThemeMode {
 }
 
 fn default_light_color_scheme() -> String {
-    "Daybreak".into()
+    BUILTIN_LIGHT_SCHEME_NAME.into()
 }
 
 fn default_dark_color_scheme() -> String {
-    "Nightfall".into()
+    BUILTIN_DARK_SCHEME_NAME.into()
 }
 
 const fn default_scrollback() -> i64 {
@@ -126,6 +136,36 @@ const fn default_reconnect_delay_secs() -> u32 {
 
 const fn default_paste_guard_threshold() -> usize {
     200
+}
+
+impl PreferencesV1 {
+    /// Migrate a version 1 document to version 2 by repairing palette names.
+    ///
+    /// Version 1 defaults used bare `"Daybreak"`/`"Nightfall"` names that no
+    /// scheme ever carried, so the preferences combos fell back to the first
+    /// entry and saved the same palette for both modes. Returns `true` when a
+    /// name changed, so the caller can rewrite the document.
+    pub fn migrate_color_scheme_names(&mut self) -> bool {
+        let mut light = canonical_scheme_name(&self.light_color_scheme);
+        let mut dark = canonical_scheme_name(&self.dark_color_scheme);
+        if light == dark {
+            light = default_light_color_scheme();
+            dark = default_dark_color_scheme();
+        }
+
+        let changed = light != self.light_color_scheme || dark != self.dark_color_scheme;
+        self.light_color_scheme = light;
+        self.dark_color_scheme = dark;
+        changed
+    }
+}
+
+fn canonical_scheme_name(name: &str) -> String {
+    match name {
+        LEGACY_LIGHT_SCHEME_NAME => BUILTIN_LIGHT_SCHEME_NAME.into(),
+        LEGACY_DARK_SCHEME_NAME => BUILTIN_DARK_SCHEME_NAME.into(),
+        other => other.into(),
+    }
 }
 
 // ── Conversions to/from the existing domain type ────────────
@@ -201,5 +241,78 @@ impl From<&crate::preferences::Preferences> for PreferencesV1 {
             paste_guard: prefs.paste_guard,
             paste_guard_threshold: prefs.paste_guard_threshold,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color_scheme::load_color_scheme_by_name;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn default_palette_names_resolve_to_distinct_schemes() {
+        let prefs = PreferencesV1::default();
+        let light = load_color_scheme_by_name(&prefs.light_color_scheme)
+            .expect("default light palette must name a real scheme");
+        let dark = load_color_scheme_by_name(&prefs.dark_color_scheme)
+            .expect("default dark palette must name a real scheme");
+
+        assert_eq!(light.name, BUILTIN_LIGHT_SCHEME_NAME);
+        assert_eq!(dark.name, BUILTIN_DARK_SCHEME_NAME);
+        assert_ne!(light.background, dark.background, "defaults must render differently");
+    }
+
+    #[test]
+    fn migration_replaces_legacy_bare_names() {
+        let mut prefs = PreferencesV1 {
+            light_color_scheme: LEGACY_LIGHT_SCHEME_NAME.into(),
+            dark_color_scheme: LEGACY_DARK_SCHEME_NAME.into(),
+            ..PreferencesV1::default()
+        };
+
+        assert!(prefs.migrate_color_scheme_names());
+        assert_eq!(prefs.light_color_scheme, BUILTIN_LIGHT_SCHEME_NAME);
+        assert_eq!(prefs.dark_color_scheme, BUILTIN_DARK_SCHEME_NAME);
+    }
+
+    #[test]
+    fn migration_splits_collapsed_palettes() {
+        let mut prefs = PreferencesV1 {
+            light_color_scheme: BUILTIN_LIGHT_SCHEME_NAME.into(),
+            dark_color_scheme: BUILTIN_LIGHT_SCHEME_NAME.into(),
+            ..PreferencesV1::default()
+        };
+
+        assert!(prefs.migrate_color_scheme_names());
+        assert_eq!(prefs.light_color_scheme, BUILTIN_LIGHT_SCHEME_NAME);
+        assert_eq!(prefs.dark_color_scheme, BUILTIN_DARK_SCHEME_NAME);
+    }
+
+    #[test]
+    fn migration_keeps_distinct_custom_palettes() {
+        let mut prefs = PreferencesV1 {
+            light_color_scheme: "Solarized Light".into(),
+            dark_color_scheme: "Solarized Dark".into(),
+            ..PreferencesV1::default()
+        };
+
+        assert!(!prefs.migrate_color_scheme_names());
+        assert_eq!(prefs.light_color_scheme, "Solarized Light");
+        assert_eq!(prefs.dark_color_scheme, "Solarized Dark");
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let mut prefs = PreferencesV1 {
+            light_color_scheme: LEGACY_LIGHT_SCHEME_NAME.into(),
+            dark_color_scheme: LEGACY_LIGHT_SCHEME_NAME.into(),
+            ..PreferencesV1::default()
+        };
+
+        assert!(prefs.migrate_color_scheme_names());
+        assert!(!prefs.migrate_color_scheme_names());
+        assert_eq!(prefs.light_color_scheme, BUILTIN_LIGHT_SCHEME_NAME);
+        assert_eq!(prefs.dark_color_scheme, BUILTIN_DARK_SCHEME_NAME);
     }
 }
