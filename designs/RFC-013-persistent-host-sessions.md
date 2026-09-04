@@ -373,9 +373,22 @@ Test coverage tracked in RFC-010:
 
 ## Open Questions
 
-- **Q1** — Should multi-attach to the same runtime eventually support `share`, `read-only mirror`,
-  or `take over`, and how explicit should that handoff be? Single-writer ownership is enforced;
-  `OwnershipConflict` blocks concurrent attach.
+- **Q1** — ~~Should multi-attach to the same runtime eventually support `share`,
+  `read-only mirror`, or `take over`, and how explicit should that handoff be?~~
+  *Resolved*: **explicit take-over that demotes the previous owner to a read-only mirror.**
+  Single-writer ownership stays the invariant — concurrent read-write attach is still refused
+  with `OwnershipConflict`. A second client claims the workspace only through a deliberate
+  `TakeoverWorkspace` command (capability-gated, offered only when the daemon reports the
+  workspace eligible, and confirmed through a destructive-styled dialog that defaults to
+  Cancel). The client that loses the lease is *not* disconnected: it stays attached as a
+  reader, keeps receiving output as a live read-only mirror, and is shown "Another client
+  took over this workspace" with input refused both client-side and daemon-side. That state
+  is never auto-retried, so the two clients cannot ping-pong the lease; taking it back is the
+  same explicit, confirmed gesture in the other direction. Full semantics — event ordering,
+  guards, and the demotion rules — are in
+  [RFC-021 Section 10](RFC-021-client-server-protocol-v3.md#10-ownership-and-multi-client-semantics).
+  Free-form `share` (two concurrent writers) remains out of scope: a single PTY with two
+  writers has no coherent input model.
 - **Q2** — ~~What default scrollback retention and disk cap should each pane use?~~
   *Resolved*: 10 MB per pane for both in-memory scrollback and on-disk scrollback log
   (`services/rttx-server/src/pane.rs`).

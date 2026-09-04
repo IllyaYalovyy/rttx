@@ -210,6 +210,14 @@ version.
 
 ### 3. Per-client viewport (ephemeral, client-local)
 
+Attachment is role-aware: one client holds the write lease and any number hold
+read-only attachments. A reader — including a writer that was demoted by an
+explicit take-over — renders the same server tree and receives the same deltas,
+but every structural command (`SplitPane`, `ClosePane`, `ResizeSplit`) and all
+terminal input are refused for it by the daemon. See
+[RFC-021 Section 10](RFC-021-client-server-protocol-v3.md#10-ownership-and-multi-client-semantics)
+for the ownership and take-over rules.
+
 A client attaching to a workspace holds a **viewport** that is *not* durable and
 *not* server-authoritative:
 
