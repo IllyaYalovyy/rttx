@@ -160,8 +160,10 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     // --- Keyboard shortcuts ---
     let keyboard_group = adw::PreferencesGroup::new();
     keyboard_group.set_title("Keyboard Shortcuts");
-    keyboard_group
-        .set_description(Some("Click a shortcut to change it. Press Backspace to clear."));
+    keyboard_group.set_description(Some(
+        "Click a shortcut to change it. Press Backspace to clear. \
+         Pane navigation keeps a zoomed pane maximized and moves the zoom instead.",
+    ));
 
     let shortcut_overrides: Rc<RefCell<BTreeMap<String, Vec<String>>>> =
         Rc::new(RefCell::new(prefs.keyboard_shortcuts.clone()));

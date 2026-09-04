@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Next pane / previous pane shortcuts (Alt+] and Alt+[, both remappable in
+  Preferences). They cycle through every pane of the workspace in layout order
+  and wrap around, so a keypress always lands on another pane. This matters most
+  on a small screen: with a pane maximized (Ctrl+Shift+Z) the layout is hidden,
+  and cycling moves the zoom from pane to pane — the `n/total` counter in the
+  pane header follows along. Alt+Arrow navigation is unchanged and still
+  spatial, but it no longer leaves the focus behind on the pane you zoomed away
+  from, so repeated presses keep moving.
 - A header-bar quick toggle for the terminal theme. One button cycles the
   terminal palette between following the system, always light, and always dark,
   and repaints every open pane immediately — switching no longer means opening

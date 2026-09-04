@@ -415,6 +415,24 @@ impl LayoutNode {
         self.find_adjacent_inner(target_uuid, direction).0
     }
 
+    /// Return the UUID of the terminal that follows `target_uuid` in layout
+    /// order, wrapping around at the ends.
+    ///
+    /// Unlike [`Self::find_adjacent`], cycling is independent of geometry, so
+    /// it always reaches every pane and never dead-ends at a layout edge.
+    /// Returns `None` when the layout holds a single terminal or when
+    /// `target_uuid` is not part of it.
+    #[must_use]
+    pub fn cycle_terminal(&self, target_uuid: &str, forward: bool) -> Option<String> {
+        let uuids = self.terminal_uuids();
+        if uuids.len() < 2 {
+            return None;
+        }
+        let index = uuids.iter().position(|uuid| uuid == target_uuid)?;
+        let step = if forward { 1 } else { uuids.len() - 1 };
+        Some(uuids[(index + step) % uuids.len()].clone())
+    }
+
     /// Returns `(adjacent_uuid, target_is_in_this_subtree)`.
     fn find_adjacent_inner(
         &self,
@@ -1119,6 +1137,64 @@ mod tests {
         assert_eq!(layout.find_adjacent("t3", Direction::Left).as_deref(), Some("t2"));
         assert_eq!(layout.find_adjacent("t2", Direction::Left).as_deref(), Some("t1"));
     }
+
+    // ── Pane cycling (#1095) ────────────────────────────────────
+
+    #[test]
+    fn cycle_forward_follows_layout_order() {
+        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        assert_eq!(layout.cycle_terminal("t1", true).as_deref(), Some("t2"));
+        assert_eq!(layout.cycle_terminal("t2", true).as_deref(), Some("t3"));
+    }
+
+    #[test]
+    fn cycle_backward_follows_reverse_layout_order() {
+        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        assert_eq!(layout.cycle_terminal("t3", false).as_deref(), Some("t2"));
+        assert_eq!(layout.cycle_terminal("t2", false).as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn cycle_wraps_at_both_ends() {
+        let layout = hsplit(term("t1"), vsplit(term("t2"), term("t3")));
+        assert_eq!(layout.cycle_terminal("t3", true).as_deref(), Some("t1"));
+        assert_eq!(layout.cycle_terminal("t1", false).as_deref(), Some("t3"));
+    }
+
+    /// Cycling must reach panes that spatial navigation dead-ends on: from the
+    /// bottom-right pane there is no rightward neighbour, but Next still moves.
+    #[test]
+    fn cycle_moves_where_spatial_navigation_is_a_no_op() {
+        let layout = hsplit(vsplit(term("t1"), term("t2")), vsplit(term("t3"), term("t4")));
+        assert!(layout.find_adjacent("t4", Direction::Right).is_none());
+        assert_eq!(layout.cycle_terminal("t4", true).as_deref(), Some("t1"));
+    }
+
+    /// Repeated Next visits every pane exactly once before returning to the start.
+    #[test]
+    fn cycle_visits_every_pane_before_repeating() {
+        let layout = hsplit(vsplit(term("t1"), term("t2")), vsplit(term("t3"), term("t4")));
+        let mut visited = vec!["t1".to_string()];
+        for _ in 0..3 {
+            let next = layout.cycle_terminal(visited.last().unwrap(), true).unwrap();
+            visited.push(next);
+        }
+        assert_eq!(visited, vec!["t1", "t2", "t3", "t4"]);
+        assert_eq!(layout.cycle_terminal("t4", true).as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn cycle_single_terminal_returns_none() {
+        let layout = term("t1");
+        assert!(layout.cycle_terminal("t1", true).is_none());
+        assert!(layout.cycle_terminal("t1", false).is_none());
+    }
+
+    #[test]
+    fn cycle_unknown_terminal_returns_none() {
+        let layout = hsplit(term("t1"), term("t2"));
+        assert!(layout.cycle_terminal("missing", true).is_none());
+    }
 }
 
 #[cfg(test)]
@@ -1243,6 +1319,31 @@ pub mod proptests {
                 if let Some(adj) = layout.find_adjacent(target, dir) {
                     prop_assert!(uuids.contains(&adj), "Adjacent UUID must exist in layout");
                     prop_assert_ne!(&adj, target, "Adjacent must differ from target");
+                }
+            }
+        }
+
+        #[test]
+        fn cycle_terminal_is_reversible(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            for target in &uuids {
+                if let Some(next) = layout.cycle_terminal(target, true) {
+                    prop_assert!(uuids.contains(&next), "Cycled UUID must exist in layout");
+                    let back = layout.cycle_terminal(&next, false);
+                    prop_assert_eq!(back.as_ref(), Some(target), "Previous must undo next");
+                }
+            }
+        }
+
+        #[test]
+        fn cycle_terminal_never_dead_ends_in_multi_pane_layouts(layout in arb_layout()) {
+            let uuids = layout.terminal_uuids();
+            if uuids.len() > 1 {
+                for target in &uuids {
+                    prop_assert!(
+                        layout.cycle_terminal(target, true).is_some(),
+                        "Every pane in a multi-pane layout must have a next pane"
+                    );
                 }
             }
         }
