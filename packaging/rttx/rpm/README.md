@@ -150,6 +150,23 @@ COPR API page — `COPR_LOGIN`, `COPR_USERNAME`, `COPR_TOKEN` — and optionally
 repository **variable** `COPR_PROJECT` (default `etf2026/rttx`). Without the
 secrets the job logs a notice and skips.
 
+**Which Fedora does the GitHub Release RPM target?** The `build-rpm` job pins
+its container to `registry.fedoraproject.org/fedora:43` — the oldest supported
+Fedora — so the attached `rttx-X.Y.Z-1.fc43.x86_64.rpm` is a deliberate choice
+and does not change when a new Fedora ships. (It used to be `fedora:latest`,
+which drifted to F44 and silently changed the dist tag of the v1.0.1 asset.)
+A `.fc43` RPM installs on newer releases too — it links against the oldest
+glibc/GTK/VTE of the supported set — but it is only a convenience asset:
+
+> **COPR is the supported way to install binary RPMs.** It rebuilds the same
+> SRPM in a clean chroot for every enabled release and architecture (F43/F44/
+> rawhide, x86_64/aarch64) and delivers updates through `dnf upgrade`:
+> `sudo dnf copr enable etf2026/rttx && sudo dnf install rttx`.
+
+Use the GitHub Release RPM only when COPR is not an option; if you need an
+architecture or release the asset does not cover, take the `.src.rpm` from the
+same release and `mock -r fedora-<N>-<arch> --rebuild` it (§4).
+
 ### 5.4 Alternative trigger: let COPR build from git
 
 `.copr/Makefile` lets COPR produce the SRPM itself. Set the project's default
@@ -165,6 +182,10 @@ trade-off is that nothing gates the build on tests.
 2. Resubmit the latest SRPM (or press **Rebuild** on the latest build) so the
    new repo isn't empty.
 3. Add the chroot to `--mock` in your local test loop.
+4. When the *oldest* supported release goes EOL, drop its chroot and bump the
+   `container:` pin of the `build-rpm` job in `.github/workflows/release.yml`
+   to the new oldest one (§5.3). Leaving it on an EOL Fedora means the release
+   RPM is built in a container that no longer gets updates.
 
 ### 5.6 What about hosting our own repository instead?
 
