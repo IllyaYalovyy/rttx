@@ -32,6 +32,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.0.1" date="2026-09-03">
+      <description>
+        <p>Adds a Support link in the About window and a donation URL for software centers, ships the reworked Fedora source package, and fixes terminal-mode reset after a daemon restart.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-06-29">
       <description>
         <p>First stable release: server-authoritative workspaces with durable pane identity and crash-safe per-pane shell history, plus a clean 1.0 baseline with all pre-release migration code removed.</p>

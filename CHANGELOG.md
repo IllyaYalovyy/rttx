@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-03
+
+### Added
+- A "Support rttx" link in the About window and a `donation` URL in the
+  AppStream metainfo (rendered as a Donate button in GNOME Software and KDE
+  Discover), both pointing at the project's GitHub Sponsors page.
+
 ### Changed
 - Fedora packaging is now a proper source package: `packaging/rttx/rttx.spec`
   uses Fedora's `cargo-rpm-macros` with a vendored-crates tarball (offline
