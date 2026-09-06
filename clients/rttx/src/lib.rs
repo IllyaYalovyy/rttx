@@ -24,6 +24,7 @@ pub mod application;
 pub mod preferences_window;
 pub mod sidebar;
 pub mod terminal;
+pub mod wayland_im;
 pub mod window;
 
 #[cfg(test)]
