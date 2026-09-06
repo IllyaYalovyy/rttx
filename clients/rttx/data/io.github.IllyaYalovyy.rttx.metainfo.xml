@@ -32,6 +32,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.0" date="2026-09-06">
+      <description>
+        <p>Adds next-pane and previous-pane shortcuts that keep a pane zoomed, a header-bar quick toggle for the terminal theme, and taking over a workspace already connected on another client. Fixes an intermittent startup crash caused by a use-after-free in GTK's Wayland input method, distinct light and dark terminal palettes, and workspace-rename persistence across restarts.</p>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-09-03">
       <description>
         <p>Adds a Support link in the About window and a donation URL for software centers, ships the reworked Fedora source package, and fixes terminal-mode reset after a daemon restart.</p>

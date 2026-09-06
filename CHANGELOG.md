@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-06
+
 ### Added
 - Next pane / previous pane shortcuts (Alt+] and Alt+[, both remappable in
   Preferences). They cycle through every pane of the workspace in layout order
@@ -417,7 +419,9 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/IllyaYalovyy/rttx/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.5...v0.9.0
 [0.6.5]: https://github.com/IllyaYalovyy/rttx/compare/v0.6.1...v0.6.5

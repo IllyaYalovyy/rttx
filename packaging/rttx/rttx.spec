@@ -11,7 +11,7 @@
 %global app_id io.github.IllyaYalovyy.rttx
 
 Name:           rttx
-Version:        1.0.1
+Version:        1.1.0
 # build-srpm.sh injects `%%global snapinfo .YYYYMMDDgitHASH` (and %%rttx_commit)
 # at the top of the spec it packs into the SRPM for untagged snapshot builds.
 Release:        1%{?snapinfo}%{?dist}
@@ -110,6 +110,14 @@ RUST_TEST_THREADS=5 %cargo_test -- -p rttx-proto -p rttx-server
 %{_mandir}/man1/rttx-server.1*
 
 %changelog
+* Sun Sep 06 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.1.0-1
+- Add next-pane / previous-pane shortcuts (Alt+] and Alt+[) that keep the zoom
+- Add a header-bar quick toggle for the terminal theme
+- Support taking over a workspace already connected on another client
+- Fix an intermittent startup crash from GTK's Wayland input method (a
+  use-after-free in GtkIMContextWayland worked around client-side)
+- Fix distinct light/dark terminal palettes and workspace-rename persistence
+
 * Thu Sep 03 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.0.1-1
 - Add a "Support rttx" About-window link and an AppStream donation URL
 - Ship the reworked Fedora source package (cargo-rpm-macros, vendored crates)
