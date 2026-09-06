@@ -296,6 +296,11 @@ without a comment explaining why the specific lint does not apply.
   deferred position application.
 - Prefer `gtk4::prelude::*` and `libadwaita::prelude::*` wildcard imports (explicitly allowed
   in `Cargo.toml`) over per-trait imports for GTK types.
+- On Wayland, GTK's input-method global (`GtkIMContextWayland`) keeps an unowned pointer to the
+  last-focused context and can be left dangling when a focused widget is unrealized before the
+  text-input protocol finishes binding. `clients/rttx/src/wayland_im.rs` primes that handshake
+  once at startup to close the race; do not remove the `prime_text_input()` call from
+  `application::run` while the minimum supported GTK still carries the bug.
 
 ### UI and UX
 

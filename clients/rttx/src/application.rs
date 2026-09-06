@@ -171,6 +171,12 @@ pub fn run() -> glib::ExitCode {
             accent_css.load_from_string(accent_css_for_dark(mgr.is_dark()));
         });
 
+        // Must run before any window can take keyboard focus: closes the
+        // GTK Wayland IM race that segfaults rttx right after launch
+        // (see `wayland_im` module docs, issue #1099).
+        let outcome = crate::wayland_im::prime_text_input();
+        tracing::debug!(?outcome, "GTK Wayland text-input priming");
+
         if !config::is_development() {
             return;
         }

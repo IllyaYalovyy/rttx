@@ -30,6 +30,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   live only as long as their clients stay attached.
 
 ### Fixed
+- rttx no longer crashes intermittently right after launch. The crash was a
+  use-after-free inside GTK's Wayland input-method backend
+  (`GtkIMContextWayland`): the per-display input-method global records an
+  unowned pointer to the focused pane the moment it is focused, but before the
+  compositor's text-input protocol has finished binding. If that pane was then
+  unrealized inside the same event-loop turn — which is exactly what the first
+  session rebuild at startup does — the pointer was left dangling, and the next
+  text-input event dereferenced freed memory. It surfaced most often after a
+  reboot or a fresh deploy, when the compositor is busy and replies late. rttx
+  now completes the input-method handshake once with a throwaway context during
+  application startup, before any window can take focus, so the dangling-pointer
+  window never opens. The underlying GTK bug is unfixed upstream; this is a
+  client-side workaround.
 - The light and dark terminal palettes are now distinct. Both Preferences rows
   defaulted to scheme names that matched no builtin scheme, so each row fell
   back to the first entry in the list and closing the window persisted that one
