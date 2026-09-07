@@ -343,7 +343,8 @@ impl Server {
                                 // TUI modes the captured scrollback left active
                                 // so the respawned shell starts from a clean,
                                 // interactive baseline (mirrors the snapshot path).
-                                pane.screen.feed(crate::screen::terminal_cleanup_bytes());
+                                let cleanup = pane.screen.cleanup_sequence(false);
+                                pane.screen.feed(&cleanup);
                             }
                             ReplayData::None => {}
                         }
@@ -887,11 +888,11 @@ impl Server {
                         }
                     }
                 };
-                let rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
+                let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
                 let role = rt
                     .client_role(client_id)
                     .map_or(v3::WorkspaceClientRole::Unattached, ClientRole::as_v3_proto);
-                let snapshot = protocol::build_v3_workspace_snapshot(&rt, runtime_id, role);
+                let snapshot = protocol::build_v3_workspace_snapshot(&mut rt, runtime_id, role);
                 Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
             }
 
@@ -1131,13 +1132,43 @@ impl Server {
         };
         match attach_outcome {
             AttachOutcome::Attached { role, .. } => {
+                // A pane whose app died mid-flight would hand the client a
+                // terminal that needs `reset`; clear what a dead app left
+                // behind before rendering the snapshot.
+                let mut healed = Vec::new();
+                for pane in rt.panes.values_mut() {
+                    if let Some(cleanup) = pane.sanitize_modes_if_idle() {
+                        healed.push((pane.id, cleanup));
+                    }
+                }
+                let attached_others = rt.attached_clients.keys().copied().collect::<Vec<_>>();
                 let v3_role = role.as_v3_proto();
-                let snapshot = protocol::build_v3_workspace_snapshot(&rt, runtime_id, v3_role);
+                let snapshot = protocol::build_v3_workspace_snapshot(&mut rt, runtime_id, v3_role);
                 let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
+                drop(rt);
                 tracing::info!(
                     "Client {} attached to workspace {workspace_label} as {role:?}",
                     short_id(client_id)
                 );
+                if !healed.is_empty() {
+                    // Clients already attached rendered the stale modes live;
+                    // hand them the same cleanup so they agree with the daemon.
+                    let mut s = crate::instrument::lock_server(server, metrics).await;
+                    for (pane_id, cleanup) in healed {
+                        tracing::info!(
+                            "Cleared modes left by a dead app in pane {} of workspace {}",
+                            short_id(pane_id),
+                            short_id(runtime_id)
+                        );
+                        let msg =
+                            protocol::v3_delta(runtime_id, pane_id, bytes::Bytes::from(cleanup), 0);
+                        s.broadcast_to_clients(
+                            attached_others.iter().copied(),
+                            Some(client_id),
+                            &msg,
+                        );
+                    }
+                }
                 Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
             }
             AttachOutcome::Blocked { current_role, .. } => {
@@ -2222,18 +2253,12 @@ fn spawn_pty_read_loop(
         // Feed terminal cleanup and broadcast exit under per-workspace lock.
         {
             let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
-            if let Some(pane) = rt.panes.get_mut(&pane_id) {
-                pane.feed_cleanup();
-            }
+            let cleanup = rt.panes.get_mut(&pane_id).map(Pane::feed_cleanup).unwrap_or_default();
             let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
             drop(rt);
 
-            let cleanup_delta = protocol::v3_delta(
-                runtime_id,
-                pane_id,
-                bytes::Bytes::from_static(crate::screen::terminal_cleanup_bytes()),
-                0,
-            );
+            let cleanup_delta =
+                protocol::v3_delta(runtime_id, pane_id, bytes::Bytes::from(cleanup), 0);
             let s = crate::instrument::lock_server(&server, &metrics).await;
             let senders = s.collect_senders_for_clients(&client_ids);
             drop(s);
@@ -2395,18 +2420,18 @@ pub async fn serialization_loop(
         let snapshot_due = diagnostics_counter.is_multiple_of(30);
 
         for (runtime_id, rt_lock) in &workspace_entries {
-            let rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
+            let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
             if rt.policy == WorkspacePolicy::Persistent {
                 current_ids.push(*runtime_id);
                 if rt.is_dirty() {
                     dirty_runtime_files.push(rt.to_workspace_file());
-                    for pane in rt.panes.values() {
+                    for pane in rt.panes.values_mut() {
                         screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
                     }
                 } else if snapshot_due {
                     // Periodic snapshot: capture screen state even when
                     // workspace metadata hasn't changed.
-                    for pane in rt.panes.values() {
+                    for pane in rt.panes.values_mut() {
                         screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
                     }
                 }
@@ -2542,7 +2567,7 @@ pub async fn persist_and_cleanup(server: &Arc<Mutex<Server>>) {
         let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
         if rt.policy == WorkspacePolicy::Persistent {
             runtime_files.push(rt.to_workspace_file());
-            for pane in rt.panes.values() {
+            for pane in rt.panes.values_mut() {
                 screen_snapshots.push((*runtime_id, pane.to_screen_snapshot()));
             }
             rt.mark_persisted();

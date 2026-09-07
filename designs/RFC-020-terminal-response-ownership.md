@@ -26,8 +26,13 @@ applications behave identically whether or not a GUI client is attached.
 
 ## Non-Goals
 
-- **NG1** — Full cell-grid terminal emulation in the daemon. The daemon only needs to answer
-  queries, not render.
+- **NG1** — ~~Full cell-grid terminal emulation in the daemon. The daemon only needs to answer
+  queries, not render.~~ *Withdrawn (2026-09-07)*: the daemon now keeps a cell grid per pane
+  (`vt100`) beside the raw byte log, because replaying a byte-stream suffix into a client of
+  another width — or into a client at all, after a full-screen app died mid-session — cannot
+  reconstruct the terminal. Attach hands the client a rendering of the grid's *state*; see
+  RFC-021 §8 (*Attach rendering*). The grid does not answer queries; the `ScreenPerformer`
+  still owns that.
 - **NG2** — Matching VTE's exact response strings byte-for-byte. Reasonable xterm-compatible
   responses are sufficient.
 - **NG3** — Handling DCS (Device Control String) passthrough or Sixel graphics.

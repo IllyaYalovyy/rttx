@@ -7,6 +7,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Reconnecting or restarting no longer leaves a pane broken. Panes came back
+  with lines overwritten from the middle, the cursor in the wrong place,
+  stale mouse tracking spraying escape codes on click, and frames of a
+  full-screen app that had long since exited — and needed `reset` to be
+  usable. The cause was replaying a suffix of the raw PTY byte stream into
+  the client: a suffix starts at an arbitrary point, and every carriage
+  return, cursor move and erase in it was computed for the width the output
+  was produced at. The daemon now keeps a real cell grid per pane and hands
+  an attaching client a rendering of the pane's *state*: history and screen
+  as intact lines with their formatting, the cursor where the shell left it,
+  a running full-screen app restored on the alternate screen, and only the
+  input modes that are actually armed. Resizing a pane re-lays its screen
+  instead of truncating it, and a daemon restart rebuilds panes from the same
+  clean rendering.
+- A pane whose full-screen app died without cleaning up is healed at attach:
+  when the shell itself is back in the foreground, leftover mouse tracking,
+  alternate screen, focus reporting and hidden cursor are cleared, so the
+  prompt is usable without `reset`.
+- Leaving the alternate screen is no longer sent unconditionally. On VTE that
+  sequence restores a stale saved cursor — the top-left corner — when no
+  alternate screen was active, which is why the next prompt after a process
+  exit or a restart could land over the top of the screen.
 - Reconnecting one workspace no longer kills every other workspace on the same
   host. All workspaces on a host share one daemon connection, and "Reconnect"
   tore it down and re-opened only the one workspace, so every sibling went

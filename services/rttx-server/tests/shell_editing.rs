@@ -272,7 +272,7 @@ async fn attach_and_collect_prompt(
         }
     }
 
-    panic!("shell prompt did not arrive after reattach");
+    panic!("shell prompt did not arrive after reattach: {:?}", normalize_scrollback(&output));
 }
 
 async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], data: &[u8]) {
@@ -288,10 +288,6 @@ async fn send_input(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u8], 
             })),
         })
         .await;
-}
-
-fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|window| window == needle)
 }
 
 async fn shutdown_server(client: &mut TestClient, server_child: &mut Child) {
@@ -350,11 +346,22 @@ async fn shell_line_editing_survives_detach_mid_command_and_executes_after_reatt
     send_input(&mut client, &runtime_id, &pane_id, b"echo abxd\x1b[D\x7f").await;
     tokio::time::sleep(Duration::from_millis(250)).await;
 
+    // The snapshot describes the screen as it is: the `x` is already
+    // deleted and the cursor sits where the shell left it, after "ab".
     let partial_snapshot = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
+    let mut view = vt100::Parser::new(24, 80, 100);
+    view.process(&partial_snapshot);
+    let rows: Vec<String> = view.screen().rows(0, 80).map(|r| r.trim_end().to_string()).collect();
     assert!(
-        contains_bytes(&partial_snapshot, b"echo abxd"),
-        "expected the in-progress command to survive reattach.\nsnapshot bytes: {:?}",
+        rows.iter().any(|r| r == "PROMPT> echo abd"),
+        "expected the in-progress command to survive reattach.\nrows: {rows:?}\nsnapshot bytes: {:?}",
         String::from_utf8_lossy(&partial_snapshot)
+    );
+    let prompt_row = rows.iter().position(|r| r == "PROMPT> echo abd").unwrap() as u16;
+    assert_eq!(
+        view.screen().cursor_position(),
+        (prompt_row, 15),
+        "cursor must be restored after \"ab\", where the next keystroke goes"
     );
 
     send_input(&mut client, &runtime_id, &pane_id, b"c\r").await;
@@ -407,10 +414,24 @@ async fn formatted_output_survives_reattach_and_allows_follow_up_input() {
     tokio::time::sleep(Duration::from_millis(600)).await;
 
     let snapshot_bytes = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
-    assert!(
-        contains_bytes(&snapshot_bytes, b"\x1b[31mRED\x1b[0m"),
-        "expected ANSI formatting bytes to survive snapshot replay.\nsnapshot bytes: {:?}",
-        String::from_utf8_lossy(&snapshot_bytes)
+    let mut view = vt100::Parser::new(24, 80, 100);
+    view.process(&snapshot_bytes);
+    let rows: Vec<String> = view.screen().rows(0, 80).map(|r| r.trim_end().to_string()).collect();
+    let red_row = rows.iter().position(|r| r == "RED").unwrap_or_else(|| {
+        panic!(
+            "expected the formatted line to survive snapshot replay.\nrows: {rows:?}\nsnapshot bytes: {:?}",
+            String::from_utf8_lossy(&snapshot_bytes)
+        )
+    }) as u16;
+    assert_eq!(
+        view.screen().cell(red_row, 0).unwrap().fgcolor(),
+        vt100::Color::Idx(1),
+        "ANSI formatting must survive snapshot replay"
+    );
+    assert_eq!(
+        view.screen().cell(red_row + 1, 0).unwrap().fgcolor(),
+        vt100::Color::Default,
+        "formatting must be reset after the formatted text"
     );
 
     send_input(&mut client, &runtime_id, &pane_id, b"echo AFTER\r").await;

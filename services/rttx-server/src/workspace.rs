@@ -483,6 +483,9 @@ impl Workspace {
             let changed = pane.cols != cols || pane.rows != rows;
             pane.cols = cols;
             pane.rows = rows;
+            if changed {
+                pane.screen.resize(cols, rows);
+            }
             changed
         };
         if changed {

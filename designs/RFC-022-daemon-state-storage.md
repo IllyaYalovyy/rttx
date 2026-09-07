@@ -320,7 +320,11 @@ cursor visibility) via a VTE parser.
 New contract:
 
 - `screen/<pane_id>.snap` is a **deterministic screen snapshot** produced from
-  the `PaneScreen` state on each flush
+  the `PaneScreen` state on each flush. *As built (2026-09-07):* its `screen_bytes`
+  is the rendering of the pane's primary buffer from the daemon's cell grid
+  (`PaneScreen::primary_buffer_stream`, capped to the newest lines), not a raw
+  byte tail, so a restart rebuilds the pane from a clean description of what
+  was on screen
 - Consumed on resurrection to restore the visible screen without replaying raw
   bytes
 - Reconnect `AttachRuntime` snapshot encodes this data directly over the wire

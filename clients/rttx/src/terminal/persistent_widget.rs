@@ -2226,6 +2226,72 @@ mod tests {
         window.close();
     }
 
+    /// Replay `stream` into a fresh pane's VTE (as `restore_managed_snapshot`
+    /// does) and return the logical lines VTE ends up with, its cursor
+    /// `(row, col)`, and its column count. VTE's text dump joins soft-wrapped
+    /// rows, so a line that wrapped cleanly comes back whole while a line
+    /// that was overwritten mid-way comes back as two.
+    fn replay_into_vte(stream: &[u8]) -> (Vec<String>, (i64, i64), i64) {
+        let pane = PersistentPaneView::new("pane-replay-probe", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+        let cols = pane.vte().column_count();
+
+        pane.begin_replay();
+        pane.feed_snapshot(stream);
+        pane.end_replay();
+        let started = std::time::Instant::now();
+        while pane.is_replaying() && started.elapsed() < std::time::Duration::from_secs(2) {
+            pump_events(10);
+        }
+        assert!(!pane.is_replaying());
+
+        let text = pane.vte().text_format(vte4::Format::Text).unwrap_or_default();
+        let lines: Vec<String> =
+            text.lines().map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()).collect();
+        let (col, row) = pane.vte().cursor_position();
+        window.close();
+        (lines, (row, col), cols)
+    }
+
+    /// The daemon renders a pane's *state* for attach (see the daemon's
+    /// `PaneScreen::reattach_stream`): logical lines with the part after the
+    /// cursor bracketed in DECSC/DECRC. Fed to a real VTE narrower than the
+    /// pane was, the line must come back whole and the cursor must land
+    /// after the prompt. The raw output that produced the same screen —
+    /// what used to be replayed — comes back as a line overwritten from the
+    /// middle, which is the artifact this replaces.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn rendered_snapshot_rewraps_cleanly_at_a_narrower_width() {
+        require_display!();
+
+        let long: String = (0..150).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let expected_line = format!("PROMPT> {}", &long[8..]);
+
+        // Bytes pinned by the daemon test
+        // `narrower_client_gets_lines_rewrapped_not_overwritten`.
+        let rendered = format!("PROMPT> \x1b7{}\x1b8", &long[8..]);
+        let (lines, cursor, cols) = replay_into_vte(rendered.as_bytes());
+        assert!(cols < 150, "the probe VTE must be narrower than the line ({cols} cols)");
+        assert_eq!(lines, vec![expected_line.clone()], "rendered state replays as one intact line");
+        assert_eq!(cursor, (0, 8), "cursor sits right after the prompt");
+
+        // Control: the raw bytes at 200 columns overwrote the line in place
+        // with CR; at this width the CR lands on the continuation row.
+        let raw = format!("{long}\rPROMPT> ");
+        let (lines, cursor, _) = replay_into_vte(raw.as_bytes());
+        assert_ne!(lines, vec![expected_line], "raw replay must reproduce the old artifact");
+        // The prompt lands inside the line, where the continuation row began.
+        let joined = lines.join("");
+        let prompt_at = joined.find("PROMPT> ").expect("prompt was drawn");
+        assert!(prompt_at > 0, "raw replay overwrites the line from the middle: {joined:?}");
+        assert_ne!(cursor, (0, 8));
+    }
+
     #[test]
     fn contains_cpr_response_detects_reports_only() {
         assert!(contains_cpr_response(b"\x1b[12;40R"));

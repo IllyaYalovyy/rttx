@@ -41,7 +41,7 @@ vte-0_78 = ["vte4/v0_78"]
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_14"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
-vte4 = "0.8"
+vte4 = { version = "0.8", features = ["v0_76"] }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

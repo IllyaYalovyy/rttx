@@ -583,8 +583,11 @@ async fn snapshot_includes_mouse_tracking_mode() {
     let mut client = TestClient::connect(&sock).await;
     let (sid, pid) = setup_attached_pane(&mut client).await;
 
-    // Enable SGR mouse tracking (DECSET 1003 + 1006) via printf.
-    send_input(&mut client, &sid, &pid, b"printf '\\033[?1003h\\033[?1006h'\r").await;
+    // A foreground app enables SGR mouse tracking (DECSET 1003 + 1006) and
+    // keeps running: `sleep` stands in for the app so the shell is not the
+    // foreground process while the snapshot is taken.
+    send_input(&mut client, &sid, &pid, b"sh -c \"printf '\\033[?1003h\\033[?1006h'; sleep 4\"\r")
+        .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     collect_output(&mut client, Duration::from_secs(1)).await;
 
@@ -593,12 +596,26 @@ async fn snapshot_includes_mouse_tracking_mode() {
     assert_eq!(
         pane.terminal_modes.as_ref().unwrap().mouse_mode,
         v3::MouseMode::Any as i32,
-        "DECSET 1003 must be reflected in snapshot"
+        "DECSET 1003 must be reflected in snapshot while the app runs"
     );
     assert!(
         pane.terminal_modes.as_ref().unwrap().sgr_mouse,
-        "DECSET 1006 must be reflected in snapshot"
+        "DECSET 1006 must be reflected in snapshot while the app runs"
     );
+
+    // Once the app is gone and the shell is back at its prompt, the modes it
+    // left behind are cleared for the next attach: a shell never wants mouse
+    // tracking, and a client must not need `reset` to get a usable prompt.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    collect_output(&mut client, Duration::from_secs(1)).await;
+    let snapshot = reattach_snapshot(&mut client, &sid).await;
+    let pane = snapshot.panes.iter().find(|p| p.pane_id == pid).expect("pane missing");
+    assert_eq!(
+        pane.terminal_modes.as_ref().unwrap().mouse_mode,
+        v3::MouseMode::None as i32,
+        "mouse tracking left behind by a finished app must be cleared at attach"
+    );
+    assert!(!pane.terminal_modes.as_ref().unwrap().sgr_mouse);
 
     shutdown_server(&mut client, &mut server).await;
 }
