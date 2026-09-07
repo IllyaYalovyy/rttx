@@ -264,7 +264,8 @@ pub async fn start_test_server(
     Server::reconstruct_workspaces(&server).await;
     let sock = socket_path.clone();
     let handle = tokio::spawn(async move { rttx_server::server::run(server).await });
-    for _ in 0..50 {
+    // A large real state directory takes seconds to reconstruct.
+    for _ in 0..1500 {
         if sock.exists() {
             break;
         }

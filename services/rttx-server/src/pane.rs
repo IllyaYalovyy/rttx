@@ -391,6 +391,7 @@ impl Pane {
         // the reconstructed screen reports a clean state to attaching clients.
         let cleanup = self.screen.cleanup_sequence(false);
         self.screen.feed(&cleanup);
+        self.screen.move_cursor_below_content();
 
         self.output_seq = snap.pane_output_seq;
     }
@@ -1444,6 +1445,54 @@ mod tests {
         );
     }
 
+    /// An app that draws inline (a chat UI with a status line under the
+    /// input box) leaves its cursor inside its frame. After a restart the
+    /// app is gone, so the persisted rendering must not restore that cursor:
+    /// the respawned shell's prompt goes after the last line, never over
+    /// the frame.
+    #[test]
+    fn restart_reconstruction_ignores_a_dead_apps_cursor_inside_its_frame() {
+        let mut before = Pane::new(Uuid::new_v4(), 80, 10);
+        before.feed_output(b"$ claude\r\n> type here\r\n\r\n  model high | ~/proj\r\n");
+        // Cursor back up into the input box, after "> ".
+        before.feed_output(b"\x1b[3A\x1b[3G");
+        assert_eq!(before.screen.cursor_position(), (1, 2));
+
+        let snap = before.to_screen_snapshot();
+        let mut after = Pane::new(snap.pane_id, snap.cols, snap.rows);
+        after.restore_from_snapshot(&snap);
+        after.feed_output(b"PROMPT> ");
+        let mut client = vt100::Parser::new(10, 80, 100);
+        client.process(&after.screen.reattach_stream());
+        let rows: Vec<String> =
+            client.screen().rows(0, 80).map(|r| r.trim_end().to_string()).collect();
+        assert_eq!(rows[0], "$ claude");
+        assert_eq!(rows[1], "> type here");
+        // The status line was the unterminated last line and is dropped, as
+        // a stale prompt would be; the new prompt follows the frame.
+        let prompt_row = rows.iter().position(|r| r == "PROMPT>").expect("prompt drawn");
+        assert!(prompt_row > 1, "prompt below the input box: {rows:?}");
+        assert_eq!(client.screen().cursor_position(), (prompt_row as u16, 8));
+
+        // A snapshot written by a 1.1.0 daemon is the raw byte stream, with
+        // the app's cursor-up sequences in it; restoring it lands the cursor
+        // inside the frame. The prompt must still go below the frame.
+        let mut legacy = snap.clone();
+        legacy.screen_bytes =
+            b"$ claude\r\n> type here\r\n\r\n  model high | ~/proj\r\n\x1b[3A\x1b[3G".to_vec();
+        let mut after = Pane::new(legacy.pane_id, legacy.cols, legacy.rows);
+        after.restore_from_snapshot(&legacy);
+        after.feed_output(b"PROMPT> ");
+        let mut client = vt100::Parser::new(10, 80, 100);
+        client.process(&after.screen.reattach_stream());
+        let rows: Vec<String> =
+            client.screen().rows(0, 80).map(|r| r.trim_end().to_string()).collect();
+        assert_eq!(rows[1], "> type here", "the frame is not overwritten: {rows:?}");
+        let prompt_row = rows.iter().position(|r| r == "PROMPT>").expect("prompt drawn");
+        assert!(prompt_row >= 3, "prompt below the frame: {rows:?}");
+        assert_eq!(client.screen().cursor_position(), (prompt_row as u16, 8));
+    }
+
     /// A daemon restart rebuilds the pane from the persisted rendering and
     /// the respawned shell's prompt lands below the restored history.
     #[test]
@@ -1451,9 +1500,11 @@ mod tests {
         let mut before = Pane::new(Uuid::new_v4(), 80, 24);
         before.feed_output(b"PROMPT> echo cycle-0\r\ncycle-0\r\nPROMPT> ");
         let snap = before.to_screen_snapshot();
+        // Trailing blanks are not content; the old prompt line is dropped on
+        // restore anyway (the process that printed it is gone).
         assert_eq!(
             String::from_utf8_lossy(&snap.screen_bytes),
-            "PROMPT> echo cycle-0\r\ncycle-0\r\nPROMPT> "
+            "PROMPT> echo cycle-0\r\ncycle-0\r\nPROMPT>"
         );
 
         let mut after = Pane::new(snap.pane_id, snap.cols, snap.rows);

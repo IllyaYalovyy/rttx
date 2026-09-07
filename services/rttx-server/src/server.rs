@@ -345,6 +345,7 @@ impl Server {
                                 // interactive baseline (mirrors the snapshot path).
                                 let cleanup = pane.screen.cleanup_sequence(false);
                                 pane.screen.feed(&cleanup);
+                                pane.screen.move_cursor_below_content();
                             }
                             ReplayData::None => {}
                         }

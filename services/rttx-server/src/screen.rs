@@ -205,7 +205,7 @@ impl PaneScreen {
             self.grid.process(b"\x1b[?47l");
         }
         let mut relaid = Vec::new();
-        render_visible_primary_rows(self.grid.screen(), &mut relaid);
+        render_rows(&[], self.grid.screen(), CursorPlacement::AsIs, &mut relaid);
         self.grid.process(b"\x1b[2J\x1b[H");
         self.grid.screen_mut().set_size(rows, cols);
         self.grid.process(&relaid);
@@ -296,7 +296,7 @@ impl PaneScreen {
             // mode 47 switches buffers without clearing or moving cursors.
             self.grid.process(b"\x1b[?47l");
         }
-        render_primary_buffer(&mut self.grid, &mut out);
+        render_primary_buffer(&mut self.grid, CursorPlacement::AsIs, &mut out);
         drop_oldest_lines_over(&mut out, MAX_REATTACH_BYTES);
         if on_alternate {
             self.grid.process(b"\x1b[?47h");
@@ -304,6 +304,35 @@ impl PaneScreen {
         }
         render_armed_modes(self.grid.screen(), self.performer.focus_event_mode, &mut out);
         out
+    }
+
+    /// Put the cursor on a fresh line below everything on the primary
+    /// screen, if it is not already below the content.
+    ///
+    /// Used when the process that owned the pane is gone (a restart): its
+    /// cursor position is meaningless, and a full-screen app that drew
+    /// inline leaves the cursor inside its frame, where the respawned
+    /// shell's prompt would otherwise be printed. Legacy snapshots written
+    /// as raw bytes by a 1.1.0 daemon land the cursor there too.
+    pub fn move_cursor_below_content(&mut self) {
+        if self.grid.screen().alternate_screen() {
+            return;
+        }
+        let screen = self.grid.screen();
+        let (rows, cols) = screen.size();
+        let last_content = (0..rows).rev().find(|&row| {
+            (0..cols).any(|col| screen.cell(row, col).is_some_and(vt100::Cell::has_contents))
+        });
+        let Some(last_content) = last_content else {
+            return;
+        };
+        let (cursor_row, _) = screen.cursor_position();
+        if cursor_row > last_content {
+            return;
+        }
+        // Absolute move to the last content row, then a new line: scrolls
+        // if that row is the bottom one.
+        self.feed(format!("\x1b[{};1H\r\n", last_content + 1).as_bytes());
     }
 
     /// The cleanup sequence for this screen's current state: leaves the
@@ -363,13 +392,20 @@ impl PaneScreen {
     /// Render the primary buffer — history and primary screen, without any
     /// running full-screen app's frame or the input modes — as the clean
     /// stream that rebuilds it on a daemon restart.
+    ///
+    /// The process that owned the pane will be gone when this is replayed,
+    /// so its cursor position is meaningless: the cursor is left after the
+    /// last line of content, where the respawned shell's prompt belongs.
+    /// (A full-screen app that drew inline — a chat UI, a progress
+    /// dashboard — leaves its cursor in the middle of its frame; restoring
+    /// that would put the new prompt there.)
     pub fn primary_buffer_stream(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         let on_alternate = self.grid.screen().alternate_screen();
         if on_alternate {
             self.grid.process(b"\x1b[?47l");
         }
-        render_primary_buffer(&mut self.grid, &mut out);
+        render_primary_buffer(&mut self.grid, CursorPlacement::AfterContent, &mut out);
         if on_alternate {
             self.grid.process(b"\x1b[?47h");
         }
@@ -568,9 +604,19 @@ fn incomplete_utf8_tail_len(data: &[u8]) -> usize {
     0
 }
 
+/// Where a rendering leaves the cursor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CursorPlacement {
+    /// Where the grid's cursor is, using DECSC/DECRC around any content
+    /// that follows it.
+    AsIs,
+    /// After the last line of content, ignoring the grid's cursor.
+    AfterContent,
+}
+
 /// Render history plus the primary screen of `grid` as logical lines into
-/// `out`, leaving the client cursor where the grid's cursor is.
-fn render_primary_buffer(grid: &mut vt100::Parser, out: &mut Vec<u8>) {
+/// `out`.
+fn render_primary_buffer(grid: &mut vt100::Parser, cursor: CursorPlacement, out: &mut Vec<u8>) {
     let (rows, _) = grid.screen().size();
     let screen_rows = usize::from(rows);
 
@@ -590,18 +636,17 @@ fn render_primary_buffer(grid: &mut vt100::Parser, out: &mut Vec<u8>) {
     }
     grid.screen_mut().set_scrollback(0);
 
-    render_rows(&history, grid.screen(), out);
-}
-
-/// Render only the visible primary-screen rows of `screen` (no history),
-/// leaving the cursor where the screen's cursor is.
-fn render_visible_primary_rows(screen: &vt100::Screen, out: &mut Vec<u8>) {
-    render_rows(&[], screen, out);
+    render_rows(&history, grid.screen(), cursor, out);
 }
 
 /// Emit `history` followed by the visible rows of `screen` as logical
 /// lines, and place the cursor.
-fn render_rows(history: &[RenderedRow], screen: &vt100::Screen, out: &mut Vec<u8>) {
+fn render_rows(
+    history: &[RenderedRow],
+    screen: &vt100::Screen,
+    cursor: CursorPlacement,
+    out: &mut Vec<u8>,
+) {
     let (rows, cols) = screen.size();
     let (cursor_row, cursor_col) = screen.cursor_position();
     let mut screen_lines: Vec<RenderedRow> =
@@ -609,8 +654,16 @@ fn render_rows(history: &[RenderedRow], screen: &vt100::Screen, out: &mut Vec<u8
     // Rows below both the last content and the cursor are blank space the
     // client provides on its own.
     let last_content = screen_lines.iter().rposition(|r| !r.cells.is_empty());
-    let keep = last_content.map_or(0, |i| i + 1).max(usize::from(cursor_row) + 1);
+    let keep = match cursor {
+        CursorPlacement::AsIs => last_content.map_or(0, |i| i + 1).max(usize::from(cursor_row) + 1),
+        CursorPlacement::AfterContent => last_content.map_or(0, |i| i + 1),
+    };
     screen_lines.truncate(keep);
+    // With the cursor going after the content, no row is "the cursor row".
+    let cursor_row = match cursor {
+        CursorPlacement::AsIs => usize::from(cursor_row),
+        CursorPlacement::AfterContent => usize::MAX,
+    };
 
     let mut attrs = CellAttrs::default();
     let mut emit_row = |row: &RenderedRow, upto: Option<usize>, out: &mut Vec<u8>| {
@@ -634,7 +687,6 @@ fn render_rows(history: &[RenderedRow], screen: &vt100::Screen, out: &mut Vec<u8
             out.extend_from_slice(b"\r\n");
         }
     }
-    let cursor_row = usize::from(cursor_row);
     for (index, row) in screen_lines.iter().enumerate() {
         if index == cursor_row {
             let cursor_col = usize::from(cursor_col);
@@ -664,7 +716,7 @@ fn render_rows(history: &[RenderedRow], screen: &vt100::Screen, out: &mut Vec<u8
             break;
         }
         emit_row(row, None, out);
-        if !row.wrapped {
+        if !row.wrapped && (cursor == CursorPlacement::AsIs || index + 1 < screen_lines.len()) {
             out.extend_from_slice(b"\r\n");
         }
     }
@@ -1110,7 +1162,7 @@ fn csi_query_len(data: &[u8]) -> Option<usize> {
 /// and stray text attributes.
 #[must_use]
 pub const fn idle_shell_cleanup_bytes() -> &'static [u8] {
-    b"\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[m"
+    b"\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[r\x1b[?6l\x1b[m"
 }
 
 /// Leave the alternate screen: DECRST 1049 (modern) then DECRST 47 (legacy).
@@ -1144,7 +1196,10 @@ pub const fn leave_alternate_screen_bytes() -> &'static [u8] {
 /// 6. Normal cursor keys: DECRST 1
 /// 7. Numeric keypad: DECPNM (`ESC >`)
 /// 8. Disable bracketed paste: DECRST 2004
-/// 9. Reset SGR: `ESC [ m`
+/// 9. Reset the scroll region (DECSTBM) and origin mode (DECRST 6): a
+///    full-screen app that died inside a scroll region leaves a terminal
+///    where a line feed at the bottom does not scroll
+/// 10. Reset SGR: `ESC [ m`
 #[must_use]
 pub const fn terminal_cleanup_bytes() -> &'static [u8] {
     b"\x18\
@@ -1153,6 +1208,7 @@ pub const fn terminal_cleanup_bytes() -> &'static [u8] {
       \x1b[?1004l\
       \x1b[?1l\x1b>\
       \x1b[?2004l\
+      \x1b[r\x1b[?6l\
       \x1b[m"
 }
 
@@ -2320,6 +2376,31 @@ mod tests {
         fn visible_rows(client: &vt100::Parser) -> Vec<String> {
             let (_, cols) = client.screen().size();
             client.screen().rows(0, cols).map(|r| r.trim_end().to_string()).collect()
+        }
+
+        /// A dead app's scroll region must not survive: with it, a line feed
+        /// on the bottom row does not scroll and the new prompt is drawn
+        /// over the last line instead of below it.
+        #[test]
+        fn cleanup_resets_a_scroll_region_left_by_a_dead_app() {
+            let mut screen = PaneScreen::new_sized(1 << 20, 80, 10);
+            let mut output = Vec::new();
+            for i in 0..9 {
+                output.extend_from_slice(format!("line {i}\r\n").as_bytes());
+            }
+            // App sets a scroll region over rows 1-8 and draws a status line
+            // on row 10 (outside it), then dies.
+            output.extend_from_slice(b"\x1b[1;8r\x1b[10;1Hstatus line\x1b[5;1H");
+            screen.feed(&output);
+            let cleanup = screen.cleanup_sequence(false);
+            screen.feed(&cleanup);
+            screen.move_cursor_below_content();
+            screen.feed(b"$ ");
+            let client = client_after_replay(&screen.reattach_stream(), 80, 10);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[8], "status line", "{rows:?}");
+            assert_eq!(rows[9], "$", "{rows:?}");
+            assert_eq!(client.screen().cursor_position(), (9, 2));
         }
 
         /// Shrinking the pane must not cut the ends off visible lines: the
