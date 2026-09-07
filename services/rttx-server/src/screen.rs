@@ -269,6 +269,7 @@ impl PaneScreen {
             self.grid.process(b"\x1b[?47l");
         }
         render_primary_buffer(&mut self.grid, &mut out);
+        drop_oldest_lines_over(&mut out, MAX_REATTACH_BYTES);
         if on_alternate {
             self.grid.process(b"\x1b[?47h");
             render_alternate_screen(self.grid.screen(), &mut out);
@@ -587,6 +588,23 @@ fn render_alternate_screen(screen: &vt100::Screen, out: &mut Vec<u8>) {
     out.extend_from_slice(&screen.contents_formatted());
     let (row, col) = screen.cursor_position();
     out.extend_from_slice(format!("\x1b[{};{}H", row + 1, col + 1).as_bytes());
+}
+
+/// Upper bound on the rendered attach stream per pane. A thousand
+/// heavily coloured 200-column rows render to well under this; the cap
+/// guards the wire frame and the client's replay against pathological
+/// content, dropping the oldest history lines first.
+pub const MAX_REATTACH_BYTES: usize = 2 * 1024 * 1024;
+
+/// Trim `stream` to at most `max` bytes by dropping whole lines from the
+/// front, so what remains still starts at a line boundary.
+pub fn drop_oldest_lines_over(stream: &mut Vec<u8>, max: usize) {
+    if stream.len() <= max {
+        return;
+    }
+    let start = stream.len() - max;
+    let cut = stream[start..].iter().position(|&b| b == b'\n').map_or(start, |o| start + o + 1);
+    stream.drain(..cut);
 }
 
 /// Emit only the input modes that are currently *on*. The client terminal
@@ -2110,6 +2128,21 @@ mod tests {
 
     mod reattach {
         use super::super::*;
+
+        #[test]
+        fn oversized_streams_lose_their_oldest_lines_first() {
+            let mut stream = b"old line\r\nnewer line\r\nprompt> ".to_vec();
+            // Budget of 21 bytes: the cut lands on the boundary after "old line".
+            drop_oldest_lines_over(&mut stream, 21);
+            assert_eq!(stream, b"newer line\r\nprompt> ");
+            // A budget that starts mid-line skips to the next whole line.
+            let mut stream = b"old line\r\nnewer line\r\nprompt> ".to_vec();
+            drop_oldest_lines_over(&mut stream, 15);
+            assert_eq!(stream, b"prompt> ");
+            let mut small = b"fits".to_vec();
+            drop_oldest_lines_over(&mut small, 20);
+            assert_eq!(small, b"fits");
+        }
 
         /// Rendering a full grid must be cheap enough to run under the
         /// workspace lock on attach.

@@ -328,15 +328,7 @@ impl Pane {
     pub fn to_screen_snapshot(&mut self) -> ScreenSnapshotV1 {
         let (cursor_row, cursor_col) = self.screen.cursor_position();
         let mut screen_bytes = self.screen.primary_buffer_stream();
-        if screen_bytes.len() > MAX_SNAPSHOT_BYTES {
-            // Keep the newest lines: drop whole lines from the front.
-            let start = screen_bytes.len() - MAX_SNAPSHOT_BYTES;
-            let cut = screen_bytes[start..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .map_or(start, |offset| start + offset + 1);
-            screen_bytes.drain(..cut);
-        }
+        crate::screen::drop_oldest_lines_over(&mut screen_bytes, MAX_SNAPSHOT_BYTES);
         ScreenSnapshotV1 {
             schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
             pane_id: self.id,
