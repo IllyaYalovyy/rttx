@@ -1,5 +1,8 @@
 """Black-box client+daemon AT-SPI tests for managed workspace recovery."""
 
+import re
+import subprocess
+import time
 import unittest
 
 import gi
@@ -7,7 +10,55 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi
 
-from common import AppFixture, click, wait_for_name
+from common import DAEMON_BINARY, AppFixture, click, find_all_by_role, is_showing
+
+
+def _workspace_row_names(app: Atspi.Accessible) -> list[str]:
+    """Names of the visible rows of the Workspaces sidebar list."""
+    names = []
+    for row in find_all_by_role(app, Atspi.Role.LIST_ITEM):
+        try:
+            parent = row.get_parent()
+            if (
+                parent is not None
+                and parent.get_role() == Atspi.Role.LIST
+                and parent.get_name() == "Workspaces"
+                and is_showing(row)
+            ):
+                names.append(_row_name(row))
+        except Exception:  # noqa: BLE001 — AT-SPI calls can raise on stale refs
+            pass
+    return names
+
+
+def _daemon_workspace_names(fixture: AppFixture) -> list[str]:
+    """Workspace names as the daemon reports them in `rttx-server status`."""
+    out = subprocess.run(
+        [DAEMON_BINARY, "status"],
+        env=fixture.environment.process_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    names = []
+    for line in out.splitlines():
+        # `<uuid>   <name>   <policy>   <panes>  <clients>`
+        m = re.match(r"^[0-9a-f-]{36}\s+(.*?)\s+(persistent|ephemeral)\s+\d+", line)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def _row_name(row: Atspi.Accessible) -> str:
+    """The row's own name, or the name of the ActionRow it wraps."""
+    name = row.get_name() or ""
+    if name:
+        return name
+    for i in range(row.get_child_count()):
+        child = row.get_child_at_index(i)
+        if child is not None and child.get_name():
+            return child.get_name()
+    return ""
 
 
 class TestManagedBlackBox(unittest.TestCase):
@@ -43,12 +94,24 @@ class TestManagedBlackBox(unittest.TestCase):
         self.fixture.clear_saved_state()
         self.fixture.start_app()
 
-        workspace_row = wait_for_name(
-            self.fixture.atspi_app, Atspi.Role.LIST_ITEM, "Workspace 2", timeout=20.0
-        )
-        self.assertIsNotNone(
-            workspace_row,
-            "daemon inventory should recover the managed workspace on cold start",
+        # The daemon owns the workspace name: the recovered row must show
+        # whatever the daemon reports — the creation-time "Workspace 2", or
+        # the shell's directory once the reattached client proposed it and
+        # the daemon recorded it — never a name the client made up itself.
+        deadline = time.monotonic() + 20.0
+        rows: list[str] = []
+        daemon_names: list[str] = []
+        while time.monotonic() < deadline:
+            rows = [n for n in _workspace_row_names(self.fixture.atspi_app) if n]
+            daemon_names = _daemon_workspace_names(self.fixture)
+            if len(rows) == 2 and daemon_names and rows[1] == daemon_names[0]:
+                break
+            time.sleep(0.5)
+        self.assertEqual(len(daemon_names), 1, f"one managed workspace expected, got {daemon_names}")
+        self.assertEqual(
+            rows[1:],
+            daemon_names,
+            f"the recovered row must carry the daemon's name; rows {rows}, daemon {daemon_names}",
         )
 
         close_terminal = self.fixture.wait_for_showing_name(
