@@ -519,3 +519,90 @@ async fn reattach_without_resize_does_not_duplicate_prompt() {
 
     shutdown_server(&mut client, &mut server_child).await;
 }
+
+/// The cursor must end up on the last line after a reattach and after a
+/// daemon restart — never in the middle of the history — even when the
+/// output stream carries a blanket cleanup with an unconditional
+/// alternate-screen exit, as the 1.1.0 daemon wrote into every log at
+/// process exit and restart and as `tput rmcup` produces.
+#[test]
+fn prompt_lands_on_the_last_line_after_reattach_and_restart_despite_stray_alt_exit() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (socket_path, mut server_child) = start_binary_server(&tmp).await;
+        let mut client = TestClient::connect(&socket_path).await;
+        let (runtime_id, pane_id) = setup_attached_pane(&mut client).await;
+        resize_pane(&mut client, &runtime_id, &pane_id, 100, 12).await;
+
+        // Fill more than a screen of history, then emit the legacy cleanup.
+        send_input(
+            &mut client,
+            &runtime_id,
+            &pane_id,
+            b"for i in $(seq 1 30); do echo history-$i; done\r",
+        )
+        .await;
+        wait_for_prompt(&mut client).await;
+        send_input(
+            &mut client,
+            &runtime_id,
+            &pane_id,
+            b"printf '\\030\\033[?1049l\\033[?47l\\033[?25h\\033[?1000l\\033[?1004l\\033[m'\r",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        client.drain(Duration::from_millis(300)).await;
+
+        let check = |bytes: &[u8], label: &str| {
+            let mut view = vt100::Parser::new(12, 100, 1000);
+            view.process(bytes);
+            let rows: Vec<String> =
+                view.screen().rows(0, 100).map(|r| r.trim_end().to_string()).collect();
+            let (row, _) = view.screen().cursor_position();
+            let last_content = rows.iter().rposition(|r| !r.is_empty()).unwrap();
+            assert_eq!(
+                rows[last_content].trim_end(),
+                PROMPT.trim_end(),
+                "{label}: the last line must be the prompt: {rows:?}"
+            );
+            assert_eq!(
+                row as usize, last_content,
+                "{label}: cursor must be on the prompt line, not in the history: {rows:?}"
+            );
+            assert!(
+                rows[..last_content].iter().any(|r| r == "history-30"),
+                "{label}: history precedes the prompt: {rows:?}"
+            );
+        };
+
+        // Reattach on the running daemon.
+        let bytes = reattach_snapshot_bytes(&mut client, &runtime_id, &pane_id).await;
+        check(&bytes, "reattach");
+
+        // Restart the daemon and attach again: the new shell's prompt must
+        // follow the restored history, not overwrite the middle of it.
+        shutdown_server(&mut client, &mut server_child).await;
+        let (socket_path, mut server_child) = start_binary_server(&tmp).await;
+        let mut client = TestClient::connect(&socket_path).await;
+        client.handshake().await;
+        let restored = attach_and_collect_prompt(&mut client, &runtime_id, &pane_id).await;
+        let mut view = vt100::Parser::new(12, 100, 1000);
+        view.process(restored.replace('\n', "\r\n").as_bytes());
+        let rows: Vec<String> =
+            view.screen().rows(0, 100).map(|r| r.trim_end().to_string()).collect();
+        let last_content = rows.iter().rposition(|r| !r.is_empty()).unwrap();
+        let (row, _) = view.screen().cursor_position();
+        assert_eq!(
+            rows[last_content].trim_end(),
+            PROMPT.trim_end(),
+            "restart: last line is the prompt: {rows:?}"
+        );
+        assert_eq!(row as usize, last_content, "restart: cursor on the prompt line: {rows:?}");
+        assert!(
+            rows[..last_content].iter().any(|r| r == "history-30"),
+            "restart: history restored: {rows:?}"
+        );
+
+        shutdown_server(&mut client, &mut server_child).await;
+    });
+}

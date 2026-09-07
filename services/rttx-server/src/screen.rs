@@ -102,9 +102,37 @@ impl PaneScreen {
     }
 
     /// Feed raw PTY output bytes into the parser.
+    ///
+    /// Stray alternate-screen exits are dropped first (see
+    /// [`sanitize_output`](Self::sanitize_output)); the read loop does the
+    /// same before it stores, parses or forwards a batch, so every consumer
+    /// of a pane's output sees the same bytes.
     pub fn feed(&mut self, data: &[u8]) {
-        self.accept_raw(data);
-        self.parse(data);
+        let clean = self.sanitize_output(data);
+        self.accept_raw(&clean);
+        self.parse(&clean);
+    }
+
+    /// Remove alternate-screen exits (DECRST 1049 / 1047 / 47) that arrive
+    /// while the alternate screen is *not* active.
+    ///
+    /// Terminals — VTE included — implement DECRST 1049 as "switch to the
+    /// normal buffer and restore the saved cursor" without checking whether
+    /// the alternate buffer was in use. On a terminal that never entered it
+    /// the sequence jumps the cursor to a stale saved position, usually the
+    /// top of the screen, and the next prompt is drawn over the middle of
+    /// the history. Such exits come from blanket "reset everything" cleanup
+    /// sequences (this daemon emitted one at every process exit and restart
+    /// before 1.1.1; the logs it wrote still contain them) and from tools
+    /// like `tput rmcup`. The daemon owns terminal semantics, so it removes
+    /// them on the way in: the cell grid, the persisted log and the bytes
+    /// forwarded to clients all agree. Exits that do leave an active
+    /// alternate screen pass through untouched, including within the same
+    /// batch as the entry.
+    #[must_use]
+    pub fn sanitize_output<'a>(&self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        let in_alt = self.performer.alternate_screen || self.grid.screen().alternate_screen();
+        strip_stray_alternate_screen_exits(data, in_alt)
     }
 
     /// Store raw bytes for snapshot replay without running the VTE parser.
@@ -453,6 +481,68 @@ pub fn restart_safe_scrollback(data: &[u8]) -> &[u8] {
     match data.iter().rposition(|&byte| matches!(byte, b'\n' | b'\r')) {
         Some(index) => &data[..=index],
         None => &[],
+    }
+}
+
+/// Drop DECRST 1049 / 1047 / 47 sequences from `data` wherever the
+/// alternate screen is not active at that point of the stream, starting
+/// from `in_alt`. Entries (DECSET) are tracked so an exit that follows an
+/// entry in the same data is kept. Returns the input unchanged (borrowed)
+/// when there is nothing to remove.
+#[must_use]
+pub fn strip_stray_alternate_screen_exits(
+    data: &[u8],
+    mut in_alt: bool,
+) -> std::borrow::Cow<'_, [u8]> {
+    if !data.contains(&0x1b) {
+        return std::borrow::Cow::Borrowed(data);
+    }
+    let mut out: Option<Vec<u8>> = None;
+    let mut i = 0;
+    let mut copied_upto = 0;
+    while i < data.len() {
+        if data[i] == 0x1b
+            && let Some((len, entering)) = alternate_screen_switch_len(&data[i..])
+        {
+            if entering {
+                in_alt = true;
+            } else if in_alt {
+                in_alt = false;
+            } else {
+                let out = out.get_or_insert_with(|| Vec::with_capacity(data.len()));
+                out.extend_from_slice(&data[copied_upto..i]);
+                copied_upto = i + len;
+            }
+            i += len;
+            continue;
+        }
+        i += 1;
+    }
+    out.map_or(std::borrow::Cow::Borrowed(data), |mut out| {
+        out.extend_from_slice(&data[copied_upto..]);
+        std::borrow::Cow::Owned(out)
+    })
+}
+
+/// If `data` starts with an alternate-screen switch — `CSI ? 1049 h/l`,
+/// `CSI ? 1047 h/l` or `CSI ? 47 h/l` — return its length and whether it
+/// enters (`h`) the alternate screen.
+fn alternate_screen_switch_len(data: &[u8]) -> Option<(usize, bool)> {
+    if data.len() < 5 || data[0] != 0x1b || data[1] != b'[' || data[2] != b'?' {
+        return None;
+    }
+    let mut pos = 3;
+    while pos < data.len() && data[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    let param = &data[3..pos];
+    if !matches!(param, b"1049" | b"1047" | b"47") {
+        return None;
+    }
+    match data.get(pos) {
+        Some(b'h') => Some((pos + 1, true)),
+        Some(b'l') => Some((pos + 1, false)),
+        _ => None,
     }
 }
 
@@ -2095,6 +2185,58 @@ mod tests {
     // not necessarily the size the output was produced at — and check what
     // that terminal would display. Raw output replay fails every one of
     // them: it is a suffix of a byte stream, not a description of a state.
+
+    #[test]
+    fn stray_alternate_screen_exits_are_dropped_and_real_ones_kept() {
+        use std::borrow::Cow;
+        // Not in the alternate screen: a bare exit is dropped.
+        let out = strip_stray_alternate_screen_exits(b"abc\x1b[?1049ldef", false);
+        assert_eq!(&*out, b"abcdef");
+        let out = strip_stray_alternate_screen_exits(b"\x1b[?47l\x1b[?1047l\x1b[m", false);
+        assert_eq!(&*out, b"\x1b[m");
+        // In the alternate screen: the exit is the real thing.
+        let out = strip_stray_alternate_screen_exits(b"x\x1b[?1049ly", true);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(&*out, b"x\x1b[?1049ly");
+        // Entry and exit in one batch: both kept; a second exit is stray.
+        let out = strip_stray_alternate_screen_exits(b"\x1b[?1049hA\x1b[?1049l\x1b[?1049lB", false);
+        assert_eq!(&*out, b"\x1b[?1049hA\x1b[?1049lB");
+        // Untouched data is borrowed, not copied.
+        let out = strip_stray_alternate_screen_exits(b"plain \x1b[31mred\x1b[m", false);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        // Other private modes are not confused with the switch.
+        let out = strip_stray_alternate_screen_exits(b"\x1b[?1000l\x1b[?25l\x1b[?2004l", false);
+        assert!(matches!(out, Cow::Borrowed(_)));
+    }
+
+    /// The old daemon's cleanup — appended to logs and snapshots at every
+    /// process exit and restart — jumped the cursor to the top of the
+    /// screen through its unconditional DECRST 1049, so the next prompt
+    /// was drawn over the middle of the history. Fed through the screen
+    /// now, the cursor stays at the bottom.
+    #[test]
+    fn legacy_cleanup_bytes_do_not_move_the_cursor_off_the_last_line() {
+        let mut screen = PaneScreen::new_sized(1 << 20, 100, 24);
+        let mut output = Vec::new();
+        for i in 0..40 {
+            output.extend_from_slice(format!("history row {i}\r\n").as_bytes());
+        }
+        output.extend_from_slice(b"$ rttx-server stop\r\nShutdown signal sent\r\n");
+        screen.feed(&output);
+        // The exact sequence a 1.1.0 daemon fed at process exit / restart.
+        screen.feed(
+            b"\x18\x1b[?1049l\x1b[?47l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?1l\x1b>\x1b[?2004l\x1b[m",
+        );
+        assert_eq!(screen.cursor_position(), (23, 0), "cursor must stay on the last line");
+        screen.feed(b"$ ");
+        let mut client = vt100::Parser::new(24, 100, 1000);
+        client.process(&screen.reattach_stream());
+        let rows: Vec<String> =
+            client.screen().rows(0, 100).map(|r| r.trim_end().to_string()).collect();
+        assert_eq!(rows[22], "Shutdown signal sent");
+        assert_eq!(rows[23], "$");
+        assert_eq!(client.screen().cursor_position(), (23, 2));
+    }
 
     #[test]
     fn incomplete_utf8_tail_is_held_back() {

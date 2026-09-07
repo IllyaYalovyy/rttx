@@ -2090,8 +2090,8 @@ fn spawn_pty_read_loop(
                                 }
                             }
 
-                            let data = batch.split().freeze();
-                            let batch_len = data.len() as u64;
+                            let raw = batch.split().freeze();
+                            let batch_len = raw.len() as u64;
                             metrics.bytes_read_from_pty.fetch_add(batch_len, std::sync::atomic::Ordering::Relaxed);
                             let pty_batch_start = std::time::Instant::now();
                             let mut pane_context = [0u8; 16];
@@ -2100,14 +2100,21 @@ fn spawn_pty_read_loop(
                             // Phase 1: accept raw bytes under the per-workspace lock
                             // (fast memcpy, no VTE parsing).  The server mutex is
                             // only touched briefly to collect client senders.
-                            let (mut taken_screen, senders, output_seq, contended) = {
+                            let (mut taken_screen, senders, output_seq, contended, data) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
-                                let (screen, seq) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
+                                let (screen, seq, data) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
+                                    // Drop stray alternate-screen exits before anything
+                                    // sees the batch: the log, the grid and every client
+                                    // must agree (see PaneScreen::sanitize_output).
+                                    let data = match pane.screen.sanitize_output(&raw) {
+                                        std::borrow::Cow::Borrowed(_) => raw.clone(),
+                                        std::borrow::Cow::Owned(clean) => bytes::Bytes::from(clean),
+                                    };
                                     pane.accept_output(&data);
-                                    (Some(pane.take_screen()), pane.output_seq)
+                                    (Some(pane.take_screen()), pane.output_seq, data)
                                 } else {
-                                    (None, 0)
+                                    (None, 0, raw.clone())
                                 };
                                 let client_ids: Vec<Uuid> =
                                     rt.attached_clients.keys().copied().collect();
@@ -2124,7 +2131,7 @@ fn spawn_pty_read_loop(
                                         "mutex held too long in PTY read loop",
                                     );
                                 }
-                                (screen, senders, seq, hold > MUTEX_HOLD_WARN_THRESHOLD)
+                                (screen, senders, seq, hold > MUTEX_HOLD_WARN_THRESHOLD, data)
                             };
 
                             // Adaptive throttle: yield when contention is detected
