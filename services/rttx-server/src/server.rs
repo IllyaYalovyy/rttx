@@ -1143,6 +1143,10 @@ impl Server {
                     }
                 }
                 let attached_others = rt.attached_clients.keys().copied().collect::<Vec<_>>();
+                // The snapshot hands the client the daemon's name; make sure
+                // it is current (a live shell's /proc cwd may be newer than
+                // the last report).
+                let renamed = rt.refresh_auto_name().map(|name| (name, rt.revision()));
                 let v3_role = role.as_v3_proto();
                 let snapshot = protocol::build_v3_workspace_snapshot(&mut rt, runtime_id, v3_role);
                 let workspace_label = format!("\"{}\" ({})", rt.name, short_id(runtime_id));
@@ -1151,6 +1155,16 @@ impl Server {
                     "Client {} attached to workspace {workspace_label} as {role:?}",
                     short_id(client_id)
                 );
+                if let Some((name, revision)) = renamed {
+                    let mut s = crate::instrument::lock_server(server, metrics).await;
+                    s.broadcast_to_clients(
+                        attached_others.iter().copied(),
+                        Some(client_id),
+                        &rttx_proto::v3_snapshot::build_workspace_renamed_push(
+                            runtime_id, name, revision, false,
+                        ),
+                    );
+                }
                 if !healed.is_empty() {
                     // Clients already attached rendered the stale modes live;
                     // hand them the same cleanup so they agree with the daemon.
@@ -2156,7 +2170,7 @@ fn spawn_pty_read_loop(
 
                             // Phase 3: return parsed screen under per-workspace lock,
                             // collect PTY writer from server.
-                            let (new_cwd, new_title, pending_replies, pty_writer) = {
+                            let (new_cwd, new_name, new_title, pending_replies, pty_writer) = {
                                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                                 if let Some(screen) = taken_screen
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
@@ -2166,6 +2180,13 @@ fn spawn_pty_read_loop(
                                         let rev = rt.set_pane_cwd(pane_id, &cwd)?;
                                         Some((cwd, rev))
                                     });
+                                    // The daemon names the workspace after its
+                                    // naming pane's directory.
+                                    let renamed = if cwd.is_some() && rt.pane_names_workspace(pane_id) {
+                                        rt.refresh_auto_name().map(|name| (name, rt.revision()))
+                                    } else {
+                                        None
+                                    };
                                     let title = result.new_title.and_then(|title| {
                                         let rev = rt.set_pane_title(pane_id, title.clone())?;
                                         Some((title, rev))
@@ -2178,9 +2199,9 @@ fn spawn_pty_read_loop(
                                     } else {
                                         None
                                     };
-                                    (cwd, title, result.pending_replies, writer)
+                                    (cwd, renamed, title, result.pending_replies, writer)
                                 } else {
-                                    (None, None, Vec::new(), None)
+                                    (None, None, None, Vec::new(), None)
                                 }
                             };
 
@@ -2210,6 +2231,10 @@ fn spawn_pty_read_loop(
                             }
                             if let Some((cwd, revision)) = new_cwd {
                                 let msg = protocol::v3_cwd_changed(runtime_id, pane_id, cwd, revision);
+                                all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics));
+                            }
+                            if let Some((name, revision)) = new_name {
+                                let msg = rttx_proto::v3_snapshot::build_workspace_renamed_push(runtime_id, name, revision, false);
                                 all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics));
                             }
                             if let Some((title, revision)) = new_title {
@@ -2377,6 +2402,7 @@ pub async fn serialization_loop(
         // Detects CWD changes when OSC 7 is not emitted by the shell.
         if diagnostics_counter.is_multiple_of(CWD_POLL_INTERVAL_TICKS) {
             let mut cwd_changes: Vec<(Uuid, Uuid, String, u64, Vec<Uuid>)> = Vec::new();
+            let mut name_changes: Vec<(Uuid, String, u64, Vec<Uuid>)> = Vec::new();
             for (runtime_id, rt_lock) in &workspace_entries {
                 let mut rt = crate::instrument::lock_workspace(rt_lock, &metrics).await;
                 let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
@@ -2404,15 +2430,34 @@ pub async fn serialization_loop(
                                 rev,
                                 client_ids.clone(),
                             ));
+                            if rt.pane_names_workspace(pane_id)
+                                && let Some(name) = rt.refresh_auto_name()
+                            {
+                                name_changes.push((
+                                    *runtime_id,
+                                    name,
+                                    rt.revision(),
+                                    client_ids.clone(),
+                                ));
+                            }
                         }
                     }
                 }
             }
-            if !cwd_changes.is_empty() {
+            if !cwd_changes.is_empty() || !name_changes.is_empty() {
                 let mut s = crate::instrument::lock_server(&server, &metrics).await;
                 for (runtime_id, pane_id, cwd, revision, client_ids) in &cwd_changes {
                     let msg =
                         protocol::v3_cwd_changed(*runtime_id, *pane_id, cwd.clone(), *revision);
+                    s.broadcast_to_clients(client_ids.iter().copied(), None, &msg);
+                }
+                for (runtime_id, name, revision, client_ids) in &name_changes {
+                    let msg = rttx_proto::v3_snapshot::build_workspace_renamed_push(
+                        *runtime_id,
+                        name.clone(),
+                        *revision,
+                        false,
+                    );
                     s.broadcast_to_clients(client_ids.iter().copied(), None, &msg);
                 }
             }

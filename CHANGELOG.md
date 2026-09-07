@@ -62,14 +62,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ticks pause while the UI has paused reading for backpressure.
 
 ### Changed
-- The daemon owns workspace names. A workspace's name travels in the attach
-  snapshot and every rename — a user's, or the automatic one derived from the
-  shell's directory — is recorded by the daemon and pushed to every attached
-  client, so a workspace reads the same in every window, after every reconnect,
-  and in `rttx-server status`. A name the user chose on the client before the
-  daemon tracked user renames is pushed back to the daemon on the next attach
-  rather than discarded. Remote workspaces are named after their directory like
-  local ones; the host name is only the fallback.
+- The daemon owns workspace names, fully. It derives the automatic name from
+  the naming pane's working directory itself — on every directory change, at
+  attach, and when it loads a workspace file — records user renames, and
+  pushes every change to every attached client, so a workspace reads the same
+  in every window, after every reconnect, and in `rttx-server status`. Clients
+  never rename a managed workspace on their own. A name the user chose on the
+  client before the daemon tracked user renames is sent to the daemon as a
+  rename on the next attach rather than discarded. Remote workspaces are named
+  after their directory like local ones; the host name is only the fallback.
 
 ## [1.1.0] - 2026-09-06
 

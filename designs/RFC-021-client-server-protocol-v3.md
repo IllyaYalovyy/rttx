@@ -807,12 +807,17 @@ The daemon owns workspace metadata; the name is metadata. Concretely:
 - `WorkspaceSnapshot` carries `name` and `user_renamed`. A client adopts both on attach
   instead of keeping a name of its own, so a workspace reads the same in every window and
   after every reconnect, and `rttx-server status` shows what the user sees.
-- `RenameWorkspace` carries `automatic`. A client still derives the automatic name from the
-  shell's working directory — it is the one receiving `CwdChanged` — but proposes it to the
-  daemon as an automatic rename rather than renaming locally. An automatic rename never sets
-  `user_renamed`, and once `user_renamed` is set the daemon ignores automatic renames; the
-  response then carries the user's name, which the proposing client adopts. Only the writer
-  proposes: a reader (the demoted mirror) follows the daemon's pushes.
+- **The daemon derives the automatic name itself**: the last path component of the naming
+  pane's working directory (the default-active pane, else the first leaf in tree order),
+  re-evaluated whenever that pane's directory changes (OSC 7 or the `/proc` poll), at attach,
+  and when a workspace file is loaded — so a file written by a daemon that kept creation-time
+  names comes back under the right name. The name a client sends in `CreateWorkspace` is only
+  the initial value. A client never renames a managed workspace on its own; the copy it stores
+  is a display cache for the sidebar before the connection is up.
+- `RenameWorkspace` carries `automatic` for older clients that still propose directory names;
+  an automatic rename never sets `user_renamed`, and once `user_renamed` is set the daemon
+  ignores automatic names from any source. A user rename is always a `RenameWorkspace`
+  command to the daemon, which records it and announces it.
 - `WorkspaceRenamed` carries `user_renamed` and is pushed to every other attached client
   whenever the name changes, so a read-only mirror and a second window follow along.
 - A client that holds a user-chosen name the daemon does not know about (a workspace

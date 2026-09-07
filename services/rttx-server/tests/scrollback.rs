@@ -1,6 +1,7 @@
 //! Integration tests for scrollback persistence to disk.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, start_test_server, wait_for_scrollback_log, wait_for_state_containing};
 use rttx_proto::v3;
@@ -77,7 +78,7 @@ async fn scrollback_flushed_to_disk_after_serialization_tick() {
     client.send(&input).await;
 
     // Wait for output + serialization tick (server serializes every 1s).
-    wait_for_state_containing(tmp.path(), "scrollback-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10)).await;
 
     // Check that scrollback log exists in the state directory (RFC-022 layout).
     let runtimes_dir = tmp.path().join("state/rttx/daemon/workspaces");
@@ -170,7 +171,7 @@ async fn scrollback_written_to_state_dir_not_cache_dir() {
     };
     client.send(&input).await;
 
-    wait_for_state_containing(tmp.path(), "path-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10)).await;
 
     // Scrollback must NOT appear in the cache directory.
     let cache_scrollback = tmp.path().join("cache").join("scrollback");
@@ -332,7 +333,7 @@ async fn scrollback_log_does_not_contain_dsr_queries() {
     client.send(&input).await;
 
     // Wait for serialization tick to flush scrollback.
-    wait_for_state_containing(tmp.path(), "dsr-strip-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10)).await;
     // Extra wait for the scrollback flush after the DSR-producing command.
     tokio::time::sleep(Duration::from_secs(2)).await;
 

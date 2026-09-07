@@ -5,6 +5,7 @@
 //! directory (RFC-022 Step 9).
 
 mod common;
+use common::uuid_str;
 
 use common::{create_workspace, start_test_server};
 use rttx_proto::v3;
@@ -24,7 +25,8 @@ async fn first_run_creates_state_in_state_dir_not_cache() {
     let runtime_id = rttx_proto::bytes_to_uuid(&rt_id_bytes).unwrap();
 
     // Wait for serialization to write state.
-    common::wait_for_state_containing(tmp.path(), "first-run-test", Duration::from_secs(10)).await;
+    common::wait_for_state_containing(tmp.path(), &uuid_str(&rt_id_bytes), Duration::from_secs(10))
+        .await;
 
     // Verify state landed in the v2 state directory, not the cache.
     let state_dir = tmp.path().join("state/rttx/daemon");

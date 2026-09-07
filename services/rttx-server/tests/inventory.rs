@@ -79,7 +79,7 @@ async fn list_workspaces_includes_workspace_inventory_metadata() {
 
     let session = &workspaces[0];
     assert_eq!(session.id, runtime_id);
-    assert_eq!(session.name, "inventory-test");
+    assert_eq!(session.name, common::expected_auto_name(session, "inventory-test"));
     assert_eq!(session.pane_count, 1);
     assert!(!session.has_write_owner);
     assert_eq!(session.read_only_client_count, 0);
@@ -250,7 +250,7 @@ async fn list_workspaces_marks_restored_workspace_and_panes_as_reconstructed() {
             .await;
         client.ping().await;
 
-        wait_for_state_containing(tmp.path(), "reconstructed-inventory", Duration::from_secs(10))
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
             .await;
 
         handle.abort();
@@ -267,7 +267,7 @@ async fn list_workspaces_marks_restored_workspace_and_panes_as_reconstructed() {
 
         let session = &workspaces[0];
         assert_eq!(session.id, runtime_id);
-        assert_eq!(session.name, "reconstructed-inventory");
+        assert_eq!(session.name, common::expected_auto_name(session, "reconstructed-inventory"));
         assert_eq!(session.pane_count, 1);
         assert_eq!(session.read_only_client_count, 0);
         assert!(!session.has_write_owner);

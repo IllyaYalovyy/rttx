@@ -235,11 +235,12 @@ impl WorkspaceState {
 /// Derive the initial name for a new workspace from its working directory,
 /// falling back to the short host name for a remote workspace.
 ///
-/// This is only the name a workspace is *created* with; from then on the
-/// daemon owns it and keeps an auto-named workspace tracking the shell's
-/// working directory (see `apply_daemon_workspace_name`). The directory
-/// rule is the same one the daemon uses, so the name does not jump when
-/// the daemon takes over.
+/// This is only the name a workspace is *created* with — the value sent in
+/// `CreateWorkspace`. From then on the daemon owns it and keeps an
+/// auto-named workspace tracking the naming pane's working directory; the
+/// client never renames a managed workspace on its own. The directory rule
+/// is the same one the daemon uses, so the name does not jump when the
+/// daemon takes over.
 ///
 /// Returns `None` when no meaningful name can be derived.
 #[must_use]

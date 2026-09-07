@@ -1,6 +1,7 @@
 //! Integration tests for session lifecycle.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, start_test_server};
 use rttx_proto::v3;
@@ -294,7 +295,8 @@ async fn never_renamed_workspace_is_not_marked_user_renamed_across_restart() {
     assert_eq!(workspaces.len(), 1);
     assert!(!workspaces[0].user_renamed, "a creation-time name is not a user rename");
 
-    common::wait_for_state_containing(tmp.path(), "Projects", Duration::from_secs(5)).await;
+    common::wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(5))
+        .await;
 
     client
         .send(&v3::ClientEnvelope {

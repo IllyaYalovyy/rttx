@@ -4,6 +4,7 @@
 //! and loads from v2 on restart.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
 use rttx_proto::v3;
@@ -27,13 +28,13 @@ async fn serialization_writes_v2_runtime_files() {
         })),
     })
     .await;
-    let _runtime_id = match c.recv().await.payload {
+    let runtime_id = match c.recv().await.payload {
         Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
         other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Wait for serialization tick to write state.
-    wait_for_state_containing(tmp.path(), "v2-write-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10)).await;
 
     // Verify v2 daemon index exists.
     let state_dir = tmp.path().join("state/rttx/daemon");
@@ -67,13 +68,13 @@ async fn serialization_creates_backup_symlink() {
         })),
     })
     .await;
-    let _runtime_id = match c.recv().await.payload {
+    let runtime_id = match c.recv().await.payload {
         Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
         other => panic!("expected WorkspaceCreated, got {other:?}"),
     };
 
     // Wait for first serialization tick.
-    wait_for_state_containing(tmp.path(), "bak-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10)).await;
 
     // Second workspace — changes workspace IDs, triggers second daemon index write.
     c.send(&v3::ClientEnvelope {
@@ -123,7 +124,8 @@ async fn restart_loads_persisted_current_state() {
             other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
-        wait_for_state_containing(tmp.path(), "v2-preferred", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
+            .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -203,9 +205,12 @@ async fn corrupt_v2_workspace_skipped_not_fatal() {
             })),
         })
         .await;
-        let _ = c.recv().await; // WorkspaceCreated
+        let bad_rt = match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+            other => panic!("expected WorkspaceCreated, got {other:?}"),
+        };
 
-        wait_for_state_containing(tmp.path(), "bad-workspace", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&bad_rt), Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -279,9 +284,12 @@ async fn persisted_workspace_file_carries_current_schema_version() {
         })),
     })
     .await;
-    let _ = c.recv().await;
+    let schema_rt = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
+    };
 
-    wait_for_state_containing(tmp.path(), "schema-version-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&schema_rt), Duration::from_secs(10)).await;
     handle.abort();
 
     let state_dir = tmp.path().join("state/rttx/daemon");

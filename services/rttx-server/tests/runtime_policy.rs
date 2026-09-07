@@ -1,6 +1,7 @@
 //! Integration tests for daemon workspace retention policy behavior.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, list_workspaces, start_test_server, wait_for_state_containing};
 use rttx_proto::v3;
@@ -179,13 +180,13 @@ async fn ephemeral_workspace_is_not_restored_after_restart() {
         ));
 
         // Create a persistent workspace as anchor to wait for serialization.
-        let _ = common::create_workspace(
+        let anchor = common::create_workspace(
             &mut client,
             "e-policy-anchor",
             v3::WorkspacePolicy::Persistent,
         )
         .await;
-        wait_for_state_containing(tmp.path(), "e-policy-anchor", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&anchor), Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

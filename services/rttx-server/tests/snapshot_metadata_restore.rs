@@ -4,6 +4,7 @@
 //! alt-screen, …) onto the freshly respawned shell.
 
 mod common;
+use common::uuid_str;
 
 use common::{
     attach_rw, create_pane, create_workspace, send_input, start_test_server,
@@ -46,7 +47,12 @@ async fn restart_resets_tui_modes_instead_of_restoring_them() {
         .await;
 
         // Wait for serialization tick to persist the snapshot.
-        wait_for_state_containing(tmp.path(), "mode-restore", Duration::from_secs(10)).await;
+        wait_for_state_containing(
+            tmp.path(),
+            &uuid_str(&runtime_id_bytes),
+            Duration::from_secs(10),
+        )
+        .await;
 
         // Drain output.
         let _ = tokio::time::timeout(Duration::from_millis(500), c.recv()).await;

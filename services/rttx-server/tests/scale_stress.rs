@@ -159,8 +159,12 @@ async fn scrollback_survives_restart() {
         // Wait for serialization + scrollback flush.
         // The serialization loop ticks every 1s. Wait for the v2 workspace
         // file to contain our session data.
-        common::wait_for_state_containing(tmp.path(), "restart-scroll", Duration::from_secs(10))
-            .await;
+        common::wait_for_state_containing(
+            tmp.path(),
+            &uuid_str(&runtime_id),
+            Duration::from_secs(10),
+        )
+        .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
