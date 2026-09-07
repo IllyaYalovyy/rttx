@@ -234,6 +234,8 @@ async fn multiple_mutations_coalesce_into_single_write() {
             command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                 runtime_id: rt_id_bytes.clone(),
                 name: format!("renamed-{i}"),
+
+                automatic: false,
             })),
         })
         .await;

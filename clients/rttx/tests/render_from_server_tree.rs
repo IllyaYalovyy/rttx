@@ -25,6 +25,9 @@ fn snapshot_with_tree(tree: Option<v3::PaneTreeNode>) -> v3::WorkspaceSnapshot {
         panes: Vec::new(),
         tree,
         default_active_pane_id: Vec::new(),
+
+        name: String::new(),
+        user_renamed: false,
     }
 }
 

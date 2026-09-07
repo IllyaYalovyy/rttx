@@ -922,6 +922,19 @@ impl Window {
 
         for rebuild in &transition.rebuilt_workspaces {
             self.rebuild_session_content(&rebuild.workspace_id, &rebuild.session_state);
+            self.update_sidebar_row_name(&rebuild.workspace_id, &rebuild.session_state.name);
+        }
+
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            for repair in &transition.name_repairs {
+                manager.rename_runtime(
+                    &repair.workspace_id,
+                    &repair.endpoint,
+                    &repair.runtime_id,
+                    &repair.name,
+                    false,
+                );
+            }
         }
 
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
@@ -1115,9 +1128,30 @@ impl Window {
         status: &ConnectionStatus,
     ) {
         self.clear_workspace_reconnect_countdown(workspace_id);
+        let became_writable = status.accepts_input()
+            && !self
+                .imp()
+                .workspace_connection_status
+                .borrow()
+                .get(workspace_id)
+                .is_some_and(ConnectionStatus::accepts_input);
         self.replace_workspace_connection_status(workspace_id, status);
         if let ConnectionStatus::Reconnecting { attempt, retry_in_secs } = status {
             self.start_workspace_reconnect_countdown(workspace_id, *attempt, *retry_in_secs);
+        }
+        if became_writable {
+            // Now that this client holds the lease it is the one keeping
+            // the daemon's automatic name current: bring a name a previous
+            // daemon never learned (a client-side rename of old) up to date.
+            let cwd = {
+                let state = self.imp().state.borrow();
+                state.workspaces.iter().find(|s| s.uuid == workspace_id).and_then(|s| {
+                    s.active_terminal_uuid.as_deref().and_then(|t| s.layout.terminal_cwd(t))
+                })
+            };
+            if let Some(cwd) = cwd {
+                self.maybe_auto_rename_workspace(workspace_id, Some(&cwd));
+            }
         }
     }
 
@@ -1191,6 +1225,11 @@ impl Window {
 
         if let Payload::LeaseLost(lost) = inner {
             self.handle_lease_lost(endpoint, lost);
+            return;
+        }
+
+        if let Payload::WorkspaceRenamed(renamed) = inner {
+            self.handle_workspace_renamed(endpoint, renamed);
             return;
         }
 
@@ -1415,25 +1454,102 @@ impl Window {
         self.connect_managed_workspace(&session_state);
     }
 
+    /// Propose an automatic name for a workspace whose shell moved to `cwd`.
+    ///
+    /// The daemon owns the name, so the proposal is sent there as an
+    /// *automatic* rename and the sidebar follows the daemon's answer —
+    /// which is the user's name instead if one was ever chosen, on any
+    /// client. Nothing is sent while this client cannot write to the
+    /// workspace (a read-only mirror after a take-over): the owner's client
+    /// keeps the name current and the daemon pushes it here.
     pub(super) fn maybe_auto_rename_workspace(&self, workspace_id: &str, cwd: Option<&str>) {
-        let mut state = self.imp().state.borrow_mut();
-        let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == workspace_id) else {
+        let proposal = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.workspaces.iter().find(|s| s.uuid == workspace_id) else {
+                return;
+            };
+            if session.user_renamed {
+                return;
+            }
+            let Some(new_name) =
+                crate::workspace::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
+            else {
+                return;
+            };
+            if session.name == new_name {
+                return;
+            }
+            (session.runtime.endpoint.clone(), session.runtime.runtime_id.clone(), new_name)
+        };
+        let (endpoint, runtime_id, new_name) = proposal;
+        let Some(runtime_id) = runtime_id else {
+            // Not bound to a runtime yet: nothing owns the name but us.
+            self.apply_daemon_workspace_name(workspace_id, &new_name, false);
             return;
         };
-        if session.user_renamed {
+        let writable = self
+            .imp()
+            .workspace_connection_status
+            .borrow()
+            .get(workspace_id)
+            .is_some_and(ConnectionStatus::accepts_input);
+        if !writable {
             return;
         }
-        let Some(new_name) =
-            crate::workspace::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
-        else {
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.rename_runtime(workspace_id, &endpoint, &runtime_id, &new_name, true);
+        }
+    }
+
+    /// Adopt the daemon's name for a managed workspace.
+    ///
+    /// The daemon owns workspace metadata: it derives an automatic name
+    /// from the shell's working directory and records explicit renames, and
+    /// announces both with `WorkspaceRenamed`. The client only renders. One
+    /// exception keeps a local rename from being clobbered by an automatic
+    /// name still in flight: a daemon-derived name never overrides a name
+    /// the user chose here.
+    pub(super) fn apply_daemon_workspace_name(
+        &self,
+        workspace_id: &str,
+        name: &str,
+        user_renamed: bool,
+    ) {
+        if name.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == workspace_id) else {
+                return;
+            };
+            if session.user_renamed && !user_renamed {
+                return;
+            }
+            let changed = session.name != name || session.user_renamed != user_renamed;
+            session.name = name.to_string();
+            session.user_renamed = user_renamed;
+            changed
+        };
+        if changed {
+            self.update_sidebar_row_name(workspace_id, name);
+            self.save_state();
+        }
+    }
+
+    /// Apply a `WorkspaceRenamed` event from the daemon — the response to a
+    /// rename this client sent, or a push about a rename made elsewhere.
+    fn handle_workspace_renamed(&self, endpoint: &RuntimeEndpoint, renamed: &v3::WorkspaceRenamed) {
+        let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&renamed.runtime_id) else {
             return;
         };
-        if session.name == new_name {
-            return;
+        let workspace_id = {
+            let state = self.imp().state.borrow();
+            state.workspace_for_runtime(endpoint, &runtime_id.to_string())
+        };
+        if let Some(workspace_id) = workspace_id {
+            self.apply_daemon_workspace_name(&workspace_id, &renamed.name, renamed.user_renamed);
         }
-        session.name.clone_from(&new_name);
-        drop(state);
-        self.update_sidebar_row_name(workspace_id, &new_name);
     }
 
     fn update_sidebar_row_name(&self, session_uuid: &str, name: &str) {

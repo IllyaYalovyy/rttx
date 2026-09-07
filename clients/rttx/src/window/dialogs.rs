@@ -697,7 +697,7 @@ impl Window {
         if let Some((endpoint, Some(runtime_id))) = runtime_info
             && let Some(manager) = self.imp().connection_manager.borrow().as_ref()
         {
-            manager.rename_runtime(session_uuid, &endpoint, &runtime_id, new_name);
+            manager.rename_runtime(session_uuid, &endpoint, &runtime_id, new_name, false);
         }
 
         if let Some(session_row) = self.sidebar_workspace_row(session_uuid) {

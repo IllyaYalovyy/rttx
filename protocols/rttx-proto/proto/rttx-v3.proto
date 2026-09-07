@@ -170,6 +170,11 @@ message TerminateWorkspace {
 message RenameWorkspace {
   bytes runtime_id = 1;
   string name = 2;
+  // True when the client derived the name automatically (from the shell's
+  // working directory) rather than the user typing it. An automatic rename
+  // never marks the workspace as user-renamed and is ignored once a user
+  // has named the workspace; the response then carries the user's name.
+  bool automatic = 3;
 }
 
 message ListWorkspaces {}
@@ -192,10 +197,17 @@ message WorkspaceTerminated {
   WorkspaceTerminationReason reason = 3;
 }
 
+// Sent as the response to RenameWorkspace and pushed to every attached
+// client whenever the daemon's name for a workspace changes — an explicit
+// rename by any client, or the daemon deriving a name from the shell's
+// working directory. The daemon owns workspace metadata; clients render it.
 message WorkspaceRenamed {
   bytes runtime_id = 1;
   string name = 2;
   uint64 workspace_revision = 3;
+  // True when the name was chosen by a user; false when the daemon derived
+  // it from a pane's working directory.
+  bool user_renamed = 4;
 }
 
 message AttachBlocked {
@@ -316,6 +328,11 @@ message WorkspaceSnapshot {
   // Fallback focus pane for a fresh attach (RFC-031 §2). Empty when the
   // workspace has no panes.
   bytes default_active_pane_id = 6;
+  // The daemon's name for the workspace and whether a user chose it. The
+  // daemon owns this metadata: a client adopts it on attach instead of
+  // keeping a name of its own.
+  string name = 7;
+  bool user_renamed = 8;
 }
 
 message PaneSnapshot {

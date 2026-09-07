@@ -263,6 +263,8 @@ async fn read_only_client_cannot_rename_workspace() {
             command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                 runtime_id: runtime_id.clone(),
                 name: "hijacked".into(),
+
+                automatic: false,
             })),
         })
         .await;
@@ -309,18 +311,133 @@ async fn read_only_client_cannot_set_pane_title() {
 
     // SetPaneTitle is fire-and-forget; the server silently drops it for a
     // read-only client. Use a Ping/Pong barrier to flush, then confirm the
-    // reader sees neither an error nor a TitleChanged broadcast — proving
-    // the title was never changed.
+    // reader sees neither an error nor a TitleChanged carrying its title —
+    // proving the title was never changed. The shell itself may set a
+    // title through OSC 0 in its prompt (bash on Fedora does), so only the
+    // hijacked title counts.
     reader.ping().await;
     let events = reader.drain(std::time::Duration::from_millis(200)).await;
     assert!(
-        events.iter().all(|e| !matches!(
-            e.payload,
-            Some(
-                v3::server_envelope::Payload::Error(_)
-                    | v3::server_envelope::Payload::TitleChanged(_)
-            )
-        )),
+        events.iter().all(|e| match &e.payload {
+            Some(v3::server_envelope::Payload::Error(_)) => false,
+            Some(v3::server_envelope::Payload::TitleChanged(t)) => t.title != "hijacked",
+            _ => true,
+        }),
         "read-only client must not be able to change the pane title"
     );
+}
+
+async fn rename(
+    client: &mut TestClient,
+    runtime_id: &[u8],
+    name: &str,
+    automatic: bool,
+) -> v3::WorkspaceRenamed {
+    client
+        .send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
+                runtime_id: runtime_id.to_vec(),
+                name: name.into(),
+                automatic,
+            })),
+        })
+        .await;
+    loop {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceRenamed(r)) => return r,
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("expected WorkspaceRenamed, got {other:?}"),
+        }
+    }
+}
+
+async fn next_renamed_push(client: &mut TestClient) -> v3::WorkspaceRenamed {
+    loop {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceRenamed(r)) => return r,
+            Some(_) => {}
+            None => panic!("connection closed before WorkspaceRenamed"),
+        }
+    }
+}
+
+/// The daemon owns the name: an attach snapshot carries it, and every rename —
+/// automatic or user — is pushed to the other attached clients.
+#[tokio::test]
+async fn renames_travel_in_snapshots_and_are_pushed_to_other_clients() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut writer = TestClient::connect(&sock).await;
+    writer.handshake().await;
+    let runtime_id =
+        common::create_workspace(&mut writer, "Projects", v3::WorkspacePolicy::Persistent).await;
+    let snapshot = common::attach_rw(&mut writer, &runtime_id).await;
+    assert_eq!(snapshot.name, "Projects");
+    assert!(!snapshot.user_renamed);
+
+    let mut reader = TestClient::connect(&sock).await;
+    reader.handshake().await;
+    common::attach_ro(&mut reader, &runtime_id).await;
+
+    // The writer's shell moved: it proposes an automatic name.
+    let ack = rename(&mut writer, &runtime_id, "dev1_rttx", true).await;
+    assert_eq!(ack.name, "dev1_rttx");
+    assert!(!ack.user_renamed, "a directory-derived name is not a user rename");
+    let pushed = next_renamed_push(&mut reader).await;
+    assert_eq!(pushed.name, "dev1_rttx");
+    assert!(!pushed.user_renamed);
+
+    // A fresh client sees the daemon's current name in its snapshot.
+    let mut late = TestClient::connect(&sock).await;
+    late.handshake().await;
+    let snapshot = common::attach_ro(&mut late, &runtime_id).await;
+    assert_eq!(snapshot.name, "dev1_rttx");
+    assert!(!snapshot.user_renamed);
+}
+
+/// Once a user names a workspace, automatic proposals lose — and the response
+/// tells the proposing client what to show instead.
+#[tokio::test]
+async fn automatic_rename_never_overrides_a_user_rename() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut writer = TestClient::connect(&sock).await;
+    writer.handshake().await;
+    let runtime_id =
+        common::create_workspace(&mut writer, "Projects", v3::WorkspacePolicy::Persistent).await;
+    common::attach_rw(&mut writer, &runtime_id).await;
+
+    let mut reader = TestClient::connect(&sock).await;
+    reader.handshake().await;
+    common::attach_ro(&mut reader, &runtime_id).await;
+
+    let ack = rename(&mut writer, &runtime_id, "Blog: pipeline", false).await;
+    assert_eq!(ack.name, "Blog: pipeline");
+    assert!(ack.user_renamed);
+    let pushed = next_renamed_push(&mut reader).await;
+    assert_eq!(pushed.name, "Blog: pipeline");
+    assert!(pushed.user_renamed);
+    let user_revision = ack.workspace_revision;
+
+    let ack = rename(&mut writer, &runtime_id, "pipeline", true).await;
+    assert_eq!(ack.name, "Blog: pipeline", "the user's name is reported back");
+    assert!(ack.user_renamed);
+    assert_eq!(ack.workspace_revision, user_revision, "nothing changed, nothing bumped");
+
+    // Nothing was pushed to the reader for the refused proposal.
+    reader.ping().await;
+    let events = reader.drain(std::time::Duration::from_millis(200)).await;
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e.payload, Some(v3::server_envelope::Payload::WorkspaceRenamed(_)))),
+        "a refused automatic rename must not be announced"
+    );
+
+    let workspaces = list_workspaces(&mut writer).await;
+    assert_eq!(workspaces[0].name, "Blog: pipeline");
+    assert!(workspaces[0].user_renamed);
 }

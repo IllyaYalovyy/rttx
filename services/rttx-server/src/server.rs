@@ -800,19 +800,49 @@ impl Server {
                     ));
                 }
                 let old_name = rt.name.clone();
-                let revision = rt.rename(req.name.clone());
-                tracing::info!(
-                    "Workspace renamed: \"{}\" -> \"{}\" ({})",
-                    old_name,
-                    req.name,
-                    short_id(runtime_id),
-                );
+                let changed = if req.automatic {
+                    rt.set_auto_name(req.name.clone())
+                } else {
+                    Some(rt.rename(req.name.clone()))
+                };
+                // The response always states the daemon's current name: an
+                // automatic rename that lost to a user's choice tells the
+                // client what to show instead.
+                let (name, revision, user_renamed) =
+                    (rt.name.clone(), rt.revision(), rt.user_renamed);
+                let attached = rt.attached_clients.keys().copied().collect::<Vec<_>>();
+                drop(rt);
+                if changed.is_some() {
+                    tracing::info!(
+                        "Workspace renamed: \"{}\" -> \"{}\" ({}){}",
+                        old_name,
+                        name,
+                        short_id(runtime_id),
+                        if req.automatic { " (automatic)" } else { "" },
+                    );
+                    // Every other client showing this workspace — a
+                    // read-only mirror after a take-over, another window —
+                    // renders the daemon's name, so it learns about the
+                    // change too.
+                    let mut s = crate::instrument::lock_server(server, metrics).await;
+                    s.broadcast_to_clients(
+                        attached.iter().copied(),
+                        Some(client_id),
+                        &rttx_proto::v3_snapshot::build_workspace_renamed_push(
+                            runtime_id,
+                            name.clone(),
+                            revision,
+                            user_renamed,
+                        ),
+                    );
+                }
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
                     v3::server_envelope::Payload::WorkspaceRenamed(v3::WorkspaceRenamed {
                         runtime_id: uuid_to_bytes(runtime_id),
-                        name: req.name,
+                        name,
                         workspace_revision: revision,
+                        user_renamed,
                     }),
                 ))
             }
@@ -1111,6 +1141,13 @@ impl Server {
                 Some(rttx_proto::v3_snapshot::build_snapshot_response(request_id, snapshot))
             }
             AttachOutcome::Blocked { current_role, .. } => {
+                tracing::info!(
+                    "Client {} refused read-write attach to workspace \"{}\" ({}): owned by {}",
+                    short_id(client_id),
+                    rt.name,
+                    short_id(runtime_id),
+                    rt.writer_client_id().map_or_else(|| "nobody".to_string(), short_id),
+                );
                 Some(rttx_proto::v3_envelope::build_response_envelope(
                     request_id,
                     v3::server_envelope::Payload::AttachBlocked(v3::AttachBlocked {

@@ -222,6 +222,10 @@ pub fn build_v3_workspace_snapshot(
         panes,
         workspace_tree_to_proto(&rt.tree),
         default_active_bytes(&rt.tree),
+        rttx_proto::v3_snapshot::WorkspaceNaming {
+            name: rt.name.clone(),
+            user_renamed: rt.user_renamed,
+        },
     )
 }
 

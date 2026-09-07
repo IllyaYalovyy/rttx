@@ -747,6 +747,41 @@ readers know the lease is free. The message and its builders exist on the wire, 
 daemon does not emit it yet: a reader currently discovers the free lease by retrying its
 attach. Emitting it is a follow-up, not a protocol change.
 
+**Taking it back.** The demoted client cannot use the connect-existing dialog to reclaim
+the workspace — the dialog lists it as *open in this window* — so the workspace row's
+context menu offers *Take Over Workspace…* whenever the row is `Blocked(TakenOver)` or
+`Blocked(OwnershipConflict)`. It runs the same Cancel-default destructive dialog and the
+same `TakeoverWorkspace`-then-`AttachWorkspace` sequence.
+
+**Retry scope.** Every workspace on an endpoint shares one daemon connection, so a retry
+of one workspace must never rebuild that connection: doing so orphans every sibling
+workspace on the host (their panes keep saying "Connected" while nothing they send goes
+anywhere). *Reconnect* on a workspace whose problem is workspace-scoped — `TakenOver`,
+`OwnershipConflict`, `SessionMissing`, a daemon refusal — re-issues `AttachWorkspace` on
+the live connection; only an endpoint-scoped problem (daemon unreachable, dead, wrong
+version) rebuilds the connection, and then every managed workspace on that endpoint is
+reconnected with it, connected ones included. The same holds for *Reconnect All from
+Host*.
+
+#### Workspace name ownership
+
+The daemon owns workspace metadata; the name is metadata. Concretely:
+
+- `WorkspaceSnapshot` carries `name` and `user_renamed`. A client adopts both on attach
+  instead of keeping a name of its own, so a workspace reads the same in every window and
+  after every reconnect, and `rttx-server status` shows what the user sees.
+- `RenameWorkspace` carries `automatic`. A client still derives the automatic name from the
+  shell's working directory — it is the one receiving `CwdChanged` — but proposes it to the
+  daemon as an automatic rename rather than renaming locally. An automatic rename never sets
+  `user_renamed`, and once `user_renamed` is set the daemon ignores automatic renames; the
+  response then carries the user's name, which the proposing client adopts. Only the writer
+  proposes: a reader (the demoted mirror) follows the daemon's pushes.
+- `WorkspaceRenamed` carries `user_renamed` and is pushed to every other attached client
+  whenever the name changes, so a read-only mirror and a second window follow along.
+- A client that holds a user-chosen name the daemon does not know about (a workspace
+  renamed before the daemon recorded user renames, #1084) pushes it back as a user rename
+  on attach instead of discarding it.
+
 ### 11. Error Model
 
 ```protobuf

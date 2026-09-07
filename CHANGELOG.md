@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Reconnecting one workspace no longer kills every other workspace on the same
+  host. All workspaces on a host share one daemon connection, and "Reconnect"
+  tore it down and re-opened only the one workspace, so every sibling went
+  silently dead — its panes still said "Connected" but nothing typed went
+  anywhere. A workspace-scoped problem (taken over, owned elsewhere, runtime
+  gone) is now retried on the live connection; only a host-scoped problem
+  (daemon unreachable, dead, wrong version) rebuilds the connection, and then
+  every workspace on that host is reconnected with it. "Reconnect All from
+  Host" likewise reconnects all of them, not just the ones that looked broken.
+- The client that lost a workspace to a take-over can take it back: the
+  workspace row's context menu offers "Take Over Workspace…" with the same
+  confirmation as the connect dialog.
+- The connect-existing dialog groups available workspaces before busy ones
+  instead of printing an "Available" header over whatever the daemon listed
+  first, spells out what "In use by another client" and "Open in this window"
+  mean, and names a workspace it attaches after the daemon's name.
+- Reconnecting no longer types escape-sequence garbage into the shell. VTE
+  parses replayed scrollback asynchronously and answers any query it finds in
+  it (DECRQSS, XTGETTCAP, colour queries); those answers were forwarded to the
+  daemon as input. Replay is now gated until VTE has parsed it.
+- Output that arrives in the same instant as a snapshot is no longer lost.
+- A large replay can no longer be mistaken for a dead connection: heartbeat
+  ticks pause while the UI has paused reading for backpressure.
+
+### Changed
+- The daemon owns workspace names. A workspace's name travels in the attach
+  snapshot and every rename — a user's, or the automatic one derived from the
+  shell's directory — is recorded by the daemon and pushed to every attached
+  client, so a workspace reads the same in every window, after every reconnect,
+  and in `rttx-server status`. A name the user chose on the client before the
+  daemon tracked user renames is pushed back to the daemon on the next attach
+  rather than discarded. Remote workspaces are named after their directory like
+  local ones; the host name is only the fallback.
+
 ## [1.1.0] - 2026-09-06
 
 ### Added

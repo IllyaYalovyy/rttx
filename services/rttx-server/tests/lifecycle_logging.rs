@@ -51,6 +51,8 @@ async fn rename_workspace_through_server() {
             command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                 runtime_id: sid.clone(),
                 name: "after-rename".into(),
+
+                automatic: false,
             })),
         })
         .await;

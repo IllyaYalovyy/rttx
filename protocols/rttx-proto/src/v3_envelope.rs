@@ -220,6 +220,8 @@ mod tests {
         let cmd = v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: rid(),
             name: "new".into(),
+
+            automatic: false,
         });
         assert!(!is_fire_and_forget(&cmd));
     }

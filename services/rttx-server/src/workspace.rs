@@ -446,6 +446,23 @@ impl Workspace {
         DetachOutcome::Detached { revision: self.revision() }
     }
 
+    /// Apply an automatic (client-derived) name.
+    ///
+    /// The daemon owns workspace metadata, so even a name a client derived
+    /// from its shell's working directory is recorded here and fanned out
+    /// to every other attached client. A workspace a user named keeps that
+    /// name: automatic renames are ignored once `user_renamed` is set, so a
+    /// stale client cannot downgrade a deliberate choice. Returns the new
+    /// revision when the name changed.
+    pub fn set_auto_name(&mut self, name: String) -> Option<u64> {
+        if self.user_renamed || self.name == name || name.is_empty() {
+            return None;
+        }
+        self.name = name;
+        self.bump_revision();
+        Some(self.revision())
+    }
+
     /// Rename this workspace and return the resulting revision.
     ///
     /// A rename always marks the workspace as user-renamed: the command only
@@ -970,6 +987,32 @@ mod tests {
             !workspace.user_renamed,
             "a name chosen at creation time is not an explicit user rename"
         );
+    }
+
+    #[test]
+    fn set_auto_name_records_a_derived_name_without_user_intent() {
+        let mut workspace = Workspace::new("Projects".into());
+        let rev = workspace.revision();
+
+        assert_eq!(workspace.set_auto_name("rttx".into()), Some(rev + 1));
+        assert_eq!(workspace.name, "rttx");
+        assert!(!workspace.user_renamed, "a derived name is not a user rename");
+
+        assert_eq!(workspace.set_auto_name("rttx".into()), None, "same name: no change");
+        assert_eq!(workspace.set_auto_name(String::new()), None, "empty names are ignored");
+        assert_eq!(workspace.revision(), rev + 1);
+    }
+
+    #[test]
+    fn set_auto_name_never_overrides_a_user_rename() {
+        let mut workspace = Workspace::new("Projects".into());
+        workspace.rename("Blog: pipeline".into());
+        let rev = workspace.revision();
+
+        assert_eq!(workspace.set_auto_name("pipeline".into()), None);
+        assert_eq!(workspace.name, "Blog: pipeline");
+        assert!(workspace.user_renamed);
+        assert_eq!(workspace.revision(), rev);
     }
 
     #[test]

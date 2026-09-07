@@ -202,6 +202,9 @@ enum EndpointCommand {
         workspace_id: String,
         runtime_id: String,
         name: String,
+        /// Derived from the shell's working directory rather than typed by
+        /// the user; the daemon ignores it once a user has named the workspace.
+        automatic: bool,
     },
     SetPaneNoPersist {
         workspace_id: String,
@@ -481,11 +484,13 @@ impl EndpointConnectionManager {
         endpoint: &RuntimeEndpoint,
         runtime_id: &str,
         name: &str,
+        automatic: bool,
     ) {
         let _ = self.endpoint_handle(endpoint).try_send(EndpointCommand::RenameWorkspace {
             workspace_id: workspace_id.to_string(),
             runtime_id: runtime_id.to_string(),
             name: name.to_string(),
+            automatic,
         });
     }
 
@@ -1431,7 +1436,7 @@ impl EndpointActor {
                     self.reconnect_attempt = 0;
                 }
             }
-            EndpointCommand::RenameWorkspace { workspace_id, runtime_id, name } => {
+            EndpointCommand::RenameWorkspace { workspace_id, runtime_id, name, automatic } => {
                 let Some(runtime_uuid) = parse_uuid(
                     &workspace_id,
                     ManagerOperation::RenameWorkspace,
@@ -1449,6 +1454,7 @@ impl EndpointActor {
                         v3::RenameWorkspace {
                             runtime_id: rttx_proto::uuid_to_bytes(runtime_uuid),
                             name,
+                            automatic,
                         },
                     )),
                 };
@@ -2343,6 +2349,9 @@ mod tests {
                             panes: vec![],
                             workspace_revision: 1,
                             client_role: v3::WorkspaceClientRole::Writer as i32,
+
+                            name: String::new(),
+                            user_renamed: false,
                         },
                     )),
                 },
@@ -3182,6 +3191,9 @@ mod tests {
                             panes: vec![],
                             workspace_revision: 1,
                             client_role: v3::WorkspaceClientRole::Writer as i32,
+
+                            name: String::new(),
+                            user_renamed: false,
                         },
                     )),
                 },
@@ -3593,6 +3605,9 @@ mod tests {
                             panes: vec![],
                             workspace_revision: 1,
                             client_role: v3::WorkspaceClientRole::Writer as i32,
+
+                            name: String::new(),
+                            user_renamed: false,
                         },
                     )),
                 },

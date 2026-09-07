@@ -218,6 +218,12 @@ terminal input are refused for it by the daemon. See
 [RFC-021 Section 10](RFC-021-client-server-protocol-v3.md#10-ownership-and-multi-client-semantics)
 for the ownership and take-over rules.
 
+The workspace *name* is server-authoritative in the same way as the tree: the
+snapshot carries it, `WorkspaceRenamed` pushes changes to every attached
+client, and a client only proposes automatic (directory-derived) names through
+`RenameWorkspace { automatic: true }` rather than renaming locally
+(RFC-021 §10, *Workspace name ownership*).
+
 A client attaching to a workspace holds a **viewport** that is *not* durable and
 *not* server-authoritative:
 

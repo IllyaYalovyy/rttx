@@ -92,6 +92,8 @@ async fn takeover_transfers_the_write_lease_and_demotes_the_previous_writer() {
         .request(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: runtime_id.clone(),
             name: "renamed-by-reader".into(),
+
+            automatic: false,
         }))
         .await;
     let Some(v3::server_envelope::Payload::Error(error)) = rejected.payload else {

@@ -39,6 +39,24 @@ async fn reconnect_restores_scrollback() {
             other => panic!("expected WorkspaceCreated, got {other:?}"),
         };
 
+        // Pin the name as a user choice: an auto-named workspace follows
+        // its shell's working directory, and this test is about the
+        // name surviving a reconnect, not about auto-naming.
+        c.send(&v3::ClientEnvelope {
+            request_id: 0,
+            command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
+                runtime_id: runtime_id.clone(),
+                name: "lifecycle-test".into(),
+
+                automatic: false,
+            })),
+        })
+        .await;
+        match c.recv().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceRenamed(r)) => assert!(r.user_renamed),
+            other => panic!("expected WorkspaceRenamed, got {other:?}"),
+        }
+
         // Create pane (spawns PTY).
         c.send(&v3::ClientEnvelope {
             request_id: 0,
@@ -82,7 +100,8 @@ async fn reconnect_restores_scrollback() {
         .await;
 
         // Wait for output + serialization tick.
-        wait_for_state_containing(tmp.path(), "lifecycle-test", Duration::from_secs(10)).await;
+        let pane_uuid = uuid::Uuid::from_slice(&pane_id).unwrap().to_string();
+        wait_for_state_containing(tmp.path(), &pane_uuid, Duration::from_secs(10)).await;
 
         // Drain deltas.
         let _ = c.drain(Duration::from_millis(500)).await;
@@ -106,7 +125,8 @@ async fn reconnect_restores_scrollback() {
             other => panic!("expected WorkspaceList, got {other:?}"),
         };
         assert_eq!(workspaces.len(), 1, "should have exactly 1 session");
-        assert_eq!(workspaces[0].name, "lifecycle-test");
+        assert_eq!(workspaces[0].name, "lifecycle-test", "a user-chosen name survives");
+        assert!(workspaces[0].user_renamed);
         assert_eq!(workspaces[0].id, runtime_id, "session ID should match");
 
         // Attach — should get snapshot with scrollback.
@@ -263,7 +283,8 @@ async fn restart_preserves_workspace_count_and_scrollback() {
         .await;
 
         // Wait for serialization.
-        wait_for_state_containing(tmp.path(), "restart-stable", Duration::from_secs(10)).await;
+        let pane_uuid = uuid::Uuid::from_slice(&pane_id).unwrap().to_string();
+        wait_for_state_containing(tmp.path(), &pane_uuid, Duration::from_secs(10)).await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
