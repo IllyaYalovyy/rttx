@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when the shell itself is back in the foreground, leftover mouse tracking,
   alternate screen, focus reporting and hidden cursor are cleared, so the
   prompt is usable without `reset`.
+- A dead full-screen app's cursor position and scroll region no longer
+  survive a restart. The persisted rendering leaves the cursor after the
+  last line of content, every restart path moves it onto a fresh line below
+  the content, and the cleanup sequences reset the scroll region and origin
+  mode, so the respawned shell's prompt lands below the old frame instead of
+  over it. Stray alternate-screen exits, as the 1.1.0 daemon wrote into
+  every log and snapshot, are dropped on the way in. Verified against a copy
+  of a real 18-workspace, 40-pane state directory written by 1.1.0.
 - Leaving the alternate screen is no longer sent unconditionally. On VTE that
   sequence restores a stale saved cursor — the top-left corner — when no
   alternate screen was active, which is why the next prompt after a process
