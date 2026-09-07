@@ -71,11 +71,21 @@ pub fn build_workspace_snapshot(
         panes,
         tree: None,
         default_active_pane_id: Vec::new(),
+        name: String::new(),
+        user_renamed: false,
     }
 }
 
-/// Build a `WorkspaceSnapshot` carrying the authoritative workspace tree and
-/// fallback-focus pane (RFC-031 §5).
+/// Workspace-level metadata carried by a snapshot: the daemon's name for
+/// the workspace and whether a user chose it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceNaming {
+    pub name: String,
+    pub user_renamed: bool,
+}
+
+/// Build a `WorkspaceSnapshot` carrying the authoritative workspace tree,
+/// fallback-focus pane (RFC-031 §5), and the daemon-owned name.
 #[must_use]
 pub fn build_workspace_snapshot_with_tree(
     runtime_id: uuid::Uuid,
@@ -84,6 +94,7 @@ pub fn build_workspace_snapshot_with_tree(
     panes: Vec<v3::PaneSnapshot>,
     tree: Option<v3::PaneTreeNode>,
     default_active_pane_id: Vec<u8>,
+    naming: WorkspaceNaming,
 ) -> v3::WorkspaceSnapshot {
     v3::WorkspaceSnapshot {
         runtime_id: crate::uuid_to_bytes(runtime_id),
@@ -92,7 +103,28 @@ pub fn build_workspace_snapshot_with_tree(
         panes,
         tree,
         default_active_pane_id,
+        name: naming.name,
+        user_renamed: naming.user_renamed,
     }
+}
+
+/// Build a `WorkspaceRenamed` push envelope announcing the daemon's current
+/// name for a workspace to an attached client.
+#[must_use]
+pub fn build_workspace_renamed_push(
+    runtime_id: uuid::Uuid,
+    name: String,
+    workspace_revision: u64,
+    user_renamed: bool,
+) -> v3::ServerEnvelope {
+    crate::v3_envelope::build_push_envelope(v3::server_envelope::Payload::WorkspaceRenamed(
+        v3::WorkspaceRenamed {
+            runtime_id: crate::uuid_to_bytes(runtime_id),
+            name,
+            workspace_revision,
+            user_renamed,
+        },
+    ))
 }
 
 /// Build a `ServerEnvelope` response containing a `WorkspaceSnapshot`.

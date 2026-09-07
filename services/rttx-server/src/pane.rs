@@ -73,7 +73,7 @@ impl Pane {
     pub fn new(id: Uuid, cols: u16, rows: u16) -> Self {
         Self {
             id,
-            screen: PaneScreen::new(DEFAULT_MAX_SCROLLBACK),
+            screen: PaneScreen::new_sized(DEFAULT_MAX_SCROLLBACK, cols, rows),
             cwd: None,
             title: None,
             cols,
@@ -237,6 +237,47 @@ impl Pane {
             .and_then(|p| p.to_str().map(str::to_string))
     }
 
+    /// Whether an interactive shell is the foreground process of the pane's
+    /// terminal — that is, nothing but a shell prompt is running in it.
+    ///
+    /// Read from `/proc`: the pane's child names the terminal's foreground
+    /// process group (`tpgid` in its `stat`), and that group's leader must
+    /// be a known shell. A pane whose root process is itself a full-screen
+    /// app (`htop`, a one-off command, an exerciser) is therefore never
+    /// mistaken for an idle shell. `None` when the pane has no live child
+    /// or the kernel will not say.
+    #[must_use]
+    pub fn foreground_is_shell(&self) -> Option<bool> {
+        let pid = self.child_pid?;
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let tpgid = foreground_pgrp_from_stat(&stat)?;
+        if tpgid <= 0 {
+            return Some(false);
+        }
+        let comm = std::fs::read_to_string(format!("/proc/{tpgid}/comm")).ok()?;
+        Some(is_interactive_shell_name(comm.trim()))
+    }
+
+    /// Clear terminal modes that only a running full-screen app uses when
+    /// the shell itself is in the foreground, so a client attaching to a
+    /// pane whose app died mid-flight gets a usable terminal rather than
+    /// one that needs `reset`: no stuck mouse tracking spraying escape
+    /// codes on click, no alternate screen, no invisible cursor.
+    ///
+    /// Returns the cleanup bytes that were applied (and should reach any
+    /// client already attached), or `None` when nothing needed doing.
+    pub fn sanitize_modes_if_idle(&mut self) -> Option<Vec<u8>> {
+        if self.is_exited() || !self.screen.has_app_only_modes() {
+            return None;
+        }
+        if self.foreground_is_shell() != Some(true) {
+            return None;
+        }
+        let cleanup = self.screen.cleanup_sequence(true);
+        self.screen.feed(&cleanup);
+        Some(cleanup)
+    }
+
     /// Return the effective CWD: OSC 7 value if available, otherwise /proc fallback.
     #[must_use]
     pub fn effective_cwd(&self) -> Option<String> {
@@ -254,10 +295,10 @@ impl Pane {
     /// hidden cursor, and other TUI modes are reset. Returns the cleanup
     /// bytes for the caller to broadcast to attached clients and append to
     /// the scrollback log.
-    pub fn feed_cleanup(&mut self) -> &'static [u8] {
-        let cleanup = crate::screen::terminal_cleanup_bytes();
-        self.screen.feed(cleanup);
-        self.pending_flush.extend_from_slice(cleanup);
+    pub fn feed_cleanup(&mut self) -> Vec<u8> {
+        let cleanup = self.screen.cleanup_sequence(false);
+        self.screen.feed(&cleanup);
+        self.pending_flush.extend_from_slice(&cleanup);
         self.output_seq += 1;
         cleanup
     }
@@ -278,10 +319,16 @@ impl Pane {
     }
 
     /// Build a deterministic screen snapshot for on-disk persistence (RFC-022 §4).
+    ///
+    /// `screen_bytes` is a rendering of the pane's primary buffer (see
+    /// [`PaneScreen::primary_buffer_stream`]), not a tail of raw output, so
+    /// a daemon restart rebuilds the pane from a clean description of what
+    /// was on screen rather than from a byte-stream suffix.
     #[must_use]
-    pub fn to_screen_snapshot(&self) -> ScreenSnapshotV1 {
+    pub fn to_screen_snapshot(&mut self) -> ScreenSnapshotV1 {
         let (cursor_row, cursor_col) = self.screen.cursor_position();
-        let screen_bytes = self.screen.snapshot_bytes(MAX_SNAPSHOT_BYTES).to_vec();
+        let mut screen_bytes = self.screen.primary_buffer_stream();
+        crate::screen::drop_oldest_lines_over(&mut screen_bytes, MAX_SNAPSHOT_BYTES);
         ScreenSnapshotV1 {
             schema_version: SCREEN_SNAPSHOT_SCHEMA_VERSION,
             pane_id: self.id,
@@ -342,10 +389,48 @@ impl Pane {
         // keys, and cursor visibility to a sane baseline. Feeding the cleanup
         // bytes through the parser also clears the corresponding mode flags, so
         // the reconstructed screen reports a clean state to attaching clients.
-        self.screen.feed(crate::screen::terminal_cleanup_bytes());
+        let cleanup = self.screen.cleanup_sequence(false);
+        self.screen.feed(&cleanup);
+        self.screen.move_cursor_below_content();
 
         self.output_seq = snap.pane_output_seq;
     }
+}
+
+/// The terminal's foreground process group (`tpgid`, field 8) from a
+/// `/proc/<pid>/stat` line, counted after the parenthesised command name,
+/// which may itself contain spaces and parentheses.
+#[must_use]
+pub fn foreground_pgrp_from_stat(stat: &str) -> Option<i64> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // after_comm starts at field 3 (state); tpgid is index 5.
+    fields.get(5)?.parse().ok()
+}
+
+/// Whether `comm` names an interactive shell: the only kind of foreground
+/// process that means "nothing is running here".
+#[must_use]
+pub fn is_interactive_shell_name(comm: &str) -> bool {
+    let name = comm.trim_start_matches('-');
+    matches!(
+        name,
+        "bash"
+            | "zsh"
+            | "fish"
+            | "sh"
+            | "dash"
+            | "ksh"
+            | "mksh"
+            | "tcsh"
+            | "csh"
+            | "nu"
+            | "elvish"
+            | "xonsh"
+            | "ash"
+            | "oil"
+            | "osh"
+    )
 }
 
 /// Write scrollback data to disk: append and rotate.
@@ -1073,6 +1158,12 @@ mod tests {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         let returned = pane.feed_cleanup();
         assert_eq!(returned, crate::screen::terminal_cleanup_bytes());
+        // In the alternate screen the sequence leaves it first.
+        let mut tui = Pane::new(Uuid::new_v4(), 80, 24);
+        tui.feed_output(b"\x1b[?1049h");
+        let returned = tui.feed_cleanup();
+        assert!(returned.starts_with(crate::screen::leave_alternate_screen_bytes()));
+        assert!(!tui.screen.alternate_screen());
     }
 
     #[test]
@@ -1285,5 +1376,148 @@ mod tests {
         assert_eq!(pane.output_seq, 1);
         pane.accept_output(b"b");
         assert_eq!(pane.output_seq, 2);
+    }
+    #[test]
+    fn foreground_pgrp_is_read_from_stat() {
+        // pid (comm) state ppid pgrp session tty_nr tpgid ...
+        let shell_idle = "4242 (bash) S 1 4242 4242 34816 4242 4194560 0 0 0 0";
+        assert_eq!(foreground_pgrp_from_stat(shell_idle), Some(4242));
+        let app_running = "4242 (bash) S 1 4242 4242 34816 5000 4194560 0 0 0 0";
+        assert_eq!(foreground_pgrp_from_stat(app_running), Some(5000));
+        let odd_comm = "4242 (my (weird) sh) S 1 4242 4242 34816 4242 0";
+        assert_eq!(foreground_pgrp_from_stat(odd_comm), Some(4242));
+        assert_eq!(foreground_pgrp_from_stat("garbage"), None);
+    }
+
+    #[test]
+    fn only_interactive_shells_count_as_idle_foreground() {
+        for shell in ["bash", "-bash", "zsh", "fish", "sh", "dash", "nu"] {
+            assert!(is_interactive_shell_name(shell), "{shell}");
+        }
+        for app in ["htop", "vim", "pty-exerciser", "ssh", "claude", "less", "python3"] {
+            assert!(!is_interactive_shell_name(app), "{app}");
+        }
+    }
+
+    #[test]
+    fn idle_sanitizer_leaves_a_pane_without_app_modes_alone() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.child_pid = Some(std::process::id());
+        // (This test binary is not a shell, so even with app modes armed
+        // the sanitizer would decline; here it must decline earlier, on
+        // the absence of app modes, without touching the shell's modes.)
+        pane.feed_output(b"\x1b[?2004h\x1b[?1h$ ");
+        assert!(pane.sanitize_modes_if_idle().is_none(), "shell modes are not app modes");
+        assert!(pane.screen.bracketed_paste_mode());
+        assert!(pane.screen.application_cursor_keys());
+    }
+
+    #[test]
+    fn idle_sanitizer_needs_a_live_child_to_judge() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.feed_output(b"\x1b[?1000h\x1b[?1049h");
+        assert!(pane.sanitize_modes_if_idle().is_none(), "no child: cannot tell, do nothing");
+        assert_eq!(pane.screen.mouse_tracking_mode(), 1000);
+    }
+
+    #[test]
+    fn idle_sanitizer_clears_app_modes_when_the_shell_is_foreground() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        // The foreground check needs a real shell in /proc; the end-to-end
+        // case lives in tests/idle_mode_recovery.rs. Here, exercise the
+        // screen half: what the cleanup does to the tracked modes.
+        pane.feed_output(b"$ app\r\n\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?25l\x1b[?1004h");
+        assert!(pane.screen.has_app_only_modes());
+        let cleanup = pane.screen.cleanup_sequence(true);
+        assert!(cleanup.starts_with(crate::screen::leave_alternate_screen_bytes()));
+        pane.screen.feed(&cleanup);
+        assert!(!pane.screen.has_app_only_modes());
+        assert!(!pane.screen.alternate_screen());
+        assert_eq!(pane.screen.mouse_tracking_mode(), 0);
+        assert!(!pane.screen.sgr_mouse_mode());
+        assert!(!pane.screen.focus_event_mode());
+        assert!(pane.screen.cursor_visible());
+        // The rendered attach stream then arms nothing.
+        let stream = pane.screen.reattach_stream();
+        assert!(
+            !stream.windows(4).any(|w| w == b"\x1b[?1"),
+            "no DEC private modes armed: {stream:?}"
+        );
+    }
+
+    /// An app that draws inline (a chat UI with a status line under the
+    /// input box) leaves its cursor inside its frame. After a restart the
+    /// app is gone, so the persisted rendering must not restore that cursor:
+    /// the respawned shell's prompt goes after the last line, never over
+    /// the frame.
+    #[test]
+    fn restart_reconstruction_ignores_a_dead_apps_cursor_inside_its_frame() {
+        let mut before = Pane::new(Uuid::new_v4(), 80, 10);
+        before.feed_output(b"$ claude\r\n> type here\r\n\r\n  model high | ~/proj\r\n");
+        // Cursor back up into the input box, after "> ".
+        before.feed_output(b"\x1b[3A\x1b[3G");
+        assert_eq!(before.screen.cursor_position(), (1, 2));
+
+        let snap = before.to_screen_snapshot();
+        let mut after = Pane::new(snap.pane_id, snap.cols, snap.rows);
+        after.restore_from_snapshot(&snap);
+        after.feed_output(b"PROMPT> ");
+        let mut client = vt100::Parser::new(10, 80, 100);
+        client.process(&after.screen.reattach_stream());
+        let rows: Vec<String> =
+            client.screen().rows(0, 80).map(|r| r.trim_end().to_string()).collect();
+        assert_eq!(rows[0], "$ claude");
+        assert_eq!(rows[1], "> type here");
+        // The status line was the unterminated last line and is dropped, as
+        // a stale prompt would be; the new prompt follows the frame.
+        let prompt_row = rows.iter().position(|r| r == "PROMPT>").expect("prompt drawn");
+        assert!(prompt_row > 1, "prompt below the input box: {rows:?}");
+        assert_eq!(client.screen().cursor_position(), (prompt_row as u16, 8));
+
+        // A snapshot written by a 1.1.0 daemon is the raw byte stream, with
+        // the app's cursor-up sequences in it; restoring it lands the cursor
+        // inside the frame. The prompt must still go below the frame.
+        let mut legacy = snap.clone();
+        legacy.screen_bytes =
+            b"$ claude\r\n> type here\r\n\r\n  model high | ~/proj\r\n\x1b[3A\x1b[3G".to_vec();
+        let mut after = Pane::new(legacy.pane_id, legacy.cols, legacy.rows);
+        after.restore_from_snapshot(&legacy);
+        after.feed_output(b"PROMPT> ");
+        let mut client = vt100::Parser::new(10, 80, 100);
+        client.process(&after.screen.reattach_stream());
+        let rows: Vec<String> =
+            client.screen().rows(0, 80).map(|r| r.trim_end().to_string()).collect();
+        assert_eq!(rows[1], "> type here", "the frame is not overwritten: {rows:?}");
+        let prompt_row = rows.iter().position(|r| r == "PROMPT>").expect("prompt drawn");
+        assert!(prompt_row >= 3, "prompt below the frame: {rows:?}");
+        assert_eq!(client.screen().cursor_position(), (prompt_row as u16, 8));
+    }
+
+    /// A daemon restart rebuilds the pane from the persisted rendering and
+    /// the respawned shell's prompt lands below the restored history.
+    #[test]
+    fn restart_reconstruction_places_the_new_prompt_below_restored_history() {
+        let mut before = Pane::new(Uuid::new_v4(), 80, 24);
+        before.feed_output(b"PROMPT> echo cycle-0\r\ncycle-0\r\nPROMPT> ");
+        let snap = before.to_screen_snapshot();
+        // Trailing blanks are not content; the old prompt line is dropped on
+        // restore anyway (the process that printed it is gone).
+        assert_eq!(
+            String::from_utf8_lossy(&snap.screen_bytes),
+            "PROMPT> echo cycle-0\r\ncycle-0\r\nPROMPT>"
+        );
+
+        let mut after = Pane::new(snap.pane_id, snap.cols, snap.rows);
+        after.restore_from_snapshot(&snap);
+        assert_eq!(
+            after.screen.cursor_position(),
+            (2, 0),
+            "old prompt line dropped, cursor below history"
+        );
+        after.feed_output(b"PROMPT> ");
+        assert_eq!(
+            String::from_utf8_lossy(&after.screen.reattach_stream()),
+            "PROMPT> echo cycle-0\r\ncycle-0\r\nPROMPT> "
+        );
     }
 }

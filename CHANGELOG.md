@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Reconnecting or restarting no longer leaves a pane broken. Panes came back
+  with lines overwritten from the middle, the cursor in the wrong place,
+  stale mouse tracking spraying escape codes on click, and frames of a
+  full-screen app that had long since exited — and needed `reset` to be
+  usable. The cause was replaying a suffix of the raw PTY byte stream into
+  the client: a suffix starts at an arbitrary point, and every carriage
+  return, cursor move and erase in it was computed for the width the output
+  was produced at. The daemon now keeps a real cell grid per pane and hands
+  an attaching client a rendering of the pane's *state*: history and screen
+  as intact lines with their formatting, the cursor where the shell left it,
+  a running full-screen app restored on the alternate screen, and only the
+  input modes that are actually armed. Resizing a pane re-lays its screen
+  instead of truncating it, and a daemon restart rebuilds panes from the same
+  clean rendering.
+- A pane whose full-screen app died without cleaning up is healed at attach:
+  when the shell itself is back in the foreground, leftover mouse tracking,
+  alternate screen, focus reporting and hidden cursor are cleared, so the
+  prompt is usable without `reset`.
+- A dead full-screen app's cursor position and scroll region no longer
+  survive a restart. The persisted rendering leaves the cursor after the
+  last line of content, every restart path moves it onto a fresh line below
+  the content, and the cleanup sequences reset the scroll region and origin
+  mode, so the respawned shell's prompt lands below the old frame instead of
+  over it. Stray alternate-screen exits, as the 1.1.0 daemon wrote into
+  every log and snapshot, are dropped on the way in. Verified against a copy
+  of a real 18-workspace, 40-pane state directory written by 1.1.0.
+- Leaving the alternate screen is no longer sent unconditionally. On VTE that
+  sequence restores a stale saved cursor — the top-left corner — when no
+  alternate screen was active, which is why the next prompt after a process
+  exit or a restart could land over the top of the screen.
+- Reconnecting one workspace no longer kills every other workspace on the same
+  host. All workspaces on a host share one daemon connection, and "Reconnect"
+  tore it down and re-opened only the one workspace, so every sibling went
+  silently dead — its panes still said "Connected" but nothing typed went
+  anywhere. A workspace-scoped problem (taken over, owned elsewhere, runtime
+  gone) is now retried on the live connection; only a host-scoped problem
+  (daemon unreachable, dead, wrong version) rebuilds the connection, and then
+  every workspace on that host is reconnected with it. "Reconnect All from
+  Host" likewise reconnects all of them, not just the ones that looked broken.
+- The client that lost a workspace to a take-over can take it back: the
+  workspace row's context menu offers "Take Over Workspace…" with the same
+  confirmation as the connect dialog.
+- The connect-existing dialog groups available workspaces before busy ones
+  instead of printing an "Available" header over whatever the daemon listed
+  first, spells out what "In use by another client" and "Open in this window"
+  mean, and names a workspace it attaches after the daemon's name.
+- Reconnecting no longer types escape-sequence garbage into the shell. VTE
+  parses replayed scrollback asynchronously and answers any query it finds in
+  it (DECRQSS, XTGETTCAP, colour queries); those answers were forwarded to the
+  daemon as input. Replay is now gated until VTE has parsed it.
+- Output that arrives in the same instant as a snapshot is no longer lost.
+- A large replay can no longer be mistaken for a dead connection: heartbeat
+  ticks pause while the UI has paused reading for backpressure.
+
+### Changed
+- The daemon owns workspace names. A workspace's name travels in the attach
+  snapshot and every rename — a user's, or the automatic one derived from the
+  shell's directory — is recorded by the daemon and pushed to every attached
+  client, so a workspace reads the same in every window, after every reconnect,
+  and in `rttx-server status`. A name the user chose on the client before the
+  daemon tracked user renames is pushed back to the daemon on the next attach
+  rather than discarded. Remote workspaces are named after their directory like
+  local ones; the host name is only the fallback.
+
 ## [1.1.0] - 2026-09-06
 
 ### Added

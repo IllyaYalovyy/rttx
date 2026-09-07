@@ -187,18 +187,18 @@ where
 /// Build a v3 `WorkspaceSnapshot` from a workspace's current state.
 #[must_use]
 pub fn build_v3_workspace_snapshot(
-    rt: &Workspace,
+    rt: &mut Workspace,
     runtime_id: Uuid,
     client_role: v3::WorkspaceClientRole,
 ) -> v3::WorkspaceSnapshot {
     let panes: Vec<v3::PaneSnapshot> = rt
         .panes
-        .values()
+        .values_mut()
         .map(|pane| {
-            let scrollback_data = crate::screen::strip_client_queries(
-                pane.screen.snapshot_bytes(crate::pane::MAX_SNAPSHOT_BYTES),
-            );
-            let total_scrollback_bytes = pane.screen.raw_bytes().len() as u64;
+            // A rendering of the pane's state, complete by construction:
+            // the client rebuilds the pane from it, not from raw output.
+            let scrollback_data = pane.screen.reattach_stream();
+            let total_scrollback_bytes = scrollback_data.len() as u64;
             rttx_proto::v3_snapshot::build_pane_snapshot(
                 rttx_proto::v3_snapshot::PaneSnapshotParams {
                     pane_id: pane.id,
@@ -222,6 +222,10 @@ pub fn build_v3_workspace_snapshot(
         panes,
         workspace_tree_to_proto(&rt.tree),
         default_active_bytes(&rt.tree),
+        rttx_proto::v3_snapshot::WorkspaceNaming {
+            name: rt.name.clone(),
+            user_renamed: rt.user_renamed,
+        },
     )
 }
 

@@ -1324,6 +1324,8 @@ fn v3_send_discipline_core_commands_always_allowed() {
         v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: rt.clone(),
             name: "renamed".into(),
+
+            automatic: false,
         }),
         v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}),
         v3::client_envelope::Command::CreatePane(v3::CreatePane {
@@ -1612,6 +1614,9 @@ fn v3_core_workspace_lifecycle_end_to_end() {
             workspace_revision: 2,
             client_role: v3::WorkspaceClientRole::Writer as i32,
             panes: vec![],
+
+            name: String::new(),
+            user_renamed: false,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);
@@ -1620,6 +1625,8 @@ fn v3_core_workspace_lifecycle_end_to_end() {
     let cmd = v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
         runtime_id: runtime_id.clone(),
         name: "renamed".into(),
+
+        automatic: false,
     });
     let req = v3_envelope::build_client_envelope(&id_gen, cmd);
     let resp = v3_envelope::build_response_envelope(
@@ -1628,6 +1635,8 @@ fn v3_core_workspace_lifecycle_end_to_end() {
             runtime_id: runtime_id.clone(),
             name: "renamed".into(),
             workspace_revision: 3,
+
+            user_renamed: false,
         }),
     );
     assert_eq!(resp.request_id, req.request_id);

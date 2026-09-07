@@ -2934,6 +2934,9 @@ fn managed_workspace_recovery_does_not_steal_visible_session_from_selected_row()
                 total_scrollback_bytes: 15,
                 scrollback_complete: true,
             }],
+
+            name: String::new(),
+            user_renamed: false,
         },
     });
     pump_events(50);
@@ -3381,7 +3384,7 @@ fn auto_rename_updates_sidebar_when_not_user_renamed() {
         state.workspaces[0].uuid.clone()
     };
 
-    window.maybe_auto_rename_workspace(&session_uuid, Some("/home/user/projects/rttx"));
+    window.apply_daemon_workspace_name(&session_uuid, "rttx", false);
 
     {
         let state = window.imp().state.borrow();
@@ -3418,11 +3421,20 @@ fn auto_rename_skipped_after_manual_rename() {
     };
 
     window.rename_runtime(&session_uuid, "My Custom Name");
-    window.maybe_auto_rename_workspace(&session_uuid, Some("/home/user/projects/rttx"));
+    // A daemon-derived name still in flight must not clobber the rename.
+    window.apply_daemon_workspace_name(&session_uuid, "rttx", false);
 
     {
         let state = window.imp().state.borrow();
         assert_eq!(state.workspaces[0].name, "My Custom Name");
+        assert!(state.workspaces[0].user_renamed);
+    }
+
+    // The daemon's acknowledgement of a user rename is authoritative.
+    window.apply_daemon_workspace_name(&session_uuid, "Renamed Elsewhere", true);
+    {
+        let state = window.imp().state.borrow();
+        assert_eq!(state.workspaces[0].name, "Renamed Elsewhere");
         assert!(state.workspaces[0].user_renamed);
     }
 
@@ -3491,6 +3503,9 @@ fn retry_workspace_connection_sets_connecting_and_rebuilds_on_open() {
                 total_scrollback_bytes: 11,
                 scrollback_complete: true,
             }],
+
+            name: String::new(),
+            user_renamed: false,
         },
     });
     pump_events(50);
@@ -7503,6 +7518,9 @@ fn workspace_resynced_event_restores_pane_content() {
                 total_scrollback_bytes: 7,
                 scrollback_complete: true,
             }],
+
+            name: String::new(),
+            user_renamed: false,
         },
     });
     pump_events(50);
@@ -7530,6 +7548,9 @@ fn workspace_resynced_event_restores_pane_content() {
                 total_scrollback_bytes: 15,
                 scrollback_complete: true,
             }],
+
+            name: String::new(),
+            user_renamed: false,
         },
     });
     pump_events(50);

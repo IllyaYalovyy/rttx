@@ -4,10 +4,29 @@
 //! representation of the terminal grid. Used to build snapshots for client
 //! reconnection.
 
+/// Rows of history the cell grid keeps per pane.
+///
+/// A 200-column row costs 6.4 KiB in the grid, so this bounds the grid at a
+/// few megabytes per pane. Older output stays in the raw byte log; the grid
+/// exists to hand an attaching client a *clean* picture of the pane, and
+/// two thousand clean lines beat two hundred kilobytes of garbled replay.
+pub const GRID_SCROLLBACK_ROWS: usize = 1000;
+
 /// In-memory terminal screen state built from VTE parsing.
 pub struct PaneScreen {
     parser: vte::Parser,
     performer: ScreenPerformer,
+    /// The pane's cell grid: the screen and its recent history as cells,
+    /// sized like the PTY. This is what an attaching client is shown — a
+    /// rendering of the *state*, not a replay of the byte stream that
+    /// produced it (see [`reattach_stream`](Self::reattach_stream)).
+    grid: vt100::Parser,
+    /// Trailing bytes of an incomplete UTF-8 sequence held back from the
+    /// grid until the read that completes it arrives. PTY reads split
+    /// multi-byte characters at arbitrary points, and the grid's parser
+    /// does not always resolve a sequence split across two feeds the way
+    /// it resolves it whole.
+    grid_utf8_tail: Vec<u8>,
 }
 
 /// Implements `vte::Perform` to track cursor position and collect raw bytes.
@@ -48,10 +67,19 @@ struct ScreenPerformer {
 }
 
 impl PaneScreen {
-    /// Create a new screen with the given scrollback byte limit.
+    /// Create a new screen with the given scrollback byte limit at the
+    /// default 80x24 size.
     #[must_use]
     pub fn new(max_scrollback_bytes: usize) -> Self {
+        Self::new_sized(max_scrollback_bytes, 80, 24)
+    }
+
+    /// Create a new screen with the given scrollback byte limit and size.
+    #[must_use]
+    pub fn new_sized(max_scrollback_bytes: usize, cols: u16, rows: u16) -> Self {
         Self {
+            grid: vt100::Parser::new(rows.max(1), cols.max(1), GRID_SCROLLBACK_ROWS),
+            grid_utf8_tail: Vec::new(),
             parser: vte::Parser::new(),
             performer: ScreenPerformer {
                 raw_bytes: Vec::new(),
@@ -74,9 +102,37 @@ impl PaneScreen {
     }
 
     /// Feed raw PTY output bytes into the parser.
+    ///
+    /// Stray alternate-screen exits are dropped first (see
+    /// [`sanitize_output`](Self::sanitize_output)); the read loop does the
+    /// same before it stores, parses or forwards a batch, so every consumer
+    /// of a pane's output sees the same bytes.
     pub fn feed(&mut self, data: &[u8]) {
-        self.accept_raw(data);
-        self.parse(data);
+        let clean = self.sanitize_output(data);
+        self.accept_raw(&clean);
+        self.parse(&clean);
+    }
+
+    /// Remove alternate-screen exits (DECRST 1049 / 1047 / 47) that arrive
+    /// while the alternate screen is *not* active.
+    ///
+    /// Terminals — VTE included — implement DECRST 1049 as "switch to the
+    /// normal buffer and restore the saved cursor" without checking whether
+    /// the alternate buffer was in use. On a terminal that never entered it
+    /// the sequence jumps the cursor to a stale saved position, usually the
+    /// top of the screen, and the next prompt is drawn over the middle of
+    /// the history. Such exits come from blanket "reset everything" cleanup
+    /// sequences (this daemon emitted one at every process exit and restart
+    /// before 1.1.1; the logs it wrote still contain them) and from tools
+    /// like `tput rmcup`. The daemon owns terminal semantics, so it removes
+    /// them on the way in: the cell grid, the persisted log and the bytes
+    /// forwarded to clients all agree. Exits that do leave an active
+    /// alternate screen pass through untouched, including within the same
+    /// batch as the entry.
+    #[must_use]
+    pub fn sanitize_output<'a>(&self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        let in_alt = self.performer.alternate_screen || self.grid.screen().alternate_screen();
+        strip_stray_alternate_screen_exits(data, in_alt)
     }
 
     /// Store raw bytes for snapshot replay without running the VTE parser.
@@ -104,6 +160,65 @@ impl PaneScreen {
         for &byte in data {
             self.parser.advance(&mut self.performer, byte);
         }
+        self.feed_grid(data);
+    }
+
+    /// Feed the grid whole UTF-8 sequences only, carrying an incomplete
+    /// trailing sequence over to the next feed.
+    fn feed_grid(&mut self, data: &[u8]) {
+        if self.grid_utf8_tail.is_empty() {
+            let keep = incomplete_utf8_tail_len(data);
+            let (whole, tail) = data.split_at(data.len() - keep);
+            self.grid.process(whole);
+            self.grid_utf8_tail.extend_from_slice(tail);
+            return;
+        }
+        let mut joined = std::mem::take(&mut self.grid_utf8_tail);
+        joined.extend_from_slice(data);
+        let keep = incomplete_utf8_tail_len(&joined);
+        let whole_len = joined.len() - keep;
+        self.grid.process(&joined[..whole_len]);
+        self.grid_utf8_tail.extend_from_slice(&joined[whole_len..]);
+    }
+
+    /// Resize the cell grid to follow the PTY.
+    ///
+    /// The grid's own resize truncates: a narrower width cuts every visible
+    /// row at the new column, a shorter height drops rows off the bottom.
+    /// A terminal reflows instead, and so must the daemon's model, or the
+    /// picture a client gets on its next attach is missing the ends of the
+    /// lines it could see before it resized. The primary screen's visible
+    /// rows are therefore re-laid at the new size: rendered as logical
+    /// lines, the screen cleared, the grid resized, the lines fed back in
+    /// so they wrap at the new width (and scroll into history if they no
+    /// longer fit). History rows keep the width they scrolled off at and
+    /// are read back in full, so they need no reflow. A full-screen app on
+    /// the alternate screen is merely resized: it redraws itself.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        let (cols, rows) = (cols.max(1), rows.max(1));
+        let (cur_rows, cur_cols) = self.grid.screen().size();
+        if (cur_cols, cur_rows) == (cols, rows) {
+            return;
+        }
+        let on_alternate = self.grid.screen().alternate_screen();
+        if on_alternate {
+            self.grid.process(b"\x1b[?47l");
+        }
+        let mut relaid = Vec::new();
+        render_rows(&[], self.grid.screen(), CursorPlacement::AsIs, &mut relaid);
+        self.grid.process(b"\x1b[2J\x1b[H");
+        self.grid.screen_mut().set_size(rows, cols);
+        self.grid.process(&relaid);
+        if on_alternate {
+            self.grid.process(b"\x1b[?47h");
+        }
+    }
+
+    /// The cell grid's current size as `(cols, rows)`.
+    #[must_use]
+    pub fn grid_size(&self) -> (u16, u16) {
+        let (rows, cols) = self.grid.screen().size();
+        (cols, rows)
     }
 
     /// Return the raw bytes for snapshot replay.
@@ -119,9 +234,12 @@ impl PaneScreen {
         self.performer.raw_bytes.capacity()
     }
 
-    /// Release the in-memory scrollback buffer, freeing its allocation.
+    /// Release the in-memory scrollback buffer and the cell grid, freeing
+    /// their allocations. The pane renders as empty afterwards.
     pub fn clear_scrollback(&mut self) {
         self.performer.raw_bytes = Vec::new();
+        let (rows, cols) = self.grid.screen().size();
+        self.grid = vt100::Parser::new(rows, cols, 0);
     }
 
     /// Return a tail slice of raw bytes suitable for client snapshot replay.
@@ -143,6 +261,115 @@ impl PaneScreen {
             .map_or(&raw[start..], |offset| &raw[start + offset + 1..])
     }
 
+    /// The byte stream a freshly reset client terminal is fed on attach to
+    /// show this pane.
+    ///
+    /// This renders the pane's *state* — history and screen as cells — rather
+    /// than replaying the bytes that produced it. A byte-stream suffix is not
+    /// a description of a terminal: it starts at an arbitrary point (often
+    /// inside a full-screen app's session, after the sequences that armed its
+    /// modes), and every `\r`, cursor movement and erase in it was computed
+    /// for the width the output was produced at, so replaying it into a
+    /// client of another width overwrites the wrong cells. The rendering
+    /// instead emits:
+    ///
+    /// 1. The primary buffer — history rows and the primary screen — as
+    ///    *logical lines*: text plus SGR attributes, with soft-wrapped rows
+    ///    joined, so the client wraps them at its own width. No cursor
+    ///    movement is used, so the result cannot depend on the client's
+    ///    size. The cursor is placed by emitting the cursor row's cells up to
+    ///    the cursor and, only if content follows, bracketing that content
+    ///    in DECSC/DECRC.
+    /// 2. If a full-screen app owns the alternate screen: the switch to it and
+    ///    its current frame, positioned absolutely (an app redraws on the
+    ///    resize that follows a size change anyway), then its cursor.
+    /// 3. The input modes the client must arm (keypad, cursor keys, bracketed
+    ///    paste, mouse) and cursor visibility.
+    ///
+    /// Modes that a finished app turned off are simply absent, so nothing an
+    /// old session did can leak into the client.
+    pub fn reattach_stream(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let on_alternate = self.grid.screen().alternate_screen();
+        if on_alternate {
+            // Peek at the primary buffer without disturbing either grid:
+            // mode 47 switches buffers without clearing or moving cursors.
+            self.grid.process(b"\x1b[?47l");
+        }
+        render_primary_buffer(&mut self.grid, CursorPlacement::AsIs, &mut out);
+        drop_oldest_lines_over(&mut out, MAX_REATTACH_BYTES);
+        if on_alternate {
+            self.grid.process(b"\x1b[?47h");
+            render_alternate_screen(self.grid.screen(), &mut out);
+        }
+        render_armed_modes(self.grid.screen(), self.performer.focus_event_mode, &mut out);
+        out
+    }
+
+    /// Put the cursor on a fresh line below everything on the primary
+    /// screen, if it is not already below the content.
+    ///
+    /// Used when the process that owned the pane is gone (a restart): its
+    /// cursor position is meaningless, and a full-screen app that drew
+    /// inline leaves the cursor inside its frame, where the respawned
+    /// shell's prompt would otherwise be printed. Legacy snapshots written
+    /// as raw bytes by a 1.1.0 daemon land the cursor there too.
+    pub fn move_cursor_below_content(&mut self) {
+        if self.grid.screen().alternate_screen() {
+            return;
+        }
+        let screen = self.grid.screen();
+        let (rows, cols) = screen.size();
+        let last_content = (0..rows).rev().find(|&row| {
+            (0..cols).any(|col| screen.cell(row, col).is_some_and(vt100::Cell::has_contents))
+        });
+        let Some(last_content) = last_content else {
+            return;
+        };
+        let (cursor_row, _) = screen.cursor_position();
+        if cursor_row > last_content {
+            return;
+        }
+        // Absolute move to the last content row, then a new line: scrolls
+        // if that row is the bottom one.
+        self.feed(format!("\x1b[{};1H\r\n", last_content + 1).as_bytes());
+    }
+
+    /// The cleanup sequence for this screen's current state: leaves the
+    /// alternate screen only if it is active, then either the full reset
+    /// ([`terminal_cleanup_bytes`], for a pane whose process is gone) or the
+    /// prompt-safe subset ([`idle_shell_cleanup_bytes`]).
+    #[must_use]
+    pub fn cleanup_sequence(&self, idle_shell: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        if self.performer.alternate_screen || self.grid.screen().alternate_screen() {
+            out.extend_from_slice(leave_alternate_screen_bytes());
+        }
+        out.extend_from_slice(if idle_shell {
+            idle_shell_cleanup_bytes()
+        } else {
+            terminal_cleanup_bytes()
+        });
+        out
+    }
+
+    /// Whether a mode is armed that only a running full-screen app uses:
+    /// the alternate screen, mouse tracking, focus reporting, or a hidden
+    /// cursor. With the shell itself in the foreground such a mode is a
+    /// leftover of an app that died without cleaning up.
+    #[must_use]
+    pub fn has_app_only_modes(&self) -> bool {
+        let screen = self.grid.screen();
+        self.performer.alternate_screen
+            || screen.alternate_screen()
+            || self.performer.mouse_tracking_mode != 0
+            || screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None
+            || self.performer.sgr_mouse_mode
+            || self.performer.focus_event_mode
+            || !self.performer.cursor_visible
+            || screen.hide_cursor()
+    }
+
     /// Return the terminal title if set via OSC.
     #[must_use]
     pub fn title(&self) -> Option<&str> {
@@ -155,10 +382,34 @@ impl PaneScreen {
         self.performer.cwd.as_deref()
     }
 
-    /// Return cursor position (row, col).
+    /// Return cursor position (row, col), from the cell grid.
     #[must_use]
-    pub const fn cursor_position(&self) -> (usize, usize) {
-        (self.performer.cursor_row, self.performer.cursor_col)
+    pub fn cursor_position(&self) -> (usize, usize) {
+        let (row, col) = self.grid.screen().cursor_position();
+        (usize::from(row), usize::from(col))
+    }
+
+    /// Render the primary buffer — history and primary screen, without any
+    /// running full-screen app's frame or the input modes — as the clean
+    /// stream that rebuilds it on a daemon restart.
+    ///
+    /// The process that owned the pane will be gone when this is replayed,
+    /// so its cursor position is meaningless: the cursor is left after the
+    /// last line of content, where the respawned shell's prompt belongs.
+    /// (A full-screen app that drew inline — a chat UI, a progress
+    /// dashboard — leaves its cursor in the middle of its frame; restoring
+    /// that would put the new prompt there.)
+    pub fn primary_buffer_stream(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let on_alternate = self.grid.screen().alternate_screen();
+        if on_alternate {
+            self.grid.process(b"\x1b[?47l");
+        }
+        render_primary_buffer(&mut self.grid, CursorPlacement::AfterContent, &mut out);
+        if on_alternate {
+            self.grid.process(b"\x1b[?47h");
+        }
+        out
     }
 
     /// Drain and return any pending replies (e.g. CPR for DSR).
@@ -266,6 +517,373 @@ pub fn restart_safe_scrollback(data: &[u8]) -> &[u8] {
     match data.iter().rposition(|&byte| matches!(byte, b'\n' | b'\r')) {
         Some(index) => &data[..=index],
         None => &[],
+    }
+}
+
+/// Drop DECRST 1049 / 1047 / 47 sequences from `data` wherever the
+/// alternate screen is not active at that point of the stream, starting
+/// from `in_alt`. Entries (DECSET) are tracked so an exit that follows an
+/// entry in the same data is kept. Returns the input unchanged (borrowed)
+/// when there is nothing to remove.
+#[must_use]
+pub fn strip_stray_alternate_screen_exits(
+    data: &[u8],
+    mut in_alt: bool,
+) -> std::borrow::Cow<'_, [u8]> {
+    if !data.contains(&0x1b) {
+        return std::borrow::Cow::Borrowed(data);
+    }
+    let mut out: Option<Vec<u8>> = None;
+    let mut i = 0;
+    let mut copied_upto = 0;
+    while i < data.len() {
+        if data[i] == 0x1b
+            && let Some((len, entering)) = alternate_screen_switch_len(&data[i..])
+        {
+            if entering {
+                in_alt = true;
+            } else if in_alt {
+                in_alt = false;
+            } else {
+                let out = out.get_or_insert_with(|| Vec::with_capacity(data.len()));
+                out.extend_from_slice(&data[copied_upto..i]);
+                copied_upto = i + len;
+            }
+            i += len;
+            continue;
+        }
+        i += 1;
+    }
+    out.map_or(std::borrow::Cow::Borrowed(data), |mut out| {
+        out.extend_from_slice(&data[copied_upto..]);
+        std::borrow::Cow::Owned(out)
+    })
+}
+
+/// If `data` starts with an alternate-screen switch — `CSI ? 1049 h/l`,
+/// `CSI ? 1047 h/l` or `CSI ? 47 h/l` — return its length and whether it
+/// enters (`h`) the alternate screen.
+fn alternate_screen_switch_len(data: &[u8]) -> Option<(usize, bool)> {
+    if data.len() < 5 || data[0] != 0x1b || data[1] != b'[' || data[2] != b'?' {
+        return None;
+    }
+    let mut pos = 3;
+    while pos < data.len() && data[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    let param = &data[3..pos];
+    if !matches!(param, b"1049" | b"1047" | b"47") {
+        return None;
+    }
+    match data.get(pos) {
+        Some(b'h') => Some((pos + 1, true)),
+        Some(b'l') => Some((pos + 1, false)),
+        _ => None,
+    }
+}
+
+/// Length of an incomplete (but so far valid) UTF-8 sequence at the end
+/// of `data`: the bytes to hold back until the rest arrives. Zero when the
+/// data ends on a character boundary or in something that is not a valid
+/// sequence prefix (those are fed through and resolved as-is).
+fn incomplete_utf8_tail_len(data: &[u8]) -> usize {
+    // Look back at most three bytes for a lead byte.
+    for back in 1..=3.min(data.len()) {
+        let byte = data[data.len() - back];
+        if byte & 0b1100_0000 == 0b1000_0000 {
+            continue; // continuation byte: keep looking for the lead
+        }
+        let needed = match byte {
+            0b1100_0000..=0b1101_1111 => 2,
+            0b1110_0000..=0b1110_1111 => 3,
+            0b1111_0000..=0b1111_0111 => 4,
+            _ => return 0, // ASCII or invalid lead: nothing to hold
+        };
+        return if back < needed { back } else { 0 };
+    }
+    0
+}
+
+/// Where a rendering leaves the cursor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CursorPlacement {
+    /// Where the grid's cursor is, using DECSC/DECRC around any content
+    /// that follows it.
+    AsIs,
+    /// After the last line of content, ignoring the grid's cursor.
+    AfterContent,
+}
+
+/// Render history plus the primary screen of `grid` as logical lines into
+/// `out`.
+fn render_primary_buffer(grid: &mut vt100::Parser, cursor: CursorPlacement, out: &mut Vec<u8>) {
+    let (rows, _) = grid.screen().size();
+    let screen_rows = usize::from(rows);
+
+    // Walk the history from the oldest row. The grid exposes it through a
+    // scrolled-back view of `rows` rows at a time.
+    grid.screen_mut().set_scrollback(usize::MAX);
+    let history_len = grid.screen().scrollback();
+    let mut history: Vec<RenderedRow> = Vec::with_capacity(history_len);
+    let mut offset = history_len;
+    while offset > 0 {
+        grid.screen_mut().set_scrollback(offset);
+        let window = offset.min(screen_rows);
+        for row in 0..window {
+            history.push(RenderedRow::read(grid.screen(), row as u16, None));
+        }
+        offset -= window;
+    }
+    grid.screen_mut().set_scrollback(0);
+
+    render_rows(&history, grid.screen(), cursor, out);
+}
+
+/// Emit `history` followed by the visible rows of `screen` as logical
+/// lines, and place the cursor.
+fn render_rows(
+    history: &[RenderedRow],
+    screen: &vt100::Screen,
+    cursor: CursorPlacement,
+    out: &mut Vec<u8>,
+) {
+    let (rows, cols) = screen.size();
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let mut screen_lines: Vec<RenderedRow> =
+        (0..rows).map(|row| RenderedRow::read(screen, row, Some(cols))).collect();
+    // Rows below both the last content and the cursor are blank space the
+    // client provides on its own.
+    let last_content = screen_lines.iter().rposition(|r| !r.cells.is_empty());
+    let keep = match cursor {
+        CursorPlacement::AsIs => last_content.map_or(0, |i| i + 1).max(usize::from(cursor_row) + 1),
+        CursorPlacement::AfterContent => last_content.map_or(0, |i| i + 1),
+    };
+    screen_lines.truncate(keep);
+    // With the cursor going after the content, no row is "the cursor row".
+    let cursor_row = match cursor {
+        CursorPlacement::AsIs => usize::from(cursor_row),
+        CursorPlacement::AfterContent => usize::MAX,
+    };
+
+    let mut attrs = CellAttrs::default();
+    let mut emit_row = |row: &RenderedRow, upto: Option<usize>, out: &mut Vec<u8>| {
+        let limit = upto.unwrap_or(row.cells.len());
+        for cell in row.cells.iter().take(limit) {
+            cell.attrs.write_diff(&attrs, out);
+            attrs = cell.attrs;
+            out.extend_from_slice(cell.text.as_bytes());
+        }
+        // A cursor past the row's content sits on blank cells.
+        for _ in row.cells.len()..limit {
+            CellAttrs::default().write_diff(&attrs, out);
+            attrs = CellAttrs::default();
+            out.push(b' ');
+        }
+    };
+
+    for row in history {
+        emit_row(row, None, out);
+        if !row.wrapped {
+            out.extend_from_slice(b"\r\n");
+        }
+    }
+    for (index, row) in screen_lines.iter().enumerate() {
+        if index == cursor_row {
+            let cursor_col = usize::from(cursor_col);
+            emit_row(row, Some(cursor_col), out);
+            let rest_of_row = row.cells.len() > cursor_col;
+            let rows_below = index + 1 < screen_lines.len();
+            if !rest_of_row && !rows_below {
+                break;
+            }
+            // Content continues after the cursor: draw it, then return.
+            out.extend_from_slice(b"\x1b7");
+            if rest_of_row {
+                let tail =
+                    RenderedRow { cells: row.cells[cursor_col..].to_vec(), wrapped: row.wrapped };
+                emit_row(&tail, None, out);
+            }
+            if !row.wrapped && rows_below {
+                out.extend_from_slice(b"\r\n");
+            }
+            for later in &screen_lines[index + 1..] {
+                emit_row(later, None, out);
+                if !later.wrapped {
+                    out.extend_from_slice(b"\r\n");
+                }
+            }
+            out.extend_from_slice(b"\x1b8");
+            break;
+        }
+        emit_row(row, None, out);
+        if !row.wrapped && (cursor == CursorPlacement::AsIs || index + 1 < screen_lines.len()) {
+            out.extend_from_slice(b"\r\n");
+        }
+    }
+    CellAttrs::default().write_diff(&attrs, out);
+}
+
+/// Render the alternate screen of `screen` — a running full-screen app's
+/// frame — positioned absolutely, followed by its cursor.
+fn render_alternate_screen(screen: &vt100::Screen, out: &mut Vec<u8>) {
+    out.extend_from_slice(b"\x1b[?1049h");
+    out.extend_from_slice(&screen.contents_formatted());
+    let (row, col) = screen.cursor_position();
+    out.extend_from_slice(format!("\x1b[{};{}H", row + 1, col + 1).as_bytes());
+}
+
+/// Upper bound on the rendered attach stream per pane. A thousand
+/// heavily coloured 200-column rows render to well under this; the cap
+/// guards the wire frame and the client's replay against pathological
+/// content, dropping the oldest history lines first.
+pub const MAX_REATTACH_BYTES: usize = 2 * 1024 * 1024;
+
+/// Trim `stream` to at most `max` bytes by dropping whole lines from the
+/// front, so what remains still starts at a line boundary.
+pub fn drop_oldest_lines_over(stream: &mut Vec<u8>, max: usize) {
+    if stream.len() <= max {
+        return;
+    }
+    let start = stream.len() - max;
+    let cut = stream[start..].iter().position(|&b| b == b'\n').map_or(start, |o| start + o + 1);
+    stream.drain(..cut);
+}
+
+/// Emit only the input modes that are currently *on*. The client terminal
+/// was reset before this stream, so every mode starts off; spelling out
+/// the off states would only add noise (and an exited pane renders to
+/// nothing at all).
+fn render_armed_modes(screen: &vt100::Screen, focus_events: bool, out: &mut Vec<u8>) {
+    if screen.application_keypad() {
+        out.extend_from_slice(b"\x1b=");
+    }
+    if screen.application_cursor() {
+        out.extend_from_slice(b"\x1b[?1h");
+    }
+    if screen.bracketed_paste() {
+        out.extend_from_slice(b"\x1b[?2004h");
+    }
+    let mouse: &[u8] = match screen.mouse_protocol_mode() {
+        vt100::MouseProtocolMode::None => b"",
+        vt100::MouseProtocolMode::Press => b"\x1b[?9h",
+        vt100::MouseProtocolMode::PressRelease => b"\x1b[?1000h",
+        vt100::MouseProtocolMode::ButtonMotion => b"\x1b[?1002h",
+        vt100::MouseProtocolMode::AnyMotion => b"\x1b[?1003h",
+    };
+    out.extend_from_slice(mouse);
+    match screen.mouse_protocol_encoding() {
+        vt100::MouseProtocolEncoding::Default => {}
+        vt100::MouseProtocolEncoding::Utf8 => out.extend_from_slice(b"\x1b[?1005h"),
+        vt100::MouseProtocolEncoding::Sgr => out.extend_from_slice(b"\x1b[?1006h"),
+    }
+    if focus_events {
+        out.extend_from_slice(b"\x1b[?1004h");
+    }
+    if screen.hide_cursor() {
+        out.extend_from_slice(b"\x1b[?25l");
+    }
+}
+
+/// One grid row reduced to the cells worth emitting.
+struct RenderedRow {
+    cells: Vec<RenderedCell>,
+    /// The row is soft-wrapped: the next row continues the same line.
+    wrapped: bool,
+}
+
+#[derive(Clone)]
+struct RenderedCell {
+    text: String,
+    attrs: CellAttrs,
+}
+
+impl RenderedRow {
+    /// Read visible row `row` of `screen`. `width` bounds the read for
+    /// screen rows; history rows keep whatever width they had when they
+    /// scrolled off, so they are read to their end.
+    fn read(screen: &vt100::Screen, row: u16, width: Option<u16>) -> Self {
+        let mut cells = Vec::new();
+        let mut col: u16 = 0;
+        let limit = width.unwrap_or(u16::MAX);
+        while col < limit {
+            let Some(cell) = screen.cell(row, col) else { break };
+            col += 1;
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let attrs = CellAttrs::of(cell);
+            let text = if cell.has_contents() { cell.contents().to_string() } else { " ".into() };
+            cells.push(RenderedCell { text, attrs });
+        }
+        // Trailing blank cells with default attributes carry nothing.
+        while cells.last().is_some_and(|c| c.text == " " && c.attrs == CellAttrs::default()) {
+            cells.pop();
+        }
+        Self { cells, wrapped: screen.row_wrapped(row) }
+    }
+}
+
+/// The SGR attributes of a cell.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+struct CellAttrs {
+    fg: vt100::Color,
+    bg: vt100::Color,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+}
+
+impl CellAttrs {
+    fn of(cell: &vt100::Cell) -> Self {
+        Self {
+            fg: cell.fgcolor(),
+            bg: cell.bgcolor(),
+            bold: cell.bold(),
+            dim: cell.dim(),
+            italic: cell.italic(),
+            underline: cell.underline(),
+            inverse: cell.inverse(),
+        }
+    }
+
+    /// Emit the SGR sequence that turns `prev` into `self`, if any.
+    fn write_diff(self, prev: &Self, out: &mut Vec<u8>) {
+        if self == *prev {
+            return;
+        }
+        let mut params: Vec<String> = vec!["0".into()];
+        if self.bold {
+            params.push("1".into());
+        }
+        if self.dim {
+            params.push("2".into());
+        }
+        if self.italic {
+            params.push("3".into());
+        }
+        if self.underline {
+            params.push("4".into());
+        }
+        if self.inverse {
+            params.push("7".into());
+        }
+        match self.fg {
+            vt100::Color::Default => {}
+            vt100::Color::Idx(n @ 0..=7) => params.push((30 + u16::from(n)).to_string()),
+            vt100::Color::Idx(n @ 8..=15) => params.push((90 + u16::from(n) - 8).to_string()),
+            vt100::Color::Idx(n) => params.push(format!("38;5;{n}")),
+            vt100::Color::Rgb(r, g, b) => params.push(format!("38;2;{r};{g};{b}")),
+        }
+        match self.bg {
+            vt100::Color::Default => {}
+            vt100::Color::Idx(n @ 0..=7) => params.push((40 + u16::from(n)).to_string()),
+            vt100::Color::Idx(n @ 8..=15) => params.push((100 + u16::from(n) - 8).to_string()),
+            vt100::Color::Idx(n) => params.push(format!("48;5;{n}")),
+            vt100::Color::Rgb(r, g, b) => params.push(format!("48;2;{r};{g};{b}")),
+        }
+        out.extend_from_slice(format!("\x1b[{}m", params.join(";")).as_bytes());
     }
 }
 
@@ -535,31 +1153,62 @@ fn csi_query_len(data: &[u8]) -> Option<usize> {
     }
 }
 
+/// The subset of [`terminal_cleanup_bytes`] that is safe to apply while a
+/// shell sits at its prompt: it leaves the modes a line editor may hold
+/// (application cursor keys and keypad — zsh's zle arms them; bracketed
+/// paste — every modern shell arms it) and clears only what no shell ever
+/// uses and only a dead full-screen app can have left behind: the
+/// alternate screen, mouse tracking, focus reporting, a hidden cursor,
+/// and stray text attributes.
+#[must_use]
+pub const fn idle_shell_cleanup_bytes() -> &'static [u8] {
+    b"\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[r\x1b[?6l\x1b[m"
+}
+
+/// Leave the alternate screen: DECRST 1049 (modern) then DECRST 47 (legacy).
+///
+/// Send this **only while the alternate screen is active**. Terminals — VTE
+/// included — implement DECRST 1049 as "switch to the normal buffer and
+/// restore the saved cursor" without checking whether the alternate buffer
+/// was in use, so on a terminal that never entered it the sequence jumps
+/// the cursor to a stale saved position, usually the top-left corner, and
+/// the next line of output lands over the top of the screen.
+#[must_use]
+pub const fn leave_alternate_screen_bytes() -> &'static [u8] {
+    b"\x1b[?1049l\x1b[?47l"
+}
+
 /// Terminal cleanup byte sequence fed into a pane's screen when its
 /// process exits.
 ///
 /// Resets every mode a TUI might have left enabled so that reconnecting
 /// clients and persisted snapshots see a clean terminal state.
 ///
+/// The alternate screen is deliberately *not* left here: see
+/// [`leave_alternate_screen_bytes`] for why that must be conditional, and
+/// [`PaneScreen::cleanup_sequence`] for the sequence that decides.
+///
 /// Contents (in order):
 /// 1. `CAN` (`\x18`) — abort any in-progress escape sequence
-/// 2. Exit alt-screen: DECRST 1049 (modern) + DECRST 47 (legacy)
 /// 3. Show cursor: DECSET 25
 /// 4. Disable mouse: DECRST 1000, 1002, 1003, 1006, 1015
 /// 5. Disable focus reporting: DECRST 1004
 /// 6. Normal cursor keys: DECRST 1
 /// 7. Numeric keypad: DECPNM (`ESC >`)
 /// 8. Disable bracketed paste: DECRST 2004
-/// 9. Reset SGR: `ESC [ m`
+/// 9. Reset the scroll region (DECSTBM) and origin mode (DECRST 6): a
+///    full-screen app that died inside a scroll region leaves a terminal
+///    where a line feed at the bottom does not scroll
+/// 10. Reset SGR: `ESC [ m`
 #[must_use]
 pub const fn terminal_cleanup_bytes() -> &'static [u8] {
     b"\x18\
-      \x1b[?1049l\x1b[?47l\
       \x1b[?25h\
       \x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\
       \x1b[?1004l\
       \x1b[?1l\x1b>\
       \x1b[?2004l\
+      \x1b[r\x1b[?6l\
       \x1b[m"
 }
 
@@ -1483,8 +2132,10 @@ mod tests {
     fn terminal_cleanup_bytes_contains_required_sequences() {
         let bytes = terminal_cleanup_bytes();
         assert_eq!(bytes[0], 0x18, "must start with CAN");
-        assert!(bytes.windows(8).any(|w| w == b"\x1b[?1049l"), "alt-screen modern off");
-        assert!(bytes.windows(6).any(|w| w == b"\x1b[?47l"), "alt-screen legacy off");
+        assert!(!bytes.windows(8).any(|w| w == b"\x1b[?1049l"), "alt-screen exit is conditional");
+        let alt = leave_alternate_screen_bytes();
+        assert!(alt.windows(8).any(|w| w == b"\x1b[?1049l"), "alt-screen modern off");
+        assert!(alt.windows(6).any(|w| w == b"\x1b[?47l"), "alt-screen legacy off");
         assert!(bytes.windows(6).any(|w| w == b"\x1b[?25h"), "cursor visible");
         assert!(bytes.windows(8).any(|w| w == b"\x1b[?1000l"), "mouse normal off");
         assert!(bytes.windows(8).any(|w| w == b"\x1b[?1002l"), "mouse button off");
@@ -1520,8 +2171,11 @@ mod tests {
         assert!(screen.application_keypad());
         assert!(screen.bracketed_paste_mode());
 
-        // Feed cleanup.
-        screen.feed(terminal_cleanup_bytes());
+        // Feed the cleanup for this state: it leaves the alternate screen
+        // because the screen is on it.
+        let cleanup = screen.cleanup_sequence(false);
+        assert!(cleanup.starts_with(leave_alternate_screen_bytes()));
+        screen.feed(&cleanup);
 
         assert!(!screen.alternate_screen());
         assert!(screen.cursor_visible());
@@ -1578,5 +2232,396 @@ mod tests {
         screen.accept_raw(b"0123456789abcdef");
         assert_eq!(screen.raw_bytes().len(), 10);
         assert_eq!(screen.raw_bytes(), b"6789abcdef");
+    }
+    // ── Reattach rendering ───────────────────────────────────────────────
+    //
+    // What a client terminal shows after attach is decided by the bytes the
+    // daemon hands it. These tests replay those bytes into an independent
+    // terminal model (`vt100`) sized like the *attaching* client — which is
+    // not necessarily the size the output was produced at — and check what
+    // that terminal would display. Raw output replay fails every one of
+    // them: it is a suffix of a byte stream, not a description of a state.
+
+    #[test]
+    fn stray_alternate_screen_exits_are_dropped_and_real_ones_kept() {
+        use std::borrow::Cow;
+        // Not in the alternate screen: a bare exit is dropped.
+        let out = strip_stray_alternate_screen_exits(b"abc\x1b[?1049ldef", false);
+        assert_eq!(&*out, b"abcdef");
+        let out = strip_stray_alternate_screen_exits(b"\x1b[?47l\x1b[?1047l\x1b[m", false);
+        assert_eq!(&*out, b"\x1b[m");
+        // In the alternate screen: the exit is the real thing.
+        let out = strip_stray_alternate_screen_exits(b"x\x1b[?1049ly", true);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(&*out, b"x\x1b[?1049ly");
+        // Entry and exit in one batch: both kept; a second exit is stray.
+        let out = strip_stray_alternate_screen_exits(b"\x1b[?1049hA\x1b[?1049l\x1b[?1049lB", false);
+        assert_eq!(&*out, b"\x1b[?1049hA\x1b[?1049lB");
+        // Untouched data is borrowed, not copied.
+        let out = strip_stray_alternate_screen_exits(b"plain \x1b[31mred\x1b[m", false);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        // Other private modes are not confused with the switch.
+        let out = strip_stray_alternate_screen_exits(b"\x1b[?1000l\x1b[?25l\x1b[?2004l", false);
+        assert!(matches!(out, Cow::Borrowed(_)));
+    }
+
+    /// The old daemon's cleanup — appended to logs and snapshots at every
+    /// process exit and restart — jumped the cursor to the top of the
+    /// screen through its unconditional DECRST 1049, so the next prompt
+    /// was drawn over the middle of the history. Fed through the screen
+    /// now, the cursor stays at the bottom.
+    #[test]
+    fn legacy_cleanup_bytes_do_not_move_the_cursor_off_the_last_line() {
+        let mut screen = PaneScreen::new_sized(1 << 20, 100, 24);
+        let mut output = Vec::new();
+        for i in 0..40 {
+            output.extend_from_slice(format!("history row {i}\r\n").as_bytes());
+        }
+        output.extend_from_slice(b"$ rttx-server stop\r\nShutdown signal sent\r\n");
+        screen.feed(&output);
+        // The exact sequence a 1.1.0 daemon fed at process exit / restart.
+        screen.feed(
+            b"\x18\x1b[?1049l\x1b[?47l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?1l\x1b>\x1b[?2004l\x1b[m",
+        );
+        assert_eq!(screen.cursor_position(), (23, 0), "cursor must stay on the last line");
+        screen.feed(b"$ ");
+        let mut client = vt100::Parser::new(24, 100, 1000);
+        client.process(&screen.reattach_stream());
+        let rows: Vec<String> =
+            client.screen().rows(0, 100).map(|r| r.trim_end().to_string()).collect();
+        assert_eq!(rows[22], "Shutdown signal sent");
+        assert_eq!(rows[23], "$");
+        assert_eq!(client.screen().cursor_position(), (23, 2));
+    }
+
+    #[test]
+    fn incomplete_utf8_tail_is_held_back() {
+        assert_eq!(incomplete_utf8_tail_len(b"abc"), 0);
+        assert_eq!(incomplete_utf8_tail_len("é".as_bytes()), 0);
+        assert_eq!(incomplete_utf8_tail_len(&"é".as_bytes()[..1]), 1);
+        assert_eq!(incomplete_utf8_tail_len(&"漢".as_bytes()[..2]), 2);
+        assert_eq!(incomplete_utf8_tail_len(&"漢".as_bytes()[..1]), 1);
+        assert_eq!(incomplete_utf8_tail_len(&"😀".as_bytes()[..3]), 3);
+        assert_eq!(incomplete_utf8_tail_len(b"a\xc3"), 1);
+        assert_eq!(incomplete_utf8_tail_len(b"\x80\x80"), 0, "stray continuations pass through");
+        assert_eq!(incomplete_utf8_tail_len(b""), 0);
+    }
+
+    /// The exact split the property test found: an ASCII letter, then a
+    /// two-byte character split between its bytes, then more text.
+    #[test]
+    fn grid_survives_a_character_split_across_feeds() {
+        let text = "ü 0\nö\r0a字a\r\r\na\n\n\nAéA字a\n";
+        let bytes = text.as_bytes();
+        let mut bulk = PaneScreen::new(4096);
+        bulk.feed(bytes);
+        for cut in 1..bytes.len() {
+            let mut split = PaneScreen::new(4096);
+            split.feed(&bytes[..cut]);
+            split.feed(&bytes[cut..]);
+            assert_eq!(split.cursor_position(), bulk.cursor_position(), "cut at {cut}");
+            assert_eq!(split.reattach_stream(), bulk.reattach_stream(), "cut at {cut}");
+        }
+    }
+
+    mod reattach {
+        use super::super::*;
+
+        #[test]
+        fn oversized_streams_lose_their_oldest_lines_first() {
+            let mut stream = b"old line\r\nnewer line\r\nprompt> ".to_vec();
+            // Budget of 21 bytes: the cut lands on the boundary after "old line".
+            drop_oldest_lines_over(&mut stream, 21);
+            assert_eq!(stream, b"newer line\r\nprompt> ");
+            // A budget that starts mid-line skips to the next whole line.
+            let mut stream = b"old line\r\nnewer line\r\nprompt> ".to_vec();
+            drop_oldest_lines_over(&mut stream, 15);
+            assert_eq!(stream, b"prompt> ");
+            let mut small = b"fits".to_vec();
+            drop_oldest_lines_over(&mut small, 20);
+            assert_eq!(small, b"fits");
+        }
+
+        /// Rendering a full grid must be cheap enough to run under the
+        /// workspace lock on attach.
+        #[test]
+        fn rendering_a_full_grid_is_fast() {
+            let mut screen = PaneScreen::new_sized(1024 * 1024, 200, 50);
+            for i in 0..(GRID_SCROLLBACK_ROWS + 50) {
+                screen.feed(
+                    format!("\x1b[3{}mrow {i} {}\x1b[m\r\n", i % 8, "x".repeat(150)).as_bytes(),
+                );
+            }
+            let started = std::time::Instant::now();
+            let stream = screen.reattach_stream();
+            let elapsed = started.elapsed();
+            assert!(stream.len() > GRID_SCROLLBACK_ROWS * 150);
+            assert!(elapsed < std::time::Duration::from_millis(250), "took {elapsed:?}");
+        }
+
+        fn produce(cols: u16, rows: u16, output: &[u8]) -> PaneScreen {
+            let mut screen = PaneScreen::new_sized(1024 * 1024, cols, rows);
+            screen.feed(output);
+            screen
+        }
+
+        /// Replay `bytes` into a fresh terminal of the given size, the way a
+        /// reset client VTE would parse them, and return that terminal.
+        fn client_after_replay(bytes: &[u8], cols: u16, rows: u16) -> vt100::Parser {
+            let mut client = vt100::Parser::new(rows, cols, 10_000);
+            client.process(bytes);
+            client
+        }
+
+        fn visible_rows(client: &vt100::Parser) -> Vec<String> {
+            let (_, cols) = client.screen().size();
+            client.screen().rows(0, cols).map(|r| r.trim_end().to_string()).collect()
+        }
+
+        /// A dead app's scroll region must not survive: with it, a line feed
+        /// on the bottom row does not scroll and the new prompt is drawn
+        /// over the last line instead of below it.
+        #[test]
+        fn cleanup_resets_a_scroll_region_left_by_a_dead_app() {
+            let mut screen = PaneScreen::new_sized(1 << 20, 80, 10);
+            let mut output = Vec::new();
+            for i in 0..9 {
+                output.extend_from_slice(format!("line {i}\r\n").as_bytes());
+            }
+            // App sets a scroll region over rows 1-8 and draws a status line
+            // on row 10 (outside it), then dies.
+            output.extend_from_slice(b"\x1b[1;8r\x1b[10;1Hstatus line\x1b[5;1H");
+            screen.feed(&output);
+            let cleanup = screen.cleanup_sequence(false);
+            screen.feed(&cleanup);
+            screen.move_cursor_below_content();
+            screen.feed(b"$ ");
+            let client = client_after_replay(&screen.reattach_stream(), 80, 10);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[8], "status line", "{rows:?}");
+            assert_eq!(rows[9], "$", "{rows:?}");
+            assert_eq!(client.screen().cursor_position(), (9, 2));
+        }
+
+        /// Shrinking the pane must not cut the ends off visible lines: the
+        /// screen is re-laid at the new width and a later attach shows the
+        /// whole line.
+        #[test]
+        fn shrinking_the_pane_reflows_visible_lines_instead_of_truncating() {
+            let long: String = (0..150).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+            let mut screen = produce(200, 40, format!("first\r\n{long}\r\n$ ").as_bytes());
+            screen.resize(100, 40);
+            assert_eq!(screen.grid_size(), (100, 40));
+
+            let client = client_after_replay(&screen.reattach_stream(), 100, 40);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[0], "first");
+            assert_eq!(rows[1], &long[..100]);
+            assert_eq!(rows[2], &long[100..]);
+            assert_eq!(rows[3], "$");
+            assert_eq!(client.screen().cursor_position(), (3, 2));
+
+            // And growing back joins the line again.
+            screen.resize(200, 40);
+            let client = client_after_replay(&screen.reattach_stream(), 200, 40);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[1], long);
+            assert_eq!(rows[2], "$");
+            assert_eq!(client.screen().cursor_position(), (2, 2));
+        }
+
+        /// Fewer rows push the top of the screen into history rather than
+        /// dropping the bottom, where the prompt is.
+        #[test]
+        fn shortening_the_pane_scrolls_the_top_into_history() {
+            let mut output = Vec::new();
+            for i in 0..10 {
+                output.extend_from_slice(format!("line {i}\r\n").as_bytes());
+            }
+            output.extend_from_slice(b"$ ");
+            let mut screen = produce(80, 20, &output);
+            screen.resize(80, 5);
+
+            let client = client_after_replay(&screen.reattach_stream(), 80, 5);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[3], "line 9");
+            assert_eq!(rows[4], "$");
+            assert_eq!(client.screen().cursor_position(), (4, 2));
+            let mut client = client;
+            client.screen_mut().set_scrollback(usize::MAX);
+            assert!(client.screen().scrollback() >= 6, "the top lines went to history");
+            client.screen_mut().set_scrollback(6);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[0], "line 0");
+        }
+
+        /// A progress-style line rewritten in place with CR at 200 columns
+        /// must come back as one intact logical line when the client is
+        /// only 100 columns wide — rewrapped, not overwritten mid-line —
+        /// and the cursor must be where the shell left it on that line.
+        #[test]
+        fn narrower_client_gets_lines_rewrapped_not_overwritten() {
+            let long: String = (0..150).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+            let mut screen = produce(200, 40, format!("{long}\rPROMPT> ").as_bytes());
+
+            let client = client_after_replay(&screen.reattach_stream(), 100, 40);
+            let rows = visible_rows(&client);
+
+            let expected_line = format!("PROMPT> {}", &long[8..]);
+            assert_eq!(rows[0], &expected_line[..100], "first row is the start of the line");
+            assert_eq!(rows[1], &expected_line[100..], "second row is its continuation");
+            assert_eq!(
+                client.screen().cursor_position(),
+                (0, 8),
+                "cursor stays right after the prompt, on the row the prompt is on"
+            );
+
+            // The stream is plain text plus a save/restore around the part
+            // after the cursor — no cursor motion that could depend on the
+            // client's width. The client-side VTE test
+            // `rendered_snapshot_rewraps_cleanly_at_a_narrower_width` feeds
+            // exactly these bytes to a real VTE.
+            let expected = format!("PROMPT> \x1b7{}\x1b8", &long[8..]);
+            assert_eq!(String::from_utf8_lossy(&screen.reattach_stream()), expected);
+        }
+
+        /// The same content at the same width must be pixel-identical to
+        /// what the producing terminal showed.
+        #[test]
+        fn same_width_client_sees_the_identical_screen() {
+            let mut screen =
+                produce(120, 30, b"first line\r\n\x1b[1;32mgreen bold\x1b[m plain\r\n$ typed");
+            let client = client_after_replay(&screen.reattach_stream(), 120, 30);
+            let rows = visible_rows(&client);
+            assert_eq!(rows[0], "first line");
+            assert_eq!(rows[1], "green bold plain");
+            assert_eq!(rows[2], "$ typed");
+            assert_eq!(client.screen().cursor_position(), (2, 7));
+            let cell = client.screen().cell(1, 0).unwrap();
+            assert!(cell.bold(), "attributes survive: bold");
+            assert_eq!(cell.fgcolor(), vt100::Color::Idx(2), "attributes survive: green");
+            let plain = client.screen().cell(1, 11).unwrap();
+            assert!(!plain.bold() && plain.fgcolor() == vt100::Color::Default);
+        }
+
+        /// A full-screen app that ran and exited earlier must leave nothing
+        /// behind: no alternate-screen frames splattered into the history,
+        /// and no mouse or keypad modes still armed on the client.
+        #[test]
+        fn exited_tui_leaves_neither_frames_nor_modes_behind() {
+            let mut output = Vec::new();
+            output.extend_from_slice(b"$ htop\r\n");
+            output.extend_from_slice(b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1h\x1b=");
+            // Enough frames that a byte-tail snapshot starts in the middle
+            // of the app's session, after the mode-enabling sequences.
+            for frame in 0..12_000 {
+                output.extend_from_slice(
+                    format!("\x1b[{};1H\x1b[7mTUI FRAME {frame} CPU 100%\x1b[m", frame % 24 + 1)
+                        .as_bytes(),
+                );
+            }
+            output.extend_from_slice(b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1l\x1b>\x1b[?1049l");
+            output.extend_from_slice(b"$ ");
+            let mut screen = produce(120, 24, &output);
+            assert!(!screen.alternate_screen() && screen.mouse_tracking_mode() == 0);
+
+            let stream = screen.reattach_stream();
+            let client = client_after_replay(&stream, 120, 24);
+            let rows = visible_rows(&client);
+            assert!(
+                !rows.iter().any(|r| r.contains("TUI FRAME")),
+                "app frames must not be replayed into the primary screen: {rows:?}"
+            );
+            assert_eq!(rows[0], "$ htop");
+            assert_eq!(rows[1], "$");
+            assert_eq!(client.screen().cursor_position(), (1, 2));
+            assert!(!client.screen().alternate_screen());
+            assert_eq!(client.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+            assert!(!client.screen().application_cursor());
+            assert!(!client.screen().application_keypad());
+        }
+
+        /// A full-screen app that is still running must come back as its
+        /// current frame on the alternate screen with its modes armed and
+        /// its cursor where it left it — and the primary screen underneath
+        /// must still be intact for when it exits.
+        #[test]
+        fn running_tui_is_restored_on_the_alternate_screen() {
+            let mut output = Vec::new();
+            output.extend_from_slice(b"$ ls\r\nfile-a\r\nfile-b\r\n$ vim notes\r\n");
+            output.extend_from_slice(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J");
+            output.extend_from_slice(b"\x1b[1;1Hline one of notes\x1b[2;1Hline two");
+            output.extend_from_slice(b"\x1b[24;1H\x1b[7m-- INSERT --\x1b[m\x1b[2;9H");
+            let mut screen = produce(80, 24, &output);
+
+            let stream = screen.reattach_stream();
+            let client = client_after_replay(&stream, 80, 24);
+            assert!(client.screen().alternate_screen(), "app is on the alternate screen");
+            let rows = visible_rows(&client);
+            assert_eq!(rows[0], "line one of notes");
+            assert_eq!(rows[1], "line two");
+            assert_eq!(rows[23], "-- INSERT --");
+            assert_eq!(client.screen().cursor_position(), (1, 8));
+            assert_eq!(
+                client.screen().mouse_protocol_mode(),
+                vt100::MouseProtocolMode::ButtonMotion
+            );
+            assert_eq!(
+                client.screen().mouse_protocol_encoding(),
+                vt100::MouseProtocolEncoding::Sgr
+            );
+            assert!(client.screen().bracketed_paste());
+
+            // Leaving the app must reveal the shell history underneath.
+            let mut client = client;
+            client.process(b"\x1b[?1049l");
+            let rows = visible_rows(&client);
+            assert_eq!(rows[0], "$ ls");
+            assert_eq!(rows[1], "file-a");
+            assert_eq!(rows[3], "$ vim notes");
+        }
+
+        /// History older than the visible screen comes back as history, in
+        /// order, with long lines intact.
+        #[test]
+        fn history_is_replayed_in_order_with_long_lines_intact() {
+            let mut output = Vec::new();
+            for i in 0..60 {
+                output.extend_from_slice(
+                    format!("history line {i:02} {}\r\n", "=".repeat(90)).as_bytes(),
+                );
+            }
+            output.extend_from_slice(b"$ ");
+            let mut screen = produce(120, 10, &output);
+
+            let mut client = client_after_replay(&screen.reattach_stream(), 80, 10);
+            let mut all = String::new();
+            client.screen_mut().set_scrollback(usize::MAX);
+            let total = client.screen().scrollback();
+            let mut lines: Vec<String> = Vec::new();
+            let mut offset = total;
+            loop {
+                client.screen_mut().set_scrollback(offset);
+                let take = if offset == 0 { 10 } else { offset.min(10) };
+                lines.extend(
+                    client.screen().rows(0, 80).map(|r| r.trim_end().to_string()).take(take),
+                );
+                if offset == 0 {
+                    break;
+                }
+                offset = offset.saturating_sub(10);
+            }
+            for line in &lines {
+                all.push_str(line);
+                all.push('\n');
+            }
+            for i in 0..60 {
+                assert!(all.contains(&format!("history line {i:02} ")), "line {i} missing:\n{all}");
+            }
+            // At 80 columns each 106-char line wraps; the wrap must be a
+            // continuation of the same line, not a lost tail.
+            let joined = lines.join("");
+            assert!(joined.contains(&format!("history line 00 {}history line 01", "=".repeat(90))));
+        }
     }
 }

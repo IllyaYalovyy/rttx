@@ -516,6 +516,43 @@ The client renders immediately from `scrollback_tail`. If the user scrolls up an
 `scrollback_complete` is false, the client requests pages via `GetScrollback`
 (requires `OPT_CHUNKED_SCROLLBACK`).
 
+#### Attach rendering (as built, 2026-09-07)
+
+`scrollback_tail` is **not** a tail of raw PTY output. It is a rendering of the pane's
+state from the daemon's cell grid (`PaneScreen::reattach_stream`), fed to a freshly reset
+client terminal:
+
+1. History rows and the primary screen as *logical lines* — text plus SGR attributes,
+   soft-wrapped rows joined, no cursor movement — so the client wraps them at its own
+   width. The cursor is placed by emitting the cursor row up to the cursor and, only when
+   content follows, bracketing that content in DECSC/DECRC.
+2. If a full-screen app owns the alternate screen: the switch to it, its current frame
+   positioned absolutely, and its cursor. An app redraws on the resize that follows a size
+   change.
+3. Only the input modes that are *armed* (keypad, cursor keys, bracketed paste, mouse,
+   focus reporting, hidden cursor). Modes a finished app turned off are simply absent.
+
+A raw suffix could not do this: it starts at an arbitrary point (often inside a dead app's
+session, after the sequences that armed its modes), and every `\r`, cursor move and erase
+in it was computed for the width the output was produced at.
+
+Two daemon-side rules keep the rendered state honest:
+
+- **Idle-shell cleanup.** At attach, a pane whose foreground process is an interactive shell
+  (`/proc/<pid>/stat` `tpgid` → `/proc/<tpgid>/comm` ∈ known shells) cannot legitimately
+  have the alternate screen, mouse tracking, focus reporting or a hidden cursor armed;
+  they are leftovers of an app that died, and are cleared before rendering. Modes a line
+  editor holds (application cursor keys/keypad, bracketed paste) are left alone. Clients
+  already attached receive the same cleanup as a delta.
+- **Leaving the alternate screen is conditional.** DECRST 1049 on a terminal that never
+  entered the alternate buffer restores a stale saved cursor (top-left on VTE), so every
+  cleanup sequence emits it only while the alternate screen is active.
+
+The grid follows the PTY size; on resize the visible primary rows are re-laid at the new
+size rather than truncated, and history rows keep the width they scrolled off at. The
+grid keeps `GRID_SCROLLBACK_ROWS` rows of history; the raw log on disk remains the
+long-term history stream.
+
 #### Chunked scrollback (OPT_CHUNKED_SCROLLBACK)
 
 ```protobuf
@@ -746,6 +783,41 @@ client's inventory can be stale.
 readers know the lease is free. The message and its builders exist on the wire, but the
 daemon does not emit it yet: a reader currently discovers the free lease by retrying its
 attach. Emitting it is a follow-up, not a protocol change.
+
+**Taking it back.** The demoted client cannot use the connect-existing dialog to reclaim
+the workspace — the dialog lists it as *open in this window* — so the workspace row's
+context menu offers *Take Over Workspace…* whenever the row is `Blocked(TakenOver)` or
+`Blocked(OwnershipConflict)`. It runs the same Cancel-default destructive dialog and the
+same `TakeoverWorkspace`-then-`AttachWorkspace` sequence.
+
+**Retry scope.** Every workspace on an endpoint shares one daemon connection, so a retry
+of one workspace must never rebuild that connection: doing so orphans every sibling
+workspace on the host (their panes keep saying "Connected" while nothing they send goes
+anywhere). *Reconnect* on a workspace whose problem is workspace-scoped — `TakenOver`,
+`OwnershipConflict`, `SessionMissing`, a daemon refusal — re-issues `AttachWorkspace` on
+the live connection; only an endpoint-scoped problem (daemon unreachable, dead, wrong
+version) rebuilds the connection, and then every managed workspace on that endpoint is
+reconnected with it, connected ones included. The same holds for *Reconnect All from
+Host*.
+
+#### Workspace name ownership
+
+The daemon owns workspace metadata; the name is metadata. Concretely:
+
+- `WorkspaceSnapshot` carries `name` and `user_renamed`. A client adopts both on attach
+  instead of keeping a name of its own, so a workspace reads the same in every window and
+  after every reconnect, and `rttx-server status` shows what the user sees.
+- `RenameWorkspace` carries `automatic`. A client still derives the automatic name from the
+  shell's working directory — it is the one receiving `CwdChanged` — but proposes it to the
+  daemon as an automatic rename rather than renaming locally. An automatic rename never sets
+  `user_renamed`, and once `user_renamed` is set the daemon ignores automatic renames; the
+  response then carries the user's name, which the proposing client adopts. Only the writer
+  proposes: a reader (the demoted mirror) follows the daemon's pushes.
+- `WorkspaceRenamed` carries `user_renamed` and is pushed to every other attached client
+  whenever the name changes, so a read-only mirror and a second window follow along.
+- A client that holds a user-chosen name the daemon does not know about (a workspace
+  renamed before the daemon recorded user renames, #1084) pushes it back as a user rename
+  on attach instead of discarding it.
 
 ### 11. Error Model
 

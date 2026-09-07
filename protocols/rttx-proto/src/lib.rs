@@ -401,6 +401,9 @@ mod v3_tests {
             }],
             tree: None,
             default_active_pane_id: Vec::new(),
+
+            name: String::new(),
+            user_renamed: false,
         };
         let mut buf = BytesMut::new();
         encode_frame(&msg, &mut buf).unwrap();
@@ -522,6 +525,8 @@ mod v3_envelope_tests {
                 command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                     runtime_id: rt.clone(),
                     name: "prod".into(),
+
+                    automatic: false,
                 })),
             },
             v3::ClientEnvelope {
@@ -655,6 +660,9 @@ mod v3_envelope_tests {
                         panes: vec![],
                         tree: None,
                         default_active_pane_id: Vec::new(),
+
+                        name: String::new(),
+                        user_renamed: false,
                     },
                 )),
             },
@@ -681,6 +689,8 @@ mod v3_envelope_tests {
                         runtime_id: rt.clone(),
                         name: "renamed".into(),
                         workspace_revision: 13,
+
+                        user_renamed: false,
                     },
                 )),
             },

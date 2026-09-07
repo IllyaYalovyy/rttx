@@ -1074,6 +1074,9 @@ fn workspace_opened_with_new_runtime_id_updates_session_state() {
             }],
             workspace_revision: 1,
             client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
+
+            name: String::new(),
+            user_renamed: false,
         },
     });
 
@@ -1304,6 +1307,9 @@ fn v3_snapshot_terminal_modes_propagate_through_reconciliation() {
         }],
         workspace_revision: 5,
         client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
+
+        name: String::new(),
+        user_renamed: false,
     };
 
     let transition =
@@ -1380,6 +1386,9 @@ fn v3_snapshot_focus_and_cursor_modes_propagate_through_reconciliation() {
         }],
         workspace_revision: 1,
         client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
+
+        name: String::new(),
+        user_renamed: false,
     };
 
     let transition =

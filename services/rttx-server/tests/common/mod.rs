@@ -264,7 +264,8 @@ pub async fn start_test_server(
     Server::reconstruct_workspaces(&server).await;
     let sock = socket_path.clone();
     let handle = tokio::spawn(async move { rttx_server::server::run(server).await });
-    for _ in 0..50 {
+    // A large real state directory takes seconds to reconstruct.
+    for _ in 0..1500 {
         if sock.exists() {
             break;
         }
@@ -444,6 +445,23 @@ pub async fn close_pane(client: &mut TestClient, runtime_id: &[u8], pane_id: &[u
     }
 }
 
+/// Whether `payload` is a push the daemon may interleave with any response:
+/// output, a title or directory the shell reported, a mode change, a rename.
+/// Helpers waiting for a specific response skip these instead of failing
+/// because the shell happened to set its title at that moment.
+pub const fn is_incidental_push(payload: Option<&v3::server_envelope::Payload>) -> bool {
+    matches!(
+        payload,
+        Some(
+            v3::server_envelope::Payload::OutputDelta(_)
+                | v3::server_envelope::Payload::TitleChanged(_)
+                | v3::server_envelope::Payload::CwdChanged(_)
+                | v3::server_envelope::Payload::TerminalModeChanged(_)
+                | v3::server_envelope::Payload::WorkspaceRenamed(_)
+        )
+    )
+}
+
 pub async fn detach_workspace(client: &mut TestClient, runtime_id: &[u8]) {
     client
         .send_cmd(v3::client_envelope::Command::DetachWorkspace(v3::DetachWorkspace {
@@ -456,7 +474,7 @@ pub async fn detach_workspace(client: &mut TestClient, runtime_id: &[u8]) {
                 v3::server_envelope::Payload::WorkspaceDetached(_)
                 | v3::server_envelope::Payload::WorkspaceTerminated(_),
             ) => return,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            ref other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected WorkspaceDetached/Terminated, got {other:?}"),
         }
     }
@@ -483,7 +501,7 @@ pub async fn list_workspaces(client: &mut TestClient) -> Vec<v3::WorkspaceInfo> 
     loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::WorkspaceList(rl)) => return rl.workspaces,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            ref other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected WorkspaceList, got {other:?}"),
         }
     }

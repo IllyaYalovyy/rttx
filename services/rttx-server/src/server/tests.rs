@@ -869,6 +869,8 @@ async fn v3_rename_workspace_returns_renamed() {
         command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: uuid_to_bytes(runtime_id),
             name: "new-name".into(),
+
+            automatic: false,
         })),
     };
     let resp =

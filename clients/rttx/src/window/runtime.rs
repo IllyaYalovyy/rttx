@@ -51,6 +51,50 @@ pub(super) fn coalesce_event_batch(
     CoalescedBatch { delta_buffers, other_events }
 }
 
+/// Whether `event` must be applied strictly in sequence with the output
+/// deltas around it.
+///
+/// Daemon push messages (`OutputDelta`, `CwdChanged`, `TitleChanged`, …)
+/// commute with each other, so a run of them can be coalesced. Everything
+/// else changes the set or content of the pane widgets themselves — a
+/// snapshot restore resets a pane, a pane is created or removed, a
+/// workspace is rebuilt — and reordering output across it either loses
+/// bytes or feeds them into the wrong widget.
+#[must_use]
+pub(super) const fn is_output_ordering_barrier(
+    event: &crate::daemon_bridge::EndpointEvent,
+) -> bool {
+    !matches!(event, crate::daemon_bridge::EndpointEvent::WorkspaceMessage { .. })
+}
+
+/// Whether retrying a workspace in `status` requires rebuilding the shared
+/// endpoint connection rather than re-opening the workspace on it.
+///
+/// Problems that concern only this workspace's runtime (lease taken over,
+/// owned by another client, runtime gone, a daemon-side refusal) leave the
+/// connection itself healthy — and healthy connections carry every other
+/// workspace on the host, so they must be left alone.
+#[must_use]
+pub(super) const fn connection_retry_needs_endpoint_reset(status: &ConnectionStatus) -> bool {
+    match status {
+        ConnectionStatus::Blocked(problem) => !matches!(
+            problem,
+            ConnectionProblem::TakenOver
+                | ConnectionProblem::OwnershipConflict
+                | ConnectionProblem::SessionMissing
+                | ConnectionProblem::PermissionDenied
+                | ConnectionProblem::UserActionRequired(_)
+        ),
+        ConnectionStatus::SessionMissing
+        | ConnectionStatus::Connected
+        | ConnectionStatus::Recovered => false,
+        ConnectionStatus::Starting
+        | ConnectionStatus::Connecting
+        | ConnectionStatus::Reconnecting { .. }
+        | ConnectionStatus::Disconnected => true,
+    }
+}
+
 impl Window {
     pub fn add_session(&self) {
         crate::new_workspace_dialog::show(self, &crate::host::Host::local());
@@ -216,15 +260,21 @@ impl Window {
     ///
     /// With `take_over`, the runtime's current write owner is demoted to
     /// reader so this client can drive it.
+    /// Attach a new sidebar workspace to a runtime that already exists on
+    /// `host`. `name` is the daemon's name for that runtime — the daemon owns
+    /// workspace metadata, so the row is created under that name rather
+    /// than a client-minted placeholder.
     pub(crate) fn attach_to_existing_runtime(
         &self,
         host: &crate::host::Host,
         runtime_id: &str,
+        name: &str,
         take_over: bool,
     ) {
         let imp = self.imp();
         let count = imp.state.borrow().workspaces.len() + 1;
-        let name = format!("Workspace {count}");
+        let name =
+            if name.trim().is_empty() { format!("Workspace {count}") } else { name.to_string() };
 
         let mut session_state = if host.is_local() {
             WorkspaceState::new_managed_local(name, WorkspacePolicy::Persistent, None)
@@ -486,6 +536,18 @@ impl Window {
         });
     }
 
+    /// Retry one workspace's connection.
+    ///
+    /// Every workspace on an endpoint shares one daemon connection, so a
+    /// retry must never tear that connection down: doing so silently
+    /// orphans every sibling workspace on the same host (their panes keep
+    /// saying "Connected" but nothing they type goes anywhere). A
+    /// workspace-scoped problem — the lease was taken over, the runtime is
+    /// owned elsewhere, the runtime is gone — is retried by re-opening the
+    /// workspace on the live connection. Only an endpoint-scoped problem
+    /// (daemon unreachable, dead, wrong version) justifies rebuilding the
+    /// connection, and then every workspace on that endpoint is reconnected
+    /// with it.
     pub(super) fn retry_workspace_connection(&self, workspace_id: &str) {
         let session_state = {
             let state = self.imp().state.borrow();
@@ -494,11 +556,56 @@ impl Window {
         let Some(session_state) = session_state else {
             return;
         };
-        self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
-        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
-            manager.reset_endpoint(&session_state.runtime.endpoint);
+        let status = self.imp().workspace_connection_status.borrow().get(workspace_id).cloned();
+        if status.as_ref().is_some_and(connection_retry_needs_endpoint_reset) {
+            self.retry_all_workspaces_for_endpoint(workspace_id);
+            return;
         }
+        self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
         self.connect_managed_workspace(&session_state);
+    }
+
+    /// Ask before seizing the write lease of a workspace this window already
+    /// shows but another client currently owns — the symmetric gesture to
+    /// the connect dialog's "Take over", for the client that was demoted.
+    pub(super) fn confirm_take_over_workspace(&self, workspace_id: &str) {
+        let name = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.workspaces.iter().find(|s| s.uuid == workspace_id) else {
+                return;
+            };
+            session.name.clone()
+        };
+        let confirm = adw::AlertDialog::new(
+            Some(&format!("Take over “{name}”?")),
+            Some("The client using this workspace becomes read-only and loses input."),
+        );
+        confirm.add_response("cancel", "Cancel");
+        confirm.add_response("takeover", "Take Over");
+        confirm.set_response_appearance("takeover", adw::ResponseAppearance::Destructive);
+        confirm.set_default_response(Some("cancel"));
+        confirm.set_close_response("cancel");
+        let win = self.clone();
+        let workspace_id = workspace_id.to_string();
+        confirm.connect_response(None, move |_, response| {
+            if response == "takeover" {
+                win.take_over_workspace(&workspace_id);
+            }
+        });
+        confirm.present(Some(self));
+    }
+
+    /// Seize the write lease for an already-listed workspace and re-attach.
+    pub(super) fn take_over_workspace(&self, workspace_id: &str) {
+        let session_state = {
+            let state = self.imp().state.borrow();
+            state.workspaces.iter().find(|s| s.uuid == workspace_id).cloned()
+        };
+        let Some(session_state) = session_state else {
+            return;
+        };
+        self.set_workspace_connection_status(workspace_id, &ConnectionStatus::Connecting);
+        self.connect_managed_workspace_with_takeover(&session_state, true);
     }
 
     /// Restart the local daemon and reconnect all workspaces on the local endpoint.
@@ -507,7 +614,12 @@ impl Window {
         self.retry_all_workspaces_for_endpoint(workspace_id);
     }
 
-    /// Reconnect all managed workspaces sharing the same endpoint as the given workspace.
+    /// Rebuild the daemon connection for the given workspace's endpoint and
+    /// reconnect every managed workspace that shares it.
+    ///
+    /// The reset drops the shared connection for *all* of them — connected
+    /// ones included — so all of them must be reconnected, not just the ones
+    /// that looked broken.
     pub(super) fn retry_all_workspaces_for_endpoint(&self, workspace_id: &str) {
         let targets: Vec<WorkspaceState> = {
             let state = self.imp().state.borrow();
@@ -515,24 +627,10 @@ impl Window {
                 return;
             };
             let endpoint_key = origin.runtime.endpoint.key();
-            let statuses = self.imp().workspace_connection_status.borrow();
             state
                 .workspaces
                 .iter()
-                .filter(|s| {
-                    s.uses_managed_runtime()
-                        && s.runtime.endpoint.key() == endpoint_key
-                        && statuses.get(&s.uuid).is_some_and(|st| {
-                            matches!(
-                                st,
-                                ConnectionStatus::Disconnected
-                                    | ConnectionStatus::Reconnecting { .. }
-                                    | ConnectionStatus::Blocked(_)
-                                    | ConnectionStatus::Connecting
-                                    | ConnectionStatus::Starting
-                            )
-                        })
-                })
+                .filter(|s| s.uses_managed_runtime() && s.runtime.endpoint.key() == endpoint_key)
                 .cloned()
                 .collect()
         };
@@ -655,11 +753,23 @@ impl Window {
             }
 
             if !events.is_empty() {
-                let batch = coalesce_event_batch(events);
-                win.feed_coalesced_deltas(&batch.delta_buffers);
-                for event in batch.other_events {
-                    win.handle_endpoint_event(event);
+                // Output deltas are coalesced per pane for throughput, but
+                // only within a run of push messages: a structural event
+                // (a snapshot that resets a pane, a pane created or
+                // removed) must see exactly the output that preceded it
+                // and none of what followed, or bytes that arrive right
+                // after an attach are fed into a pane that the snapshot
+                // then wipes.
+                let mut run = Vec::new();
+                for event in events {
+                    if is_output_ordering_barrier(&event) {
+                        win.process_event_run(std::mem::take(&mut run));
+                        win.handle_endpoint_event(event);
+                    } else {
+                        run.push(event);
+                    }
                 }
+                win.process_event_run(run);
             }
 
             // Watermark-based backpressure: check how many slots are free.
@@ -676,6 +786,18 @@ impl Window {
             glib::ControlFlow::Continue
         });
         self.imp().event_poller_source.replace(Some(source));
+    }
+
+    /// Coalesce and apply one run of order-insensitive push events.
+    fn process_event_run(&self, events: Vec<crate::daemon_bridge::EndpointEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        let batch = coalesce_event_batch(events);
+        self.feed_coalesced_deltas(&batch.delta_buffers);
+        for event in batch.other_events {
+            self.handle_endpoint_event(event);
+        }
     }
 
     /// Feed coalesced output delta buffers — one `vte.feed()` call per pane.
@@ -800,6 +922,19 @@ impl Window {
 
         for rebuild in &transition.rebuilt_workspaces {
             self.rebuild_session_content(&rebuild.workspace_id, &rebuild.session_state);
+            self.update_sidebar_row_name(&rebuild.workspace_id, &rebuild.session_state.name);
+        }
+
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            for repair in &transition.name_repairs {
+                manager.rename_runtime(
+                    &repair.workspace_id,
+                    &repair.endpoint,
+                    &repair.runtime_id,
+                    &repair.name,
+                    false,
+                );
+            }
         }
 
         if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
@@ -870,11 +1005,11 @@ impl Window {
             pane.vte().set_size(cols.into(), rows.into());
         }
 
-        // Temporarily block input forwarding during snapshot feed so that
-        // CPR responses generated by VTE (from stale ESC[6n in scrollback)
-        // are not forwarded to the daemon as terminal input.
-        let was_accepting = pane.imp().accepts_input.get();
-        pane.imp().accepts_input.set(false);
+        // VTE parses the snapshot asynchronously and answers any query it
+        // finds in it through `commit`; the replay gate drops those answers
+        // until VTE reaches the barrier fed by `end_replay`, so stale
+        // DECRQSS/XTGETTCAP replies are never typed into the shell.
+        pane.begin_replay();
         pane.feed_snapshot(&restore.scrollback_tail);
         if !pane.is_crashed() {
             if let Some(ref modes) = restore.terminal_modes {
@@ -892,7 +1027,7 @@ impl Window {
                 pane.vte().feed(crate::terminal::terminal_cleanup_bytes());
             }
         }
-        pane.imp().accepts_input.set(was_accepting);
+        pane.end_replay();
         pane.set_current_directory(Some(&restore.cwd));
         if !restore.title.is_empty() && pane.custom_title().is_none() {
             pane.set_daemon_title(&restore.title);
@@ -993,9 +1128,30 @@ impl Window {
         status: &ConnectionStatus,
     ) {
         self.clear_workspace_reconnect_countdown(workspace_id);
+        let became_writable = status.accepts_input()
+            && !self
+                .imp()
+                .workspace_connection_status
+                .borrow()
+                .get(workspace_id)
+                .is_some_and(ConnectionStatus::accepts_input);
         self.replace_workspace_connection_status(workspace_id, status);
         if let ConnectionStatus::Reconnecting { attempt, retry_in_secs } = status {
             self.start_workspace_reconnect_countdown(workspace_id, *attempt, *retry_in_secs);
+        }
+        if became_writable {
+            // Now that this client holds the lease it is the one keeping
+            // the daemon's automatic name current: bring a name a previous
+            // daemon never learned (a client-side rename of old) up to date.
+            let cwd = {
+                let state = self.imp().state.borrow();
+                state.workspaces.iter().find(|s| s.uuid == workspace_id).and_then(|s| {
+                    s.active_terminal_uuid.as_deref().and_then(|t| s.layout.terminal_cwd(t))
+                })
+            };
+            if let Some(cwd) = cwd {
+                self.maybe_auto_rename_workspace(workspace_id, Some(&cwd));
+            }
         }
     }
 
@@ -1069,6 +1225,11 @@ impl Window {
 
         if let Payload::LeaseLost(lost) = inner {
             self.handle_lease_lost(endpoint, lost);
+            return;
+        }
+
+        if let Payload::WorkspaceRenamed(renamed) = inner {
+            self.handle_workspace_renamed(endpoint, renamed);
             return;
         }
 
@@ -1293,25 +1454,102 @@ impl Window {
         self.connect_managed_workspace(&session_state);
     }
 
+    /// Propose an automatic name for a workspace whose shell moved to `cwd`.
+    ///
+    /// The daemon owns the name, so the proposal is sent there as an
+    /// *automatic* rename and the sidebar follows the daemon's answer —
+    /// which is the user's name instead if one was ever chosen, on any
+    /// client. Nothing is sent while this client cannot write to the
+    /// workspace (a read-only mirror after a take-over): the owner's client
+    /// keeps the name current and the daemon pushes it here.
     pub(super) fn maybe_auto_rename_workspace(&self, workspace_id: &str, cwd: Option<&str>) {
-        let mut state = self.imp().state.borrow_mut();
-        let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == workspace_id) else {
+        let proposal = {
+            let state = self.imp().state.borrow();
+            let Some(session) = state.workspaces.iter().find(|s| s.uuid == workspace_id) else {
+                return;
+            };
+            if session.user_renamed {
+                return;
+            }
+            let Some(new_name) =
+                crate::workspace::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
+            else {
+                return;
+            };
+            if session.name == new_name {
+                return;
+            }
+            (session.runtime.endpoint.clone(), session.runtime.runtime_id.clone(), new_name)
+        };
+        let (endpoint, runtime_id, new_name) = proposal;
+        let Some(runtime_id) = runtime_id else {
+            // Not bound to a runtime yet: nothing owns the name but us.
+            self.apply_daemon_workspace_name(workspace_id, &new_name, false);
             return;
         };
-        if session.user_renamed {
+        let writable = self
+            .imp()
+            .workspace_connection_status
+            .borrow()
+            .get(workspace_id)
+            .is_some_and(ConnectionStatus::accepts_input);
+        if !writable {
             return;
         }
-        let Some(new_name) =
-            crate::workspace::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
-        else {
+        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
+            manager.rename_runtime(workspace_id, &endpoint, &runtime_id, &new_name, true);
+        }
+    }
+
+    /// Adopt the daemon's name for a managed workspace.
+    ///
+    /// The daemon owns workspace metadata: it derives an automatic name
+    /// from the shell's working directory and records explicit renames, and
+    /// announces both with `WorkspaceRenamed`. The client only renders. One
+    /// exception keeps a local rename from being clobbered by an automatic
+    /// name still in flight: a daemon-derived name never overrides a name
+    /// the user chose here.
+    pub(super) fn apply_daemon_workspace_name(
+        &self,
+        workspace_id: &str,
+        name: &str,
+        user_renamed: bool,
+    ) {
+        if name.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(session) = state.workspaces.iter_mut().find(|s| s.uuid == workspace_id) else {
+                return;
+            };
+            if session.user_renamed && !user_renamed {
+                return;
+            }
+            let changed = session.name != name || session.user_renamed != user_renamed;
+            session.name = name.to_string();
+            session.user_renamed = user_renamed;
+            changed
+        };
+        if changed {
+            self.update_sidebar_row_name(workspace_id, name);
+            self.save_state();
+        }
+    }
+
+    /// Apply a `WorkspaceRenamed` event from the daemon — the response to a
+    /// rename this client sent, or a push about a rename made elsewhere.
+    fn handle_workspace_renamed(&self, endpoint: &RuntimeEndpoint, renamed: &v3::WorkspaceRenamed) {
+        let Ok(runtime_id) = rttx_proto::bytes_to_uuid(&renamed.runtime_id) else {
             return;
         };
-        if session.name == new_name {
-            return;
+        let workspace_id = {
+            let state = self.imp().state.borrow();
+            state.workspace_for_runtime(endpoint, &runtime_id.to_string())
+        };
+        if let Some(workspace_id) = workspace_id {
+            self.apply_daemon_workspace_name(&workspace_id, &renamed.name, renamed.user_renamed);
         }
-        session.name.clone_from(&new_name);
-        drop(state);
-        self.update_sidebar_row_name(workspace_id, &new_name);
     }
 
     fn update_sidebar_row_name(&self, session_uuid: &str, name: &str) {
@@ -1386,6 +1624,52 @@ mod tests {
                 },
             )),
         }
+    }
+
+    /// A workspace-scoped refusal leaves the shared endpoint connection
+    /// healthy, and that connection carries every sibling workspace on the
+    /// host — a retry must re-open the workspace, not rebuild the endpoint.
+    #[test]
+    fn retry_resets_endpoint_only_for_endpoint_scoped_problems() {
+        for status in [
+            ConnectionStatus::Blocked(ConnectionProblem::TakenOver),
+            ConnectionStatus::Blocked(ConnectionProblem::OwnershipConflict),
+            ConnectionStatus::Blocked(ConnectionProblem::SessionMissing),
+            ConnectionStatus::Blocked(ConnectionProblem::UserActionRequired("nope".into())),
+            ConnectionStatus::SessionMissing,
+            ConnectionStatus::Connected,
+            ConnectionStatus::Recovered,
+        ] {
+            assert!(!connection_retry_needs_endpoint_reset(&status), "{status:?}");
+        }
+        for status in [
+            ConnectionStatus::Blocked(ConnectionProblem::DaemonDied),
+            ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+            ConnectionStatus::Blocked(ConnectionProblem::VersionMismatch),
+            ConnectionStatus::Disconnected,
+            ConnectionStatus::Reconnecting { attempt: 3, retry_in_secs: 4 },
+            ConnectionStatus::Connecting,
+            ConnectionStatus::Starting,
+        ] {
+            assert!(connection_retry_needs_endpoint_reset(&status), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn structural_events_are_ordering_barriers_and_pushes_are_not() {
+        let ep = RuntimeEndpoint::Local;
+        let pane = Uuid::new_v4();
+        assert!(!is_output_ordering_barrier(&delta_event(ep.clone(), pane, b"x", 1)));
+        assert!(!is_output_ordering_barrier(&cwd_event(ep, pane, "/tmp")));
+        assert!(is_output_ordering_barrier(&EndpointEvent::WorkspaceOpened {
+            workspace_id: "ws".into(),
+            runtime_id: Uuid::new_v4().to_string(),
+            snapshot: v3::WorkspaceSnapshot::default(),
+        }));
+        assert!(is_output_ordering_barrier(&EndpointEvent::WorkspaceConnectionChanged {
+            workspace_id: "ws".into(),
+            status: ConnectionStatus::Connected,
+        }));
     }
 
     #[test]

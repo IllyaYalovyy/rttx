@@ -367,6 +367,8 @@ pub struct WorkspaceMenuItems {
     pub show_reconnect: bool,
     pub show_reconnect_host: bool,
     pub show_restart_daemon: bool,
+    /// Offer to seize the write lease back from the client that holds it.
+    pub show_take_over: bool,
     pub show_detach: bool,
 }
 
@@ -380,6 +382,9 @@ pub struct WorkspaceMenuContext {
     pub is_disconnected: bool,
     pub is_connecting: bool,
     pub is_daemon_died: bool,
+    /// Another client holds this workspace's write lease (we were taken
+    /// over, or a plain attach was refused as already owned).
+    pub is_owned_elsewhere: bool,
     pub has_other_disconnected_from_same_host: bool,
 }
 
@@ -393,6 +398,7 @@ pub const fn workspace_menu_items(ctx: &WorkspaceMenuContext) -> WorkspaceMenuIt
             && ctx.is_disconnected
             && ctx.has_other_disconnected_from_same_host,
         show_restart_daemon: ctx.is_managed && ctx.is_daemon_died,
+        show_take_over: ctx.is_managed && ctx.is_persistent && ctx.is_owned_elsewhere,
         show_detach: ctx.is_persistent && ctx.is_attached,
     }
 }
@@ -1116,6 +1122,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
@@ -1134,6 +1141,7 @@ mod tests {
             is_disconnected: true,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_edit_connection);
@@ -1152,6 +1160,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
@@ -1170,6 +1179,7 @@ mod tests {
             is_disconnected: true,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_reconnect);
@@ -1187,6 +1197,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_edit_connection);
@@ -1205,6 +1216,7 @@ mod tests {
             is_disconnected: true,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: true,
         });
         assert!(items.show_reconnect);
@@ -1221,6 +1233,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: true,
         });
         assert!(!items.show_reconnect_host);
@@ -1281,6 +1294,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_reconnect);
@@ -1394,6 +1408,7 @@ mod tests {
             is_disconnected: true,
             is_connecting: false,
             is_daemon_died: true,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_restart_daemon);
@@ -1410,6 +1425,7 @@ mod tests {
             is_disconnected: true,
             is_connecting: false,
             is_daemon_died: true,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_restart_daemon);
@@ -1433,6 +1449,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: true,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_reconnect, "Force Reconnect should be available during Connecting");
@@ -1448,6 +1465,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: true,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(items.show_reconnect, "Force Reconnect should be available for local connecting");
@@ -1463,6 +1481,7 @@ mod tests {
             is_disconnected: false,
             is_connecting: false,
             is_daemon_died: false,
+            is_owned_elsewhere: false,
             has_other_disconnected_from_same_host: false,
         });
         assert!(!items.show_reconnect, "Reconnect should be hidden when connected");
@@ -1488,5 +1507,29 @@ mod tests {
                 "header_label must be non-empty for {status:?}"
             );
         }
+    }
+    #[test]
+    fn take_over_is_offered_only_for_a_persistent_workspace_owned_elsewhere() {
+        let base = WorkspaceMenuContext {
+            is_remote: true,
+            is_managed: true,
+            is_persistent: true,
+            is_attached: true,
+            is_disconnected: true,
+            is_connecting: false,
+            is_daemon_died: false,
+            is_owned_elsewhere: true,
+            has_other_disconnected_from_same_host: false,
+        };
+        assert!(workspace_menu_items(&base).show_take_over);
+
+        let ephemeral = WorkspaceMenuContext { is_persistent: false, ..base };
+        assert!(!workspace_menu_items(&ephemeral).show_take_over);
+
+        let owned_here = WorkspaceMenuContext { is_owned_elsewhere: false, ..base };
+        assert!(!workspace_menu_items(&owned_here).show_take_over);
+
+        let unmanaged = WorkspaceMenuContext { is_managed: false, ..base };
+        assert!(!workspace_menu_items(&unmanaged).show_take_over);
     }
 }

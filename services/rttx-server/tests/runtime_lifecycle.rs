@@ -195,6 +195,8 @@ async fn rename_workspace_updates_name_and_inventory() {
             command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                 runtime_id: runtime_id.clone(),
                 name: "renamed".into(),
+
+                automatic: false,
             })),
         })
         .await;
@@ -236,6 +238,8 @@ async fn rename_workspace_persists_across_restart() {
             command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
                 runtime_id: runtime_id.clone(),
                 name: "after".into(),
+
+                automatic: false,
             })),
         })
         .await;

@@ -41,6 +41,11 @@ mod imp {
         pub input_connected: Cell<bool>,
         pub resize_connected: Cell<bool>,
         pub disconnect_message_fed: Cell<bool>,
+        /// A scrollback replay is in flight and VTE has not yet reached the
+        /// barrier query fed after it; every `commit` until then is a reply
+        /// to stale content, not user input.
+        pub replaying: Cell<bool>,
+        pub replay_timeout: RefCell<Option<glib::SourceId>>,
         pub input_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
         pub resize_tick_id: RefCell<Option<gtk4::TickCallbackId>>,
         pub vte: vte4::Terminal,
@@ -83,6 +88,8 @@ mod imp {
                 input_connected: Cell::default(),
                 resize_connected: Cell::default(),
                 disconnect_message_fed: Cell::default(),
+                replaying: Cell::default(),
+                replay_timeout: RefCell::default(),
                 input_key_controller: RefCell::default(),
                 resize_tick_id: RefCell::default(),
                 vte: vte4::Terminal::new(),
@@ -588,6 +595,66 @@ impl PersistentPaneView {
         }
     }
 
+    /// Start a scrollback replay.
+    ///
+    /// VTE parses fed bytes asynchronously, and while it does so it answers
+    /// any terminal query embedded in the replayed scrollback — DECRQSS,
+    /// XTGETTCAP, colour queries — through the `commit` signal exactly as it
+    /// would for live output. Those answers are addressed to a program that
+    /// ran long ago; forwarded to the daemon they are typed into whatever is
+    /// at the prompt now. Between `begin_replay` and the barrier fed by
+    /// [`end_replay`](Self::end_replay) every `commit` is therefore dropped.
+    pub fn begin_replay(&self) {
+        self.cancel_replay_timeout();
+        self.imp().replaying.set(true);
+    }
+
+    /// Finish a scrollback replay by feeding a barrier query.
+    ///
+    /// VTE answers `CSI 6 n` with a cursor position report only after it has
+    /// parsed everything fed before it, so the report marks the moment the
+    /// replay is fully processed and live `commit` data may flow again. A
+    /// fallback timer lifts the gate even if the report never arrives (a
+    /// crashed pane, a VTE build that does not answer), so a pane can never
+    /// stay mute.
+    pub fn end_replay(&self) {
+        if !self.imp().replaying.get() {
+            return;
+        }
+        if self.imp().crashed.get() || !safe_feed(&self.imp().vte, REPLAY_BARRIER_QUERY) {
+            self.finish_replay();
+            return;
+        }
+        let weak = self.downgrade();
+        let source = glib::timeout_add_local_once(REPLAY_BARRIER_TIMEOUT, move || {
+            if let Some(pane) = weak.upgrade() {
+                pane.imp().replay_timeout.take();
+                if pane.imp().replaying.get() {
+                    tracing::debug!(pane_uuid = %pane.uuid(), "replay barrier timed out");
+                    pane.finish_replay();
+                }
+            }
+        });
+        self.imp().replay_timeout.replace(Some(source));
+    }
+
+    /// Whether a scrollback replay is still being parsed by VTE.
+    #[must_use]
+    pub fn is_replaying(&self) -> bool {
+        self.imp().replaying.get()
+    }
+
+    fn finish_replay(&self) {
+        self.cancel_replay_timeout();
+        self.imp().replaying.set(false);
+    }
+
+    fn cancel_replay_timeout(&self) {
+        if let Some(source) = self.imp().replay_timeout.take() {
+            source.remove();
+        }
+    }
+
     /// Feed a snapshot's scrollback bytes into VTE to restore state on attach.
     /// Bell characters are stripped to prevent historical bells from ringing.
     /// Scrolls to the bottom so the viewport shows the most recent output.
@@ -952,15 +1019,27 @@ impl PersistentPaneView {
         let commit_forward = std::rc::Rc::clone(&forward_input);
         let commit_pane_weak = self.downgrade();
         self.imp().vte.connect_commit(move |_, text, _| {
-            if let Some(pane) = commit_pane_weak.upgrade()
-                && pane.imp().accepts_input.get()
-            {
-                let bytes = text.as_bytes();
-                match strip_cpr_responses(bytes) {
-                    Some(filtered) if !filtered.is_empty() => commit_forward(&filtered),
-                    Some(_) => {}
-                    None => commit_forward(bytes),
+            let Some(pane) = commit_pane_weak.upgrade() else {
+                return;
+            };
+            let bytes = text.as_bytes();
+            if pane.imp().replaying.get() {
+                // Everything VTE emits while it is still parsing replayed
+                // scrollback answers stale queries. The cursor position
+                // report is the barrier fed by `end_replay`, so its arrival
+                // means the replay is fully parsed.
+                if contains_cpr_response(bytes) {
+                    pane.finish_replay();
                 }
+                return;
+            }
+            if !pane.imp().accepts_input.get() {
+                return;
+            }
+            match strip_cpr_responses(bytes) {
+                Some(filtered) if !filtered.is_empty() => commit_forward(&filtered),
+                Some(_) => {}
+                None => commit_forward(bytes),
             }
         });
 
@@ -1332,6 +1411,31 @@ fn update_bracketed_paste_mode(mode: &std::cell::Cell<bool>, data: &[u8]) {
     } else if data.windows(BRACKETED_PASTE_ENABLE.len()).any(|w| w == BRACKETED_PASTE_ENABLE) {
         mode.set(true);
     }
+}
+
+/// Barrier query fed after a scrollback replay: DSR 6, which VTE answers
+/// with a cursor position report once everything before it is parsed.
+const REPLAY_BARRIER_QUERY: &[u8] = b"\x1b[6n";
+
+/// Upper bound on how long a replay may gate `commit` without the barrier
+/// report arriving. VTE parses queued input on a 10 ms timer and caps work
+/// per tick, so even a maximal snapshot is parsed well within this.
+const REPLAY_BARRIER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether `data` contains a cursor position report (`ESC [ row ; col R`).
+#[must_use]
+pub(crate) fn contains_cpr_response(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == 0x1b
+            && let Some(len) = csi_response_len(&data[i..])
+            && data[i + len - 1] == b'R'
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Strip terminal response sequences that VTE generates when processing
@@ -2029,6 +2133,172 @@ mod tests {
         );
 
         window.close();
+    }
+
+    /// While a scrollback replay is in flight every `commit` is a reply to
+    /// stale content and must be dropped — including DCS replies such as
+    /// DECRQSS and XTGETTCAP, which the CSI filter does not recognise. The
+    /// cursor position report VTE sends for the barrier lifts the gate.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn commit_signal_dropped_during_replay_until_barrier_report() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-replay", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 320);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+
+        let connected = present_connection_status(&ConnectionStatus::Connected);
+        pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.connect_input(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes.to_vec());
+        });
+
+        pane.begin_replay();
+        assert!(pane.is_replaying());
+
+        // A DECRQSS reply and an XTGETTCAP reply, exactly what VTE emits
+        // when replayed scrollback contains the corresponding queries.
+        for stale in ["\x1bP1$r0;4:3m\x1b\\", "\x1bP0+r\x1b\\", "\x1b[O"] {
+            pane.vte().emit_by_name::<()>("commit", &[&stale, &(stale.len() as u32)]);
+        }
+        pump_events(20);
+        assert!(forwarded.borrow().is_empty(), "replies during replay must be dropped");
+        assert!(pane.is_replaying(), "non-barrier replies must not end the replay");
+
+        let cpr = "\x1b[24;1R";
+        pane.vte().emit_by_name::<()>("commit", &[&cpr, &(cpr.len() as u32)]);
+        pump_events(20);
+        assert!(!pane.is_replaying(), "the barrier report ends the replay");
+        assert!(forwarded.borrow().is_empty(), "the barrier report itself is not input");
+
+        let sgr_click = "\x1b[<0;5;10M";
+        pane.vte().emit_by_name::<()>("commit", &[&sgr_click, &(sgr_click.len() as u32)]);
+        pump_events(20);
+        assert!(
+            forwarded.borrow().contains(&sgr_click.as_bytes().to_vec()),
+            "live commit data flows again after the replay"
+        );
+
+        window.close();
+    }
+
+    /// `end_replay` feeds the barrier; VTE parses it asynchronously and
+    /// answers with a report that ends the replay on its own, so a real
+    /// replay needs no manual bookkeeping from the caller.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn end_replay_barrier_is_answered_by_vte() {
+        require_display!();
+
+        let pane = PersistentPaneView::new("pane-barrier", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(640, 320);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let forwarded_clone = Rc::clone(&forwarded);
+        pane.connect_input(move |bytes| {
+            forwarded_clone.borrow_mut().push(bytes.to_vec());
+        });
+
+        pane.begin_replay();
+        // Scrollback carrying a DECRQSS query: VTE will answer it.
+        pane.feed_snapshot(b"stale output\r\n\x1bP$qm\x1b\\");
+        pane.end_replay();
+        assert!(pane.is_replaying());
+
+        let started = std::time::Instant::now();
+        while pane.is_replaying() && started.elapsed() < std::time::Duration::from_secs(1) {
+            pump_events(10);
+        }
+        assert!(!pane.is_replaying(), "VTE's report for the barrier must end the replay");
+        assert!(forwarded.borrow().is_empty(), "nothing VTE said during the replay was forwarded");
+
+        window.close();
+    }
+
+    /// Replay `stream` into a fresh pane's VTE (as `restore_managed_snapshot`
+    /// does) and return the logical lines VTE ends up with, its cursor
+    /// `(row, col)`, and its column count. VTE's text dump joins soft-wrapped
+    /// rows, so a line that wrapped cleanly comes back whole while a line
+    /// that was overwritten mid-way comes back as two.
+    fn replay_into_vte(stream: &[u8]) -> (Vec<String>, (i64, i64), i64) {
+        let pane = PersistentPaneView::new("pane-replay-probe", "runtime-1");
+        let window = gtk4::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(&pane));
+        window.present();
+        pump_events(50);
+        let cols = pane.vte().column_count();
+
+        pane.begin_replay();
+        pane.feed_snapshot(stream);
+        pane.end_replay();
+        let started = std::time::Instant::now();
+        while pane.is_replaying() && started.elapsed() < std::time::Duration::from_secs(2) {
+            pump_events(10);
+        }
+        assert!(!pane.is_replaying());
+
+        let text = pane.vte().text_format(vte4::Format::Text).unwrap_or_default();
+        let lines: Vec<String> =
+            text.lines().map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()).collect();
+        let (col, row) = pane.vte().cursor_position();
+        window.close();
+        (lines, (row, col), cols)
+    }
+
+    /// The daemon renders a pane's *state* for attach (see the daemon's
+    /// `PaneScreen::reattach_stream`): logical lines with the part after the
+    /// cursor bracketed in DECSC/DECRC. Fed to a real VTE narrower than the
+    /// pane was, the line must come back whole and the cursor must land
+    /// after the prompt. The raw output that produced the same screen —
+    /// what used to be replayed — comes back as a line overwritten from the
+    /// middle, which is the artifact this replaces.
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn rendered_snapshot_rewraps_cleanly_at_a_narrower_width() {
+        require_display!();
+
+        let long: String = (0..150).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let expected_line = format!("PROMPT> {}", &long[8..]);
+
+        // Bytes pinned by the daemon test
+        // `narrower_client_gets_lines_rewrapped_not_overwritten`.
+        let rendered = format!("PROMPT> \x1b7{}\x1b8", &long[8..]);
+        let (lines, cursor, cols) = replay_into_vte(rendered.as_bytes());
+        assert!(cols < 150, "the probe VTE must be narrower than the line ({cols} cols)");
+        assert_eq!(lines, vec![expected_line.clone()], "rendered state replays as one intact line");
+        assert_eq!(cursor, (0, 8), "cursor sits right after the prompt");
+
+        // Control: the raw bytes at 200 columns overwrote the line in place
+        // with CR; at this width the CR lands on the continuation row.
+        let raw = format!("{long}\rPROMPT> ");
+        let (lines, cursor, _) = replay_into_vte(raw.as_bytes());
+        assert_ne!(lines, vec![expected_line], "raw replay must reproduce the old artifact");
+        // The prompt lands inside the line, where the continuation row began.
+        let joined = lines.join("");
+        let prompt_at = joined.find("PROMPT> ").expect("prompt was drawn");
+        assert!(prompt_at > 0, "raw replay overwrites the line from the middle: {joined:?}");
+        assert_ne!(cursor, (0, 8));
+    }
+
+    #[test]
+    fn contains_cpr_response_detects_reports_only() {
+        assert!(contains_cpr_response(b"\x1b[12;40R"));
+        assert!(contains_cpr_response(b"\x1bP0+r\x1b\\\x1b[1;1R"));
+        assert!(!contains_cpr_response(b"\x1b[<0;5;10M"));
+        assert!(!contains_cpr_response(b"\x1bP1$r0;4:3m\x1b\\"));
+        assert!(!contains_cpr_response(b"plain"));
     }
 
     #[test]

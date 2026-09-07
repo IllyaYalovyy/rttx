@@ -232,11 +232,24 @@ impl WorkspaceState {
     }
 }
 
-/// Derive a workspace name from the endpoint and working directory.
+/// Derive the initial name for a new workspace from its working directory,
+/// falling back to the short host name for a remote workspace.
+///
+/// This is only the name a workspace is *created* with; from then on the
+/// daemon owns it and keeps an auto-named workspace tracking the shell's
+/// working directory (see `apply_daemon_workspace_name`). The directory
+/// rule is the same one the daemon uses, so the name does not jump when
+/// the daemon takes over.
 ///
 /// Returns `None` when no meaningful name can be derived.
 #[must_use]
 pub fn auto_name_for_workspace(endpoint: &RuntimeEndpoint, cwd: Option<&str>) -> Option<String> {
+    if let Some(path) = cwd
+        && let Some(name) = std::path::Path::new(path).file_name().and_then(|n| n.to_str())
+        && !name.is_empty()
+    {
+        return Some(name.to_string());
+    }
     if let RuntimeEndpoint::Remote { host, .. } = endpoint {
         let short = host.split('@').next_back().unwrap_or(host);
         let short = short.split('.').next().unwrap_or(short);
@@ -244,9 +257,7 @@ pub fn auto_name_for_workspace(endpoint: &RuntimeEndpoint, cwd: Option<&str>) ->
             return Some(short.to_string());
         }
     }
-    let path = cwd?;
-    let name = std::path::Path::new(path).file_name()?.to_str()?;
-    if name.is_empty() { None } else { Some(name.to_string()) }
+    None
 }
 
 /// Produce a workspace name, always returning a value.
@@ -759,10 +770,14 @@ mod module_boundary_tests {
         assert_eq!(auto_name_for_workspace(&ep, None), Some("builder".into()));
     }
 
+    /// A remote workspace is named like a local one — after its directory —
+    /// so the sidebar does not fill up with rows all called after the host.
+    /// The host name is only the fallback when no directory is known.
     #[test]
-    fn auto_name_remote_ignores_cwd() {
+    fn auto_name_remote_prefers_cwd_over_host() {
         let ep = RuntimeEndpoint::remote("etf@nucbox");
-        assert_eq!(auto_name_for_workspace(&ep, Some("/home/etf/work")), Some("nucbox".into()));
+        assert_eq!(auto_name_for_workspace(&ep, Some("/home/etf/work")), Some("work".into()));
+        assert_eq!(auto_name_for_workspace(&ep, Some("/")), Some("nucbox".into()));
     }
 
     #[test]

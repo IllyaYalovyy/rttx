@@ -14,6 +14,31 @@ use rttx_server::state::types::{
 // ── PaneScreen: arbitrary byte streams never panic ──────────────────
 
 proptest! {
+    /// Valid text split at arbitrary byte boundaries — as PTY reads split
+    /// it — must leave the grid, and so the cursor, exactly as one bulk
+    /// feed would.
+    #[test]
+    fn pane_screen_incremental_text_feed_matches_bulk(
+        text in "[a-zA-Z0-9 éöü漢字\\r\\n]{0,200}",
+        cuts in proptest::collection::vec(0..200usize, 0..6),
+    ) {
+        let all = text.as_bytes();
+        let mut bulk = PaneScreen::new(16384);
+        bulk.feed(all);
+        let mut incremental = PaneScreen::new(16384);
+        let mut cuts: Vec<usize> = cuts.into_iter().filter(|&c| c < all.len()).collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut start = 0;
+        for cut in cuts {
+            incremental.feed(&all[start..cut]);
+            start = cut;
+        }
+        incremental.feed(&all[start..]);
+        prop_assert_eq!(bulk.cursor_position(), incremental.cursor_position());
+        prop_assert_eq!(bulk.reattach_stream(), incremental.reattach_stream());
+    }
+
     #[test]
     fn pane_screen_feed_never_panics(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
         let mut screen = PaneScreen::new(8192);
@@ -54,7 +79,10 @@ proptest! {
         }
 
         prop_assert_eq!(bulk.raw_bytes(), incremental.raw_bytes());
-        prop_assert_eq!(bulk.cursor_position(), incremental.cursor_position());
+        // The cursor comes from the cell grid, whose parser resolves an
+        // *invalid* UTF-8 sequence differently depending on where the chunk
+        // boundary falls inside it; valid text is covered by
+        // `pane_screen_incremental_text_feed_matches_bulk` below.
         prop_assert_eq!(bulk.bracketed_paste_mode(), incremental.bracketed_paste_mode());
         prop_assert_eq!(bulk.application_cursor_keys(), incremental.application_cursor_keys());
         prop_assert_eq!(bulk.application_keypad(), incremental.application_keypad());

@@ -37,6 +37,50 @@ pub struct ManagedWorkspaceOpenResult {
     pub snapshot_restores: Vec<WorkspacePaneRestore>,
     pub skipped_runtime_panes: Vec<String>,
     pub previous_layout_terminals: Vec<String>,
+    /// The client's user-chosen name must be pushed to the daemon because
+    /// the daemon does not know about it (see [`adopt_snapshot_name`]).
+    pub name_repair: Option<WorkspaceNameRepair>,
+}
+
+/// A rename the client owes the daemon: the user named this workspace
+/// before the daemon recorded user renames, so the daemon's record must be
+/// brought up to date rather than the user's name discarded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceNameRepair {
+    pub workspace_id: String,
+    pub endpoint: RuntimeEndpoint,
+    pub runtime_id: String,
+    pub name: String,
+}
+
+/// Reconcile a session's name with the daemon's on attach.
+///
+/// The daemon owns the name. The one case where the client's copy wins is
+/// a workspace the user renamed here while the daemon still thinks the
+/// name is automatic — a record left behind by daemons that predate the
+/// user-rename marker (#1084). Then the daemon is told the user's name.
+/// Returns the repair to send, if any.
+pub fn adopt_snapshot_name(
+    session: &mut WorkspaceState,
+    snapshot: &v3::WorkspaceSnapshot,
+) -> Option<WorkspaceNameRepair> {
+    if snapshot.name.is_empty() {
+        return None;
+    }
+    if session.user_renamed && !snapshot.user_renamed {
+        // Even when the names agree the daemon must learn that this one
+        // was chosen, or another client's automatic rename could replace it.
+        let runtime_id = session.runtime.runtime_id.clone()?;
+        return Some(WorkspaceNameRepair {
+            workspace_id: session.uuid.clone(),
+            endpoint: session.runtime.endpoint.clone(),
+            runtime_id,
+            name: session.name.clone(),
+        });
+    }
+    session.name.clone_from(&snapshot.name);
+    session.user_renamed = snapshot.user_renamed;
+    None
 }
 
 /// Pure connection-status update derived from an endpoint event.
@@ -88,6 +132,8 @@ pub struct EndpointEventTransition {
     pub connection_status_updates: Vec<ConnectionStatusUpdate>,
     pub skipped_runtime_panes: Vec<String>,
     pub persist_window_state: bool,
+    /// Names the daemon must be told about (see [`adopt_snapshot_name`]).
+    pub name_repairs: Vec<WorkspaceNameRepair>,
 }
 
 impl WindowState {
@@ -129,7 +175,12 @@ impl WindowState {
                     snapshot_restores,
                     skipped_runtime_panes,
                     previous_layout_terminals,
+                    name_repair,
                 } = opened;
+                transition.name_repairs.extend(name_repair);
+                // The daemon's name arrived with the snapshot; the sidebar
+                // row must show it, and it belongs in the saved state.
+                transition.persist_window_state = true;
 
                 let new_terminal_set: BTreeSet<_> =
                     session_state.layout.terminal_uuids().into_iter().collect();
@@ -424,6 +475,7 @@ impl WindowState {
     ) -> Option<ManagedWorkspaceOpenResult> {
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
         session.runtime.runtime_id = Some(runtime_id.to_string());
+        let name_repair = adopt_snapshot_name(session, snapshot);
 
         let previous_layout_terminals = session.layout.terminal_uuids();
         session.layout = layout;
@@ -477,6 +529,7 @@ impl WindowState {
             snapshot_restores,
             skipped_runtime_panes: Vec::new(),
             previous_layout_terminals,
+            name_repair,
         })
     }
 
@@ -503,6 +556,7 @@ impl WindowState {
         // pane and the subsequent PaneCreated re-key assigns identity.
         let session = self.workspaces.iter_mut().find(|session| session.uuid == workspace_id)?;
         session.runtime.runtime_id = Some(runtime_id.to_string());
+        let name_repair = adopt_snapshot_name(session, snapshot);
 
         let layout_terminal_uuids = session.layout.terminal_uuids();
         let session_state = session.clone();
@@ -514,6 +568,7 @@ impl WindowState {
             snapshot_restores: Vec::new(),
             skipped_runtime_panes: Vec::new(),
             previous_layout_terminals: layout_terminal_uuids,
+            name_repair,
         })
     }
 
@@ -667,7 +722,75 @@ mod tests {
             panes,
             workspace_revision: 7,
             client_role: v3::WorkspaceClientRole::Writer as i32,
+            name: String::new(),
+            user_renamed: false,
         }
+    }
+
+    fn named_session(name: &str, user_renamed: bool) -> WorkspaceState {
+        let mut session = WorkspaceState::new_managed_local(
+            name.to_string(),
+            WorkspacePolicy::Persistent,
+            Some("/home/etf/Projects".to_string()),
+        );
+        session.runtime.runtime_id = Some("33333333-3333-3333-3333-333333333333".into());
+        session.user_renamed = user_renamed;
+        session
+    }
+
+    fn named_snapshot(name: &str, user_renamed: bool) -> v3::WorkspaceSnapshot {
+        let mut snap = snapshot("33333333-3333-3333-3333-333333333333", Vec::new());
+        snap.name = name.to_string();
+        snap.user_renamed = user_renamed;
+        snap
+    }
+
+    /// The daemon owns the name: whatever the client called the workspace
+    /// while offline, the snapshot's name wins on attach.
+    #[test]
+    fn adopt_snapshot_name_takes_the_daemons_name() {
+        let mut session = named_session("Workspace 5", false);
+        assert!(adopt_snapshot_name(&mut session, &named_snapshot("rttx", false)).is_none());
+        assert_eq!(session.name, "rttx");
+        assert!(!session.user_renamed);
+
+        let mut session = named_session("stale", false);
+        assert!(adopt_snapshot_name(&mut session, &named_snapshot("Payments", true)).is_none());
+        assert_eq!(session.name, "Payments");
+        assert!(session.user_renamed, "the daemon's user-rename marker travels with the name");
+    }
+
+    /// A user rename the daemon never recorded (pre-#1084 daemons) is
+    /// pushed back to the daemon instead of being discarded.
+    #[test]
+    fn adopt_snapshot_name_repairs_a_daemon_that_forgot_a_user_rename() {
+        let mut session = named_session("Blog: pipeline", true);
+        let repair = adopt_snapshot_name(&mut session, &named_snapshot("Projects", false))
+            .expect("the daemon must be told the user's name");
+        assert_eq!(repair.name, "Blog: pipeline");
+        assert_eq!(repair.runtime_id, "33333333-3333-3333-3333-333333333333");
+        assert_eq!(session.name, "Blog: pipeline", "the user's name is kept meanwhile");
+        assert!(session.user_renamed);
+    }
+
+    #[test]
+    fn adopt_snapshot_name_ignores_an_empty_name_from_an_older_daemon() {
+        let mut session = named_session("dev1_rttx", false);
+        assert!(adopt_snapshot_name(&mut session, &named_snapshot("", false)).is_none());
+        assert_eq!(session.name, "dev1_rttx");
+    }
+
+    /// The daemon has the right name but does not know a user chose it;
+    /// without the marker another client's automatic rename would replace
+    /// it, so the marker is repaired too.
+    #[test]
+    fn adopt_snapshot_name_repairs_the_marker_even_when_names_agree() {
+        let mut session = named_session("KTask", true);
+        let repair = adopt_snapshot_name(&mut session, &named_snapshot("KTask", false))
+            .expect("the daemon must learn the name is user-chosen");
+        assert_eq!(repair.name, "KTask");
+        assert_eq!(session.name, "KTask");
+        assert!(session.user_renamed, "the client's marker is not downgraded");
     }
 
     /// A single-pane snapshot carrying the daemon's authoritative single-leaf

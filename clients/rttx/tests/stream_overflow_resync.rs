@@ -53,6 +53,9 @@ fn snapshot(
         panes,
         workspace_revision: 1,
         client_role: rttx_proto::v3::WorkspaceClientRole::Writer as i32,
+
+        name: String::new(),
+        user_renamed: false,
     }
 }
 

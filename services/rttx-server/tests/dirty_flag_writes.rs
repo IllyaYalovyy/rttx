@@ -94,6 +94,8 @@ async fn mutation_triggers_rewrite() {
         command: Some(v3::client_envelope::Command::RenameWorkspace(v3::RenameWorkspace {
             runtime_id: runtime_id_bytes,
             name: "renamed-rt".into(),
+
+            automatic: false,
         })),
     })
     .await;
