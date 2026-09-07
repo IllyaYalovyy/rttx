@@ -10,15 +10,33 @@ pub const DIALOG_CONTENT_WIDTH: i32 = 400;
 pub const DIALOG_CONTENT_HEIGHT: i32 = 450;
 pub const SCROLL_MIN_CONTENT_HEIGHT: i32 = 300;
 
-/// Classification of a daemon session for the Connect to Existing dialog.
+/// Classification of a daemon workspace for the Connect to Existing dialog.
+///
+/// The daemon reports one write owner per workspace at most. A workspace is
+/// *available* when nobody holds that lease, *already open* when this very
+/// window holds it, and *in use* when some other client (another machine,
+/// another rttx window) holds it — the last case is the one "Take over" is
+/// for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeAvailability {
-    /// Can be attached by this client.
+    /// Nobody holds the write lease; a plain attach succeeds.
     Available,
-    /// Already open in this client window.
+    /// This window already holds the write lease.
     AlreadyOpen,
-    /// Owned by another client.
+    /// Another client holds the write lease.
     BusyElsewhere,
+}
+
+impl RuntimeAvailability {
+    /// Sort key for the dialog: attachable workspaces first, then the ones
+    /// this window already shows, then the ones somebody else is using.
+    const fn section_order(&self) -> u8 {
+        match self {
+            Self::Available => 0,
+            Self::AlreadyOpen => 1,
+            Self::BusyElsewhere => 2,
+        }
+    }
 }
 
 /// A session entry for display in the dialog.
@@ -46,12 +64,14 @@ pub fn offers_takeover(entry: &RuntimeEntry) -> bool {
 /// Classify daemon workspaces into available/busy entries.
 ///
 /// `open_runtime_ids` contains runtime IDs already attached by this client.
+/// The result is grouped so every available workspace precedes every busy
+/// one; within a group the daemon's inventory order is kept.
 #[must_use]
 pub fn classify_workspaces(
     workspaces: &[v3::WorkspaceInfo],
     open_runtime_ids: &[String],
 ) -> Vec<RuntimeEntry> {
-    workspaces
+    let mut entries: Vec<RuntimeEntry> = workspaces
         .iter()
         .filter_map(|info| {
             let id = rttx_proto::bytes_to_uuid(&info.id).ok()?.to_string();
@@ -68,8 +88,8 @@ pub fn classify_workspaces(
                     info.pane_count,
                     if info.pane_count == 1 { "pane" } else { "panes" }
                 ),
-                RuntimeAvailability::AlreadyOpen => "Already open".into(),
-                RuntimeAvailability::BusyElsewhere => "Connected elsewhere".into(),
+                RuntimeAvailability::AlreadyOpen => "Open in this window".into(),
+                RuntimeAvailability::BusyElsewhere => "In use by another client".into(),
             };
             Some(RuntimeEntry {
                 id,
@@ -80,7 +100,9 @@ pub fn classify_workspaces(
                 takeover_eligible: info.takeover_eligible,
             })
         })
-        .collect()
+        .collect();
+    entries.sort_by_key(|entry| entry.availability.section_order());
+    entries
 }
 
 /// Whether a session entry matches a search query (case-insensitive).
@@ -183,7 +205,7 @@ fn populate_workspaces(
             append_section_label(container, "Available");
         } else if !is_available && !has_busy {
             has_busy = true;
-            append_section_label(container, "Busy");
+            append_section_label(container, "In use");
         }
 
         let icon_name =
@@ -220,6 +242,7 @@ fn populate_workspaces(
         button.set_child(Some(&row_content));
         button.add_css_class("flat");
         button.set_sensitive(is_available);
+        button.set_tooltip_text(Some(&availability_tooltip(entry)));
         button.update_property(&[gtk4::accessible::Property::Label(&entry.name)]);
 
         if is_available {
@@ -227,9 +250,10 @@ fn populate_workspaces(
             let host_clone = host.clone();
             let dialog_ref = dialog.clone();
             let runtime_id = entry.id.clone();
+            let name = entry.name.clone();
             button.connect_clicked(move |_| {
                 dialog_ref.close();
-                win.attach_to_existing_runtime(&host_clone, &runtime_id, false);
+                win.attach_to_existing_runtime(&host_clone, &runtime_id, &name, false);
             });
         }
 
@@ -288,16 +312,38 @@ fn takeover_button(
         let host = host.clone();
         let dialog = dialog.clone();
         let runtime_id = runtime_id.clone();
+        let name = name.clone();
         confirm.connect_response(None, move |_, response| {
             if response == "takeover" {
                 dialog.close();
-                confirmed_win.attach_to_existing_runtime(&host, &runtime_id, true);
+                confirmed_win.attach_to_existing_runtime(&host, &runtime_id, &name, true);
             }
         });
         confirm.present(Some(&win));
     });
 
     button
+}
+
+/// Explain a row's state in words the user can act on.
+#[must_use]
+pub fn availability_tooltip(entry: &RuntimeEntry) -> String {
+    match entry.availability {
+        RuntimeAvailability::Available => {
+            "No client is using this workspace — click to open it here".into()
+        }
+        RuntimeAvailability::AlreadyOpen => {
+            "This window is already connected to this workspace".into()
+        }
+        RuntimeAvailability::BusyElsewhere if entry.takeover_eligible => {
+            "Another rttx client is connected to this workspace. Take over to move control here; \
+             the other client keeps a read-only view."
+                .into()
+        }
+        RuntimeAvailability::BusyElsewhere => {
+            "Another rttx client is connected to this workspace".into()
+        }
+    }
 }
 
 fn append_section_label(container: &gtk4::Box, text: &str) {
@@ -370,7 +416,7 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].availability, RuntimeAvailability::BusyElsewhere);
-        assert_eq!(entries[0].status_label, "Connected elsewhere");
+        assert_eq!(entries[0].status_label, "In use by another client");
     }
 
     #[test]
@@ -381,7 +427,7 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].availability, RuntimeAvailability::AlreadyOpen);
-        assert_eq!(entries[0].status_label, "Already open");
+        assert_eq!(entries[0].status_label, "Open in this window");
     }
 
     #[test]
@@ -394,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_mixed_sessions_preserves_order() {
+    fn classify_mixed_sessions_groups_available_first() {
         let avail_id = uuid::Uuid::new_v4();
         let busy_id = uuid::Uuid::new_v4();
         let open_id = uuid::Uuid::new_v4();
@@ -407,8 +453,31 @@ mod tests {
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].availability, RuntimeAvailability::Available);
-        assert_eq!(entries[1].availability, RuntimeAvailability::BusyElsewhere);
-        assert_eq!(entries[2].availability, RuntimeAvailability::AlreadyOpen);
+        assert_eq!(entries[1].availability, RuntimeAvailability::AlreadyOpen);
+        assert_eq!(entries[2].availability, RuntimeAvailability::BusyElsewhere);
+    }
+
+    /// The daemon lists workspaces in its own order; the dialog must not
+    /// print an "Available" header and then list busy rows under it.
+    #[test]
+    fn classify_moves_late_available_entries_ahead_of_busy_ones() {
+        let workspaces = vec![
+            make_session_info(uuid::Uuid::new_v4(), "busy-1", 2, true),
+            make_session_info(uuid::Uuid::new_v4(), "busy-2", 4, true),
+            make_session_info(uuid::Uuid::new_v4(), "free-1", 1, false),
+            make_session_info(uuid::Uuid::new_v4(), "busy-3", 2, true),
+            make_session_info(uuid::Uuid::new_v4(), "free-2", 3, false),
+        ];
+        let entries = classify_workspaces(&workspaces, &[]);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["free-1", "free-2", "busy-1", "busy-2", "busy-3"]);
+        let first_busy = entries
+            .iter()
+            .position(|e| e.availability == RuntimeAvailability::BusyElsewhere)
+            .unwrap();
+        assert!(
+            entries[..first_busy].iter().all(|e| e.availability == RuntimeAvailability::Available)
+        );
     }
 
     #[test]

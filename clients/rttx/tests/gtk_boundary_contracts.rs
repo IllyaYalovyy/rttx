@@ -1028,6 +1028,7 @@ fn workspace_menu_items_contract() {
         is_disconnected: true,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(all.show_edit_connection);
@@ -1043,6 +1044,7 @@ fn workspace_menu_items_contract() {
         is_disconnected: false,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(!minimal.show_edit_connection);
@@ -1127,6 +1129,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_disconnected: true,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: true,
     });
     assert!(with_siblings.show_reconnect_host);
@@ -1140,6 +1143,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_disconnected: true,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(!without_siblings.show_reconnect_host);
@@ -1153,6 +1157,7 @@ fn workspace_menu_reconnect_host_requires_sibling_disconnected() {
         is_disconnected: false,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: true,
     });
     assert!(!connected.show_reconnect_host);
@@ -1171,6 +1176,7 @@ fn workspace_menu_daemon_died_shows_restart_for_local_only() {
         is_disconnected: true,
         is_connecting: false,
         is_daemon_died: true,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(local.show_restart_daemon);
@@ -1184,6 +1190,7 @@ fn workspace_menu_daemon_died_shows_restart_for_local_only() {
         is_disconnected: true,
         is_connecting: false,
         is_daemon_died: true,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(remote.show_restart_daemon);
@@ -1204,6 +1211,7 @@ fn workspace_menu_force_reconnect_available_during_connecting() {
         is_disconnected: false,
         is_connecting: true,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(connecting.show_reconnect, "Force Reconnect must be available during Connecting state");
@@ -1217,6 +1225,7 @@ fn workspace_menu_force_reconnect_available_during_connecting() {
         is_disconnected: true,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(disconnected.show_reconnect, "Force Reconnect must remain available when Disconnected");
@@ -1230,6 +1239,7 @@ fn workspace_menu_force_reconnect_available_during_connecting() {
         is_disconnected: false,
         is_connecting: false,
         is_daemon_died: false,
+        is_owned_elsewhere: false,
         has_other_disconnected_from_same_host: false,
     });
     assert!(!connected.show_reconnect, "Force Reconnect must be hidden when already connected");

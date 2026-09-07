@@ -448,6 +448,14 @@ impl Window {
             let is_connecting = current_status.is_some_and(|s| {
                 matches!(s, ConnectionStatus::Connecting | ConnectionStatus::Starting)
             });
+            let is_owned_elsewhere = current_status.is_some_and(|s| {
+                matches!(
+                    s,
+                    ConnectionStatus::Blocked(
+                        ConnectionProblem::TakenOver | ConnectionProblem::OwnershipConflict
+                    )
+                )
+            });
             let endpoint_key = session.runtime.endpoint.key();
             let has_other_disconnected = state.workspaces.iter().any(|s| {
                 s.uuid != session_uuid
@@ -472,6 +480,7 @@ impl Window {
                 is_disconnected: disconnected,
                 is_connecting,
                 is_daemon_died,
+                is_owned_elsewhere,
                 has_other_disconnected_from_same_host: has_other_disconnected,
             })
         };
@@ -489,6 +498,9 @@ impl Window {
         }
         if items.show_reconnect_host {
             menu.append(Some("Reconnect All from Host"), Some("win.ctx-reconnect-host"));
+        }
+        if items.show_take_over {
+            menu.append(Some("Take Over Workspace…"), Some("win.ctx-take-over"));
         }
         if items.show_detach {
             menu.append(Some("Detach"), Some("win.ctx-detach"));
@@ -549,6 +561,16 @@ impl Window {
                 w.retry_all_workspaces_for_endpoint(&u);
             });
             self.add_action(&reconnect_host_action);
+        }
+
+        if items.show_take_over {
+            let w = self.clone();
+            let u = session_uuid.to_string();
+            let take_over_action = gtk4::gio::SimpleAction::new("ctx-take-over", None);
+            take_over_action.connect_activate(move |_, _| {
+                w.confirm_take_over_workspace(&u);
+            });
+            self.add_action(&take_over_action);
         }
 
         if items.show_detach {

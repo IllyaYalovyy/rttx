@@ -36,6 +36,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often a backpressure-paused actor re-checks the pause flag.
+const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 /// Capacity for the event channel (`EndpointEvent` → GTK main loop).
 const EVENT_CHANNEL_BOUND: usize = 4096;
 
@@ -638,6 +641,8 @@ impl EndpointActor {
             Command(Option<EndpointCommand>),
             Message(Result<Option<v3::ServerEnvelope>, DaemonError>),
             HeartbeatTick,
+            /// Backpressure is on; wake up to re-check the flag.
+            PausePoll,
         }
 
         loop {
@@ -648,11 +653,21 @@ impl EndpointActor {
                     self.heartbeat_deadline,
                 ));
                 tokio::pin!(heartbeat_sleep);
+                // While the GTK side has paused this actor for backpressure
+                // the reader is not polled, so no pong can arrive; counting
+                // heartbeat ticks in that window would declare a healthy
+                // connection lost just because the UI was busy replaying a
+                // large workspace. The heartbeat resumes with the reader.
                 let event = tokio::select! {
                     biased;
                     command = self.cmd_rx.recv() => LoopEvent::Command(command),
                     message = reader.recv(), if !paused => LoopEvent::Message(message),
-                    () = &mut heartbeat_sleep, if track_heartbeat => LoopEvent::HeartbeatTick,
+                    () = &mut heartbeat_sleep, if track_heartbeat && !paused => {
+                        LoopEvent::HeartbeatTick
+                    }
+                    () = tokio::time::sleep(BACKPRESSURE_POLL_INTERVAL), if paused => {
+                        LoopEvent::PausePoll
+                    }
                 };
 
                 match event {
@@ -665,6 +680,12 @@ impl EndpointActor {
                     }
                     LoopEvent::Message(message) => self.handle_runtime_message(message),
                     LoopEvent::HeartbeatTick => self.handle_heartbeat_tick().await,
+                    LoopEvent::PausePoll => {
+                        // A pause is the UI's problem, not the daemon's:
+                        // start the heartbeat window afresh once reading
+                        // resumes rather than charging the pause to it.
+                        self.heartbeat_deadline = new_heartbeat_deadline();
+                    }
                 }
             } else {
                 let Some(command) = self.cmd_rx.recv().await else { break };
