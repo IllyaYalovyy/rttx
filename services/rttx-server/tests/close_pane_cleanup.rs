@@ -70,7 +70,7 @@ async fn closing_a_pane_removes_only_its_durable_state() {
     let close_uuid = rttx_proto::bytes_to_uuid(&close).unwrap();
 
     // Wait for both panes' durable artifacts to reach disk before closing.
-    wait_for_state_containing(tmp.path(), "close-cleanup", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10)).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let both_durable = poll_until(deadline, || {
         pane_artifacts_present(&state_dir, workspace_uuid, keep_uuid)

@@ -181,6 +181,16 @@ pub struct Workspace {
     pub attached_clients: HashMap<Uuid, ClientRole>,
 }
 
+/// The automatic workspace name for a shell working in `cwd`: the last
+/// path component, or `None` for the filesystem root and other paths
+/// without one. The same rule a client uses for the name it creates a
+/// workspace with, so the name does not jump when the daemon takes over.
+#[must_use]
+pub fn auto_name_from_cwd(cwd: &str) -> Option<String> {
+    let name = std::path::Path::new(cwd).file_name()?.to_str()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 impl Workspace {
     /// Create a new empty workspace.
     #[must_use]
@@ -446,14 +456,9 @@ impl Workspace {
         DetachOutcome::Detached { revision: self.revision() }
     }
 
-    /// Apply an automatic (client-derived) name.
-    ///
-    /// The daemon owns workspace metadata, so even a name a client derived
-    /// from its shell's working directory is recorded here and fanned out
-    /// to every other attached client. A workspace a user named keeps that
-    /// name: automatic renames are ignored once `user_renamed` is set, so a
-    /// stale client cannot downgrade a deliberate choice. Returns the new
-    /// revision when the name changed.
+    /// Apply an automatic name proposed over the wire (`RenameWorkspace
+    /// { automatic: true }`, kept for older clients). A workspace a user
+    /// named keeps that name. Returns the new revision when the name changed.
     pub fn set_auto_name(&mut self, name: String) -> Option<u64> {
         if self.user_renamed || self.name == name || name.is_empty() {
             return None;
@@ -461,6 +466,47 @@ impl Workspace {
         self.name = name;
         self.bump_revision();
         Some(self.revision())
+    }
+
+    /// The pane whose working directory names the workspace: the
+    /// default-active pane, or the first leaf in tree order when there is
+    /// none. Deterministic on purpose — a name must not flip between panes.
+    #[must_use]
+    fn naming_pane_id(&self) -> Option<Uuid> {
+        self.tree
+            .default_active()
+            .map(PaneId::uuid)
+            .filter(|id| self.panes.contains_key(id))
+            .or_else(|| self.tree.panes().first().map(|id| id.uuid()))
+    }
+
+    /// Whether a change of `pane_id`'s working directory may rename the
+    /// workspace.
+    #[must_use]
+    pub fn pane_names_workspace(&self, pane_id: Uuid) -> bool {
+        !self.user_renamed && self.naming_pane_id() == Some(pane_id)
+    }
+
+    /// Re-derive the automatic name from the naming pane's working
+    /// directory (its last path component).
+    ///
+    /// The daemon owns the workspace, so it — not any client — keeps an
+    /// auto-named workspace tracking where its shell is. A workspace a user
+    /// renamed is left alone. Returns the new name when it changed, with the
+    /// revision bumped; the caller announces it with `WorkspaceRenamed`.
+    pub fn refresh_auto_name(&mut self) -> Option<String> {
+        if self.user_renamed {
+            return None;
+        }
+        let pane_id = self.naming_pane_id()?;
+        let cwd = self.panes.get(&pane_id)?.effective_cwd()?;
+        let name = auto_name_from_cwd(&cwd)?;
+        if name == self.name {
+            return None;
+        }
+        self.name.clone_from(&name);
+        self.bump_revision();
+        Some(name)
     }
 
     /// Rename this workspace and return the resulting revision.
@@ -620,7 +666,7 @@ impl Workspace {
 
         let active_pane_id = rf.spec.tree.default_active().map(PaneId::uuid);
 
-        Self {
+        let mut workspace = Self {
             id: rf.spec.id,
             name: rf.spec.name.clone(),
             user_renamed: rf.spec.user_renamed,
@@ -634,7 +680,12 @@ impl Workspace {
             last_active_at: rf.instance.last_active_at,
             attached_clients: HashMap::new(),
             panes,
-        }
+        };
+        // A file written before the daemon named workspaces itself still
+        // carries the creation-time name; the persisted pane directory says
+        // what the name should be.
+        workspace.refresh_auto_name();
+        workspace
     }
 }
 
@@ -990,6 +1041,95 @@ mod tests {
             !workspace.user_renamed,
             "a name chosen at creation time is not an explicit user rename"
         );
+    }
+
+    fn pane_in(cwd: &str) -> Pane {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.cwd = Some(cwd.to_string());
+        pane
+    }
+
+    #[test]
+    fn auto_name_from_cwd_is_the_last_path_component() {
+        assert_eq!(auto_name_from_cwd("/home/etf/Projects/rttx"), Some("rttx".into()));
+        assert_eq!(auto_name_from_cwd("/home/etf/"), Some("etf".into()));
+        assert_eq!(auto_name_from_cwd("/"), None);
+        assert_eq!(auto_name_from_cwd(""), None);
+    }
+
+    /// The daemon owns the name: an auto-named workspace follows the
+    /// working directory of its default-active pane.
+    #[test]
+    fn refresh_auto_name_tracks_the_active_panes_cwd() {
+        let mut workspace = Workspace::new("Projects".into());
+        workspace.add_pane(pane_in("/home/etf/Projects/rttx"));
+        let rev = workspace.revision();
+
+        assert_eq!(workspace.refresh_auto_name(), Some("rttx".into()));
+        assert_eq!(workspace.name, "rttx");
+        assert!(!workspace.user_renamed, "a derived name is not a user rename");
+        assert!(workspace.revision() > rev, "the new name must persist");
+        assert_eq!(workspace.refresh_auto_name(), None, "unchanged cwd means no rename");
+    }
+
+    #[test]
+    fn refresh_auto_name_leaves_a_user_renamed_workspace_alone() {
+        let mut workspace = Workspace::new("Projects".into());
+        workspace.add_pane(pane_in("/home/etf/Projects/rttx"));
+        workspace.rename("Blog: pipeline".into());
+        assert_eq!(workspace.refresh_auto_name(), None);
+        assert_eq!(workspace.name, "Blog: pipeline");
+        let pane_id = *workspace.panes.keys().next().unwrap();
+        assert!(!workspace.pane_names_workspace(pane_id));
+    }
+
+    /// Only the naming pane's directory matters: a `cd` in a secondary pane
+    /// does not rename the workspace, and the name does not flip between
+    /// panes.
+    #[test]
+    fn only_the_default_active_pane_names_the_workspace() {
+        let mut workspace = Workspace::new("Projects".into());
+        let first = pane_in("/home/etf/Projects/rttx");
+        let first_id = first.id;
+        workspace.add_pane(first);
+        let second = pane_in("/tmp/scratch");
+        let second_id = second.id;
+        workspace.add_pane(second);
+
+        assert!(workspace.pane_names_workspace(first_id));
+        assert!(!workspace.pane_names_workspace(second_id));
+        assert_eq!(workspace.refresh_auto_name(), Some("rttx".into()));
+        workspace.set_default_active_pane(second_id);
+        assert!(workspace.pane_names_workspace(second_id));
+        assert_eq!(workspace.refresh_auto_name(), Some("scratch".into()));
+    }
+
+    #[test]
+    fn refresh_auto_name_without_panes_or_cwd_is_a_noop() {
+        let mut workspace = Workspace::new("Workspace 3".into());
+        assert_eq!(workspace.refresh_auto_name(), None);
+        workspace.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        assert_eq!(workspace.refresh_auto_name(), None);
+        assert_eq!(workspace.name, "Workspace 3");
+    }
+
+    /// A workspace file written by a daemon that kept creation-time names
+    /// comes back under the name its pane directory dictates.
+    #[test]
+    fn loading_a_legacy_file_renames_from_the_persisted_pane_cwd() {
+        let mut workspace = Workspace::new("Projects".into());
+        workspace.add_pane(pane_in("/home/etf/Projects/rttx/dev1_rttx"));
+        let mut rf = workspace.to_workspace_file();
+        rf.spec.name = "Projects".into();
+        rf.spec.user_renamed = false;
+        let restored = Workspace::from_workspace_file(&rf);
+        assert_eq!(restored.name, "dev1_rttx");
+        assert!(!restored.user_renamed);
+
+        // A user-named one is left alone.
+        rf.spec.name = "Blog: pipeline".into();
+        rf.spec.user_renamed = true;
+        assert_eq!(Workspace::from_workspace_file(&rf).name, "Blog: pipeline");
     }
 
     #[test]

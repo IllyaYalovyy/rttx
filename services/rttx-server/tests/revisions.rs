@@ -1,6 +1,7 @@
 //! Integration tests for workspace revisions and mutation acknowledgements.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, list_workspaces, start_test_server, wait_for_state_containing};
 use rttx_proto::v3;
@@ -211,7 +212,8 @@ async fn workspace_revision_survives_restart_and_attach_advances_it() {
         // server is aborted below.
         client.ping().await;
 
-        wait_for_state_containing(tmp.path(), "restart-revision", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
+            .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

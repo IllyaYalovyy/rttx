@@ -140,7 +140,8 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
         // workspace is dirty after creation/splits/input, so the next
         // persistence tick writes workspace.json, screen snapshots, and
         // scrollback for every pane.
-        wait_for_state_containing(tmp.path(), "zero-orphan", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
+            .await;
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let all_durable = poll_until(deadline, || {
@@ -236,7 +237,8 @@ async fn multi_pane_workspace_survives_repeated_hard_crashes_without_orphans() {
 
         // Let the reconstructed workspace re-persist (it is dirty after reattach)
         // so the next cycle observes a fully written state dir, then crash.
-        wait_for_state_containing(tmp.path(), "zero-orphan", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
+            .await;
         handle.abort();
         tokio::time::sleep(Duration::from_millis(150)).await;
     }

@@ -441,3 +441,60 @@ async fn automatic_rename_never_overrides_a_user_rename() {
     assert_eq!(workspaces[0].name, "Blog: pipeline");
     assert!(workspaces[0].user_renamed);
 }
+
+/// The daemon names the workspace after its shell's directory, on its own:
+/// a `cd` in the pane renames the workspace and every attached client is
+/// told. A user's rename then sticks regardless of where the shell goes.
+#[tokio::test]
+async fn daemon_names_the_workspace_after_the_shells_directory() {
+    use std::time::Duration;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+    let target = tmp.path().join("zebra-project");
+    std::fs::create_dir_all(&target).unwrap();
+
+    let mut writer = TestClient::connect(&sock).await;
+    writer.handshake().await;
+    let runtime_id =
+        common::create_workspace(&mut writer, "Workspace 1", v3::WorkspacePolicy::Persistent).await;
+    common::attach_rw(&mut writer, &runtime_id).await;
+    let pane_id = common::create_pane(&mut writer, &runtime_id).await;
+
+    let mut watcher = TestClient::connect(&sock).await;
+    watcher.handshake().await;
+    common::attach_ro(&mut watcher, &runtime_id).await;
+
+    // The shell moves: the daemon renames within one /proc poll, and the
+    // reader hears about it without doing anything.
+    common::send_input(
+        &mut writer,
+        &runtime_id,
+        &pane_id,
+        format!("cd {}\n", target.display()).as_bytes(),
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut renamed_to = None;
+    while tokio::time::Instant::now() < deadline {
+        if let Some(msg) = watcher.try_recv(Duration::from_millis(300)).await
+            && let Some(v3::server_envelope::Payload::WorkspaceRenamed(r)) = msg.payload
+        {
+            renamed_to = Some((r.name, r.user_renamed));
+            break;
+        }
+    }
+    assert_eq!(renamed_to, Some(("zebra-project".to_string(), false)), "daemon renames after cd");
+    let listed = list_workspaces(&mut writer).await;
+    assert_eq!(listed[0].name, "zebra-project");
+    assert!(!listed[0].user_renamed);
+
+    // A user rename wins, and a later cd no longer renames.
+    let ack = rename(&mut writer, &runtime_id, "My Zebra", false).await;
+    assert!(ack.user_renamed);
+    let _ = next_renamed_push(&mut watcher).await;
+    common::send_input(&mut writer, &runtime_id, &pane_id, b"cd /\n").await;
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    let _ = watcher.drain(Duration::from_millis(300)).await;
+    let listed = list_workspaces(&mut writer).await;
+    assert_eq!(listed[0].name, "My Zebra", "a user's name is never replaced by a directory");
+}

@@ -4,6 +4,7 @@
 //! files and that corrupt snapshots do not block workspace loading.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
 use rttx_proto::{bytes_to_uuid, v3};
@@ -65,7 +66,8 @@ async fn serialization_writes_screen_snapshots() {
     };
 
     // Wait for serialization tick to write state.
-    wait_for_state_containing(tmp.path(), "snap-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id_bytes), Duration::from_secs(10))
+        .await;
 
     // Verify screen snapshot file exists.
     let state_dir = tmp.path().join("state/rttx/daemon");

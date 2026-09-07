@@ -94,7 +94,12 @@ async fn gui_restore_flow_no_duplicates() {
         }
 
         // Wait for output.
-        wait_for_state_containing(tmp.path(), "Session", Duration::from_secs(10)).await;
+        wait_for_state_containing(
+            tmp.path(),
+            &common::uuid_str(&session_ids[0]),
+            Duration::from_secs(10),
+        )
+        .await;
         let _ = c.drain(Duration::from_millis(500)).await;
     }
 
@@ -114,15 +119,14 @@ async fn gui_restore_flow_no_duplicates() {
         };
         assert_eq!(workspaces.len(), 2, "should have exactly 2 sessions");
 
-        // Sort by name for deterministic comparison.
-        let mut sorted_workspaces = workspaces.clone();
-        sorted_workspaces.sort_by(|a, b| a.name.cmp(&b.name));
-        let sorted_ids = session_ids.clone();
-        // session_ids[0] is "Session 1", session_ids[1] is "Session 2" — already sorted.
+        // Both workspaces are auto-named after the same shell directory, so
+        // match them by id rather than by name.
+        let sorted_workspaces: Vec<_> = session_ids
+            .iter()
+            .map(|id| workspaces.iter().find(|w| &w.id == id).expect("workspace listed").clone())
+            .collect();
 
         for (i, info) in sorted_workspaces.iter().enumerate() {
-            assert_eq!(info.id, sorted_ids[i]);
-
             c.send(&v3::ClientEnvelope {
                 request_id: 0,
                 command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {

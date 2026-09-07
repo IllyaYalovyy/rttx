@@ -322,6 +322,24 @@ fn find_scrollback_logs(runtimes_dir: &Path) -> Vec<PathBuf> {
     logs
 }
 
+/// The uuid string of a wire runtime/pane id, as it appears in state files.
+/// The name the daemon gives an auto-named workspace: the last component of
+/// its naming pane's directory once the shell has reported one, otherwise
+/// the name it was created with.
+pub fn expected_auto_name(info: &v3::WorkspaceInfo, created_as: &str) -> String {
+    info.panes
+        .first()
+        .filter(|p| !p.cwd.is_empty())
+        .and_then(|p| {
+            std::path::Path::new(&p.cwd).file_name().map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| created_as.to_string())
+}
+
+pub fn uuid_str(id: &[u8]) -> String {
+    uuid::Uuid::from_slice(id).expect("16-byte id").to_string()
+}
+
 pub async fn wait_for_state_containing(
     base_dir: &Path,
     needle: &str,

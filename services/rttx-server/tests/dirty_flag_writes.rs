@@ -4,6 +4,7 @@
 //! rewrites the daemon index when the set of workspace IDs changes.
 
 mod common;
+use common::uuid_str;
 
 use common::{TestClient, start_test_server, wait_for_state_containing};
 use rttx_proto::v3;
@@ -36,7 +37,8 @@ async fn clean_workspace_not_rewritten_on_subsequent_ticks() {
     let runtime_id = rttx_proto::bytes_to_uuid(&runtime_id_bytes).unwrap();
 
     // Wait for first serialization tick.
-    wait_for_state_containing(tmp.path(), "idle-workspace", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id_bytes), Duration::from_secs(10))
+        .await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let rt_path = layout::runtime_file(&state_dir, runtime_id);
@@ -79,7 +81,8 @@ async fn mutation_triggers_rewrite() {
     let runtime_id = rttx_proto::bytes_to_uuid(&runtime_id_bytes).unwrap();
 
     // Wait for first write.
-    wait_for_state_containing(tmp.path(), "mutable-rt", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id_bytes), Duration::from_secs(10))
+        .await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let rt_path = layout::runtime_file(&state_dir, runtime_id);
@@ -133,10 +136,13 @@ async fn daemon_index_not_rewritten_when_ids_unchanged() {
         })),
     })
     .await;
-    let _ = c.recv().await; // WorkspaceCreated
+    let index_rt = match c.recv().await.payload {
+        Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
+        other => panic!("expected WorkspaceCreated, got {other:?}"),
+    };
 
     // Wait for first write.
-    wait_for_state_containing(tmp.path(), "index-test", Duration::from_secs(10)).await;
+    wait_for_state_containing(tmp.path(), &uuid_str(&index_rt), Duration::from_secs(10)).await;
 
     let state_dir = tmp.path().join("state/rttx/daemon");
     let index_path = layout::daemon_index(&state_dir);

@@ -79,7 +79,8 @@ async fn reconstruct_session_after_restart() {
         client.send(&input).await;
 
         // Wait for output and serialization tick (>1s).
-        wait_for_state_containing(tmp.path(), "reconstruct-test", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
+            .await;
 
         // Drain any pending deltas.
         let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
@@ -107,7 +108,10 @@ async fn reconstruct_session_after_restart() {
             other => panic!("expected WorkspaceList, got {other:?}"),
         };
         assert_eq!(workspaces.len(), 1, "session should be restored");
-        assert_eq!(workspaces[0].name, "reconstruct-test");
+        assert_eq!(
+            workspaces[0].name,
+            common::expected_auto_name(&workspaces[0], "reconstruct-test")
+        );
         assert_eq!(workspaces[0].id, runtime_id);
 
         // Attach and check snapshot contains scrollback with our marker.
@@ -214,7 +218,8 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
             })
             .await;
 
-        wait_for_state_containing(tmp.path(), "reconstruct-cwd", Duration::from_secs(10)).await;
+        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
+            .await;
         let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
 
         handle.abort();

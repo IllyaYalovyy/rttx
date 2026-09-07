@@ -1128,30 +1128,9 @@ impl Window {
         status: &ConnectionStatus,
     ) {
         self.clear_workspace_reconnect_countdown(workspace_id);
-        let became_writable = status.accepts_input()
-            && !self
-                .imp()
-                .workspace_connection_status
-                .borrow()
-                .get(workspace_id)
-                .is_some_and(ConnectionStatus::accepts_input);
         self.replace_workspace_connection_status(workspace_id, status);
         if let ConnectionStatus::Reconnecting { attempt, retry_in_secs } = status {
             self.start_workspace_reconnect_countdown(workspace_id, *attempt, *retry_in_secs);
-        }
-        if became_writable {
-            // Now that this client holds the lease it is the one keeping
-            // the daemon's automatic name current: bring a name a previous
-            // daemon never learned (a client-side rename of old) up to date.
-            let cwd = {
-                let state = self.imp().state.borrow();
-                state.workspaces.iter().find(|s| s.uuid == workspace_id).and_then(|s| {
-                    s.active_terminal_uuid.as_deref().and_then(|t| s.layout.terminal_cwd(t))
-                })
-            };
-            if let Some(cwd) = cwd {
-                self.maybe_auto_rename_workspace(workspace_id, Some(&cwd));
-            }
         }
     }
 
@@ -1290,7 +1269,6 @@ impl Window {
                         session.layout.set_terminal_cwd(&layout_terminal_uuid, Some(c.cwd.clone()));
                     }
                 }
-                self.maybe_auto_rename_workspace(&workspace_id, Some(&c.cwd));
                 self.refresh_sidebar_subtitle_if_active(&layout_terminal_uuid);
             }
             Payload::PaneExited(exited) => {
@@ -1454,61 +1432,16 @@ impl Window {
         self.connect_managed_workspace(&session_state);
     }
 
-    /// Propose an automatic name for a workspace whose shell moved to `cwd`.
-    ///
-    /// The daemon owns the name, so the proposal is sent there as an
-    /// *automatic* rename and the sidebar follows the daemon's answer —
-    /// which is the user's name instead if one was ever chosen, on any
-    /// client. Nothing is sent while this client cannot write to the
-    /// workspace (a read-only mirror after a take-over): the owner's client
-    /// keeps the name current and the daemon pushes it here.
-    pub(super) fn maybe_auto_rename_workspace(&self, workspace_id: &str, cwd: Option<&str>) {
-        let proposal = {
-            let state = self.imp().state.borrow();
-            let Some(session) = state.workspaces.iter().find(|s| s.uuid == workspace_id) else {
-                return;
-            };
-            if session.user_renamed {
-                return;
-            }
-            let Some(new_name) =
-                crate::workspace::state::auto_name_for_workspace(&session.runtime.endpoint, cwd)
-            else {
-                return;
-            };
-            if session.name == new_name {
-                return;
-            }
-            (session.runtime.endpoint.clone(), session.runtime.runtime_id.clone(), new_name)
-        };
-        let (endpoint, runtime_id, new_name) = proposal;
-        let Some(runtime_id) = runtime_id else {
-            // Not bound to a runtime yet: nothing owns the name but us.
-            self.apply_daemon_workspace_name(workspace_id, &new_name, false);
-            return;
-        };
-        let writable = self
-            .imp()
-            .workspace_connection_status
-            .borrow()
-            .get(workspace_id)
-            .is_some_and(ConnectionStatus::accepts_input);
-        if !writable {
-            return;
-        }
-        if let Some(manager) = self.imp().connection_manager.borrow().as_ref() {
-            manager.rename_runtime(workspace_id, &endpoint, &runtime_id, &new_name, true);
-        }
-    }
-
     /// Adopt the daemon's name for a managed workspace.
     ///
-    /// The daemon owns workspace metadata: it derives an automatic name
-    /// from the shell's working directory and records explicit renames, and
-    /// announces both with `WorkspaceRenamed`. The client only renders. One
-    /// exception keeps a local rename from being clobbered by an automatic
-    /// name still in flight: a daemon-derived name never overrides a name
-    /// the user chose here.
+    /// The daemon owns the workspace and therefore its name: it derives the
+    /// automatic name from the naming pane's working directory, records
+    /// explicit renames, and announces every change with `WorkspaceRenamed`.
+    /// The client never authors a name for a managed workspace; the copy it
+    /// keeps is a display cache for the sidebar before the connection is up.
+    /// One exception keeps a rename the user just typed here from being
+    /// clobbered by an automatic name still in flight: a daemon-derived name
+    /// never overrides a name the user chose.
     pub(super) fn apply_daemon_workspace_name(
         &self,
         workspace_id: &str,
