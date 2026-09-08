@@ -2356,7 +2356,9 @@ mod tests {
             let stream = screen.reattach_stream();
             let elapsed = started.elapsed();
             assert!(stream.len() > GRID_SCROLLBACK_ROWS * 150);
-            assert!(elapsed < std::time::Duration::from_millis(250), "took {elapsed:?}");
+            // Guards against quadratic behaviour, not a benchmark: a debug
+            // build on a loaded CI runner takes ~250 ms.
+            assert!(elapsed < std::time::Duration::from_secs(2), "took {elapsed:?}");
         }
 
         fn produce(cols: u16, rows: u16, output: &[u8]) -> PaneScreen {
