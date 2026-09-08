@@ -226,6 +226,9 @@ jobs:
       - name: Validate packaging metadata
         run: bash .github/scripts/validate-packaging-metadata.sh
 
+      - name: Flatpak cargo sources match Cargo.lock
+        run: bash .github/scripts/check-flatpak-cargo-sources.sh
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest

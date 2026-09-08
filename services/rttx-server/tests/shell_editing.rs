@@ -113,9 +113,13 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
             })),
         })
         .await;
-    let snapshot = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => snap,
-        other => panic!("expected Snapshot, got {other:?}"),
+    let snapshot = loop {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => break snap,
+            // The shell's first output can overtake the attach response.
+            ref other if common::is_incidental_push(other.as_ref()) => {}
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
     };
 
     // The shell's first prompt can be emitted before this client finishes
