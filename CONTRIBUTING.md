@@ -520,6 +520,10 @@ its entry to the `[Unreleased]` section in the same PR, under `Added`, `Changed`
   and what happens to their existing state (persisted workspaces, preferences) if anything.
 - No entry is needed for internal refactors, test-only changes, CI, or documentation.
 - Do not put PR or issue numbers in entries — `git log` already carries them.
+- Adding or bumping a crate changes `Cargo.lock`; regenerate the Flatpak offline crate list in
+  the same PR (`flatpak-cargo-generator Cargo.lock -o packaging/rttx/flatpak/cargo-sources.json`).
+  CI fails the *Flatpak manifest* check when the two disagree; without that, the mismatch only
+  surfaces in the release build after the tag is pushed.
 - Releases move `[Unreleased]` into a versioned section, and that text becomes the AppStream
   `<release>` description shown in software centres. A missing entry is a missing line in the
   release notes users read.

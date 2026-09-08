@@ -2381,6 +2381,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/unicode-width/unicode-width-0.2.2.crate",
+        "sha256": "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254",
+        "dest": "cargo/vendor/unicode-width-0.2.2"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254\", \"files\": {}}",
+        "dest": "cargo/vendor/unicode-width-0.2.2",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/unicode-xid/unicode-xid-0.2.6.crate",
         "sha256": "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853",
         "dest": "cargo/vendor/unicode-xid-0.2.6"
@@ -2446,6 +2459,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/vt100/vt100-0.16.2.crate",
+        "sha256": "054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9",
+        "dest": "cargo/vendor/vt100-0.16.2"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9\", \"files\": {}}",
+        "dest": "cargo/vendor/vt100-0.16.2",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/vte/vte-0.13.1.crate",
         "sha256": "9a0b683b20ef64071ff03745b14391751f6beab06a54347885459b77a3f2caa5",
         "dest": "cargo/vendor/vte-0.13.1"
@@ -2454,6 +2480,19 @@
         "type": "inline",
         "contents": "{\"package\": \"9a0b683b20ef64071ff03745b14391751f6beab06a54347885459b77a3f2caa5\", \"files\": {}}",
         "dest": "cargo/vendor/vte-0.13.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/vte/vte-0.15.0.crate",
+        "sha256": "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd",
+        "dest": "cargo/vendor/vte-0.15.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd\", \"files\": {}}",
+        "dest": "cargo/vendor/vte-0.15.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
