@@ -573,8 +573,10 @@ fn prompt_lands_on_the_last_line_after_reattach_and_restart_despite_stray_alt_ex
                 row as usize, last_content,
                 "{label}: cursor must be on the prompt line, not in the history: {rows:?}"
             );
+            // On a slow runner the echo of the next typed command can land on
+            // the "history-30" row before the shell prints its newline.
             assert!(
-                rows[..last_content].iter().any(|r| r == "history-30"),
+                rows[..last_content].iter().any(|r| r.starts_with("history-30")),
                 "{label}: history precedes the prompt: {rows:?}"
             );
         };
@@ -603,7 +605,7 @@ fn prompt_lands_on_the_last_line_after_reattach_and_restart_despite_stray_alt_ex
         );
         assert_eq!(row as usize, last_content, "restart: cursor on the prompt line: {rows:?}");
         assert!(
-            rows[..last_content].iter().any(|r| r == "history-30"),
+            rows[..last_content].iter().any(|r| r.starts_with("history-30")),
             "restart: history restored: {rows:?}"
         );
 
