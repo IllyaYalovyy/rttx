@@ -11,7 +11,7 @@
 %global app_id io.github.IllyaYalovyy.rttx
 
 Name:           rttx
-Version:        1.1.0
+Version:        1.1.1
 # build-srpm.sh injects `%%global snapinfo .YYYYMMDDgitHASH` (and %%rttx_commit)
 # at the top of the spec it packs into the SRPM for untagged snapshot builds.
 Release:        1%{?snapinfo}%{?dist}
@@ -110,6 +110,19 @@ RUST_TEST_THREADS=5 %cargo_test -- -p rttx-proto -p rttx-server
 %{_mandir}/man1/rttx-server.1*
 
 %changelog
+* Mon Sep 07 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.1.1-1
+- Fix panes coming back broken after a reconnect or daemon restart: the
+  daemon keeps a cell grid per pane and renders its state on attach instead
+  of replaying raw output (no more overwritten lines, misplaced cursor,
+  stale mouse tracking, or a prompt drawn over old history; no more `reset`)
+- Fix "Reconnect" on one workspace silently killing every other workspace on
+  the same host; add "Take Over Workspace..." for the client that lost a lease
+- The daemon owns workspace names: derived from the shell's directory by the
+  daemon, user renames recorded there, every change pushed to all clients
+- Fix the connect dialog grouping and labels; heal modes a dead app left
+  behind; reset scroll region on cleanup; leave the alternate screen only
+  when it is active
+
 * Sun Sep 06 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.1.0-1
 - Add next-pane / previous-pane shortcuts (Alt+] and Alt+[) that keep the zoom
 - Add a header-bar quick toggle for the terminal theme

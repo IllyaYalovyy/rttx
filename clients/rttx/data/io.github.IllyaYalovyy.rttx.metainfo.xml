@@ -32,6 +32,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.1" date="2026-09-07">
+      <description>
+        <p>Fixes panes coming back broken after a reconnect or a daemon restart: the daemon now keeps a cell grid per pane and hands an attaching client a clean rendering of the pane's state, so lines are intact, the cursor is where the shell left it, a dead app's modes and scroll region are cleared, and a prompt is never drawn over old history. Fixes "Reconnect" on one workspace silently disconnecting every other workspace on the same host, and lets the client that lost a workspace to a take-over take it back. The daemon now owns workspace names: it derives them from the shell's directory, records user renames, and keeps every window in agreement.</p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-09-06">
       <description>
         <p>Adds next-pane and previous-pane shortcuts that keep a pane zoomed, a header-bar quick toggle for the terminal theme, and taking over a workspace already connected on another client. Fixes an intermittent startup crash caused by a use-after-free in GTK's Wayland input method, distinct light and dark terminal palettes, and workspace-rename persistence across restarts.</p>

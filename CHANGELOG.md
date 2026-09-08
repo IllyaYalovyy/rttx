@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-07
+
 ### Fixed
 - Reconnecting or restarting no longer leaves a pane broken. Panes came back
   with lines overwritten from the middle, the cursor in the wrong place,
@@ -485,7 +487,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/IllyaYalovyy/rttx/compare/v0.9.0...v1.0.0
