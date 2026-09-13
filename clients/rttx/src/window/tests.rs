@@ -1626,6 +1626,52 @@ fn about_action_is_registered() {
 }
 
 #[test]
+fn primary_menu_leads_with_support_section() {
+    let sections = primary_menu_sections();
+    assert_eq!(sections[0], [("Support rttx", "win.support")]);
+    assert_eq!(
+        sections[1..].concat(),
+        [
+            ("About rttx", "win.about"),
+            ("Preferences", "win.preferences"),
+            ("Sync Input", "win.toggle-input-sync"),
+            ("Keyboard Shortcuts", "win.show-help-overlay"),
+            ("Fullscreen", "win.fullscreen"),
+        ]
+    );
+}
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn support_action_requests_sponsors_url() {
+    require_display!();
+
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.support-action-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let sink = std::rc::Rc::clone(&requested);
+    dialogs::with_test_support_uri_launcher(
+        move |uri| sink.borrow_mut().push(uri.to_string()),
+        || {
+            let action =
+                window.lookup_action("support").expect("window should expose a support action");
+            action.activate(None);
+        },
+    );
+
+    assert_eq!(*requested.borrow(), [config::SPONSORS_URL]);
+    window.close();
+}
+
+#[test]
 #[ignore = "requires isolated GTK harness"]
 fn smart_clipboard_preference_reaches_live_terminals() {
     require_display!();

@@ -1,6 +1,58 @@
 use super::*;
 
+type SupportUriLauncher = Box<dyn Fn(&str)>;
+
+thread_local! {
+    static TEST_SUPPORT_URI_LAUNCHER: std::cell::RefCell<Option<SupportUriLauncher>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Route `win.support` URI requests to `launcher` while `f` runs.
+#[cfg(test)]
+pub(super) fn with_test_support_uri_launcher<R>(
+    launcher: impl Fn(&str) + 'static,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_SUPPORT_URI_LAUNCHER.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        }
+    }
+
+    TEST_SUPPORT_URI_LAUNCHER.with(|slot| {
+        assert!(slot.borrow().is_none(), "test support launcher must not be nested");
+        slot.borrow_mut().replace(Box::new(launcher));
+    });
+    let _reset = Reset;
+    f()
+}
+
 impl Window {
+    /// Open the GitHub Sponsors page. `UriLauncher` goes through the
+    /// `OpenURI` portal under Flatpak.
+    pub(super) fn open_support_page(&self) {
+        let handled = TEST_SUPPORT_URI_LAUNCHER.with(|slot| {
+            slot.borrow().as_ref().map(|launcher| launcher(config::SPONSORS_URL)).is_some()
+        });
+        if handled {
+            return;
+        }
+
+        gtk4::UriLauncher::new(config::SPONSORS_URL).launch(
+            Some(self),
+            gtk4::gio::Cancellable::NONE,
+            |result| {
+                if let Err(error) = result {
+                    tracing::warn!("Failed to open {}: {error}", config::SPONSORS_URL);
+                }
+            },
+        );
+    }
+
     fn confirm_delete(&self, title: &str, body: &str, on_delete: impl Fn() + 'static) {
         let alert = adw::AlertDialog::new(Some(title), Some(body));
         alert.add_response("cancel", "Cancel");
