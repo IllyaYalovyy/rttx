@@ -36,6 +36,9 @@ mod imp {
         pub exited: Cell<bool>,
         pub crashed: Cell<bool>,
         pub bracketed_paste_mode: Cell<bool>,
+        pub(crate) mouse_tracking: RefCell<crate::terminal::MouseTrackingTracker>,
+        /// Output held back while a mouse selection drag is in progress.
+        pub(crate) selection_hold: RefCell<crate::terminal::SelectionHoldGate>,
         pub application_cursor_keys: Cell<bool>,
         pub application_keypad: Cell<bool>,
         pub input_connected: Cell<bool>,
@@ -83,6 +86,8 @@ mod imp {
                 exited: Cell::default(),
                 crashed: Cell::default(),
                 bracketed_paste_mode: Cell::default(),
+                mouse_tracking: RefCell::default(),
+                selection_hold: RefCell::default(),
                 application_cursor_keys: Cell::default(),
                 application_keypad: Cell::default(),
                 input_connected: Cell::default(),
@@ -198,6 +203,53 @@ mod imp {
             let link_target = obj.downgrade();
             links::install_openable_link_controllers(&self.vte, move || {
                 link_target.upgrade().and_then(|pane| pane.current_directory())
+            });
+
+            // Hold output while button 1 drags a selection (#1108). A legacy
+            // controller rather than a GestureClick: a click gesture stops
+            // tracking once the pointer moves past the double-click distance
+            // and is cancelled when VTE's own gestures claim the sequence, so
+            // it would miss the release that ends a drag. It observes only
+            // and always lets the event through to VTE.
+            let hold_controller = gtk4::EventControllerLegacy::new();
+            hold_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            let hold_target = obj.downgrade();
+            hold_controller.connect_event(move |_, event| {
+                if let Some(pane) = hold_target.upgrade() {
+                    let button = event
+                        .downcast_ref::<gtk4::gdk::ButtonEvent>()
+                        .map(gtk4::gdk::ButtonEvent::button);
+                    let mods = event.modifier_state();
+                    match event.event_type() {
+                        gtk4::gdk::EventType::ButtonPress if button == Some(1) => {
+                            let _held = pane.begin_selection_hold(
+                                mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK),
+                            );
+                        }
+                        gtk4::gdk::EventType::ButtonRelease if button == Some(1) => {
+                            pane.end_selection_hold();
+                        }
+                        gtk4::gdk::EventType::GrabBroken | gtk4::gdk::EventType::TouchCancel => {
+                            pane.end_selection_hold();
+                        }
+                        // A release this controller never saw (grab moved
+                        // elsewhere): motion without button 1 ends the hold.
+                        gtk4::gdk::EventType::MotionNotify
+                            if !mods.contains(gtk4::gdk::ModifierType::BUTTON1_MASK) =>
+                        {
+                            pane.end_selection_hold();
+                        }
+                        _ => {}
+                    }
+                }
+                glib::Propagation::Proceed
+            });
+            self.vte.add_controller(hold_controller);
+            let unmap_target = obj.downgrade();
+            self.vte.connect_unmap(move |_| {
+                if let Some(pane) = unmap_target.upgrade() {
+                    pane.end_selection_hold();
+                }
             });
 
             let copy_link_action = gtk4::gio::SimpleAction::new("copy-link", None);
@@ -573,12 +625,69 @@ impl PersistentPaneView {
 
     /// Feed raw terminal output bytes into VTE for rendering.
     ///
-    /// Called when a `Delta` message arrives from the daemon.
+    /// Called when a `Delta` message arrives from the daemon. While a mouse
+    /// selection drag is in progress the bytes are held and fed, in order,
+    /// when the drag ends.
     pub fn feed_output(&self, data: &[u8]) {
         if self.imp().crashed.get() {
             return;
         }
         update_bracketed_paste_mode(&self.imp().bracketed_paste_mode, data);
+        self.imp().mouse_tracking.borrow_mut().scan(data);
+        let outcome = self.imp().selection_hold.borrow_mut().offer(data);
+        match outcome {
+            crate::terminal::HoldOutcome::Feed => self.feed_to_vte(data),
+            crate::terminal::HoldOutcome::Held => {}
+            crate::terminal::HoldOutcome::Overflow(queued) => {
+                tracing::debug!(
+                    pane_uuid = %self.uuid(),
+                    bytes = queued.len(),
+                    "selection hold overflowed; flushing"
+                );
+                self.feed_to_vte(&queued);
+            }
+        }
+    }
+
+    /// A mouse selection drag started. Holds this pane's output unless the
+    /// application has mouse tracking armed and Shift is not held (the drag
+    /// then belongs to the application). Returns whether output is held.
+    #[must_use]
+    pub fn begin_selection_hold(&self, shift: bool) -> bool {
+        let tracking = self.imp().mouse_tracking.borrow().is_active();
+        self.imp().selection_hold.borrow_mut().press(tracking, shift)
+    }
+
+    /// A mouse selection drag ended or was cancelled: feed held output.
+    pub fn end_selection_hold(&self) {
+        let held = self.imp().selection_hold.borrow_mut().release();
+        if let Some(held) = held
+            && !held.is_empty()
+            && !self.imp().crashed.get()
+        {
+            self.feed_to_vte(&held);
+        }
+    }
+
+    /// Whether output is currently held for a selection drag.
+    #[must_use]
+    pub fn is_holding_output(&self) -> bool {
+        self.imp().selection_hold.borrow().is_holding()
+    }
+
+    /// Whether the application has mouse tracking armed.
+    #[must_use]
+    pub fn has_mouse_tracking(&self) -> bool {
+        self.imp().mouse_tracking.borrow().is_active()
+    }
+
+    /// Set the mouse tracking state from an authoritative tracking value
+    /// (0, 9, 1000, 1002 or 1003).
+    pub fn set_mouse_tracking_mode(&self, tracking_value: u16) {
+        self.imp().mouse_tracking.borrow_mut().set_tracking_value(u32::from(tracking_value));
+    }
+
+    fn feed_to_vte(&self, data: &[u8]) {
         // Feed in chunks to avoid overwhelming VTE with a single massive
         // blob that could trigger bugs in the C library.
         if data.len() <= VTE_FEED_CHUNK {
@@ -605,6 +714,9 @@ impl PersistentPaneView {
     /// at the prompt now. Between `begin_replay` and the barrier fed by
     /// [`end_replay`](Self::end_replay) every `commit` is therefore dropped.
     pub fn begin_replay(&self) {
+        // Output held for a drag predates the state being replayed, which
+        // supersedes it; feeding it afterwards would corrupt the restore.
+        drop(self.imp().selection_hold.borrow_mut().release());
         self.cancel_replay_timeout();
         self.imp().replaying.set(true);
     }
@@ -712,6 +824,7 @@ impl PersistentPaneView {
     pub fn reset_tracked_modes(&self) {
         self.imp().application_cursor_keys.set(false);
         self.imp().application_keypad.set(false);
+        self.set_mouse_tracking_mode(0);
     }
 
     /// Inject DECSET/DECKPAM sequences into VTE to restore interaction modes
@@ -739,6 +852,7 @@ impl PersistentPaneView {
                 rttx_proto::v3::MouseMode::try_from(modes.mouse_mode)
                     .unwrap_or(rttx_proto::v3::MouseMode::None),
             ));
+        self.imp().mouse_tracking.borrow_mut().set_tracking_value(mouse_tracking);
         match mouse_tracking {
             1000 => vte.feed(b"\x1b[?1000h"),
             1002 => vte.feed(b"\x1b[?1002h"),

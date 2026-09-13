@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Text can be selected with the mouse in a workspace pane while the program
+  in it keeps drawing. Codex and Claude Code redraw a near-invisible
+  animation even when they look idle, and every frame cleared a selection the
+  moment the drag started, so nothing could be selected. The pane now holds
+  the program's output while you drag and shows it, in order, as soon as you
+  release. Programs that use the mouse themselves (vim with `mouse=a`, htop,
+  mc) still receive drags as before, and Shift+drag still selects in them.
+
 ## [1.1.1] - 2026-09-07
 
 ### Fixed

@@ -1025,6 +1025,7 @@ impl Window {
                 // scrollback can leave VTE with mouse tracking on, causing
                 // mouse clicks to print escape sequences instead of working.
                 pane.vte().feed(crate::terminal::terminal_cleanup_bytes());
+                pane.set_mouse_tracking_mode(0);
             }
         }
         pane.end_replay();

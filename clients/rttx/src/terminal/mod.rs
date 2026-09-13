@@ -177,6 +177,222 @@ pub const fn terminal_cleanup_bytes() -> &'static [u8] {
     b"\x18\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l\x1b>\x1b[?25h\x1b[m"
 }
 
+/// Tracks whether the application has mouse tracking armed (DECSET 9, 1000,
+/// 1002 or 1003) by scanning the output stream fed to a managed pane.
+///
+/// The scanner keeps its escape-sequence state between calls, so a DECSET
+/// split across two output chunks is still recognised.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MouseTrackingTracker {
+    /// Armed state of modes 9, 1000, 1002 and 1003, in that order.
+    modes: [bool; 4],
+    state: MouseScanState,
+    params: Vec<u32>,
+    current: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum MouseScanState {
+    #[default]
+    Ground,
+    Escape,
+    CsiEntry,
+    CsiPrivate,
+    CsiBang,
+    CsiIgnore,
+}
+
+/// Private modes that turn on mouse reporting, in `MouseTrackingTracker::modes` order.
+const MOUSE_TRACKING_MODES: [u32; 4] = [9, 1000, 1002, 1003];
+
+/// A CSI with more parameters than this is not a mode change we care about.
+const MOUSE_SCAN_MAX_PARAMS: usize = 32;
+
+impl MouseTrackingTracker {
+    /// Whether any mouse tracking mode is currently armed.
+    #[must_use]
+    pub(crate) fn is_active(&self) -> bool {
+        self.modes.iter().any(|&armed| armed)
+    }
+
+    /// Replace the tracked state with an authoritative tracking value
+    /// (0, 9, 1000, 1002 or 1003), e.g. from a daemon snapshot.
+    pub(crate) fn set_tracking_value(&mut self, value: u32) {
+        self.modes = MOUSE_TRACKING_MODES.map(|mode| mode == value);
+    }
+
+    /// Scan output bytes and update the armed modes.
+    pub(crate) fn scan(&mut self, data: &[u8]) {
+        for &byte in data {
+            self.step(byte);
+        }
+    }
+
+    fn step(&mut self, byte: u8) {
+        // CAN and SUB abort a sequence; ESC restarts one, from any state.
+        match byte {
+            0x18 | 0x1a => {
+                self.state = MouseScanState::Ground;
+                return;
+            }
+            0x1b => {
+                self.state = MouseScanState::Escape;
+                return;
+            }
+            _ => {}
+        }
+        self.state = match self.state {
+            MouseScanState::Ground => MouseScanState::Ground,
+            MouseScanState::Escape => match byte {
+                b'[' => {
+                    self.params.clear();
+                    self.current = None;
+                    MouseScanState::CsiEntry
+                }
+                // RIS clears every mode.
+                b'c' => {
+                    self.modes = [false; 4];
+                    MouseScanState::Ground
+                }
+                _ => MouseScanState::Ground,
+            },
+            MouseScanState::CsiEntry => match byte {
+                b'?' => MouseScanState::CsiPrivate,
+                b'!' => MouseScanState::CsiBang,
+                0x40..=0x7e => MouseScanState::Ground,
+                0x00..=0x1f => MouseScanState::CsiEntry,
+                _ => MouseScanState::CsiIgnore,
+            },
+            MouseScanState::CsiPrivate => match byte {
+                b'0'..=b'9' => {
+                    let digit = u32::from(byte - b'0');
+                    let value = self.current.unwrap_or(0).saturating_mul(10).saturating_add(digit);
+                    self.current = Some(value);
+                    MouseScanState::CsiPrivate
+                }
+                b';' => {
+                    self.push_param();
+                    MouseScanState::CsiPrivate
+                }
+                b'h' | b'l' => {
+                    self.push_param();
+                    let armed = byte == b'h';
+                    for param in &self.params {
+                        if let Some(index) = MOUSE_TRACKING_MODES.iter().position(|m| m == param) {
+                            self.modes[index] = armed;
+                        }
+                    }
+                    MouseScanState::Ground
+                }
+                0x40..=0x7e => MouseScanState::Ground,
+                0x00..=0x1f => MouseScanState::CsiPrivate,
+                _ => MouseScanState::CsiIgnore,
+            },
+            // DECSTR (`CSI ! p`) soft-resets the terminal, mouse modes included.
+            MouseScanState::CsiBang => {
+                if byte == b'p' {
+                    self.modes = [false; 4];
+                }
+                if (0x40..=0x7e).contains(&byte) {
+                    MouseScanState::Ground
+                } else {
+                    MouseScanState::CsiIgnore
+                }
+            }
+            MouseScanState::CsiIgnore => match byte {
+                0x40..=0x7e => MouseScanState::Ground,
+                _ => MouseScanState::CsiIgnore,
+            },
+        };
+    }
+
+    fn push_param(&mut self) {
+        if self.params.len() < MOUSE_SCAN_MAX_PARAMS {
+            self.params.push(self.current.unwrap_or(0));
+        }
+        self.current = None;
+    }
+}
+
+/// Default bound on output held back during one selection drag.
+pub(crate) const SELECTION_HOLD_LIMIT: usize = 4 * 1024 * 1024;
+
+/// Holds a managed pane's output while a mouse selection drag is in progress.
+///
+/// VTE protects a drag in its own terminals by pausing PTY reads until the
+/// button is released; any output processed mid-drag clears the selection.
+/// Managed panes render with `vte.feed()`, which that pause does not cover,
+/// so the pane holds output here instead and feeds it when the drag ends.
+#[derive(Debug)]
+pub(crate) struct SelectionHoldGate {
+    held: Option<Vec<u8>>,
+    limit: usize,
+}
+
+/// What [`SelectionHoldGate::offer`] did with a chunk of output.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HoldOutcome {
+    /// No drag is being protected; feed the chunk now.
+    Feed,
+    /// The chunk was queued.
+    Held,
+    /// The queue would exceed its bound: holding stopped for this drag and
+    /// everything queued so far, followed by the chunk, must be fed now.
+    Overflow(Vec<u8>),
+}
+
+impl Default for SelectionHoldGate {
+    fn default() -> Self {
+        Self::with_limit(SELECTION_HOLD_LIMIT)
+    }
+}
+
+impl SelectionHoldGate {
+    #[must_use]
+    pub(crate) const fn with_limit(limit: usize) -> Self {
+        Self { held: None, limit }
+    }
+
+    /// Whether output is currently being held.
+    #[must_use]
+    pub(crate) const fn is_holding(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// Button 1 went down. Starts holding unless the press belongs to the
+    /// application: with mouse tracking armed, only a Shift+drag selects.
+    /// Returns whether output is now held.
+    pub(crate) fn press(&mut self, mouse_tracking: bool, shift: bool) -> bool {
+        if mouse_tracking && !shift {
+            return self.is_holding();
+        }
+        if self.held.is_none() {
+            self.held = Some(Vec::new());
+        }
+        true
+    }
+
+    /// Route a chunk of output through the gate.
+    pub(crate) fn offer(&mut self, data: &[u8]) -> HoldOutcome {
+        let Some(held) = self.held.as_mut() else {
+            return HoldOutcome::Feed;
+        };
+        if held.len().saturating_add(data.len()) > self.limit {
+            let mut flushed = self.held.take().unwrap_or_default();
+            flushed.extend_from_slice(data);
+            return HoldOutcome::Overflow(flushed);
+        }
+        held.extend_from_slice(data);
+        HoldOutcome::Held
+    }
+
+    /// The drag ended (release or cancel). Returns the held output, in
+    /// arrival order, exactly once.
+    pub(crate) const fn release(&mut self) -> Option<Vec<u8>> {
+        self.held.take()
+    }
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalInputBackend {
@@ -1886,5 +2102,144 @@ mod search_tests {
         handle.set_custom_title(None);
         assert!(handle.custom_title().is_none());
         assert_eq!(pane.title_label().label(), "auto title");
+    }
+}
+
+#[cfg(test)]
+mod selection_hold_tests {
+    use super::{HoldOutcome, MouseTrackingTracker, SelectionHoldGate};
+
+    fn scanned(chunks: &[&[u8]]) -> MouseTrackingTracker {
+        let mut tracker = MouseTrackingTracker::default();
+        for chunk in chunks {
+            tracker.scan(chunk);
+        }
+        tracker
+    }
+
+    #[test]
+    fn mouse_tracker_arms_each_tracking_mode() {
+        for mode in ["9", "1000", "1002", "1003"] {
+            let set = format!("\x1b[?{mode}h");
+            let reset = format!("\x1b[?{mode}l");
+            let mut tracker = scanned(&[set.as_bytes()]);
+            assert!(tracker.is_active(), "DECSET {mode} arms tracking");
+            tracker.scan(reset.as_bytes());
+            assert!(!tracker.is_active(), "DECRST {mode} disarms tracking");
+        }
+    }
+
+    #[test]
+    fn mouse_tracker_ignores_unrelated_modes_and_output() {
+        let tracker = scanned(&[b"hello\r\n\x1b[?2004h\x1b[?1006h\x1b[1000h\x1b[38;2;1;2;3m"]);
+        assert!(
+            !tracker.is_active(),
+            "bracketed paste, SGR encoding and ANSI modes are not tracking"
+        );
+    }
+
+    #[test]
+    fn mouse_tracker_parses_sequence_split_across_chunks() {
+        let tracker = scanned(&[b"prompt\x1b", b"[?10", b"02", b"h"]);
+        assert!(tracker.is_active());
+        let mut tracker = tracker;
+        tracker.scan(b"\x1b[?");
+        tracker.scan(b"1002l");
+        assert!(!tracker.is_active());
+    }
+
+    #[test]
+    fn mouse_tracker_handles_compound_parameters() {
+        let mut tracker = scanned(&[b"\x1b[?1049;1003;1006h"]);
+        assert!(tracker.is_active());
+        tracker.scan(b"\x1b[?1006;1003l");
+        assert!(!tracker.is_active());
+    }
+
+    #[test]
+    fn mouse_tracker_modes_are_independent() {
+        let mut tracker = scanned(&[b"\x1b[?1000h\x1b[?1002h"]);
+        tracker.scan(b"\x1b[?1002l");
+        assert!(tracker.is_active(), "1000 is still armed after resetting 1002");
+        tracker.scan(b"\x1b[?1000l");
+        assert!(!tracker.is_active());
+    }
+
+    #[test]
+    fn mouse_tracker_resets_on_ris_and_decstr() {
+        let mut tracker = scanned(&[b"\x1b[?1003h\x1bc"]);
+        assert!(!tracker.is_active(), "RIS clears tracking");
+        tracker.scan(b"\x1b[?1000h\x1b[!p");
+        assert!(!tracker.is_active(), "DECSTR clears tracking");
+    }
+
+    #[test]
+    fn mouse_tracker_aborted_sequence_does_not_arm() {
+        assert!(!scanned(&[b"\x1b[?1000\x18h"]).is_active(), "CAN aborts the sequence");
+        assert!(!scanned(&[b"\x1b[?1000$h"]).is_active(), "intermediates make it another sequence");
+        assert!(scanned(&[b"\x1b[?1000\x1b[?1003h"]).is_active(), "ESC restarts the sequence");
+    }
+
+    #[test]
+    fn mouse_tracker_seeded_from_tracking_value() {
+        let mut tracker = MouseTrackingTracker::default();
+        tracker.set_tracking_value(1002);
+        assert!(tracker.is_active());
+        tracker.scan(b"\x1b[?1002l");
+        assert!(!tracker.is_active());
+        tracker.set_tracking_value(9);
+        assert!(tracker.is_active());
+        tracker.set_tracking_value(0);
+        assert!(!tracker.is_active());
+    }
+
+    #[test]
+    fn gate_feeds_output_when_no_drag() {
+        let mut gate = SelectionHoldGate::default();
+        assert_eq!(gate.offer(b"frame"), HoldOutcome::Feed);
+        assert_eq!(gate.release(), None);
+    }
+
+    #[test]
+    fn gate_holds_during_drag_and_releases_in_order_once() {
+        let mut gate = SelectionHoldGate::default();
+        assert!(gate.press(false, false));
+        assert_eq!(gate.offer(b"one "), HoldOutcome::Held);
+        assert_eq!(gate.offer(b"two "), HoldOutcome::Held);
+        assert_eq!(gate.offer(b"three"), HoldOutcome::Held);
+        assert_eq!(gate.release().as_deref(), Some(&b"one two three"[..]));
+        assert_eq!(gate.release(), None, "held output is returned exactly once");
+        assert_eq!(gate.offer(b"after"), HoldOutcome::Feed);
+    }
+
+    #[test]
+    fn gate_does_not_hold_when_app_tracks_mouse_without_shift() {
+        let mut gate = SelectionHoldGate::default();
+        assert!(!gate.press(true, false));
+        assert_eq!(gate.offer(b"frame"), HoldOutcome::Feed);
+        assert!(gate.press(true, true), "Shift+drag selects even under mouse tracking");
+        assert_eq!(gate.offer(b"frame"), HoldOutcome::Held);
+    }
+
+    #[test]
+    fn gate_repeated_press_keeps_queued_output() {
+        let mut gate = SelectionHoldGate::default();
+        gate.press(false, false);
+        gate.offer(b"kept");
+        assert!(gate.press(false, false));
+        assert!(gate.press(true, false), "an ignored press does not drop an active hold");
+        assert_eq!(gate.release().as_deref(), Some(&b"kept"[..]));
+    }
+
+    #[test]
+    fn gate_overflow_flushes_everything_and_stops_holding() {
+        let mut gate = SelectionHoldGate::with_limit(8);
+        gate.press(false, false);
+        assert_eq!(gate.offer(b"abcd"), HoldOutcome::Held);
+        assert_eq!(gate.offer(b"efgh"), HoldOutcome::Held);
+        assert_eq!(gate.offer(b"i"), HoldOutcome::Overflow(b"abcdefghi".to_vec()));
+        assert!(!gate.is_holding());
+        assert_eq!(gate.offer(b"j"), HoldOutcome::Feed, "the rest of the drag is not held");
+        assert_eq!(gate.release(), None);
     }
 }
