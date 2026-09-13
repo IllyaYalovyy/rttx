@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- "Support rttx" is now the first item in the main menu, in its own section
+  above About rttx, and opens the GitHub Sponsors page (through the portal
+  under Flatpak). The link in the About window stays.
+
 ### Fixed
 - Text can be selected with the mouse in a workspace pane while the program
   in it keeps drawing. Codex and Claude Code redraw a near-invisible

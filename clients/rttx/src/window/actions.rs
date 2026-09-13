@@ -220,6 +220,13 @@ impl Window {
         });
         self.add_action(&about_action);
 
+        let support_action = gtk4::gio::SimpleAction::new("support", None);
+        let win = self.clone();
+        support_action.connect_activate(move |_, _| {
+            win.open_support_page();
+        });
+        self.add_action(&support_action);
+
         // Pane navigation — shortcuts are customizable via preferences.
         {
             let nav_actions: &[(&str, Direction)] = &[

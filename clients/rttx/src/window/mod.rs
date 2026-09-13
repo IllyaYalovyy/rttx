@@ -164,11 +164,13 @@ mod imp {
             menu_button.set_icon_name("open-menu-symbolic");
 
             let menu = gtk4::gio::Menu::new();
-            menu.append(Some("About rttx"), Some("win.about"));
-            menu.append(Some("Preferences"), Some("win.preferences"));
-            menu.append(Some("Sync Input"), Some("win.toggle-input-sync"));
-            menu.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
-            menu.append(Some("Fullscreen"), Some("win.fullscreen"));
+            for items in super::primary_menu_sections() {
+                let section = gtk4::gio::Menu::new();
+                for (label, action) in *items {
+                    section.append(Some(label), Some(action));
+                }
+                menu.append_section(None, &section);
+            }
             menu_button.set_menu_model(Some(&menu));
 
             header.pack_end(&menu_button);
@@ -1383,6 +1385,22 @@ fn preferred_command_target_uuid(
         .workspaces
         .get(state.active_workspace_index)
         .and_then(|session| session.layout.terminal_uuids().into_iter().next())
+}
+
+/// Primary (hamburger) menu as sections of `(label, action)` pairs, top to
+/// bottom. "Support rttx" leads in its own section so it is the first item a
+/// user sees; prominence comes from position only.
+pub(crate) const fn primary_menu_sections() -> &'static [&'static [(&'static str, &'static str)]] {
+    &[
+        &[("Support rttx", "win.support")],
+        &[
+            ("About rttx", "win.about"),
+            ("Preferences", "win.preferences"),
+            ("Sync Input", "win.toggle-input-sync"),
+            ("Keyboard Shortcuts", "win.show-help-overlay"),
+            ("Fullscreen", "win.fullscreen"),
+        ],
+    ]
 }
 
 #[cfg(test)]
