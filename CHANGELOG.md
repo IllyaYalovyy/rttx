@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-13
+
 ### Changed
 - "Support rttx" is now the first item in the main menu, in its own section
   above About rttx, and opens the GitHub Sponsors page (through the portal
@@ -501,7 +503,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.0...v1.0.1
