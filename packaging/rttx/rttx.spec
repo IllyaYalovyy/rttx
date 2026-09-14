@@ -11,7 +11,7 @@
 %global app_id io.github.IllyaYalovyy.rttx
 
 Name:           rttx
-Version:        1.1.1
+Version:        1.1.2
 # build-srpm.sh injects `%%global snapinfo .YYYYMMDDgitHASH` (and %%rttx_commit)
 # at the top of the spec it packs into the SRPM for untagged snapshot builds.
 Release:        1%{?snapinfo}%{?dist}
@@ -110,6 +110,12 @@ RUST_TEST_THREADS=5 %cargo_test -- -p rttx-proto -p rttx-server
 %{_mandir}/man1/rttx-server.1*
 
 %changelog
+* Sun Sep 13 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.1.2-1
+- Fix mouse selection being cleared immediately in a pane whose program keeps
+  drawing (Codex, Claude Code): output is held during the drag and shown in
+  order on release; apps using the mouse still receive drags
+- Put "Support rttx" at the top of the main menu
+
 * Mon Sep 07 2026 Illya Yalovyy <yalovoy@gmail.com> - 1.1.1-1
 - Fix panes coming back broken after a reconnect or daemon restart: the
   daemon keeps a cell grid per pane and renders its state on attach instead
