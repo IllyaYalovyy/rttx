@@ -108,6 +108,21 @@ impl TerminalHandle {
         crate::terminal::copy_to_clipboard(self.vte());
     }
 
+    /// Whether the copy that just ran should explain the Shift override,
+    /// consuming the pane's once-per-session hint when it should (#1114).
+    ///
+    /// Direct terminals never hint: they render their own PTY through VTE and
+    /// the client does not track what mouse modes the application armed, so
+    /// there is no way to tell an empty selection from one the application
+    /// took the drag for.
+    #[must_use]
+    pub fn take_shift_select_hint(&self) -> bool {
+        match self {
+            Self::Direct(_) => false,
+            Self::Managed(pane) => pane.take_shift_select_hint(),
+        }
+    }
+
     /// Mark the pane as active or inactive in the UI.
     pub fn set_active(&self, active: bool) {
         match self {

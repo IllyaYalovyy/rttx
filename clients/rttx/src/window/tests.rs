@@ -8396,3 +8396,65 @@ fn navigate_while_zoomed_no_op_at_edge() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+/// A copy shortcut that comes up empty is silent in an ordinary pane, but
+/// while the pane's application owns the mouse it explains Shift+drag —
+/// a plain drag went to the application, so nothing was ever selected (#1114).
+///
+/// Drives the real `win.copy` action, so it covers the whole path the shortcut
+/// and the context menu take: action → terminal handle → pane decision.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn empty_copy_hints_through_the_copy_action_only_while_an_app_tracks_the_mouse() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.copy-shift-hint-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+    let pane = crate::terminal::persistent_widget::PersistentPaneView::new(
+        "managed-pane",
+        "runtime-copy-hint",
+    );
+    window.imp().persistent_terminals.borrow_mut().insert("managed-pane".to_string(), pane.clone());
+    pump_events(50);
+
+    let copy = window.lookup_action("copy").expect("window should expose a copy action");
+    // The window focuses its own restored pane while it settles, so claim the
+    // focus right before each copy.
+    let focus_pane = || {
+        window.set_focused_terminal(Some("managed-pane"));
+        assert_eq!(window.focused_terminal_uuid().as_deref(), Some("managed-pane"));
+    };
+
+    // No mouse tracking: an empty selection is just an empty selection.
+    focus_pane();
+    copy.activate(None);
+    pump_events(50);
+    assert!(!pane.shift_select_hint_shown(), "nothing to explain without mouse tracking");
+
+    // The application arms tracking, as Claude Code and Codex do.
+    pane.feed_output(b"\x1b[?1049h\x1b[?1003h\x1b[?1006h");
+    pump_events(100);
+    assert!(pane.has_mouse_tracking(), "the pane sees the app's mouse mode");
+    assert!(!pane.vte().has_selection(), "a plain drag belongs to the app");
+
+    focus_pane();
+    copy.activate(None);
+    pump_events(50);
+    assert!(pane.shift_select_hint_shown(), "the empty copy explained Shift+drag");
+
+    // Said once per pane: later empty copies add nothing.
+    focus_pane();
+    copy.activate(None);
+    pump_events(50);
+    assert!(!pane.take_shift_select_hint(), "not repeated on every keypress");
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}

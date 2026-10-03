@@ -132,6 +132,20 @@ pub fn effective_accels(action: &str, overrides: &BTreeMap<String, Vec<String>>)
         .unwrap_or_default()
 }
 
+/// Guidance shown under a shortcut in Preferences → Keyboard Shortcuts, for
+/// the shortcuts whose key combination is not the whole story.
+///
+/// Copy needs it: while an application has mouse tracking armed, a plain drag
+/// belongs to the application and selects nothing, so Copy has nothing to put
+/// on the clipboard until the user holds Shift (#1114).
+#[must_use]
+pub fn shortcut_hint(action: &str) -> Option<&'static str> {
+    match action {
+        "copy" => Some(crate::terminal::SHIFT_SELECT_HINT_SHORT),
+        _ => None,
+    }
+}
+
 /// Return the default accelerators for an action.
 #[must_use]
 pub fn default_accels(action: &str) -> Vec<String> {
@@ -166,6 +180,27 @@ mod tests {
         let overrides = BTreeMap::new();
         let accels = effective_accels("nonexistent-action", &overrides);
         assert!(accels.is_empty());
+    }
+
+    /// Copy is undiscoverable without it: the shortcut is listed, but not that
+    /// a plain drag never selects while an app is using the mouse (#1114).
+    #[test]
+    fn copy_carries_the_shift_override_hint() {
+        let hint = shortcut_hint("copy").expect("Copy must explain the Shift override");
+        assert!(hint.contains("Shift"));
+        assert_eq!(hint, crate::terminal::SHIFT_SELECT_HINT_SHORT);
+    }
+
+    /// Only the shortcuts whose key combination is not the whole story carry
+    /// one; every other row stays as it was.
+    #[test]
+    fn other_shortcuts_carry_no_hint() {
+        for def in DEFAULT_SHORTCUTS {
+            if def.action != "copy" {
+                assert!(shortcut_hint(def.action).is_none(), "{} needs no hint", def.action);
+            }
+        }
+        assert!(shortcut_hint("nonexistent-action").is_none());
     }
 
     #[test]

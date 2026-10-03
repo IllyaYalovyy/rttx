@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- A copy shortcut that comes up empty while the program in the pane is using
+  the mouse — Claude Code, Codex, htop, vim with `mouse=a` — now says why.
+  Those programs take plain drags for themselves, so nothing gets selected and
+  Ctrl+Shift+C silently copied nothing; rttx now shows a toast naming the
+  Shift+drag override, once per pane rather than on every keypress. Copying
+  with nothing selected in an ordinary pane stays silent, and Shift+drag
+  selection is unchanged. The override is now documented in the README
+  shortcut table and next to Copy in Preferences → Keyboard Shortcuts.
+
 ### Added
 - Copying inside a program that manages its own clipboard — Claude Code,
   Codex, vim with `set clipboard=unnamed`, tmux — now puts the text on the

@@ -486,10 +486,14 @@ impl Window {
     }
 
     fn clipboard_copy(&self) {
-        if let Some(uuid) = self.focused_terminal_uuid()
-            && let Some(terminal) = self.terminal_handle(&uuid)
-        {
-            terminal.copy_clipboard();
+        let Some(uuid) = self.focused_terminal_uuid() else { return };
+        let Some(terminal) = self.terminal_handle(&uuid) else { return };
+        terminal.copy_clipboard();
+        // An empty copy is silent, except while the pane's application owns
+        // the mouse: a plain drag went to the application, so there was never
+        // a selection to copy and the shortcut looks broken (#1114).
+        if terminal.take_shift_select_hint() {
+            self.show_toast(crate::terminal::SHIFT_SELECT_HINT);
         }
     }
 

@@ -181,6 +181,9 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
         let is_custom = prefs.keyboard_shortcuts.contains_key(def.action);
 
         let row = adw::ActionRow::builder().title(def.label).activatable(true).build();
+        if let Some(hint) = shortcuts::shortcut_hint(def.action) {
+            row.set_subtitle(hint);
+        }
 
         let label_text = format_accel_label(&accels);
         let accel_label = gtk4::Label::new(Some(&label_text));

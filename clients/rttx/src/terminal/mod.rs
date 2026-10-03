@@ -67,6 +67,35 @@ pub fn osc52_clipboard_text(data: &[u8], holds_write_lease: bool, enabled: bool)
     Some(text.to_string())
 }
 
+/// What a copy says when it found nothing selected because the pane's
+/// application owns the mouse. Names the Shift override, because that is the
+/// only way to select while the application is tracking (#1114).
+pub const SHIFT_SELECT_HINT: &str =
+    "Nothing selected. Hold Shift while dragging to select while this app is using the mouse.";
+
+/// The shorter form of [`SHIFT_SELECT_HINT`], for the Copy row in
+/// Preferences → Keyboard Shortcuts.
+pub const SHIFT_SELECT_HINT_SHORT: &str =
+    "Hold Shift while dragging to select while an app is using the mouse";
+
+/// Whether a copy that found no selection should explain the Shift override.
+///
+/// An empty copy is only worth a word when the application has mouse tracking
+/// armed: VTE then hands a plain drag to the application, so no selection can
+/// exist until the user holds Shift, and the copy looks broken rather than
+/// empty. Without tracking an empty selection is just an empty selection and
+/// there is nothing to say. `already_hinted` keeps it to once per pane — the
+/// hint answers a question the user asks once, and repeating it on every
+/// keypress would be noise.
+#[must_use]
+pub const fn shift_select_hint_needed(
+    has_selection: bool,
+    mouse_tracking: bool,
+    already_hinted: bool,
+) -> bool {
+    !has_selection && mouse_tracking && !already_hinted
+}
+
 /// The palette names a pane resolves, in order: the palette configured for the
 /// effective theme mode, then the builtin fallback for that same mode.
 ///
@@ -761,8 +790,9 @@ fn terminal_key_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalInputBackend, TerminalKeyAction, TerminalModes, encode_terminal_key_input,
-        osc52_clipboard_text, pane_scheme_candidates, terminal_key_action,
+        SHIFT_SELECT_HINT, SHIFT_SELECT_HINT_SHORT, TerminalInputBackend, TerminalKeyAction,
+        TerminalModes, encode_terminal_key_input, osc52_clipboard_text, pane_scheme_candidates,
+        shift_select_hint_needed, terminal_key_action,
     };
     use crate::color_scheme::{BUILTIN_DARK_SCHEME_NAME, BUILTIN_LIGHT_SCHEME_NAME};
     use crate::preferences::{Preferences, TerminalThemeMode};
@@ -802,6 +832,36 @@ mod tests {
     fn osc52_write_is_ignored_when_it_is_not_text() {
         assert!(osc52_clipboard_text(&[0xff, 0xfe], true, true).is_none(), "invalid UTF-8");
         assert!(osc52_clipboard_text(b"", true, true).is_none(), "nothing to copy");
+    }
+
+    /// The one case worth a word: the copy found nothing because the
+    /// application owns the mouse, so a plain drag never selected (#1114).
+    #[test]
+    fn empty_copy_explains_shift_while_an_app_tracks_the_mouse() {
+        assert!(shift_select_hint_needed(false, true, false));
+    }
+
+    /// Said once per pane, not on every keypress.
+    #[test]
+    fn empty_copy_hint_is_not_repeated_once_said() {
+        assert!(!shift_select_hint_needed(false, true, true));
+    }
+
+    /// Without tracking an empty selection is just empty — stay silent. And a
+    /// copy that had something to copy never explains anything.
+    #[test]
+    fn empty_copy_stays_silent_without_mouse_tracking_or_with_a_selection() {
+        assert!(!shift_select_hint_needed(false, false, false));
+        assert!(!shift_select_hint_needed(false, false, true));
+        assert!(!shift_select_hint_needed(true, true, false));
+        assert!(!shift_select_hint_needed(true, false, false));
+    }
+
+    /// The hint is useless unless it names the override it is there to teach.
+    #[test]
+    fn shift_select_hint_names_the_shift_override() {
+        assert!(SHIFT_SELECT_HINT.contains("Shift"));
+        assert!(SHIFT_SELECT_HINT_SHORT.contains("Shift"));
     }
 
     /// The quick toggle can force light while the system is dark. A missing
