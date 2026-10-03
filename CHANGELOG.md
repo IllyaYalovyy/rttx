@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Copying inside a program that manages its own clipboard — Claude Code,
+  Codex, vim with `set clipboard=unnamed`, tmux — now puts the text on the
+  system clipboard. Those programs copy by writing OSC 52, which VTE ignores,
+  so until now the copy did nothing at all. rttx handles the sequence in the
+  daemon that owns the terminal, so it also works when the workspace runs on
+  a remote host over SSH: the text lands on the clipboard of the machine
+  you are sitting at. Only the window that currently drives the workspace
+  writes the clipboard; a read-only window left behind by a take-over does
+  not. Clipboard text no longer appears in the pane's saved scrollback on
+  disk, where it had been stored in plaintext. Turn it off with "Let
+  applications set the clipboard" in Preferences → Terminal. Reading the
+  clipboard from a program is deliberately not supported, so nothing printed
+  to a pane can exfiltrate what you have copied.
+
 ## [1.1.2] - 2026-09-13
 
 ### Changed

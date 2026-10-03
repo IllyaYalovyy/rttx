@@ -137,6 +137,7 @@ enum Capability {
   OPT_RESYNC = 102;
   OPT_CHUNKED_SCROLLBACK = 103;
   OPT_DIAGNOSTICS = 104;
+  OPT_CLIPBOARD_OSC52 = 105;
 }
 ```
 
@@ -196,6 +197,7 @@ Client degrades gracefully when absent.
 | `OPT_RESYNC` | `StreamOverflow` event + `ResyncRuntime` command | Full detach/reattach on suspected data loss |
 | `OPT_CHUNKED_SCROLLBACK` | Paginated `GetScrollback` for large histories | Truncated snapshot tail only |
 | `OPT_DIAGNOSTICS` | `GetDiagnostics` / `DiagnosticsReport` | Diagnostics UI disabled |
+| `OPT_CLIPBOARD_OSC52` | `ClipboardWrite` event when an application writes OSC 52 | Sequence is still stripped; the copy is lost |
 
 #### Evolution rules for capabilities
 

@@ -51,6 +51,7 @@ fn preferences_roundtrip_all_fields() {
         visual_bell: true,
         smart_clipboard: true,
         trim_trailing_whitespace_on_copy: true,
+        clipboard_osc52_writes: false,
         default_session_folder: DefaultSessionFolder::Custom("/home/user/dev".into()),
         keyboard_shortcuts: BTreeMap::new(),
         auto_start_daemon: true,
@@ -73,6 +74,8 @@ fn preferences_partial_json_uses_defaults_for_missing() {
     assert_eq!(loaded.scrollback_lines, 10000);
     assert!(loaded.show_headerbar);
     assert!(!loaded.smart_clipboard);
+    // Written before the setting existed: applications may set the clipboard.
+    assert!(loaded.clipboard_osc52_writes);
 }
 
 #[test]

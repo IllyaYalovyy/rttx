@@ -121,6 +121,7 @@ pub fn missing_capabilities_error(missing: &[v3::Capability]) -> v3::ProtocolErr
                     102 => "OPT_RESYNC",
                     103 => "OPT_CHUNKED_SCROLLBACK",
                     104 => "OPT_DIAGNOSTICS",
+                    105 => "OPT_CLIPBOARD_OSC52",
                     _ => "UNKNOWN",
                 }
             }

@@ -31,9 +31,40 @@ pub(crate) fn copy_to_clipboard(vte: &vte4::Terminal) {
     } else {
         selected.to_string()
     };
+    set_clipboard_text(&text);
+}
+
+/// Put `text` on the system clipboard.
+///
+/// Every clipboard write in the client goes through here so they all share
+/// the one encoding-correct path (see [`copy_to_clipboard`] and #982).
+pub fn set_clipboard_text(text: &str) {
     if let Some(display) = gtk4::gdk::Display::default() {
-        display.clipboard().set_text(&text);
+        display.clipboard().set_text(text);
     }
+}
+
+/// The text a daemon `ClipboardWrite` (OSC 52) should put on the system
+/// clipboard, or `None` when the write must be ignored.
+///
+/// Two conditions must hold. The preference must be on — an application
+/// taking the clipboard is useful but not something every user wants. And
+/// this client must hold the pane's write lease: a read-only mirror left
+/// behind by a take-over keeps receiving the pane's events, and it must not
+/// replace the clipboard of whoever is watching it.
+///
+/// Payloads that are not valid UTF-8 are dropped; the GDK clipboard carries
+/// text, and a terminal application that emits anything else is malformed.
+#[must_use]
+pub fn osc52_clipboard_text(data: &[u8], holds_write_lease: bool, enabled: bool) -> Option<String> {
+    if !enabled || !holds_write_lease || data.is_empty() {
+        return None;
+    }
+    let Ok(text) = std::str::from_utf8(data) else {
+        tracing::warn!("ignoring OSC 52 clipboard write that is not valid UTF-8");
+        return None;
+    };
+    Some(text.to_string())
 }
 
 /// The palette names a pane resolves, in order: the palette configured for the
@@ -731,7 +762,7 @@ fn terminal_key_action(
 mod tests {
     use super::{
         TerminalInputBackend, TerminalKeyAction, TerminalModes, encode_terminal_key_input,
-        pane_scheme_candidates, terminal_key_action,
+        osc52_clipboard_text, pane_scheme_candidates, terminal_key_action,
     };
     use crate::color_scheme::{BUILTIN_DARK_SCHEME_NAME, BUILTIN_LIGHT_SCHEME_NAME};
     use crate::preferences::{Preferences, TerminalThemeMode};
@@ -746,6 +777,31 @@ mod tests {
             dark_color_scheme: "Deleted Dark".into(),
             ..Preferences::default()
         }
+    }
+
+    /// A pane an application copied from puts its text on the clipboard (#46).
+    #[test]
+    fn osc52_write_is_applied_for_the_lease_holder() {
+        assert_eq!(osc52_clipboard_text(b"copied", true, true).as_deref(), Some("copied"));
+        assert_eq!(
+            osc52_clipboard_text("héllo ✂".as_bytes(), true, true).as_deref(),
+            Some("héllo ✂")
+        );
+    }
+
+    /// A read-only mirror still receives the pane's events after a take-over,
+    /// and must never replace the clipboard of whoever is watching it.
+    #[test]
+    fn osc52_write_is_ignored_without_the_write_lease_or_the_preference() {
+        assert!(osc52_clipboard_text(b"copied", false, true).is_none());
+        assert!(osc52_clipboard_text(b"copied", true, false).is_none());
+        assert!(osc52_clipboard_text(b"copied", false, false).is_none());
+    }
+
+    #[test]
+    fn osc52_write_is_ignored_when_it_is_not_text() {
+        assert!(osc52_clipboard_text(&[0xff, 0xfe], true, true).is_none(), "invalid UTF-8");
+        assert!(osc52_clipboard_text(b"", true, true).is_none(), "nothing to copy");
     }
 
     /// The quick toggle can force light while the system is dark. A missing

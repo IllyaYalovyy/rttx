@@ -1153,6 +1153,288 @@ fn csi_query_len(data: &[u8]) -> Option<usize> {
     }
 }
 
+/// Maximum decoded payload accepted from a single OSC 52 clipboard write.
+///
+/// xterm caps clipboard writes too. 1 MiB is far more than any copy a person
+/// makes by hand and bounds what a runaway program can push at a client.
+pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+
+/// Longest base64 payload that can still decode within [`MAX_CLIPBOARD_BYTES`].
+const MAX_CLIPBOARD_BASE64_BYTES: usize = MAX_CLIPBOARD_BYTES.div_ceil(3) * 4;
+
+/// How many `Pc ; Pd` bytes a single write may accumulate before the scanner
+/// stops buffering and drops it.
+///
+/// This bounds the scanner's memory; the cap users see is enforced on the
+/// decoded length. The margin over the base64 payload covers the selection
+/// parameter and its separator.
+const MAX_OSC52_PARAMS_BYTES: usize = MAX_CLIPBOARD_BASE64_BYTES + 32;
+
+/// The bytes that open an OSC 52 clipboard write.
+const OSC52_INTRODUCER: &[u8] = b"\x1b]52;";
+
+/// A clipboard write an application requested with OSC 52.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardWrite {
+    /// Selection the application asked for: `c`, `p`, `s`, or a combination.
+    pub target: String,
+    /// Decoded clipboard payload.
+    pub data: Vec<u8>,
+}
+
+/// Where the OSC 52 scanner is in the byte stream.
+enum Osc52State {
+    /// Not inside a candidate sequence.
+    Scan,
+    /// The first `n` bytes of [`OSC52_INTRODUCER`] matched.
+    Introducer(usize),
+    /// Inside the `Pc ; Pd` parameters of a confirmed OSC 52 write.
+    Params,
+    /// Saw ESC inside the parameters — the next byte decides whether it is ST.
+    ParamsEscape,
+}
+
+/// Extracts OSC 52 clipboard writes from a pane's output and removes them
+/// from the byte stream.
+///
+/// The daemon owns the PTY, and VTE ignores OSC 52 entirely (in 0.82
+/// `VTE_OSC_XTERM_SET_XSELECTION` has no handler), so the daemon is the only
+/// place a clipboard write can be acted on. Removing the sequence also keeps
+/// clipboard text out of the client stream and out of the on-disk scrollback
+/// log, where it used to be persisted in plaintext.
+///
+/// The scanner is stateful because a PTY read can land anywhere inside a
+/// sequence. A batch that ends part-way through the introducer holds those
+/// (at most four) bytes back until the read that resolves them arrives; a
+/// batch that ends mid-payload holds the whole payload, which is removed from
+/// the stream either way.
+///
+/// Only the write form is implemented. The read form (`\x1b]52;c;?`) is
+/// recognised solely so it can be dropped: answering it would hand the user's
+/// clipboard to anything able to print to the pane, including a program on a
+/// remote host.
+pub struct Osc52Filter {
+    state: Osc52State,
+    /// `Pc ; Pd` bytes collected so far for the sequence being scanned.
+    params: Vec<u8>,
+    /// Whether the parameters already exceeded [`MAX_OSC52_PARAMS_BYTES`].
+    oversized: bool,
+    /// Completed writes waiting to be drained by the pane.
+    writes: Vec<ClipboardWrite>,
+}
+
+impl Default for Osc52Filter {
+    fn default() -> Self {
+        Self { state: Osc52State::Scan, params: Vec::new(), oversized: false, writes: Vec::new() }
+    }
+}
+
+impl Osc52Filter {
+    /// Remove every OSC 52 sequence from `data`, collecting the clipboard
+    /// writes it carried.
+    ///
+    /// Returns the bytes every other consumer — the cell grid, the client
+    /// stream, the scrollback log — must see.
+    pub fn filter<'a>(&mut self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        if matches!(self.state, Osc52State::Scan) && !data.contains(&0x1b) {
+            return std::borrow::Cow::Borrowed(data);
+        }
+        let mut out = Vec::with_capacity(data.len());
+        for &byte in data {
+            self.advance(byte, &mut out);
+        }
+        std::borrow::Cow::Owned(out)
+    }
+
+    /// Take the clipboard writes completed since the last call.
+    pub fn take_writes(&mut self) -> Vec<ClipboardWrite> {
+        std::mem::take(&mut self.writes)
+    }
+
+    fn advance(&mut self, byte: u8, out: &mut Vec<u8>) {
+        loop {
+            match self.state {
+                Osc52State::Scan => {
+                    if byte == OSC52_INTRODUCER[0] {
+                        self.state = Osc52State::Introducer(1);
+                    } else {
+                        out.push(byte);
+                    }
+                    return;
+                }
+                Osc52State::Introducer(matched) => {
+                    if byte == OSC52_INTRODUCER[matched] {
+                        self.state = if matched + 1 == OSC52_INTRODUCER.len() {
+                            Osc52State::Params
+                        } else {
+                            Osc52State::Introducer(matched + 1)
+                        };
+                        return;
+                    }
+                    // Some other sequence: release the held bytes and handle
+                    // this one from the top, since it may open a new sequence.
+                    out.extend_from_slice(&OSC52_INTRODUCER[..matched]);
+                    self.state = Osc52State::Scan;
+                }
+                Osc52State::Params => match byte {
+                    0x07 => {
+                        self.complete();
+                        return;
+                    }
+                    0x1b => {
+                        self.state = Osc52State::ParamsEscape;
+                        return;
+                    }
+                    _ if is_osc52_param_byte(byte) => {
+                        if self.params.len() < MAX_OSC52_PARAMS_BYTES {
+                            self.params.push(byte);
+                        } else {
+                            self.oversized = true;
+                        }
+                        return;
+                    }
+                    // A byte that cannot occur in an OSC 52 payload: the
+                    // sequence is malformed. Dropping what was collected and
+                    // resuming here bounds how much output a never-terminated
+                    // write can swallow.
+                    _ => self.abandon(),
+                },
+                Osc52State::ParamsEscape => {
+                    if byte == b'\\' {
+                        self.complete();
+                        return;
+                    }
+                    // ESC inside the payload that is not ST — malformed, and
+                    // the stray ESC goes with the payload it belonged to.
+                    self.abandon();
+                }
+            }
+        }
+    }
+
+    fn abandon(&mut self) {
+        self.params.clear();
+        self.oversized = false;
+        self.state = Osc52State::Scan;
+    }
+
+    fn complete(&mut self) {
+        let params = std::mem::take(&mut self.params);
+        let oversized = std::mem::replace(&mut self.oversized, false);
+        self.state = Osc52State::Scan;
+
+        let Some(separator) = params.iter().position(|&b| b == b';') else {
+            tracing::debug!("ignoring OSC 52 write with no selection parameter");
+            return;
+        };
+        let (target, payload) = params.split_at(separator);
+        let payload = &payload[1..];
+
+        if payload == b"?" {
+            tracing::debug!("ignoring OSC 52 clipboard read request");
+            return;
+        }
+        if oversized {
+            tracing::warn!(
+                cap_bytes = MAX_CLIPBOARD_BYTES,
+                "dropping oversized OSC 52 clipboard write"
+            );
+            return;
+        }
+        let Some(data) = base64_decode(payload) else {
+            tracing::warn!("dropping OSC 52 clipboard write with an undecodable payload");
+            return;
+        };
+        if data.len() > MAX_CLIPBOARD_BYTES {
+            tracing::warn!(
+                decoded_bytes = data.len(),
+                cap_bytes = MAX_CLIPBOARD_BYTES,
+                "dropping oversized OSC 52 clipboard write"
+            );
+            return;
+        }
+        if data.is_empty() {
+            // An empty write clears the clipboard. Nothing a user asked for
+            // produces one, so honouring it would silently throw away what
+            // they had copied.
+            tracing::debug!("ignoring empty OSC 52 clipboard write");
+            return;
+        }
+        self.writes
+            .push(ClipboardWrite { target: String::from_utf8_lossy(target).into_owned(), data });
+    }
+}
+
+/// Whether `byte` can appear in the `Pc ; Pd` parameters of an OSC 52 write:
+/// the base64 alphabet and its padding, the parameter separator, and the `?`
+/// of the read form (recognised only to be dropped).
+const fn is_osc52_param_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=' | b';' | b'?')
+}
+
+/// Decode standard base64, returning `None` for anything malformed.
+///
+/// Hand-rolled because this is the only base64 in the workspace and a crate
+/// would add a dependency to every build and to the Flatpak offline sources.
+/// A missing final padding group is accepted: emitters in the wild omit it.
+fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    let mut quad = [0u8; 4];
+    let mut filled = 0usize;
+    let mut padding = 0usize;
+
+    for &byte in input {
+        let sextet = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => {
+                padding += 1;
+                0
+            }
+            _ => return None,
+        };
+        // Padding only ever closes the final group.
+        if padding > 2 || (padding > 0 && byte != b'=') {
+            return None;
+        }
+        quad[filled] = sextet;
+        filled += 1;
+        if filled == 4 {
+            push_base64_group(quad, 4 - padding, &mut out);
+            filled = 0;
+        }
+    }
+
+    match filled {
+        0 => {}
+        // A single trailing sextet carries no whole byte, so it is malformed.
+        1 => return None,
+        remaining => {
+            quad[remaining..].fill(0);
+            push_base64_group(quad, remaining, &mut out);
+        }
+    }
+    Some(out)
+}
+
+/// Append the `sextets`-worth of bytes a base64 group encodes.
+fn push_base64_group(quad: [u8; 4], sextets: usize, out: &mut Vec<u8>) {
+    let bits = (u32::from(quad[0]) << 18)
+        | (u32::from(quad[1]) << 12)
+        | (u32::from(quad[2]) << 6)
+        | u32::from(quad[3]);
+    out.push((bits >> 16) as u8);
+    if sextets >= 3 {
+        out.push(((bits >> 8) & 0xff) as u8);
+    }
+    if sextets >= 4 {
+        out.push((bits & 0xff) as u8);
+    }
+}
+
 /// The subset of [`terminal_cleanup_bytes`] that is safe to apply while a
 /// shell sits at its prompt: it leaves the modes a line editor may hold
 /// (application cursor keys and keypad — zsh's zle arms them; bracketed
@@ -1882,6 +2164,231 @@ mod tests {
         assert_eq!(replies[1], b"\x1b[>65;0;0c"); // DA2
         assert_eq!(replies[2], b"\x1b[0n"); // status OK
         assert_eq!(replies[3], b"\x1b[1;1R"); // cursor at 1,1
+    }
+
+    // --- OSC 52 clipboard writes (#46) ---
+
+    fn base64_encode(data: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in data.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let bits = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(ALPHABET[((bits >> (18 - 6 * i)) & 0x3f) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    fn filter_all(filter: &mut Osc52Filter, feeds: &[&[u8]]) -> (Vec<u8>, Vec<ClipboardWrite>) {
+        let mut out = Vec::new();
+        for feed in feeds {
+            out.extend_from_slice(&filter.filter(feed));
+        }
+        (out, filter.take_writes())
+    }
+
+    #[test]
+    fn osc52_bel_terminated_write_is_captured_and_stripped() {
+        let mut filter = Osc52Filter::default();
+        let payload = base64_encode(b"hello");
+        let feed = format!("before\x1b]52;c;{payload}\x07after");
+
+        let (out, writes) = filter_all(&mut filter, &[feed.as_bytes()]);
+
+        assert_eq!(out, b"beforeafter", "the sequence must not reach any consumer");
+        assert_eq!(writes, vec![ClipboardWrite { target: "c".into(), data: b"hello".to_vec() }]);
+    }
+
+    #[test]
+    fn osc52_st_terminated_write_is_captured_and_stripped() {
+        let mut filter = Osc52Filter::default();
+        let payload = base64_encode(b"hello");
+        let feed = format!("before\x1b]52;c;{payload}\x1b\\after");
+
+        let (out, writes) = filter_all(&mut filter, &[feed.as_bytes()]);
+
+        assert_eq!(out, b"beforeafter");
+        assert_eq!(writes, vec![ClipboardWrite { target: "c".into(), data: b"hello".to_vec() }]);
+    }
+
+    /// A PTY read lands wherever the kernel hands it over, so every byte
+    /// boundary inside the sequence has to behave like the whole sequence.
+    #[test]
+    fn osc52_write_split_across_feeds_at_every_boundary() {
+        let payload = base64_encode("clipboard ✂".as_bytes());
+        let stream = format!("A\x1b]52;c;{payload}\x07B");
+        let bytes = stream.as_bytes();
+
+        for split in 0..=bytes.len() {
+            let mut filter = Osc52Filter::default();
+            let (out, writes) = filter_all(&mut filter, &[&bytes[..split], &bytes[split..]]);
+            assert_eq!(out, b"AB", "split at {split} leaked sequence bytes");
+            assert_eq!(
+                writes,
+                vec![ClipboardWrite {
+                    target: "c".into(),
+                    data: "clipboard ✂".as_bytes().to_vec()
+                }],
+                "split at {split} lost the clipboard write"
+            );
+        }
+    }
+
+    #[test]
+    fn osc52_write_split_byte_by_byte_is_captured_once() {
+        let payload = base64_encode(b"drip");
+        let stream = format!("\x1b]52;c;{payload}\x1b\\");
+        let mut filter = Osc52Filter::default();
+        let feeds: Vec<&[u8]> = stream.as_bytes().chunks(1).collect();
+
+        let (out, writes) = filter_all(&mut filter, &feeds);
+
+        assert!(out.is_empty(), "byte-at-a-time feeds must not leak: {out:?}");
+        assert_eq!(writes, vec![ClipboardWrite { target: "c".into(), data: b"drip".to_vec() }]);
+    }
+
+    #[test]
+    fn osc52_read_request_is_ignored_and_stripped() {
+        let mut filter = Osc52Filter::default();
+
+        let (out, writes) = filter_all(&mut filter, &[b"x\x1b]52;c;?\x07y"]);
+
+        assert_eq!(out, b"xy");
+        assert!(writes.is_empty(), "answering the OSC 52 read form would leak the clipboard");
+    }
+
+    #[test]
+    fn osc52_oversized_write_is_dropped() {
+        let mut filter = Osc52Filter::default();
+        let payload = base64_encode(&vec![b'z'; MAX_CLIPBOARD_BYTES + 1]);
+        let feed = format!("head\x1b]52;c;{payload}\x07tail");
+
+        let (out, writes) = filter_all(&mut filter, &[feed.as_bytes()]);
+
+        assert_eq!(out, b"headtail", "an oversized payload is still stripped");
+        assert!(writes.is_empty(), "payloads over the cap must be dropped");
+    }
+
+    #[test]
+    fn osc52_write_at_the_cap_is_accepted() {
+        let mut filter = Osc52Filter::default();
+        let payload = base64_encode(&vec![b'z'; MAX_CLIPBOARD_BYTES]);
+        let feed = format!("\x1b]52;c;{payload}\x07");
+
+        let (out, writes) = filter_all(&mut filter, &[feed.as_bytes()]);
+
+        assert!(out.is_empty());
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].data.len(), MAX_CLIPBOARD_BYTES);
+    }
+
+    #[test]
+    fn osc52_empty_write_does_not_clear_the_clipboard() {
+        let mut filter = Osc52Filter::default();
+
+        let (out, writes) = filter_all(&mut filter, &[b"\x1b]52;c;\x07done"]);
+
+        assert_eq!(out, b"done");
+        assert!(writes.is_empty(), "an empty write would silently wipe the user's clipboard");
+    }
+
+    #[test]
+    fn osc52_target_is_reported_verbatim() {
+        let mut filter = Osc52Filter::default();
+        let payload = base64_encode(b"primary");
+        let feed = format!("\x1b]52;p;{payload}\x07");
+
+        let (_, writes) = filter_all(&mut filter, &[feed.as_bytes()]);
+
+        assert_eq!(writes, vec![ClipboardWrite { target: "p".into(), data: b"primary".to_vec() }]);
+    }
+
+    #[test]
+    fn osc52_undecodable_payload_is_dropped_and_stripped() {
+        let mut filter = Osc52Filter::default();
+
+        // A single trailing base64 sextet encodes no whole byte.
+        let (out, writes) = filter_all(&mut filter, &[b"a\x1b]52;c;Q\x07b"]);
+
+        assert_eq!(out, b"ab");
+        assert!(writes.is_empty());
+    }
+
+    /// A sequence that never terminates must not swallow the pane's output
+    /// indefinitely: the first byte that cannot occur in a payload ends it.
+    #[test]
+    fn osc52_unterminated_write_stops_swallowing_output_at_the_first_impossible_byte() {
+        let mut filter = Osc52Filter::default();
+
+        let (out, writes) = filter_all(&mut filter, &[b"\x1b]52;c;SGVsbG8 visible output\r\n"]);
+
+        assert_eq!(out, b" visible output\r\n");
+        assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn other_osc_sequences_pass_through_untouched() {
+        let mut filter = Osc52Filter::default();
+        let stream: &[u8] = b"\x1b]0;title\x07\x1b]7;file://host/tmp\x1b\\\x1b[1;31mred\x1b[0m\x1b]5;x\x07\x1b]520;y\x07";
+
+        let (out, writes) = filter_all(&mut filter, &[stream]);
+
+        assert_eq!(out, stream, "only OSC 52 may be removed");
+        assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn partial_introducer_at_batch_end_is_released_when_it_turns_out_not_to_be_osc52() {
+        let mut filter = Osc52Filter::default();
+
+        let (out, writes) = filter_all(&mut filter, &[b"a\x1b]5", b"3;title\x07"]);
+
+        assert_eq!(out, b"a\x1b]53;title\x07");
+        assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn two_writes_in_one_batch_are_both_captured() {
+        let mut filter = Osc52Filter::default();
+        let first = base64_encode(b"one");
+        let second = base64_encode(b"two");
+        let feed = format!("\x1b]52;c;{first}\x07middle\x1b]52;c;{second}\x1b\\");
+
+        let (out, writes) = filter_all(&mut filter, &[feed.as_bytes()]);
+
+        assert_eq!(out, b"middle");
+        assert_eq!(
+            writes,
+            vec![
+                ClipboardWrite { target: "c".into(), data: b"one".to_vec() },
+                ClipboardWrite { target: "c".into(), data: b"two".to_vec() },
+            ]
+        );
+    }
+
+    #[test]
+    fn base64_decode_handles_every_padding_length() {
+        assert_eq!(base64_decode(b"").unwrap(), b"");
+        assert_eq!(base64_decode(b"aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64_decode(b"aGVsbG9vbw==").unwrap(), b"hellooo");
+        assert_eq!(base64_decode(b"aGVsbG8h").unwrap(), b"hello!");
+        // Emitters that omit the final padding group still decode.
+        assert_eq!(base64_decode(b"aGVsbG8").unwrap(), b"hello");
+        assert_eq!(base64_decode(b"aGVsbG9vbw").unwrap(), b"helloooo"[..7].to_vec());
+    }
+
+    #[test]
+    fn base64_decode_rejects_malformed_input() {
+        assert!(base64_decode(b"a").is_none(), "one sextet carries no byte");
+        assert!(base64_decode(b"aGVsbG8*").is_none(), "non-alphabet byte");
+        assert!(base64_decode(b"aGV=bG8=").is_none(), "padding in the middle");
+        assert!(base64_decode(b"aGVsbG8===").is_none(), "over-padded");
     }
 
     // --- strip_client_queries ---

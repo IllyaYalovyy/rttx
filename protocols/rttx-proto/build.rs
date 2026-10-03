@@ -7,6 +7,7 @@ fn main() -> std::io::Result<()> {
         "rttx.v3.PasteInput.text",
         "rttx.v3.PaneSnapshot.scrollback_tail",
         "rttx.v3.ScrollbackChunk.data",
+        "rttx.v3.ClipboardWrite.data",
     ]);
     v3.compile_protos(&["proto/rttx-v3.proto"], &["proto/"])?;
 

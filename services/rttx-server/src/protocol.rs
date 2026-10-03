@@ -63,6 +63,19 @@ pub fn v3_title_changed(
     ))
 }
 
+/// Build a v3 `ClipboardWrite` push envelope (`OPT_CLIPBOARD_OSC52`).
+#[must_use]
+pub fn v3_clipboard_write(
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    target: &str,
+    data: bytes::Bytes,
+) -> v3::ServerEnvelope {
+    rttx_proto::v3_clipboard::build_clipboard_write_push(
+        rttx_proto::v3_clipboard::build_clipboard_write(runtime_id, pane_id, target, data),
+    )
+}
+
 /// Build a v3 `PaneExited` push envelope.
 #[must_use]
 pub fn v3_pane_exited(

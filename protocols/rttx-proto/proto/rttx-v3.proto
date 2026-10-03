@@ -18,6 +18,7 @@ enum Capability {
   OPT_RESYNC = 102;
   OPT_CHUNKED_SCROLLBACK = 103;
   OPT_DIAGNOSTICS = 104;
+  OPT_CLIPBOARD_OSC52 = 105;
 }
 
 enum WorkspacePolicy {
@@ -510,6 +511,25 @@ message FocusChanged {
   uint64 workspace_revision = 3;
 }
 
+// ─── Clipboard (OPT_CLIPBOARD_OSC52) ─────────────────────────────────
+
+// An application in a pane asked the terminal to put text on the system
+// clipboard with OSC 52. The daemon decodes the payload and strips the
+// sequence from the output stream, so this event is the only way a client
+// learns about it.
+//
+// Write-only by design: the OSC 52 read/query form is never implemented,
+// because it would let any process that can print to a pane — including one
+// on a remote host — read the user's clipboard.
+message ClipboardWrite {
+  bytes runtime_id = 1;
+  bytes pane_id = 2;
+  // OSC 52 selection parameter as sent by the application ("c", "p", "s", …).
+  string target = 3;
+  // Decoded clipboard text. Capped at 1 MiB by the daemon.
+  bytes data = 4;
+}
+
 // ─── Recovery (OPT_RESYNC) ──────────────────────────────────────────
 
 message ResyncWorkspace {
@@ -666,6 +686,9 @@ message ServerEnvelope {
     PaneSplit pane_split = 37;
     SplitResized split_resized = 38;
     FocusChanged focus_changed = 39;
+
+    // Clipboard events (OPT_CLIPBOARD_OSC52)
+    ClipboardWrite clipboard_write = 40;
 
     // Recovery events (OPT_RESYNC)
     StreamOverflow stream_overflow = 50;

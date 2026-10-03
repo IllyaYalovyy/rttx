@@ -3,7 +3,7 @@
 //! Each pane represents a single terminal within a session, backed by a PTY
 //! process and an in-memory screen state.
 
-use crate::screen::{PaneScreen, strip_client_queries};
+use crate::screen::{ClipboardWrite, Osc52Filter, PaneScreen, strip_client_queries};
 use crate::state::layout::scrollback_log;
 use crate::state::types::{SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot};
 use std::io::Write;
@@ -35,6 +35,8 @@ pub struct FeedResult {
     pub new_title: Option<String>,
     /// Pending replies to write back to the PTY (e.g. CPR for DSR).
     pub pending_replies: Vec<Vec<u8>>,
+    /// Clipboard writes an application requested via OSC 52.
+    pub clipboard_writes: Vec<ClipboardWrite>,
 }
 
 /// Workspace state of a single pane.
@@ -65,6 +67,8 @@ pub struct Pane {
     pub output_seq: u64,
     /// When true, scrollback and history are not flushed to disk (RFC-022 §9).
     pub no_persist: bool,
+    /// Scanner that lifts OSC 52 clipboard writes out of the output stream.
+    osc52: Osc52Filter,
 }
 
 impl Pane {
@@ -85,6 +89,7 @@ impl Pane {
             child_pid: None,
             output_seq: 0,
             no_persist: false,
+            osc52: Osc52Filter::default(),
         }
     }
 
@@ -94,8 +99,20 @@ impl Pane {
     /// call. Callers that need to minimize lock hold time should use the
     /// two-phase API instead.
     pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
-        self.accept_output(data);
-        self.parse_and_extract(data)
+        let clean = self.filter_clipboard_writes(data);
+        self.accept_output(&clean);
+        self.parse_and_extract(&clean)
+    }
+
+    /// Remove OSC 52 clipboard writes from a batch of PTY output.
+    ///
+    /// Must run before anything else sees the batch: the returned bytes are
+    /// what the screen, the clients and the scrollback log are allowed to
+    /// see, and the clipboard payload is not among them. The writes it found
+    /// surface on the next [`FeedResult`].
+    #[must_use]
+    pub fn filter_clipboard_writes<'a>(&mut self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        self.osc52.filter(data)
     }
 
     /// Store raw PTY bytes without running the VTE parser.
@@ -173,7 +190,8 @@ impl Pane {
             }
         });
         let pending_replies = self.screen.take_pending_replies();
-        FeedResult { new_cwd, new_title, pending_replies }
+        let clipboard_writes = self.osc52.take_writes();
+        FeedResult { new_cwd, new_title, pending_replies, clipboard_writes }
     }
 
     /// Flush pending scrollback bytes to the log file on disk.
@@ -513,6 +531,41 @@ mod tests {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         pane.feed_output(b"\x1b]7;file://localhost/tmp/project\x07");
         assert_eq!(pane.cwd.as_deref(), Some("/tmp/project"));
+    }
+
+    /// Clipboard text used to be forwarded to the client and appended to the
+    /// on-disk scrollback log in plaintext (#46).
+    #[test]
+    fn feed_output_keeps_osc52_clipboard_writes_out_of_the_pane_state() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        // "secret" base64-encoded, as an application would emit it.
+        let result = pane.feed_output(b"before\x1b]52;c;c2VjcmV0\x07after");
+
+        assert_eq!(
+            result.clipboard_writes,
+            vec![crate::screen::ClipboardWrite { target: "c".into(), data: b"secret".to_vec() }]
+        );
+        assert_eq!(pane.screen.raw_bytes(), b"beforeafter");
+        assert_eq!(pane.take_pending_flush(), b"beforeafter");
+    }
+
+    /// A PTY read can end mid-sequence; the pane must still see one write and
+    /// no clipboard bytes.
+    #[test]
+    fn feed_output_joins_an_osc52_write_split_across_two_reads() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+
+        let first = pane.feed_output(b"a\x1b]52;c;c2Vj");
+        let second = pane.feed_output(b"cmV0\x07b");
+
+        assert!(first.clipboard_writes.is_empty(), "the write is not complete yet");
+        assert_eq!(
+            second.clipboard_writes,
+            vec![crate::screen::ClipboardWrite { target: "c".into(), data: b"secret".to_vec() }]
+        );
+        assert_eq!(pane.screen.raw_bytes(), b"ab");
+        assert_eq!(pane.take_pending_flush(), b"ab");
     }
 
     #[test]

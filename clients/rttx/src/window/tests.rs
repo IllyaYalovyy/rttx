@@ -3611,6 +3611,124 @@ fn bell_preferences_applied_to_managed_pane() {
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
 
+/// Read the clipboard back, pumping the main loop until the async read lands.
+fn read_clipboard_text() -> Option<String> {
+    let clipboard = gtk4::gdk::Display::default()?.clipboard();
+    let text: std::rc::Rc<std::cell::RefCell<Option<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let done = std::rc::Rc::new(std::cell::Cell::new(false));
+    let text_handle = std::rc::Rc::clone(&text);
+    let done_handle = std::rc::Rc::clone(&done);
+    clipboard.read_text_async(gtk4::gio::Cancellable::NONE, move |result| {
+        *text_handle.borrow_mut() = result.ok().flatten().map(|s| s.to_string());
+        done_handle.set(true);
+    });
+    let ctx = glib::MainContext::default();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !done.get() && Instant::now() < deadline {
+        if !ctx.iteration(false) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    text.borrow().clone()
+}
+
+fn clipboard_write_message(
+    pane_id: uuid::Uuid,
+    data: &'static [u8],
+) -> rttx_proto::v3::ServerEnvelope {
+    rttx_proto::v3::ServerEnvelope {
+        request_id: 0,
+        payload: Some(rttx_proto::v3::server_envelope::Payload::ClipboardWrite(
+            rttx_proto::v3::ClipboardWrite {
+                runtime_id: rttx_proto::uuid_to_bytes(uuid::Uuid::new_v4()),
+                pane_id: rttx_proto::uuid_to_bytes(pane_id),
+                target: "c".into(),
+                data: bytes::Bytes::from_static(data),
+            },
+        )),
+    }
+}
+
+/// A `ClipboardWrite` push from the daemon takes the system clipboard, and a
+/// read-only pane left behind by a take-over never does (#46).
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn clipboard_write_takes_the_clipboard_only_while_this_client_drives_the_pane() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app =
+        adw::Application::builder().application_id("com.illya.rttx.clipboard-write-test").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+
+    let window = Window::new(&app);
+
+    let layout_uuid = "5c9f6c4e-3a38-4b4e-9f2e-7d2a4c18b3d1";
+    let runtime_pane_id = uuid::Uuid::parse_str(layout_uuid).unwrap();
+    let session_state = crate::test_helpers::managed_session_with_runtime(
+        "ws-clip",
+        "Clipboard Test",
+        LayoutNode::new_terminal_with_uuid(layout_uuid),
+        RuntimeEndpoint::Local,
+        WorkspacePolicy::Persistent,
+        Some("runtime-clip"),
+    );
+    {
+        let mut state = window.imp().state.borrow_mut();
+        state.workspaces.push(session_state.clone());
+        // The daemon addresses pushes by runtime pane id; the reverse index is
+        // what turns one back into this workspace's layout terminal.
+        state.rebuild_pane_reverse_index();
+    }
+    window.build_session(&session_state, false);
+
+    // Control write first: if the clipboard cannot be owned here, every
+    // assertion below would pass for the wrong reason.
+    crate::terminal::set_clipboard_text("SENTINEL-BEFORE");
+    if read_clipboard_text().as_deref() != Some("SENTINEL-BEFORE") {
+        eprintln!("SKIPPED: the clipboard is not ownable under this display server");
+        window.close();
+        crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+        return;
+    }
+
+    let pane = window.imp().persistent_terminals.borrow().get(layout_uuid).cloned().unwrap();
+    let connected = crate::runtime::present_connection_status(&ConnectionStatus::Connected);
+    pane.set_connection_presentation(&ConnectionStatus::Connected, &connected);
+
+    window.dispatch_managed_runtime_message(
+        &RuntimeEndpoint::Local,
+        &clipboard_write_message(runtime_pane_id, b"copied by the app"),
+    );
+    assert_eq!(
+        read_clipboard_text().as_deref(),
+        Some("copied by the app"),
+        "a clipboard write for a pane this client drives must reach the clipboard"
+    );
+
+    let taken_over = ConnectionStatus::Blocked(ConnectionProblem::TakenOver);
+    pane.set_connection_presentation(
+        &taken_over,
+        &crate::runtime::present_connection_status(&taken_over),
+    );
+    window.dispatch_managed_runtime_message(
+        &RuntimeEndpoint::Local,
+        &clipboard_write_message(runtime_pane_id, b"from a read-only mirror"),
+    );
+    assert_eq!(
+        read_clipboard_text().as_deref(),
+        Some("copied by the app"),
+        "a read-only mirror must not replace the clipboard"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
+
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn cwd_changed_updates_layout_node() {

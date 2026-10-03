@@ -63,6 +63,8 @@ pub struct PreferencesV1 {
     pub smart_clipboard: bool,
     #[serde(default)]
     pub trim_trailing_whitespace_on_copy: bool,
+    #[serde(default = "default_true")]
+    pub clipboard_osc52_writes: bool,
     #[serde(default = "default_session_folder")]
     pub default_session_folder: DefaultSessionFolder,
     #[serde(default)]
@@ -92,6 +94,7 @@ impl Default for PreferencesV1 {
             visual_bell: true,
             smart_clipboard: false,
             trim_trailing_whitespace_on_copy: false,
+            clipboard_osc52_writes: true,
             default_session_folder: default_session_folder(),
             keyboard_shortcuts: BTreeMap::new(),
             auto_start_daemon: true,
@@ -189,6 +192,7 @@ impl From<PreferencesV1> for crate::preferences::Preferences {
             visual_bell: v1.visual_bell,
             smart_clipboard: v1.smart_clipboard,
             trim_trailing_whitespace_on_copy: v1.trim_trailing_whitespace_on_copy,
+            clipboard_osc52_writes: v1.clipboard_osc52_writes,
             default_session_folder: match v1.default_session_folder {
                 DefaultSessionFolder::Home => crate::preferences::DefaultSessionFolder::Home,
                 DefaultSessionFolder::CurrentSession => {
@@ -226,6 +230,7 @@ impl From<&crate::preferences::Preferences> for PreferencesV1 {
             visual_bell: prefs.visual_bell,
             smart_clipboard: prefs.smart_clipboard,
             trim_trailing_whitespace_on_copy: prefs.trim_trailing_whitespace_on_copy,
+            clipboard_osc52_writes: prefs.clipboard_osc52_writes,
             default_session_folder: match &prefs.default_session_folder {
                 crate::preferences::DefaultSessionFolder::Home => DefaultSessionFolder::Home,
                 crate::preferences::DefaultSessionFolder::CurrentSession => {
