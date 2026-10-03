@@ -39,6 +39,9 @@ mod imp {
         pub(crate) mouse_tracking: RefCell<crate::terminal::MouseTrackingTracker>,
         /// Output held back while a mouse selection drag is in progress.
         pub(crate) selection_hold: RefCell<crate::terminal::SelectionHoldGate>,
+        /// Whether this pane has already explained the Shift override after
+        /// an empty copy. Said once per pane, not on every keypress (#1114).
+        pub shift_select_hint_shown: Cell<bool>,
         pub application_cursor_keys: Cell<bool>,
         pub application_keypad: Cell<bool>,
         pub input_connected: Cell<bool>,
@@ -88,6 +91,7 @@ mod imp {
                 bracketed_paste_mode: Cell::default(),
                 mouse_tracking: RefCell::default(),
                 selection_hold: RefCell::default(),
+                shift_select_hint_shown: Cell::default(),
                 application_cursor_keys: Cell::default(),
                 application_keypad: Cell::default(),
                 input_connected: Cell::default(),
@@ -685,6 +689,32 @@ impl PersistentPaneView {
     /// (0, 9, 1000, 1002 or 1003).
     pub fn set_mouse_tracking_mode(&self, tracking_value: u16) {
         self.imp().mouse_tracking.borrow_mut().set_tracking_value(u32::from(tracking_value));
+    }
+
+    /// Whether this pane has already explained the Shift override.
+    #[must_use]
+    pub fn shift_select_hint_shown(&self) -> bool {
+        self.imp().shift_select_hint_shown.get()
+    }
+
+    /// Whether a copy that just ran on this pane should explain the Shift
+    /// override, consuming the pane's one-shot hint when it should.
+    ///
+    /// With mouse tracking armed VTE gave the drag to the application, so
+    /// there is no selection to copy until the user holds Shift; without it an
+    /// empty selection needs no explanation. See
+    /// [`crate::terminal::shift_select_hint_needed`].
+    #[must_use]
+    pub fn take_shift_select_hint(&self) -> bool {
+        let needed = crate::terminal::shift_select_hint_needed(
+            self.vte().has_selection(),
+            self.has_mouse_tracking(),
+            self.imp().shift_select_hint_shown.get(),
+        );
+        if needed {
+            self.imp().shift_select_hint_shown.set(true);
+        }
+        needed
     }
 
     fn feed_to_vte(&self, data: &[u8]) {

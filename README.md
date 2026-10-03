@@ -187,7 +187,7 @@ workspaces will fail to connect.
 | Split vertical | Ctrl+Shift+O |
 | Toggle workspace sidebar | Ctrl+Shift+N |
 | Toggle tools sidebar | Ctrl+Shift+B |
-| Copy / Paste | Ctrl+Shift+C / Ctrl+Shift+V |
+| Copy / Paste | Ctrl+Shift+C / Ctrl+Shift+V (hold Shift while dragging to select) |
 | Search | Ctrl+Shift+F |
 | Input sync toggle | Ctrl+Shift+I |
 | Next / previous workspace | Ctrl+Tab / Ctrl+Shift+Tab |
@@ -203,6 +203,12 @@ workspaces will fail to connect.
 | Commands leader key | Ctrl+; |
 | Preferences | Ctrl+, |
 | Fullscreen | F11 |
+
+Copy needs a selection, and while a program is using the mouse — Claude Code,
+Codex, htop, vim with `mouse=a` — a plain drag belongs to that program and
+selects nothing, so Ctrl+Shift+C has nothing to copy. Hold Shift while dragging
+to select instead; the program still receives plain drags. rttx says so in a
+toast the first time a copy comes up empty in such a pane.
 
 Pane navigation preserves zoom: with a pane maximized (Ctrl+Shift+Z), Alt+Arrow
 and Alt+] / Alt+[ move the zoom to the target pane instead of unzooming, and the
