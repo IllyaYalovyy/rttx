@@ -102,6 +102,7 @@ impl TestClient {
             v3::Capability::OptChunkedScrollback,
             v3::Capability::OptDiagnostics,
             v3::Capability::OptWorkspaceTakeover,
+            v3::Capability::OptClipboardOsc52,
         ];
         self.handshake_with_caps(ALL_CAPABILITIES).await
     }

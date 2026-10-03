@@ -51,6 +51,9 @@ pub mod v3_takeover;
 /// V3 diagnostics: capability gating, builders, and report construction (RFC-021 Section 3, `OPT_DIAGNOSTICS`).
 pub mod v3_diagnostics;
 
+/// V3 clipboard: capability gating and the OSC 52 clipboard-write push (`OPT_CLIPBOARD_OSC52`).
+pub mod v3_clipboard;
+
 /// Convert a `uuid::Uuid` to protobuf bytes.
 #[must_use]
 pub fn uuid_to_bytes(id: uuid::Uuid) -> Vec<u8> {

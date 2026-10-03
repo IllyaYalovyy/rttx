@@ -82,6 +82,8 @@ pub struct Preferences {
     pub smart_clipboard: bool,
     #[serde(default)]
     pub trim_trailing_whitespace_on_copy: bool,
+    #[serde(default = "default_true")]
+    pub clipboard_osc52_writes: bool,
     #[serde(default = "default_session_folder")]
     pub default_session_folder: DefaultSessionFolder,
     #[serde(default)]
@@ -136,6 +138,7 @@ impl Default for Preferences {
             visual_bell: true,
             smart_clipboard: false,
             trim_trailing_whitespace_on_copy: false,
+            clipboard_osc52_writes: true,
             default_session_folder: default_session_folder(),
             keyboard_shortcuts: BTreeMap::new(),
             auto_start_daemon: true,
@@ -183,6 +186,8 @@ struct PreferencesDisk {
     smart_clipboard: bool,
     #[serde(default)]
     trim_trailing_whitespace_on_copy: bool,
+    #[serde(default = "default_true")]
+    clipboard_osc52_writes: bool,
     #[serde(default = "default_session_folder")]
     default_session_folder: DefaultSessionFolder,
     #[serde(default)]
@@ -212,6 +217,7 @@ impl From<PreferencesDisk> for Preferences {
             visual_bell: raw.visual_bell,
             smart_clipboard: raw.smart_clipboard,
             trim_trailing_whitespace_on_copy: raw.trim_trailing_whitespace_on_copy,
+            clipboard_osc52_writes: raw.clipboard_osc52_writes,
             default_session_folder: raw.default_session_folder,
             keyboard_shortcuts: raw.keyboard_shortcuts,
             auto_start_daemon: raw.auto_start_daemon,

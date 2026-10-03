@@ -1287,6 +1287,23 @@ impl Window {
                 }
             }
             Payload::Bell(_) => pane.flash_bell(),
+            Payload::ClipboardWrite(write) => {
+                let prefs = crate::store::default_store()
+                    .load_preferences()
+                    .into_value()
+                    .unwrap_or_default();
+                if pane.apply_clipboard_write(&write.data, prefs.clipboard_osc52_writes) {
+                    tracing::debug!(
+                        bytes = write.data.len(),
+                        "applied an OSC 52 clipboard write from a pane"
+                    );
+                } else {
+                    tracing::debug!(
+                        "clipboard write not applied: disabled by preference, or this \
+                         client does not drive the pane"
+                    );
+                }
+            }
             Payload::TerminalModeChanged(m) => {
                 if let Some(modes) = m.modes {
                     pane.set_application_modes(

@@ -83,6 +83,35 @@ fn send_to_collected(
     overflowed
 }
 
+/// Send an OSC 52 clipboard write to the one client allowed to act on it.
+///
+/// Two gates, both required: the client must hold the workspace's write lease
+/// (a read-only mirror hijacking the user's clipboard would be a privacy
+/// hole), and it must have negotiated `OPT_CLIPBOARD_OSC52` so a client built
+/// before the event existed never receives an unknown push.
+fn send_to_clipboard_client(
+    senders: &[(Uuid, mpsc::Sender<ClientMsg>, Option<ClientProtocol>)],
+    writer_client: Option<Uuid>,
+    runtime_id: Uuid,
+    pane_id: Uuid,
+    msg: &ClientMsg,
+    metrics: &crate::metrics::DaemonMetrics,
+) -> Vec<Uuid> {
+    let Some(writer_client) = writer_client else {
+        return Vec::new();
+    };
+    let targeted: Vec<(Uuid, mpsc::Sender<ClientMsg>, Option<ClientProtocol>)> = senders
+        .iter()
+        .filter(|(client_id, _, protocol)| {
+            *client_id == writer_client
+                && matches!(protocol, Some(ClientProtocol::V3 { effective_caps })
+                    if rttx_proto::v3_clipboard::is_supported(effective_caps))
+        })
+        .cloned()
+        .collect();
+    send_to_collected(&targeted, runtime_id, pane_id, msg, metrics)
+}
+
 /// Per-workspace lock type used throughout the server.
 pub type WorkspaceLock = Arc<Mutex<Workspace>>;
 
@@ -1073,6 +1102,7 @@ pub const SERVER_CAPABILITIES: &[v3::Capability] = &[
     v3::Capability::OptChunkedScrollback,
     v3::Capability::OptDiagnostics,
     v3::Capability::OptWorkspaceTakeover,
+    v3::Capability::OptClipboardOsc52,
 ];
 
 // ── V3 dispatch helpers ─────────────────────────────────────────
@@ -2115,7 +2145,7 @@ fn spawn_pty_read_loop(
                             // Phase 1: accept raw bytes under the per-workspace lock
                             // (fast memcpy, no VTE parsing).  The server mutex is
                             // only touched briefly to collect client senders.
-                            let (mut taken_screen, senders, output_seq, contended, data) = {
+                            let (mut taken_screen, senders, writer_client, output_seq, contended, data) = {
                                 let lock_start = std::time::Instant::now();
                                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                                 let (screen, seq, data) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
@@ -2126,6 +2156,13 @@ fn spawn_pty_read_loop(
                                         std::borrow::Cow::Borrowed(_) => raw.clone(),
                                         std::borrow::Cow::Owned(clean) => bytes::Bytes::from(clean),
                                     };
+                                    // Lift OSC 52 clipboard writes out of the batch for
+                                    // the same reason, and so clipboard text never
+                                    // reaches a client's VTE or the scrollback log.
+                                    let data = match pane.filter_clipboard_writes(&data) {
+                                        std::borrow::Cow::Borrowed(_) => data.clone(),
+                                        std::borrow::Cow::Owned(clean) => bytes::Bytes::from(clean),
+                                    };
                                     pane.accept_output(&data);
                                     (Some(pane.take_screen()), pane.output_seq, data)
                                 } else {
@@ -2133,6 +2170,7 @@ fn spawn_pty_read_loop(
                                 };
                                 let client_ids: Vec<Uuid> =
                                     rt.attached_clients.keys().copied().collect();
+                                let writer_client = rt.writer_client_id();
                                 drop(rt);
                                 let s = crate::instrument::lock_server(&server, &metrics).await;
                                 let senders = s.collect_senders_for_clients(&client_ids);
@@ -2146,7 +2184,7 @@ fn spawn_pty_read_loop(
                                         "mutex held too long in PTY read loop",
                                     );
                                 }
-                                (screen, senders, seq, hold > MUTEX_HOLD_WARN_THRESHOLD, data)
+                                (screen, senders, writer_client, seq, hold > MUTEX_HOLD_WARN_THRESHOLD, data)
                             };
 
                             // Adaptive throttle: yield when contention is detected
@@ -2170,7 +2208,7 @@ fn spawn_pty_read_loop(
 
                             // Phase 3: return parsed screen under per-workspace lock,
                             // collect PTY writer from server.
-                            let (new_cwd, new_name, new_title, pending_replies, pty_writer) = {
+                            let (new_cwd, new_name, new_title, pending_replies, clipboard_writes, pty_writer) = {
                                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                                 if let Some(screen) = taken_screen
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
@@ -2199,9 +2237,9 @@ fn spawn_pty_read_loop(
                                     } else {
                                         None
                                     };
-                                    (cwd, renamed, title, result.pending_replies, writer)
+                                    (cwd, renamed, title, result.pending_replies, result.clipboard_writes, writer)
                                 } else {
-                                    (None, None, None, Vec::new(), None)
+                                    (None, None, None, Vec::new(), Vec::new(), None)
                                 }
                             };
 
@@ -2240,6 +2278,25 @@ fn spawn_pty_read_loop(
                             if let Some((title, revision)) = new_title {
                                 let msg = protocol::v3_title_changed(runtime_id, pane_id, title, revision);
                                 all_overflows.extend(send_to_collected(&senders, runtime_id, pane_id, &msg, &metrics));
+                            }
+                            // A clipboard write belongs to the client driving the
+                            // pane. Readers — a mirror left behind by a take-over —
+                            // must never have their clipboard replaced.
+                            for write in clipboard_writes {
+                                let msg = protocol::v3_clipboard_write(
+                                    runtime_id,
+                                    pane_id,
+                                    &write.target,
+                                    bytes::Bytes::from(write.data),
+                                );
+                                all_overflows.extend(send_to_clipboard_client(
+                                    &senders,
+                                    writer_client,
+                                    runtime_id,
+                                    pane_id,
+                                    &msg,
+                                    &metrics,
+                                ));
                             }
                             if !all_overflows.is_empty() {
                                 all_overflows.sort_unstable();

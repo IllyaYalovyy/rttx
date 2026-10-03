@@ -915,6 +915,23 @@ impl PersistentPaneView {
         }
     }
 
+    /// Act on a daemon clipboard write (OSC 52) addressed to this pane.
+    ///
+    /// Returns whether the system clipboard was replaced. The pane's own
+    /// input state is the authority on whether this client drives it: a
+    /// read-only mirror after a take-over is frozen, and a frozen pane never
+    /// takes the clipboard (see [`crate::terminal::osc52_clipboard_text`]).
+    #[must_use]
+    pub fn apply_clipboard_write(&self, data: &[u8], enabled: bool) -> bool {
+        let Some(text) =
+            crate::terminal::osc52_clipboard_text(data, self.imp().accepts_input.get(), enabled)
+        else {
+            return false;
+        };
+        crate::terminal::set_clipboard_text(&text);
+        true
+    }
+
     /// Mark the remote process as exited and make the pane visibly non-interactive.
     pub fn mark_exited(&self, status: i32) {
         self.imp().connected.set(false);

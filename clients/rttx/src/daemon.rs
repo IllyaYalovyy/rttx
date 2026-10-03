@@ -121,6 +121,7 @@ const CLIENT_CAPABILITIES: &[v3::Capability] = &[
     v3::Capability::OptChunkedScrollback,
     v3::Capability::OptDiagnostics,
     v3::Capability::OptWorkspaceTakeover,
+    v3::Capability::OptClipboardOsc52,
 ];
 
 /// A connection to a running `rttx-server` instance (pre-split).
@@ -746,6 +747,7 @@ pub fn extract_pane_id(env: &v3::ServerEnvelope) -> Option<Uuid> {
         Payload::TerminalModeChanged(m) => &m.pane_id,
         Payload::PaneSplit(m) => &m.new_pane_id,
         Payload::FocusChanged(m) => &m.pane_id,
+        Payload::ClipboardWrite(m) => &m.pane_id,
         Payload::Pong(_)
         | Payload::WorkspaceList(_)
         | Payload::WorkspaceCreated(_)

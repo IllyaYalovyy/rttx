@@ -121,6 +121,14 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
     trim_whitespace_row.set_active(prefs.trim_trailing_whitespace_on_copy);
     terminal_group.add(&trim_whitespace_row);
 
+    let osc52_row = adw::SwitchRow::new();
+    osc52_row.set_title("Let applications set the clipboard");
+    osc52_row.set_subtitle(
+        "Programs that copy text themselves (editors over SSH, CLI tools) put it on the system clipboard",
+    );
+    osc52_row.set_active(prefs.clipboard_osc52_writes);
+    terminal_group.add(&osc52_row);
+
     let session_group = adw::PreferencesGroup::new();
     session_group.set_title("Workspaces");
 
@@ -267,6 +275,7 @@ pub fn show(parent: &impl IsA<gtk4::Window>) {
             visual_bell: visual_bell_row.is_active(),
             smart_clipboard: smart_clipboard_row.is_active(),
             trim_trailing_whitespace_on_copy: trim_whitespace_row.is_active(),
+            clipboard_osc52_writes: osc52_row.is_active(),
             default_session_folder: match folder_mode_row.selected() {
                 1 => DefaultSessionFolder::CurrentSession,
                 2 => DefaultSessionFolder::Custom(custom_folder_row.text().to_string()),
