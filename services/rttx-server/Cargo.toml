@@ -11,6 +11,8 @@ unsafe_code = "deny"
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
+# assert_is_empty (new in clippy 1.99) fires on every `assert!(x.is_empty())` in the tests
+assert_is_empty = "allow"
 future_not_send = "allow"
 redundant_pub_crate = "allow"
 similar_names = "allow"
