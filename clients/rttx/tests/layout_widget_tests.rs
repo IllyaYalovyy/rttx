@@ -406,10 +406,14 @@ fn test_scheduled_initial_paned_ratios_do_not_clobber_user_resized_ratio() {
     let settled = wait_until(1000, || widget.downcast_ref::<gtk4::Paned>().unwrap().width() > 0);
     assert!(settled, "test widget should receive an allocation before resize assertions");
 
+    // Initial ratios apply on the first allocated frame; simulate the user
+    // only after that callback has completed.
+    pump_events(100);
     let paned = widget.downcast_ref::<gtk4::Paned>().unwrap();
-    paned.set_position(240);
+    let width = paned.width();
+    paned.set_position((f64::from(width) * 0.3) as i32);
 
-    paned.allocate(801, 600, -1, None);
+    paned.allocate(width + 1, paned.height(), -1, None);
     pump_events(50);
 
     let mut updated = layout;
