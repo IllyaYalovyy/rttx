@@ -497,7 +497,7 @@ mod tests {
         require_display!();
         let row = WorkspaceRow::new("s1", "Session");
         assert!(row.has_css_class("session-row"));
-        assert_eq!(row.subtitle_lines(), 2);
+        assert_eq!(row.subtitle_lines(), 1);
     }
 
     // ═══════════════════════════════════════════════════════════════

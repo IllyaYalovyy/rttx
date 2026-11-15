@@ -2019,6 +2019,20 @@ mod tests {
             forwarded_clone.borrow_mut().push(bytes.to_vec());
         });
 
+        // Paste is routed through the window action so the application's
+        // paste guard can inspect it before it reaches the daemon.
+        let actions = gtk4::gio::SimpleActionGroup::new();
+        let paste = gtk4::gio::SimpleAction::new("paste", None);
+        let paste_pane = pane.downgrade();
+        let pasted = Rc::clone(&forwarded);
+        paste.connect_activate(move |_, _| {
+            let pane = paste_pane.upgrade().unwrap();
+            let pasted = Rc::clone(&pasted);
+            pane.request_clipboard_paste(move |bytes| pasted.borrow_mut().push(bytes));
+        });
+        actions.add_action(&paste);
+        window.insert_action_group("win", Some(&actions));
+
         assert_eq!(
             pane.emit_input_key_for_test(
                 gtk4::gdk::Key::v,
