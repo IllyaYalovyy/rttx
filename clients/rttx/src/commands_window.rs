@@ -399,7 +399,7 @@ fn show_capture_dialog(
     let label_ref = label_out.clone();
     let dialog_ref = dialog.clone();
     controller.connect_key_pressed(move |_, keyval, _keycode, _state| {
-        let key_name = keyval.name().map(|n| n.to_string()).unwrap_or_default();
+        let key_name = keyval.name().map_or_else(String::new, |n| n.to_string());
         if key_name.is_empty() {
             return glib::Propagation::Stop;
         }

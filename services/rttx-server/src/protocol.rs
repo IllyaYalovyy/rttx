@@ -172,7 +172,7 @@ pub fn workspace_tree_to_proto(tree: &WorkspaceTree) -> Option<v3::PaneTreeNode>
 /// none.
 #[must_use]
 pub fn default_active_bytes(tree: &WorkspaceTree) -> Vec<u8> {
-    tree.default_active().map(PaneId::uuid).map(uuid_to_bytes).unwrap_or_default()
+    tree.default_active().map(PaneId::uuid).map_or_else(Vec::new, uuid_to_bytes)
 }
 
 /// The PTY size for a pane shared by multiple clients: the per-axis minimum of
@@ -341,7 +341,8 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
                 .panes
                 .iter()
                 .map(|p| {
-                    let id = uuid::Uuid::parse_str(&p.id).map(uuid_to_bytes).unwrap_or_default();
+                    let id =
+                        uuid::Uuid::parse_str(&p.id).map_or_else(|_| Vec::new(), uuid_to_bytes);
                     v3::PaneDiagnosticsInfo {
                         id,
                         raw_bytes_len: p.raw_bytes_len as u64,
@@ -350,7 +351,7 @@ pub fn v3_diagnostics_report(server: &crate::server::Server) -> v3::DiagnosticsR
                     }
                 })
                 .collect();
-            let id = uuid::Uuid::parse_str(&s.id).map(uuid_to_bytes).unwrap_or_default();
+            let id = uuid::Uuid::parse_str(&s.id).map_or_else(|_| Vec::new(), uuid_to_bytes);
             v3::WorkspaceDiagnosticsInfo {
                 id,
                 name: s.name.clone(),

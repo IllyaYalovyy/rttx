@@ -322,7 +322,7 @@ impl Server {
                             runtime_id,
                             pane_id,
                             label,
-                            ReplayData::Scrollback { clean: clean.clone(), rewrite },
+                            ReplayData::Scrollback { clean, rewrite },
                         ));
                         continue;
                     }
@@ -2343,7 +2343,7 @@ fn spawn_pty_read_loop(
         // Feed terminal cleanup and broadcast exit under per-workspace lock.
         {
             let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
-            let cleanup = rt.panes.get_mut(&pane_id).map(Pane::feed_cleanup).unwrap_or_default();
+            let cleanup = rt.panes.get_mut(&pane_id).map_or_else(Vec::new, Pane::feed_cleanup);
             let client_ids: Vec<Uuid> = rt.attached_clients.keys().copied().collect();
             drop(rt);
 

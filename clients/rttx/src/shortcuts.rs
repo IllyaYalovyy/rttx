@@ -128,8 +128,7 @@ pub fn effective_accels(action: &str, overrides: &BTreeMap<String, Vec<String>>)
     DEFAULT_SHORTCUTS
         .iter()
         .find(|d| d.action == action)
-        .map(|d| d.default_accels.iter().map(|s| (*s).to_string()).collect())
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |d| d.default_accels.iter().map(|s| (*s).to_string()).collect())
 }
 
 /// Guidance shown under a shortcut in Preferences → Keyboard Shortcuts, for
@@ -152,8 +151,7 @@ pub fn default_accels(action: &str) -> Vec<String> {
     DEFAULT_SHORTCUTS
         .iter()
         .find(|d| d.action == action)
-        .map(|d| d.default_accels.iter().map(|s| (*s).to_string()).collect())
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |d| d.default_accels.iter().map(|s| (*s).to_string()).collect())
 }
 
 #[cfg(test)]

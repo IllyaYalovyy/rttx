@@ -101,7 +101,7 @@ impl Window {
                         let label = if is_orphaned {
                             format!("{} (orphaned)", resolved.name)
                         } else {
-                            resolved.name.clone()
+                            resolved.name
                         };
                         shown |= self.append_place_section(&label, &visible, query.as_str());
                     }
@@ -244,7 +244,7 @@ impl Window {
                         let label = if is_orphaned {
                             format!("{} (orphaned)", resolved.name)
                         } else {
-                            resolved.name.clone()
+                            resolved.name
                         };
                         shown |= self.append_command_section(&label, &visible, query.as_str());
                     }
