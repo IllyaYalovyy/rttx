@@ -52,7 +52,7 @@ impl Window {
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
         if session_state.uses_managed_runtime() {
-            return self.materialize_persistent_terminal(session_state, uuid, custom_title);
+            return self.materialize_persistent_terminal(session_state, uuid, cwd, custom_title);
         }
 
         let zoomed = session_state.is_zoomed();
@@ -87,6 +87,7 @@ impl Window {
         &self,
         session_state: &WorkspaceState,
         uuid: &str,
+        cwd: Option<&str>,
         custom_title: Option<&str>,
     ) -> gtk4::Widget {
         let zoomed = session_state.is_zoomed();
@@ -107,6 +108,7 @@ impl Window {
 
         let daemon_runtime_id = session_state.runtime.runtime_id.as_deref().unwrap_or_default();
         let pane_view = PersistentPaneView::new(uuid, daemon_runtime_id);
+        pane_view.set_current_directory(cwd);
         if let Some(title) = custom_title {
             pane_view.set_custom_title(Some(title));
         }

@@ -282,38 +282,31 @@ async fn scrollback_rotation_keeps_n_segments_via_server() {
     let pane_id_bytes = create_pane(&mut c, &rt_id_bytes).await;
     let pane_id = bytes_to_uuid(&pane_id_bytes).unwrap();
 
-    // Generate enough output to trigger rotation (>10 MB).
-    // The shell echoes back what we send, so we need to send data that
-    // produces output. Use a large block repeated several times.
-    let big_block = vec![b'X'; 512 * 1024]; // 512 KB per send
-    for _ in 0..25 {
-        send_input(&mut c, &rt_id_bytes, &pane_id_bytes, &big_block).await;
-        // Small delay to let the PTY process and the server flush.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    // Seed an almost-full log and its retained segments, then let a real
+    // PTY output flush trigger rotation. Flooding terminal input without
+    // reading output can deadlock on the PTY/socket backpressure buffers.
+    let state_dir = tmp.path().join("state/rttx/daemon");
+    let log_path = layout::scrollback_log(&state_dir, runtime_id, pane_id);
+    std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+    std::fs::File::create(&log_path).unwrap().set_len(10 * 1024 * 1024).unwrap();
+    for segment in 1..=3 {
+        std::fs::write(
+            log_path.with_extension(format!("log.{segment}")),
+            format!("segment-{segment}"),
+        )
+        .unwrap();
     }
+    send_input(&mut c, &rt_id_bytes, &pane_id_bytes, b"printf 'rotation-output\\n'\n").await;
 
-    // Wait for several serialization ticks to flush scrollback.
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    // Check the v1 scrollback path (where flush_scrollback writes).
-    let cache_dir = tmp.path().join("cache");
-    let scrollback_dir = cache_dir.join("scrollback").join(runtime_id.to_string());
-
-    if scrollback_dir.exists() {
-        let log_path = scrollback_dir.join(format!("{pane_id}.log"));
-        let rotated_1 = scrollback_dir.join(format!("{pane_id}.log.1"));
-
-        // If enough data was written, rotation should have occurred.
-        if log_path.exists() {
-            let log_size = std::fs::metadata(&log_path).map_or(0, |m| m.len());
-            if log_size > 0 || rotated_1.exists() {
-                // Verify rotated segments exist and the oldest is bounded.
-                // SCROLLBACK_ROTATE_KEEP = 3, so .log.4 should not exist.
-                let seg4 = scrollback_dir.join(format!("{pane_id}.log.4"));
-                assert!(!seg4.exists(), "segment .log.4 should not exist (keep limit is 3)");
-            }
-        }
+    let rotated = log_path.with_extension("log.1");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !std::fs::metadata(&rotated).is_ok_and(|meta| meta.len() > 10 * 1024 * 1024) {
+        assert!(tokio::time::Instant::now() < deadline, "PTY output must rotate the full log");
+        c.drain(Duration::from_millis(100)).await;
     }
+    assert!(std::fs::metadata(&rotated).unwrap().len() > 10 * 1024 * 1024);
+    assert_eq!(std::fs::read(log_path.with_extension("log.3")).unwrap(), b"segment-2");
+    assert!(!log_path.with_extension("log.4").exists(), "only three segments may be retained");
 
     // The key invariant: the pane should still be functional after rotation.
     let workspaces = list_workspaces(&mut c).await;

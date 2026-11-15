@@ -20,6 +20,7 @@ mod imp {
         pub custom_title: RefCell<Option<String>>,
         pub initial_cwd: RefCell<Option<String>>,
         pub shell_spawned: Cell<bool>,
+        pub shell_ready: Cell<bool>,
         pub smart_clipboard: Cell<bool>,
         pub smart_clipboard_key_controller: RefCell<Option<gtk4::EventControllerKey>>,
         pub visual_bell: Cell<bool>,
@@ -141,6 +142,10 @@ mod imp {
 
             self.search_entry.set_hexpand(true);
             self.search_bar.set_child(Some(&self.search_entry));
+            self.search_bar.connect_entry(&self.search_entry);
+            self.search_entry.connect_map(|entry| {
+                entry.grab_focus();
+            });
             self.search_bar.set_show_close_button(true);
 
             self.vte.set_hexpand(true);
@@ -545,6 +550,7 @@ impl TerminalWidget {
 
     pub fn reset_launch_state_for_retry(&self) {
         self.imp().shell_spawned.set(false);
+        self.imp().shell_ready.set(false);
     }
 
     #[cfg(test)]
@@ -570,7 +576,7 @@ impl TerminalWidget {
 
     pub fn queue_input_for_shell(&self, input: impl Into<String>) {
         let input = input.into();
-        if self.imp().shell_spawned.get() {
+        if self.imp().shell_ready.get() {
             self.imp().vte.feed_child(input.as_bytes());
             return;
         }
@@ -625,8 +631,18 @@ impl TerminalWidget {
             || {},
             -1,
             gtk4::gio::Cancellable::NONE,
-            move |result| {
-                if let Err(error) = result {
+            move |result| match result {
+                Ok(_) => {
+                    if let Some(widget) = widget_ref.upgrade() {
+                        widget.imp().shell_ready.set(true);
+                        let pending: Vec<_> =
+                            widget.imp().pending_shell_inputs.borrow_mut().drain(..).collect();
+                        for input in pending {
+                            widget.vte().feed_child(input.as_bytes());
+                        }
+                    }
+                }
+                Err(error) => {
                     tracing::error!("Failed to spawn shell: {error}");
                     let msg = format!("\r\n\x1b[31mFailed to spawn shell: {error}\x1b[0m\r\n");
                     vte_for_spawn.feed(msg.as_bytes());
@@ -648,11 +664,6 @@ impl TerminalWidget {
         if std::env::var_os("RTTX_DISABLE_SHELL_SPAWN").is_none() {
             let cwd = self.imp().initial_cwd.borrow().clone();
             self.spawn_shell(cwd.as_deref());
-        }
-        let pending_inputs: Vec<String> =
-            self.imp().pending_shell_inputs.borrow_mut().drain(..).collect();
-        for input in pending_inputs {
-            self.imp().vte.feed_child(input.as_bytes());
         }
     }
 

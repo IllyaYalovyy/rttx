@@ -1,5 +1,6 @@
 use super::*;
 use crate::workspace::PaneTarget;
+use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 fn store() -> crate::store::ClientStore {
@@ -324,19 +325,19 @@ fn top_bar_has_new_connect_direct_buttons() {
     let window = Window::new(&app);
 
     assert_eq!(
-        window.imp().new_button.label().as_deref(),
-        Some("New"),
-        "New button should have 'New' label"
+        window.imp().new_button.icon_name().as_deref(),
+        Some("list-add-symbolic"),
+        "New button should have its identifying icon"
     );
     assert_eq!(
-        window.imp().connect_button.label().as_deref(),
-        Some("Connect"),
-        "Connect button should have 'Connect' label"
+        window.imp().connect_button.icon_name().as_deref(),
+        Some("network-server-symbolic"),
+        "Connect button should have its identifying icon"
     );
     assert_eq!(
-        window.imp().new_direct_button.label().as_deref(),
-        Some("Direct"),
-        "Direct button should have 'Direct' label"
+        window.imp().new_direct_button.icon_name().as_deref(),
+        Some("utilities-terminal-symbolic"),
+        "Direct button should have its identifying icon"
     );
 
     window.close();
@@ -514,7 +515,10 @@ fn utility_sidebar_shows_and_filters_commands() {
     pump_events(100);
 
     assert_eq!(
-        window.imp().command_list.observe_children().n_items(),
+        (0..window.imp().command_list.observe_children().n_items() as i32)
+            .filter_map(|index| window.imp().command_list.row_at_index(index))
+            .filter(gtk4::prelude::ListBoxRowExt::is_activatable)
+            .count(),
         2,
         "utility sidebar should show saved commands"
     );
@@ -522,7 +526,10 @@ fn utility_sidebar_shows_and_filters_commands() {
     window.imp().sidebar_search_entry.set_text("deploy");
     pump_events(50);
     assert_eq!(
-        window.imp().command_list.observe_children().n_items(),
+        (0..window.imp().command_list.observe_children().n_items() as i32)
+            .filter_map(|index| window.imp().command_list.row_at_index(index))
+            .filter(gtk4::prelude::ListBoxRowExt::is_activatable)
+            .count(),
         1,
         "search should filter the utility sidebar command list"
     );
@@ -621,6 +628,17 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
     let tmp = tempfile::TempDir::new().unwrap();
     crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
 
+    // Exercise child exit and retry deterministically, without depending on
+    // network routing or the user's shell/SSH configuration.
+    let ssh = tmp.path().join("ssh");
+    std::fs::write(&ssh, "#!/bin/sh\nexit 255\n").unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![tmp.path().to_path_buf()];
+    paths.extend(std::env::split_paths(&original_path));
+    crate::test_helpers::set_env("PATH", std::env::join_paths(paths).unwrap());
+    crate::test_helpers::set_env("SHELL", "/bin/sh");
+
     let terminal_uuid = "t1".to_string();
     let session_uuid = "s1".to_string();
     let state = WindowState {
@@ -667,7 +685,7 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
         .expect("recoverable terminal should exist");
 
     let failed = wait_until(3000, || term.recovery_message_visible_for_test());
-    assert!(failed, "unreachable SSH host should leave the pane alive and show retry UI");
+    assert!(failed, "failed SSH process should leave the pane alive and show retry UI");
     assert!(
         term.recovery_message_for_test().contains("Failed to connect to"),
         "failure message should stay inside the pane"
@@ -685,6 +703,7 @@ fn failed_structured_recovery_keeps_terminal_alive_and_allows_retry() {
     );
 
     window.close();
+    crate::test_helpers::set_env("PATH", original_path);
 }
 
 #[test]
@@ -890,21 +909,27 @@ fn switching_sessions_focuses_the_visible_terminal() {
         window.imp().terminals.borrow().get(&first_uuid).cloned().unwrap()
     };
     assert!(first_terminal.vte().grab_focus());
-    let first_focused = wait_until(1000, || first_terminal.vte().has_focus());
+    let first_focused = wait_until(1000, || {
+        gtk4::prelude::RootExt::focus(&window).as_ref() == Some(first_terminal.vte().upcast_ref())
+    });
     assert!(first_focused, "initial terminal should be focusable");
 
-    window.add_session();
+    window.add_direct_session();
     let second_terminal = {
         let state = window.imp().state.borrow();
         let second_uuid = state.workspaces[1].layout.terminal_uuids().into_iter().next().unwrap();
         window.imp().terminals.borrow().get(&second_uuid).cloned().unwrap()
     };
-    let second_focused = wait_until(1000, || second_terminal.vte().has_focus());
+    let second_focused = wait_until(1000, || {
+        gtk4::prelude::RootExt::focus(&window).as_ref() == Some(second_terminal.vte().upcast_ref())
+    });
     assert!(second_focused, "newly selected session should hand focus to its terminal");
 
     let first_row = window.imp().sidebar_list.row_at_index(0).unwrap();
     window.imp().sidebar_list.select_row(Some(&first_row));
-    let restored_focus = wait_until(1000, || first_terminal.vte().has_focus());
+    let restored_focus = wait_until(1000, || {
+        gtk4::prelude::RootExt::focus(&window).as_ref() == Some(first_terminal.vte().upcast_ref())
+    });
     assert!(restored_focus, "switching back should focus the visible terminal without a click");
 
     window.close();
@@ -1165,6 +1190,8 @@ fn save_and_restart_restores_user_resized_pane_ratios() {
         paned.width() > 0
     });
     assert!(settled, "split pane did not receive an allocation before save");
+    // Let the initial-ratio frame callback finish before simulating a drag.
+    pump_events(100);
 
     let root = first_window
         .imp()
@@ -1398,6 +1425,8 @@ fn save_and_restart_restores_nested_user_resized_pane_ratios() {
         outer.width() > 0 && inner.height() > 0
     });
     assert!(settled, "nested split panes did not receive allocation before save");
+    // Let the initial-ratio frame callback finish before simulating a drag.
+    pump_events(100);
 
     let root = first_window
         .imp()
@@ -1721,6 +1750,8 @@ fn search_bar_toggles_and_returns_focus_to_terminal() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
+    window.present();
+    pump_events(100);
     let terminal = window
         .imp()
         .terminals
@@ -1736,8 +1767,15 @@ fn search_bar_toggles_and_returns_focus_to_terminal() {
     terminal.toggle_search();
     assert!(terminal.search_bar().is_search_mode(), "toggle shows the search bar");
     assert!(
-        wait_until(1000, || terminal.search_entry().has_focus()),
-        "the search entry should take focus when the bar opens"
+        wait_until(1000, || {
+            gtk4::prelude::RootExt::focus(&window).is_some_and(|focus| {
+                focus == *terminal.search_entry().upcast_ref::<gtk4::Widget>()
+                    || focus.is_ancestor(terminal.search_entry())
+            })
+        }),
+        "the search entry should take focus when the bar opens (focus: {:?}, entry visible: {})",
+        gtk4::prelude::RootExt::focus(&window).map(|widget| widget.type_().name().to_string()),
+        terminal.search_entry().is_visible()
     );
 
     // Toggle off: the bar hides and focus returns to the terminal (guards the
@@ -1745,7 +1783,9 @@ fn search_bar_toggles_and_returns_focus_to_terminal() {
     terminal.toggle_search();
     assert!(!terminal.search_bar().is_search_mode(), "toggle hides the search bar");
     assert!(
-        wait_until(1000, || terminal.vte().has_focus()),
+        wait_until(1000, || {
+            gtk4::prelude::RootExt::focus(&window).as_ref() == Some(terminal.vte().upcast_ref())
+        }),
         "focus must return to the terminal when the search bar closes"
     );
 
@@ -1786,7 +1826,7 @@ fn font_preference_reaches_live_terminals_and_new_ones() {
     );
 
     // A terminal created after the change inherits the new font.
-    window.add_session();
+    window.add_direct_session();
     let newest = window
         .imp()
         .terminals
@@ -1862,8 +1902,8 @@ fn switch_to_session_number_selects_expected_session() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
-    window.add_session();
+    window.add_direct_session();
+    window.add_direct_session();
     pump_events(50);
 
     window.switch_to_session_number(2);
@@ -2165,8 +2205,8 @@ fn session_reorder_updates_state_order() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
-    window.add_session();
+    window.add_direct_session();
+    window.add_direct_session();
     pump_events(50);
 
     let (uuid0, uuid1, uuid2) = {
@@ -2216,8 +2256,8 @@ fn cycle_session_follows_index_order() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
-    window.add_session();
+    window.add_direct_session();
+    window.add_direct_session();
     pump_events(50);
 
     let (uuid0, uuid1, uuid2) = {
@@ -2274,7 +2314,7 @@ fn cycle_session_wraps_around() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
+    window.add_direct_session();
     pump_events(50);
 
     let (uuid0, uuid1) = {
@@ -2352,7 +2392,8 @@ fn background_activity_indicator_transitions_to_idle() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
+    window.add_direct_session();
+    window.switch_to_session_number(1);
     pump_events(50);
 
     let background_terminal_uuid = {
@@ -2389,7 +2430,8 @@ fn switching_to_session_clears_background_activity_indicator() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
+    window.add_direct_session();
+    window.switch_to_session_number(1);
     pump_events(50);
 
     let background_terminal_uuid = {
@@ -2457,7 +2499,8 @@ fn repeated_background_activity_refreshes_window_indicator() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
+    window.add_direct_session();
+    window.switch_to_session_number(1);
     pump_events(50);
 
     let background_terminal_uuid = {
@@ -3100,7 +3143,7 @@ fn recovered_workspace_uses_compact_sidebar_status_without_banner() {
     let row = session_row_for_uuid(&window, &session_state.uuid);
     let subtitle = row.subtitle().map(|value| value.to_string());
     assert_eq!(subtitle.as_deref(), Some(""));
-    assert!(row.imp().connection_icon.is_visible());
+    assert!(row.imp().connection_icon.property::<bool>("visible"));
     assert!(
         !subtitle.as_deref().is_some_and(|value| value.contains("Recovered")),
         "status text should be conveyed by icon, not subtitle"
@@ -3758,6 +3801,7 @@ fn cwd_changed_updates_layout_node() {
 
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
+    window.imp().state.borrow_mut().rebuild_pane_reverse_index();
 
     // Verify initial layout CWD is None.
     {
@@ -3833,6 +3877,7 @@ fn managed_pane_exit_marks_visible_pane_exited() {
 
     window.imp().state.borrow_mut().workspaces.push(session_state.clone());
     window.build_session(&session_state, false);
+    window.imp().state.borrow_mut().rebuild_pane_reverse_index();
 
     let msg = rttx_proto::v3::ServerEnvelope {
         request_id: 0,
@@ -4830,8 +4875,6 @@ fn open_place_action_sends_cd_to_focused_terminal() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.present();
-    pump_events(50);
 
     let terminal_uuid = {
         let state = window.imp().state.borrow();
@@ -4870,8 +4913,6 @@ fn open_place_action_resolves_tilde_path() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.present();
-    pump_events(50);
 
     let terminal_uuid = {
         let state = window.imp().state.borrow();
@@ -4912,8 +4953,6 @@ fn open_place_preserves_tilde_prefix_path() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.present();
-    pump_events(50);
 
     let terminal_uuid = {
         let state = window.imp().state.borrow();
@@ -5332,9 +5371,14 @@ fn place_sidebar_shows_edit_delete_for_user_places_not_builtins() {
     let mut found_user_with_menu = false;
     let mut idx = 0;
     while let Some(row) = place_list.row_at_index(idx) {
-        if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+        if let Some(action_row) = row
+            .clone()
+            .downcast::<adw::ActionRow>()
+            .ok()
+            .or_else(|| row.child().and_downcast::<adw::ActionRow>())
+        {
             let title = action_row.title().to_string();
-            let has_menu = has_menu_button_suffix(action_row);
+            let has_menu = has_menu_button_suffix(&action_row);
             if title == "Home" || title == "Root" {
                 if has_menu {
                     found_builtin_with_menu = true;
@@ -5354,23 +5398,20 @@ fn place_sidebar_shows_edit_delete_for_user_places_not_builtins() {
 }
 
 fn has_menu_button_suffix(action_row: &adw::ActionRow) -> bool {
-    let mut child = action_row.first_child();
-    while let Some(widget) = child {
-        if widget.downcast_ref::<gtk4::MenuButton>().is_some() {
+    fn contains_menu(widget: &gtk4::Widget) -> bool {
+        if widget.is::<gtk4::MenuButton>() {
             return true;
         }
-        if let Some(inner) = widget.first_child() {
-            let mut inner_child = Some(inner);
-            while let Some(w) = inner_child {
-                if w.downcast_ref::<gtk4::MenuButton>().is_some() {
-                    return true;
-                }
-                inner_child = w.next_sibling();
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if contains_menu(&widget) {
+                return true;
             }
+            child = widget.next_sibling();
         }
-        child = widget.next_sibling();
+        false
     }
-    false
+    contains_menu(action_row.upcast_ref())
 }
 
 #[test]
@@ -5411,8 +5452,8 @@ fn close_others_removes_all_except_kept_session() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
-    window.add_session();
-    window.add_session();
+    window.add_direct_session();
+    window.add_direct_session();
     pump_events(50);
 
     let (uuid0, uuid1, uuid2) = {
@@ -5607,6 +5648,7 @@ fn window_dispose_clears_terminal_maps_and_cancels_sources() {
     app.register(gtk4::gio::Cancellable::NONE).unwrap();
 
     let window = Window::new(&app);
+    window.present();
     window.add_direct_session();
     pump_events(50);
 
@@ -5656,6 +5698,9 @@ fn managed_pane_closures_use_weak_window_refs() {
         !window.imp().persistent_terminals.borrow().is_empty(),
         "managed session should have at least one persistent pane"
     );
+
+    window.present();
+    pump_events(50);
 
     window.close();
     pump_events(50);
@@ -7053,7 +7098,9 @@ fn reapply_preferences_updates_keyboard_shortcut_accels() {
 
     let accels = app.accels_for_action("win.fullscreen");
     assert!(
-        accels.iter().any(|a| a == "<Ctrl><Shift>F11"),
+        accels
+            .iter()
+            .any(|a| gtk4::accelerator_parse(a) == gtk4::accelerator_parse("<Ctrl><Shift>F11")),
         "fullscreen should be rebound to Ctrl+Shift+F11, got: {accels:?}"
     );
     assert!(
@@ -7093,7 +7140,7 @@ fn default_keyboard_shortcuts_register_expected_accels() {
     ] {
         let accels = app.accels_for_action(&format!("win.{action}"));
         assert!(
-            accels.iter().any(|a| a == accel),
+            accels.iter().any(|a| gtk4::accelerator_parse(a) == gtk4::accelerator_parse(accel)),
             "action '{action}' should register accelerator '{accel}', got: {accels:?}"
         );
     }
@@ -7493,7 +7540,6 @@ fn run_in_new_pane_splits_and_sends_command_to_new_terminal() {
 
     let command = SavedCommand::new("Build", "cargo build");
     window.execute_saved_command(&command, CommandRunMode::RunInNewPane);
-    pump_events(100);
 
     let (terminal_uuids, new_uuid) = {
         let state = window.imp().state.borrow();
@@ -7584,6 +7630,10 @@ fn run_in_new_pane_respects_split_depth_limit() {
         let state = window.imp().state.borrow();
         state.workspaces[0].layout.terminal_uuids().len()
     };
+
+    let deepest =
+        window.imp().state.borrow().workspaces[0].layout.terminal_uuids().last().unwrap().clone();
+    window.imp().focused_terminal_uuid.replace(Some(deepest));
 
     // Attempt RunInNewPane at max depth — should not split further
     let command = SavedCommand::new("Build", "cargo build");
@@ -7695,6 +7745,12 @@ fn workspace_resynced_event_restores_pane_content() {
         },
     });
     pump_events(50);
+
+    // The bridge announces connection readiness separately from the snapshot.
+    window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceConnectionChanged {
+        workspace_id: session_state.uuid.clone(),
+        status: ConnectionStatus::Connected,
+    });
 
     // Now simulate a resync with updated content.
     window.handle_endpoint_event(crate::daemon_bridge::EndpointEvent::WorkspaceResynced {
@@ -8134,7 +8190,6 @@ fn reconnect_host_reconnects_all_disconnected_workspaces_from_same_endpoint() {
 
     // Trigger reconnect-all for host-a endpoint via ws1.
     window.retry_all_workspaces_for_endpoint(&ws1.uuid);
-    pump_events(50);
 
     // ws1 and ws2 (same host) should now be Connecting.
     let statuses = window.imp().workspace_connection_status.borrow();
@@ -8481,8 +8536,11 @@ fn managed_context_place_uses_own_rekeyed_pane_not_stale_focus() {
     window.present();
     pump_events(50);
 
-    let session =
-        WorkspaceState::new_managed_local("Local".into(), WorkspacePolicy::Persistent, None);
+    let session = WorkspaceState::new_managed_local(
+        "Local".into(),
+        WorkspacePolicy::Persistent,
+        Some("/tmp/context-place".into()),
+    );
     let old_uuid = session.layout.terminal_uuids()[0].clone();
     window.imp().state.borrow_mut().workspaces.push(session.clone());
     window.build_session(&session, false);
@@ -8507,10 +8565,10 @@ fn managed_context_place_uses_own_rekeyed_pane_not_stale_focus() {
             })
         })
         .expect("context menu must expose Add to Places");
-    for path in ["/tmp/context-place", "/tmp/another-folder"] {
-        pane.set_current_directory(Some(path));
-        pane.activate_action(&action, None).unwrap();
-    }
+    assert_eq!(pane.current_directory().as_deref(), Some("/tmp/context-place"));
+    pane.activate_action(&action, None).unwrap();
+    pane.set_current_directory(Some("/tmp/another-folder"));
+    pane.activate_action(&action, None).unwrap();
     let places = store().load_places();
     assert_eq!(places.len(), 2);
     assert_eq!(places[0].path, "/tmp/context-place");

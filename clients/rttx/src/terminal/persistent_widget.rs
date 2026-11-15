@@ -380,6 +380,10 @@ mod imp {
 
             self.search_entry.set_hexpand(true);
             self.search_bar.set_child(Some(&self.search_entry));
+            self.search_bar.connect_entry(&self.search_entry);
+            self.search_entry.connect_map(|entry| {
+                entry.grab_focus();
+            });
             self.search_bar.set_show_close_button(true);
 
             self.terminal_scroller.set_hscrollbar_policy(gtk4::PolicyType::Never);

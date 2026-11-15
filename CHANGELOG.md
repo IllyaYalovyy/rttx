@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   connecting. Real disconnects still show their warning and retry status.
 - "Add to Places" in a pane's context menu saves that pane's directory,
   even when another pane has focus or the new pane has received its daemon ID.
+  New managed panes also retain their configured starting directory while
+  waiting for live directory updates.
+- Direct terminals retain startup commands until their shell is ready, so
+  saved recovery commands and retries are not lost during launch.
+- Opening terminal search reliably focuses its entry after it is mapped.
+- Closing a window stops its background timers and releases pane maps
+  immediately, even if GTK callbacks still hold references to the window.
 
 ### Changed
 - A copy shortcut that comes up empty while the program in the pane is using

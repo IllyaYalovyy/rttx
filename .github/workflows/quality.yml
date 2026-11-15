@@ -84,7 +84,7 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False \
             git gcc pkg-config rustup \
             protobuf-compiler protobuf-devel \
-            gtk4-devel libadwaita-devel vte291-gtk4-devel
+            gtk4-devel libadwaita-devel vte291-gtk4-devel weston dbus-daemon
 
       - uses: actions/checkout@v5
 
@@ -100,7 +100,7 @@ jobs:
         env:
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
-        run: bash .github/scripts/run-quality-tests.sh
+        run: dbus-run-session -- bash .github/scripts/run-quality-tests.sh
 
   ui-test:
     name: UI behavioral tests
