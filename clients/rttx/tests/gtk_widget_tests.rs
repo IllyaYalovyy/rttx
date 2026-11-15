@@ -1450,7 +1450,7 @@ fn persistent_pane_view_has_expected_children() {
 
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn window_add_session_materializes_managed_runtime_controls() {
+fn window_new_ephemeral_workspace_materializes_managed_runtime_controls() {
     require_display!();
 
     let tmp = tempfile::TempDir::new().unwrap();
@@ -1471,7 +1471,8 @@ fn window_add_session_materializes_managed_runtime_controls() {
     assert_eq!(count_buttons_with_tooltip(&window, "Close pane"), 0);
     assert_eq!(count_vte_terminals(&window), 1);
 
-    window.add_session();
+    gtk4::prelude::WidgetExt::activate_action(&window, "win.new-ephemeral-workspace", None)
+        .unwrap();
     assert!(
         wait_until(1_000, || count_buttons_with_tooltip(&window, "Close pane") == 1),
         "adding a managed workspace should materialize persistent pane controls"
