@@ -10,7 +10,7 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi
 
-from common import DAEMON_BINARY, AppFixture, click, find_all_by_role, is_showing
+from common import DAEMON_BINARY, AppFixture, click, find_all_by_role, is_showing, terminal_text
 
 
 def _workspace_row_names(app: Atspi.Accessible) -> list[str]:
@@ -85,6 +85,16 @@ class TestManagedBlackBox(unittest.TestCase):
             Atspi.Role.LABEL, "Connected", timeout=20.0
         )
         self.assertIsNotNone(connected, "managed workspace never reached Connected state")
+
+    def test_new_local_workspaces_do_not_print_connection_loss_after_restart(self) -> None:
+        """Initial connections must never leave a disconnect warning in terminal history."""
+        for restart in (False, False, True):
+            if restart:
+                self.fixture.restart_app()
+            self._create_managed_workspace()
+            terminals = self.fixture.wait_for_terminal_count(1)
+            self.assertEqual(len(terminals), 1)
+            self.assertNotIn("connection lost", terminal_text(terminals[0]))
 
     def test_startup_inventory_recovery_keeps_direct_session_visible(self) -> None:
         """Cold-start recovery must restore the workspace row without stealing visibility."""

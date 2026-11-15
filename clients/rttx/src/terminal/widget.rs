@@ -209,6 +209,15 @@ mod imp {
             let action_group = gtk4::gio::SimpleActionGroup::new();
             action_group.add_action(&copy_link_action);
             action_group.add_action(&open_link_action);
+            let add_place_action = gtk4::gio::SimpleAction::new("add-current-place", None);
+            let place_pane = obj.downgrade();
+            add_place_action.connect_activate(move |_, _| {
+                let Some(pane) = place_pane.upgrade() else { return };
+                if let Some(window) = pane.root().and_downcast::<crate::window::Window>() {
+                    window.add_terminal_path_to_places(&pane.uuid());
+                }
+            });
+            action_group.add_action(&add_place_action);
             obj.insert_action_group("term", Some(&action_group));
 
             let obj_weak = obj.downgrade();
@@ -248,7 +257,7 @@ mod imp {
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
             session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
-            session_section.append(Some("Add to Places"), Some("win.add-current-place"));
+            session_section.append(Some("Add to Places"), Some("term.add-current-place"));
             session_section.append(Some("Add Host"), Some("win.add-current-host"));
             session_section.append(Some("Preferences"), Some("win.preferences"));
             let places_submenu = &self.places_submenu;

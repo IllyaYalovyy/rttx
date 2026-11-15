@@ -806,7 +806,11 @@ impl Window {
 
     pub(super) fn do_add_current_path_to_places(&self) {
         let Some(uuid) = self.focused_terminal_uuid() else { return };
-        let cwd = self.terminal_handle(&uuid).and_then(|t| t.current_directory());
+        self.add_terminal_path_to_places(&uuid);
+    }
+
+    pub(crate) fn add_terminal_path_to_places(&self, uuid: &str) {
+        let cwd = self.terminal_handle(uuid).and_then(|t| t.current_directory());
         let Some(cwd) = cwd else {
             self.show_toast("No working directory available");
             return;
@@ -814,9 +818,10 @@ impl Window {
 
         let host_key = {
             let state = self.imp().state.borrow();
-            let visible = self.imp().session_stack.visible_child_name();
-            visible
-                .and_then(|name| state.workspaces.iter().find(|s| s.uuid == name.as_str()))
+            state
+                .workspaces
+                .iter()
+                .find(|s| s.layout.contains_terminal(uuid))
                 .map_or_else(|| host::LOCAL_KEY.into(), |s| s.runtime.endpoint.host_key())
         };
 

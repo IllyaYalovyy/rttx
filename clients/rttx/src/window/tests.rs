@@ -8458,3 +8458,43 @@ fn empty_copy_hints_through_the_copy_action_only_while_an_app_tracks_the_mouse()
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn managed_context_place_uses_own_rekeyed_pane_not_stale_focus() {
+    require_display!();
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path().join("config"));
+    crate::test_helpers::set_env("XDG_STATE_HOME", tmp.path().join("state"));
+    crate::test_helpers::set_env("XDG_CACHE_HOME", tmp.path().join("cache"));
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+    let app = adw::Application::builder().application_id("com.illya.rttx.context-place").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let session =
+        WorkspaceState::new_managed_local("Local".into(), WorkspacePolicy::Persistent, None);
+    let old_uuid = session.layout.terminal_uuids()[0].clone();
+    window.imp().state.borrow_mut().workspaces.push(session.clone());
+    window.build_session(&session, false);
+    let pane = window.imp().persistent_terminals.borrow()[&old_uuid].clone();
+    let rekey = window
+        .imp()
+        .state
+        .borrow_mut()
+        .apply_managed_pane_created(&session.uuid, &old_uuid, "runtime", "server-pane")
+        .unwrap();
+    window.rekey_terminal_widgets(&rekey);
+    pane.set_current_directory(Some("/tmp/context-place"));
+    window.set_focused_terminal(Some("stale-placeholder"));
+
+    pane.activate_action("term.add-current-place", None).unwrap();
+    let places = store().load_places();
+    assert_eq!(places.len(), 1);
+    assert_eq!(places[0].path, "/tmp/context-place");
+    assert!(places[0].host_tags.is_empty());
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
