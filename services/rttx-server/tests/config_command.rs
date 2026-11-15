@@ -2,17 +2,9 @@
 
 use std::process::Command;
 
-fn server_binary() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // remove test binary name
-    path.pop(); // remove `deps/`
-    path.push("rttx-server");
-    path
-}
-
 #[test]
 fn config_prints_expected_fields() {
-    let output = Command::new(server_binary())
+    let output = Command::new(env!("CARGO_BIN_EXE_rttx-server"))
         .arg("config")
         .env("RTTX_DEV_MODE", "")
         .output()
@@ -31,7 +23,7 @@ fn config_prints_expected_fields() {
 
 #[test]
 fn config_dev_mode_shows_development() {
-    let output = Command::new(server_binary())
+    let output = Command::new(env!("CARGO_BIN_EXE_rttx-server"))
         .arg("config")
         .env("RTTX_DEV_MODE", "1")
         .output()

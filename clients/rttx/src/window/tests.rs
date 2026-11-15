@@ -5871,6 +5871,9 @@ fn close_last_managed_workspace_persists_clean_state() {
     }
     window.build_session(&managed, false);
 
+    window.present();
+    pump_events(50);
+
     window.close_session(&session_uuid);
     pump_events(50);
 
@@ -7242,6 +7245,9 @@ fn c4_split_preserves_child_exited_handler_identity() {
         .is_some();
     assert!(handler_before, "t1 should have a child_exited handler after initial build");
 
+    let terminal_count_before = window.imp().terminals.borrow().len();
+    let original = window.imp().terminals.borrow()["t1"].clone();
+
     // Split t1 — this triggers rebuild_session_content.
     window.split_terminal("t1", SplitOrientation::Horizontal);
 
@@ -7259,7 +7265,8 @@ fn c4_split_preserves_child_exited_handler_identity() {
 
     // The widget pointer must be the same — no recreation.
     let terminal_count = window.imp().terminals.borrow().len();
-    assert_eq!(terminal_count, 2, "split should produce exactly 2 terminals (t1 + new)");
+    assert_eq!(terminal_count, terminal_count_before + 1, "split should add one terminal");
+    assert_eq!(window.imp().terminals.borrow()["t1"], original);
 
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
@@ -8487,14 +8494,28 @@ fn managed_context_place_uses_own_rekeyed_pane_not_stale_focus() {
         .apply_managed_pane_created(&session.uuid, &old_uuid, "runtime", "server-pane")
         .unwrap();
     window.rekey_terminal_widgets(&rekey);
-    pane.set_current_directory(Some("/tmp/context-place"));
     window.set_focused_terminal(Some("stale-placeholder"));
-
-    pane.activate_action("term.add-current-place", None).unwrap();
+    let model = pane.imp().context_menu.borrow().as_ref().unwrap().menu_model().unwrap();
+    let action = (0..model.n_items())
+        .filter_map(|i| model.item_link(i, "section"))
+        .find_map(|section| {
+            (0..section.n_items()).find_map(|i| {
+                let label = section.item_attribute_value(i, "label", None)?.get::<String>()?;
+                (label == "Add to Places")
+                    .then(|| section.item_attribute_value(i, "action", None)?.get::<String>())
+                    .flatten()
+            })
+        })
+        .expect("context menu must expose Add to Places");
+    for path in ["/tmp/context-place", "/tmp/another-folder"] {
+        pane.set_current_directory(Some(path));
+        pane.activate_action(&action, None).unwrap();
+    }
     let places = store().load_places();
-    assert_eq!(places.len(), 1);
+    assert_eq!(places.len(), 2);
     assert_eq!(places[0].path, "/tmp/context-place");
-    assert!(places[0].host_tags.is_empty());
+    assert_eq!(places[1].path, "/tmp/another-folder");
+    assert!(places.iter().all(|place| place.host_tags.is_empty()));
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
