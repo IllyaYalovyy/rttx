@@ -19,7 +19,8 @@ else
 fi
 
 broadway_cmd=""
-broadway_pid=""
+display_pid=""
+display_runtime=""
 readonly IGNORED_GTK_INTEGRATION_TESTS=(
     "gtk_widget_tests"
     "layout_widget_tests"
@@ -27,13 +28,38 @@ readonly IGNORED_GTK_INTEGRATION_TESTS=(
 )
 
 cleanup() {
-    if [[ -n "${broadway_pid}" ]]; then
-        kill "${broadway_pid}" 2>/dev/null || true
-        wait "${broadway_pid}" 2>/dev/null || true
+    if [[ -n "${display_pid}" ]]; then
+        kill "${display_pid}" 2>/dev/null || true
+        wait "${display_pid}" 2>/dev/null || true
+    fi
+    if [[ -n "${display_runtime}" ]]; then
+        rm -rf "${display_runtime}"
     fi
 }
 
-start_broadway_if_available() {
+start_test_display() {
+    # Honor an explicitly supplied display (for local interactive debugging).
+    if [[ -n "${GDK_BACKEND:-}" ]]; then
+        return
+    fi
+    if command -v weston >/dev/null 2>&1; then
+        display_runtime=$(mktemp -d -t rttx-quality-display-XXXXXX)
+        chmod 700 "${display_runtime}"
+        export XDG_RUNTIME_DIR="${display_runtime}"
+        export GDK_BACKEND=wayland
+        export GSK_RENDERER=cairo
+        export WAYLAND_DISPLAY="${display_runtime}/rttx-tests"
+        weston --no-config --backend=headless --renderer=pixman \
+            --width=1280 --height=1024 --idle-time=0 --socket=rttx-tests \
+            >"${display_runtime}/weston.log" 2>&1 &
+        display_pid=$!
+        for _ in {1..50}; do
+            [[ -S "${WAYLAND_DISPLAY}" ]] && return
+            sleep 0.1
+        done
+        cat "${display_runtime}/weston.log" >&2
+        return 1
+    fi
     if command -v gtk4-broadwayd >/dev/null 2>&1; then
         broadway_cmd="gtk4-broadwayd"
     elif command -v gtkbroadwayd >/dev/null 2>&1; then
@@ -47,7 +73,7 @@ start_broadway_if_available() {
     export BROADWAY_DISPLAY="${BROADWAY_DISPLAY:-:5}"
 
     "${broadway_cmd}" "${BROADWAY_DISPLAY}" >/tmp/rttx-broadway.log 2>&1 &
-    broadway_pid=$!
+    display_pid=$!
     sleep 1
 }
 
@@ -55,9 +81,19 @@ run_logged_command() {
     local label=$1
     shift
 
-    local logfile test_roots
+    local logfile test_roots display_socket socket mode
     logfile=$(mktemp -t rttx-quality-tests-XXXXXX.log)
     test_roots=$(mktemp -d -t rttx-quality-state-XXXXXX)
+    mkdir -m 700 "${test_roots}/runtime"
+    # Share only the test display, never daemon sockets from another test.
+    for socket in "${XDG_RUNTIME_DIR:-/tmp}"/broadway*.socket; do
+        [[ -S "${socket}" ]] || continue
+        ln -s "${socket}" "${test_roots}/runtime/$(basename "${socket}")"
+    done
+    display_socket=${WAYLAND_DISPLAY:-}
+    if [[ -n "${display_socket}" && "${display_socket}" != /* ]]; then
+        display_socket="${XDG_RUNTIME_DIR:-/tmp}/${display_socket}"
+    fi
 
     echo "::group::${label}"
 
@@ -65,9 +101,21 @@ run_logged_command() {
     env XDG_CONFIG_HOME="${test_roots}/config" \
         XDG_STATE_HOME="${test_roots}/state" \
         XDG_CACHE_HOME="${test_roots}/cache" \
+        XDG_RUNTIME_DIR="${test_roots}/runtime" \
+        WAYLAND_DISPLAY="${display_socket}" \
         "$@" 2>&1 | tee "${logfile}"
     local status=${PIPESTATUS[0]}
     set -e
+    if grep -q 'SKIPPED: no display available' "${logfile}"; then
+        echo "GTK validation requires a working display; treating skipped display checks as a failure." >&2
+        status=1
+    fi
+    if [[ -x "${repo_root}/target/debug/rttx-server" ]]; then
+        for mode in "" "1"; do
+            env XDG_RUNTIME_DIR="${test_roots}/runtime" RTTX_DEV_MODE="${mode}" \
+                "${repo_root}/target/debug/rttx-server" stop >/dev/null 2>&1 || true
+        done
+    fi
     rm -rf "${test_roots}"
 
     if [[ ${status} -eq 0 ]]; then
@@ -98,7 +146,7 @@ run_library_tests() {
 
 trap cleanup EXIT
 
-start_broadway_if_available
+start_test_display
 
 run_logged_command \
     "Runtime behavior gate tests" \

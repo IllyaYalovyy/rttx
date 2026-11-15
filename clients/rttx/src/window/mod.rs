@@ -96,17 +96,7 @@ mod imp {
 
     impl ObjectImpl for Window {
         fn dispose(&self) {
-            if let Some(source) = self.event_poller_source.take() {
-                source.remove();
-            }
-            if let Some(source) = self.auto_save_source.take() {
-                source.remove();
-            }
-            for (_, source) in self.workspace_reconnect_sources.borrow_mut().drain() {
-                source.remove();
-            }
-            self.persistent_terminals.borrow_mut().clear();
-            self.terminals.borrow_mut().clear();
+            self.obj().clear_live_resources();
         }
 
         fn constructed(&self) {
@@ -610,6 +600,7 @@ impl Window {
         let win = self.clone();
         self.connect_close_request(move |_| {
             win.save_state();
+            win.clear_live_resources();
             glib::Propagation::Proceed
         });
 
@@ -630,6 +621,24 @@ impl Window {
             glib::ControlFlow::Continue
         });
         self.imp().auto_save_source.replace(Some(source));
+    }
+
+    // Closing a GTK window can precede final GObject disposal while callbacks
+    // still hold references. Stop its work immediately; disposal may call this
+    // again after those references are released.
+    fn clear_live_resources(&self) {
+        let imp = self.imp();
+        if let Some(source) = imp.event_poller_source.take() {
+            source.remove();
+        }
+        if let Some(source) = imp.auto_save_source.take() {
+            source.remove();
+        }
+        for (_, source) in imp.workspace_reconnect_sources.borrow_mut().drain() {
+            source.remove();
+        }
+        imp.persistent_terminals.borrow_mut().clear();
+        imp.terminals.borrow_mut().clear();
     }
 
     fn setup_host_menu_buttons(&self) {

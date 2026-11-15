@@ -1,6 +1,7 @@
 //! Integration tests for #809: snapshot restore must be deterministic
 //! regardless of what the scrollback tail left in VTE.
 
+use gtk4::prelude::*;
 use rttx::terminal::persistent_widget::PersistentPaneView;
 use std::sync::Once;
 use vte4::prelude::*;
@@ -106,13 +107,27 @@ fn repair_terminal_clears_stuck_tui_modes() {
 #[test]
 #[ignore = "requires isolated GTK harness"]
 fn vte_reset_clears_residual_state_before_recovery() {
+    fn wait_for_cursor(pane: &PersistentPaneView, column: i64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let context = gtk4::glib::MainContext::default();
+        while pane.vte().cursor_position().0 != column && std::time::Instant::now() < deadline {
+            context.iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(pane.vte().cursor_position().0, column);
+    }
+
     require_display!();
 
     let pane = PersistentPaneView::new("reset-recovery-1", "runtime-1");
+    let window = gtk4::Window::new();
+    window.set_child(Some(&pane));
+    window.present();
 
     // Simulate residual state: mouse tracking on, cursor hidden,
     // bracketed paste enabled, application cursor keys on.
-    pane.vte().feed(b"\x1b[?1003h\x1b[?25l\x1b[?2004h\x1b[?1h");
+    pane.vte().feed(b"\x1b[?1003h\x1b[?25l\x1b[?2004h\x1b[?1hx");
+    wait_for_cursor(&pane, 1);
     pane.set_application_modes(true, true);
 
     // This is what trigger_managed_recovery_for_terminal now does before
@@ -122,9 +137,11 @@ fn vte_reset_clears_residual_state_before_recovery() {
     // After VTE reset, feeding a simple prompt should not be affected by
     // the residual escape state. The VTE parser is now clean.
     pane.vte().feed(b"$ ");
+    wait_for_cursor(&pane, 2);
 
     // Verify the VTE accepted the clean input without corruption by
     // checking that the cursor is at a sane position (column 2 after "$ ").
     let (col, _row) = pane.vte().cursor_position();
     assert_eq!(col, 2, "cursor should be at column 2 after feeding '$ ' to a reset VTE");
+    window.close();
 }

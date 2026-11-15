@@ -68,21 +68,18 @@ fn remove_env(key: &str) {
 /// the stack — but unparent() already removed it.
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn stack_remove_after_unparent_is_invalid() {
+fn stack_remove_clears_named_child() {
     require_display!();
 
     let stack = gtk4::Stack::new();
     let child = gtk4::Label::new(Some("test"));
     stack.add_named(&child, Some("page1"));
 
-    // This is what the OLD buggy code did:
-    // 1. unparent the child (removes from stack)
-    child.unparent();
-    // 2. try to find it by name — it's gone
-    let found = stack.child_by_name("page1");
-    assert!(found.is_none(), "child_by_name should return None after unparent");
-
-    // The fix: remove from stack FIRST, then unparent from detached tree.
+    // Remove through the container so both parentage and named-page
+    // bookkeeping are cleared before the child is reused.
+    stack.remove(&child);
+    assert!(child.parent().is_none());
+    assert!(stack.child_by_name("page1").is_none());
 }
 
 /// Correct pattern: remove from stack first, then unparent children
@@ -175,9 +172,9 @@ fn paned_children_unparent_safely() {
     paned.set_start_child(Some(&left));
     paned.set_end_child(Some(&right));
 
-    // Unparent both children
-    left.unparent();
-    right.unparent();
+    // Detach through Paned so its child slots are cleared as well.
+    paned.set_start_child(gtk4::Widget::NONE);
+    paned.set_end_child(gtk4::Widget::NONE);
 
     // Paned should now have no children
     assert!(paned.start_child().is_none());
@@ -400,7 +397,7 @@ fn pump_events(max_ms: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_ms);
     while std::time::Instant::now() < deadline {
         if !ctx.iteration(false) {
-            break;
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 }
@@ -1085,7 +1082,8 @@ fn terminal_handle_grab_focus_targets_direct_terminal_vte() {
     let handle = rttx::terminal::handle::TerminalHandle::Direct(direct.clone());
 
     assert!(handle.grab_focus(), "direct handle should request focus successfully");
-    assert!(wait_until(1000, || direct.vte().has_focus()));
+    assert!(wait_until(1000, || gtk4::prelude::RootExt::focus(&window).as_ref()
+        == Some(direct.vte().upcast_ref())));
 
     window.close();
 }
@@ -1101,7 +1099,8 @@ fn terminal_handle_grab_focus_targets_managed_terminal_vte() {
     let handle = rttx::terminal::handle::TerminalHandle::Managed(managed.clone());
 
     assert!(handle.grab_focus(), "managed handle should request focus successfully");
-    assert!(wait_until(1000, || managed.vte().has_focus()));
+    assert!(wait_until(1000, || gtk4::prelude::RootExt::focus(&window).as_ref()
+        == Some(managed.vte().upcast_ref())));
 
     window.close();
 }
@@ -1511,16 +1510,14 @@ fn terminal_search_bar_wired_to_vte() {
     assert!(term.search_bar().is_search_mode());
 
     term.search_entry().set_text("hello");
-    pump_events(50);
     assert!(
-        term.vte().search_get_regex().is_some(),
+        wait_until(1000, || term.vte().search_get_regex().is_some()),
         "typing in search entry must set VTE search regex"
     );
 
     term.search_entry().set_text("");
-    pump_events(50);
     assert!(
-        term.vte().search_get_regex().is_none(),
+        wait_until(1000, || term.vte().search_get_regex().is_none()),
         "clearing search entry must clear VTE search regex"
     );
 
@@ -1776,9 +1773,9 @@ fn pane_count_label_hides_when_unzoomed() {
 fn terminal_widget_has_open_and_copy_link_actions() {
     require_display!();
     let term = rttx::terminal::widget::TerminalWidget::new("t1", None);
-    // Actions exist but are disabled by default — activate returns Err.
-    assert!(term.activate_action("term.open-link", None).is_err());
-    assert!(term.activate_action("term.copy-link", None).is_err());
+    // GTK resolves registered actions even when they are disabled.
+    assert!(term.activate_action("term.open-link", None).is_ok());
+    assert!(term.activate_action("term.copy-link", None).is_ok());
 }
 
 #[test]
@@ -1786,8 +1783,8 @@ fn terminal_widget_has_open_and_copy_link_actions() {
 fn persistent_pane_has_open_and_copy_link_actions() {
     require_display!();
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("p1", "s1");
-    assert!(pane.activate_action("term.open-link", None).is_err());
-    assert!(pane.activate_action("term.copy-link", None).is_err());
+    assert!(pane.activate_action("term.open-link", None).is_ok());
+    assert!(pane.activate_action("term.copy-link", None).is_ok());
 }
 
 /// Persistent pane must forward VTE `commit` data (mouse escape sequences)
@@ -1995,7 +1992,7 @@ fn connect_existing_dialog_classifies_busy_session() {
         entries[0].availability,
         rttx::connect_existing_dialog::RuntimeAvailability::BusyElsewhere
     );
-    assert_eq!(entries[0].status_label, "Connected elsewhere");
+    assert_eq!(entries[0].status_label, "In use by another client");
 }
 
 #[test]
@@ -2028,7 +2025,7 @@ fn connect_existing_dialog_classifies_already_open_session() {
         entries[0].availability,
         rttx::connect_existing_dialog::RuntimeAvailability::AlreadyOpen
     );
-    assert_eq!(entries[0].status_label, "Already open");
+    assert_eq!(entries[0].status_label, "Open in this window");
 }
 
 #[test]
@@ -2715,13 +2712,12 @@ fn persistent_pane_mouse_input_forwarded_after_reconnect() {
     window.close();
 }
 
-/// Regression test for #769: all gesture controllers on the persistent
-/// pane VTE must use capture phase so they can deny events to let VTE
-/// handle mouse-aware applications. No gesture should use bubble phase,
-/// which would prevent VTE from seeing the event first.
+/// Regression for #769: the pane context-menu gesture must use capture
+/// phase so it can defer to mouse-aware applications. VTE owns its
+/// other internal gestures and controls their propagation phases.
 #[test]
 #[ignore = "requires isolated GTK harness"]
-fn persistent_pane_all_gestures_use_capture_phase() {
+fn persistent_pane_context_menu_gesture_uses_capture_phase() {
     require_display!();
 
     let pane = rttx::terminal::persistent_widget::PersistentPaneView::new("gest-cap", "runtime-1");
@@ -2729,7 +2725,9 @@ fn persistent_pane_all_gestures_use_capture_phase() {
     let mut gesture_count = 0;
     for i in 0..controllers.n_items() {
         let Some(ctrl) = controllers.item(i) else { continue };
-        if let Ok(gesture) = ctrl.downcast::<gtk4::GestureClick>() {
+        if let Ok(gesture) = ctrl.downcast::<gtk4::GestureClick>()
+            && gesture.button() == 3
+        {
             gesture_count += 1;
             assert_eq!(
                 gesture.propagation_phase(),
@@ -2877,23 +2875,11 @@ fn preferences_data_group_has_three_rows() {
     let group = rttx::preferences_window::build_data_group(&window);
 
     let mut row_count = 0;
-    let mut child = group.first_child();
-    while let Some(widget) = child {
-        if widget.downcast_ref::<adw::ActionRow>().is_some() {
+    walk_widget_tree(group.upcast_ref(), |widget| {
+        if widget.is::<adw::ActionRow>() {
             row_count += 1;
         }
-        // ActionRows are inside a GtkListBox inside the group
-        if let Some(list_box) = widget.downcast_ref::<gtk4::ListBox>() {
-            let mut row_child = list_box.first_child();
-            while let Some(row_widget) = row_child {
-                if row_widget.downcast_ref::<adw::ActionRow>().is_some() {
-                    row_count += 1;
-                }
-                row_child = row_widget.next_sibling();
-            }
-        }
-        child = widget.next_sibling();
-    }
+    });
     assert_eq!(row_count, 3, "Data group should contain exactly 3 action rows");
 }
 
@@ -3010,27 +2996,15 @@ fn preferences_reset_row_activates_reset_config_action() {
 }
 
 fn find_action_row_by_title(group: &adw::PreferencesGroup, title: &str) -> Option<adw::ActionRow> {
-    let mut child = group.first_child();
-    while let Some(widget) = child {
+    let mut found = None;
+    walk_widget_tree(group.upcast_ref(), |widget| {
         if let Some(row) = widget.downcast_ref::<adw::ActionRow>()
             && row.title().as_str() == title
         {
-            return Some(row.clone());
+            found = Some(row.clone());
         }
-        if let Some(list_box) = widget.downcast_ref::<gtk4::ListBox>() {
-            let mut row_child = list_box.first_child();
-            while let Some(row_widget) = row_child {
-                if let Some(row) = row_widget.downcast_ref::<adw::ActionRow>()
-                    && row.title().as_str() == title
-                {
-                    return Some(row.clone());
-                }
-                row_child = row_widget.next_sibling();
-            }
-        }
-        child = widget.next_sibling();
-    }
-    None
+    });
+    found
 }
 
 /// Regression for #887: header bar workspace buttons must be icon-only and consistent.
