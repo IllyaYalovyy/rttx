@@ -172,6 +172,18 @@ impl ConnectionStatus {
         matches!(self, Self::Connected | Self::Recovered)
     }
 
+    /// Whether this state represents an interrupted or failed connection.
+    #[must_use]
+    pub const fn shows_connection_problem(&self) -> bool {
+        matches!(
+            self,
+            Self::Disconnected
+                | Self::Reconnecting { .. }
+                | Self::Blocked(_)
+                | Self::SessionMissing
+        )
+    }
+
     /// Short label suitable for compact pane headers.
     #[must_use]
     pub fn short_label(&self) -> String {
@@ -534,6 +546,27 @@ fn is_generic_title(title: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_connection_is_not_a_connection_problem() {
+        for status in [ConnectionStatus::Starting, ConnectionStatus::Connecting] {
+            assert!(!status.accepts_input());
+            assert!(!status.shows_connection_problem());
+        }
+        for status in [
+            ConnectionStatus::Disconnected,
+            ConnectionStatus::Reconnecting { attempt: 1, retry_in_secs: 3 },
+            ConnectionStatus::Blocked(ConnectionProblem::DaemonUnavailable),
+            ConnectionStatus::SessionMissing,
+        ] {
+            assert!(!status.accepts_input());
+            assert!(status.shows_connection_problem());
+        }
+        for status in [ConnectionStatus::Connected, ConnectionStatus::Recovered] {
+            assert!(status.accepts_input());
+            assert!(!status.shows_connection_problem());
+        }
+    }
 
     #[test]
     fn managed_runtime_sets_managed_flag_and_policy() {

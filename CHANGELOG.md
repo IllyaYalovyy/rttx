@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- New local workspaces no longer print a false connection-lost warning while
+  connecting. Real disconnects still show their warning and retry status.
+- "Add to Places" in a pane's context menu saves that pane's directory,
+  even when another pane has focus or the new pane has received its daemon ID.
+
 ### Changed
 - A copy shortcut that comes up empty while the program in the pane is using
   the mouse — Claude Code, Codex, htop, vim with `mouse=a` — now says why.

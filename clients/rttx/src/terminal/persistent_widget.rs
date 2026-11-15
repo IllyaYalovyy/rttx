@@ -263,6 +263,15 @@ mod imp {
             let action_group = gtk4::gio::SimpleActionGroup::new();
             action_group.add_action(&copy_link_action);
             action_group.add_action(&open_link_action);
+            let add_place_action = gtk4::gio::SimpleAction::new("add-current-place", None);
+            let place_pane = obj.downgrade();
+            add_place_action.connect_activate(move |_, _| {
+                let Some(pane) = place_pane.upgrade() else { return };
+                if let Some(window) = pane.root().and_downcast::<crate::window::Window>() {
+                    window.add_terminal_path_to_places(&pane.uuid());
+                }
+            });
+            action_group.add_action(&add_place_action);
             obj.insert_action_group("term", Some(&action_group));
 
             let obj_weak = obj.downgrade();
@@ -303,7 +312,7 @@ mod imp {
             let session_section = gtk4::gio::Menu::new();
             session_section.append(Some("New Session"), Some("win.new-session"));
             session_section.append(Some("Toggle Input Sync"), Some("win.toggle-input-sync"));
-            session_section.append(Some("Add to Places"), Some("win.add-current-place"));
+            session_section.append(Some("Add to Places"), Some("term.add-current-place"));
             session_section.append(Some("Add Host"), Some("win.add-current-host"));
             session_section.append(Some("Preferences"), Some("win.preferences"));
             let places_submenu = &self.places_submenu;
@@ -935,6 +944,9 @@ impl PersistentPaneView {
             self.remove_css_class("terminal-pane-frozen");
             self.imp().disconnect_banner.set_visible(false);
             self.imp().disconnect_message_fed.set(false);
+        } else if !status.shows_connection_problem() {
+            self.add_css_class("terminal-pane-frozen");
+            self.imp().disconnect_banner.set_visible(false);
         } else {
             self.add_css_class("terminal-pane-frozen");
             if !self.imp().disconnect_message_fed.replace(true) {
@@ -3190,6 +3202,23 @@ mod tests {
     }
 
     // ── Disconnect visualization (#957) ─────────────────────────
+
+    #[test]
+    #[ignore = "requires isolated GTK harness"]
+    fn initial_connection_does_not_report_connection_loss() {
+        require_display!();
+        let pane = PersistentPaneView::new("pane-1", "runtime-1");
+        for status in [ConnectionStatus::Starting, ConnectionStatus::Connecting] {
+            pane.set_connection_presentation(&status, &present_connection_status(&status));
+            assert!(!pane.disconnect_banner_visible_for_test());
+            assert!(!pane.disconnect_message_fed_for_test());
+            assert!(!pane.imp().accepts_input.get());
+        }
+        let status = ConnectionStatus::Disconnected;
+        pane.set_connection_presentation(&status, &present_connection_status(&status));
+        assert!(pane.disconnect_banner_visible_for_test());
+        assert!(pane.disconnect_message_fed_for_test());
+    }
 
     #[test]
     #[ignore = "requires isolated GTK harness"]
