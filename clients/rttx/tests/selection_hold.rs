@@ -76,7 +76,7 @@ fn presented_pane() -> (gtk4::Window, PersistentPaneView) {
 }
 
 fn screen_text(pane: &PersistentPaneView) -> String {
-    pane.vte().text_format(vte4::Format::Text).map(|text| text.to_string()).unwrap_or_default()
+    pane.vte().text_format(vte4::Format::Text).map_or_else(String::new, |text| text.to_string())
 }
 
 /// One frame of the #1108 emitter: braille dots redrawn in a synchronized

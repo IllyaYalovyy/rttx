@@ -234,7 +234,8 @@ impl From<PreferencesDisk> for Preferences {
 /// are absent, without going through `ClientStore`.
 #[cfg(test)]
 fn parse_preferences_json(data: &str) -> Preferences {
-    serde_json::from_str::<PreferencesDisk>(data).map(Into::into).unwrap_or_default()
+    serde_json::from_str::<PreferencesDisk>(data)
+        .map_or_else(|_| Preferences::default(), Into::into)
 }
 
 #[cfg(test)]
@@ -347,8 +348,7 @@ mod tests {
             DefaultSessionFolder::CurrentSession,
             DefaultSessionFolder::Custom("/home/user/dev".into()),
         ] {
-            let prefs =
-                Preferences { default_session_folder: folder.clone(), ..Default::default() };
+            let prefs = Preferences { default_session_folder: folder, ..Default::default() };
             assert_eq!(roundtrip(&prefs).default_session_folder, prefs.default_session_folder);
         }
     }

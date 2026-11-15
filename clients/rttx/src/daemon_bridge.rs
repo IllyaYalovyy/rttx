@@ -1418,7 +1418,7 @@ impl EndpointActor {
                                 self.emit_error(
                                     &workspace_id,
                                     ManagerOperation::OpenWorkspace,
-                                    problem.clone(),
+                                    problem,
                                     error.to_string(),
                                 );
                             }

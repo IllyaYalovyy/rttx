@@ -681,7 +681,7 @@ impl Window {
         let win = self.clone();
         controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
         controller.connect_key_pressed(move |ctrl, keyval, _keycode, _state| {
-            let key_name = keyval.name().map(|n| n.to_string()).unwrap_or_default();
+            let key_name = keyval.name().map_or_else(String::new, |n| n.to_string());
             if key_name.is_empty() || key_name == "Escape" {
                 win.cancel_leader_mode();
                 win.remove_controller(ctrl);

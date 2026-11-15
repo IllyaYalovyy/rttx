@@ -61,7 +61,7 @@ fn wait_for_text(pane: &PersistentPaneView, needle: &str) -> String {
     loop {
         pump_events(20);
         let text =
-            pane.vte().text_format(vte4::Format::Text).map(|t| t.to_string()).unwrap_or_default();
+            pane.vte().text_format(vte4::Format::Text).map_or_else(String::new, |t| t.to_string());
         if text.contains(needle) || std::time::Instant::now() >= deadline {
             return text;
         }

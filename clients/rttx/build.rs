@@ -14,8 +14,7 @@ fn main() {
                 .filter(|o| o.status.success())
                 .and_then(|o| String::from_utf8(o.stdout).ok())
         })
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+        .map_or_else(String::new, |s| s.trim().to_string());
     println!("cargo:rustc-env=GIT_HASH={hash}");
     println!("cargo:rerun-if-env-changed=RTTX_GIT_HASH");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
