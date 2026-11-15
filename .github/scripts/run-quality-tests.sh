@@ -46,7 +46,7 @@ start_broadway_if_available() {
     export GDK_BACKEND="${GDK_BACKEND:-broadway}"
     export BROADWAY_DISPLAY="${BROADWAY_DISPLAY:-:5}"
 
-    "${broadway_cmd}" "${BROADWAY_DISPLAY#:}" >/tmp/rttx-broadway.log 2>&1 &
+    "${broadway_cmd}" "${BROADWAY_DISPLAY}" >/tmp/rttx-broadway.log 2>&1 &
     broadway_pid=$!
     sleep 1
 }
@@ -55,15 +55,20 @@ run_logged_command() {
     local label=$1
     shift
 
-    local logfile
+    local logfile test_roots
     logfile=$(mktemp -t rttx-quality-tests-XXXXXX.log)
+    test_roots=$(mktemp -d -t rttx-quality-state-XXXXXX)
 
     echo "::group::${label}"
 
     set +e
-    "$@" 2>&1 | tee "${logfile}"
+    env XDG_CONFIG_HOME="${test_roots}/config" \
+        XDG_STATE_HOME="${test_roots}/state" \
+        XDG_CACHE_HOME="${test_roots}/cache" \
+        "$@" 2>&1 | tee "${logfile}"
     local status=${PIPESTATUS[0]}
     set -e
+    rm -rf "${test_roots}"
 
     if [[ ${status} -eq 0 ]]; then
         echo "::endgroup::"
