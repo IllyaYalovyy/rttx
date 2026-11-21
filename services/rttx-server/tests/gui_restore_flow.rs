@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestClient, start_test_server, wait_for_state_containing};
+use common::{TestClient, create_workspace, start_test_server, wait_for_state_containing};
 use rttx_proto::v3;
 use std::time::Duration;
 
@@ -27,18 +27,9 @@ async fn gui_restore_flow_no_duplicates() {
         c.handshake().await;
 
         for i in 1..=2 {
-            c.send(&v3::ClientEnvelope {
-                request_id: 0,
-                command: Some(v3::client_envelope::Command::CreateWorkspace(v3::CreateWorkspace {
-                    name: format!("Session {i}"),
-                    policy: v3::WorkspacePolicy::Persistent as i32,
-                })),
-            })
-            .await;
-            let sid = match c.recv().await.payload {
-                Some(v3::server_envelope::Payload::WorkspaceCreated(sc)) => sc.runtime_id,
-                other => panic!("expected WorkspaceCreated, got {other:?}"),
-            };
+            let sid =
+                create_workspace(&mut c, &format!("Session {i}"), v3::WorkspacePolicy::Persistent)
+                    .await;
 
             c.send(&v3::ClientEnvelope {
                 request_id: 0,
