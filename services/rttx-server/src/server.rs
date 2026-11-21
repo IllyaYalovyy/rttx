@@ -1668,7 +1668,7 @@ impl Server {
     ) -> Option<v3::ServerEnvelope> {
         let Ok(runtime_id) = bytes_to_uuid(&input.runtime_id) else { return None };
         let Ok(pane_id) = bytes_to_uuid(&input.pane_id) else { return None };
-        let (writer, resolved_bytes) = {
+        let (writer, resolved_bytes, rt_lock) = {
             let s = crate::instrument::lock_server(server, metrics).await;
             let rt_lock = s.workspaces.get(&runtime_id).cloned()?;
             let writer = s.pty_writers.get(&pane_id).cloned();
@@ -1683,16 +1683,43 @@ impl Server {
             let modes = rt.panes.get(&pane_id)?.screen.terminal_mode_state();
             let resolved =
                 rttx_proto::v3_terminal_input::resolve_input(input.kind.as_ref(), &modes);
-            (writer, resolved)
+            drop(rt);
+            (writer, resolved, rt_lock)
         };
         if resolved_bytes.is_empty() {
             return None;
         }
+        // The client's terminal widget answers colour queries through raw
+        // input. Daemon replies held behind such a query follow its answer.
+        let color_replies = if matches!(input.kind, Some(v3::terminal_input::Kind::Raw(_))) {
+            crate::reply_order::count_client_color_replies(&resolved_bytes)
+        } else {
+            0
+        };
+        // Taken before the PTY writer is locked (the two locks are never
+        // nested) and written in the same writer hold as the client's answer,
+        // so nothing can slip in between the two.
+        let released: Vec<Vec<u8>> = if color_replies > 0 {
+            crate::instrument::lock_workspace(&rt_lock, metrics)
+                .await
+                .panes
+                .get_mut(&pane_id)
+                .into_iter()
+                .flat_map(|pane| pane.reply_hold.client_replied(color_replies))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if let Some(writer) = writer {
             let pane_short = short_id(pane_id);
             let mut w = writer.lock().await;
             if let Err(e) = w.write_all(&resolved_bytes).await {
                 tracing::error!("Failed to write to PTY {pane_short}: {e}");
+            }
+            for reply in &released {
+                if let Err(e) = w.write_all(reply).await {
+                    tracing::error!("Failed to write held reply to PTY {pane_short}: {e}");
+                }
             }
             if let Err(e) = w.flush().await {
                 tracing::error!("Failed to flush PTY {pane_short}: {e}");
@@ -2143,6 +2170,60 @@ const CWD_POLL_INTERVAL_TICKS: u64 = 5;
 /// starving input handlers and the serialization loop.
 pub const CONTENTION_BACKOFF: Duration = Duration::from_micros(200);
 
+/// Release daemon replies held behind a colour query once the client has had
+/// its chance to answer (see [`crate::reply_order`]).
+///
+/// Runs for the duration of one wait: it sleeps until the deadline, which a
+/// further colour query may push back, and stops as soon as the client's
+/// answer has released the replies instead.
+async fn release_held_replies_at_deadline(
+    server: Arc<Mutex<Server>>,
+    rt_lock: WorkspaceLock,
+    pane_id: Uuid,
+    metrics: Arc<crate::metrics::DaemonMetrics>,
+) {
+    use crate::reply_order::HoldExpiry;
+    loop {
+        let now = std::time::Instant::now();
+        let expiry = {
+            let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
+            match rt.panes.get_mut(&pane_id) {
+                Some(pane) => pane.reply_hold.expire(now),
+                None => HoldExpiry::Idle,
+            }
+        };
+        match expiry {
+            HoldExpiry::Idle => return,
+            HoldExpiry::Wait(deadline) => {
+                tokio::time::sleep(deadline.saturating_duration_since(now)).await;
+            }
+            HoldExpiry::Released(replies) => {
+                if replies.is_empty() {
+                    return;
+                }
+                let writer = {
+                    let s = crate::instrument::lock_server(&server, &metrics).await;
+                    s.pty_writers.get(&pane_id).cloned()
+                };
+                if let Some(writer) = writer {
+                    let mut w = writer.lock().await;
+                    for reply in &replies {
+                        if let Err(e) = w.write_all(reply).await {
+                            tracing::error!(
+                                "Failed to write held reply to PTY {}: {e}",
+                                short_id(pane_id)
+                            );
+                        }
+                    }
+                    let _ = w.flush().await;
+                    drop(w);
+                }
+                return;
+            }
+        }
+    }
+}
+
 /// Spawn a background task that reads PTY output and broadcasts Deltas.
 #[allow(clippy::too_many_arguments)] // metrics parameter required for instrumentation
 fn spawn_pty_read_loop(
@@ -2270,10 +2351,30 @@ fn spawn_pty_read_loop(
                             // collect PTY writer from server.
                             let (new_cwd, new_name, new_title, pending_replies, clipboard_writes, pty_writer) = {
                                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
+                                let client_can_answer = rt.writer_client_id().is_some();
                                 if let Some(screen) = taken_screen
                                     && let Some(pane) = rt.panes.get_mut(&pane_id)
                                 {
-                                    let result = pane.return_screen(screen);
+                                    let mut result = pane.return_screen(screen);
+                                    // A colour query is answered by the client a round
+                                    // trip later; replies the daemon generated after it
+                                    // wait so the program sees them in query order.
+                                    let routed = pane.reply_hold.route(
+                                        std::mem::take(&mut result.pending_replies),
+                                        result.replies_before_client_query,
+                                        result.client_queries,
+                                        client_can_answer,
+                                        std::time::Instant::now(),
+                                    );
+                                    result.pending_replies = routed.write_now;
+                                    if routed.wait_started {
+                                        tokio::spawn(release_held_replies_at_deadline(
+                                            Arc::clone(&server),
+                                            Arc::clone(&rt_lock),
+                                            pane_id,
+                                            Arc::clone(&metrics),
+                                        ));
+                                    }
                                     let cwd = result.new_cwd.and_then(|cwd| {
                                         let rev = rt.set_pane_cwd(pane_id, &cwd)?;
                                         Some((cwd, rev))

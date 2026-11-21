@@ -35,6 +35,11 @@ pub struct FeedResult {
     pub new_title: Option<String>,
     /// Pending replies to write back to the PTY (e.g. CPR for DSR).
     pub pending_replies: Vec<Vec<u8>>,
+    /// How many of `pending_replies` precede the first colour query that only
+    /// the attached client can answer (all of them when there was none).
+    pub replies_before_client_query: usize,
+    /// Number of client-answered colour queries in this output.
+    pub client_queries: u32,
     /// Clipboard writes an application requested via OSC 52.
     pub clipboard_writes: Vec<ClipboardWrite>,
 }
@@ -69,6 +74,8 @@ pub struct Pane {
     pub no_persist: bool,
     /// Scanner that lifts OSC 52 clipboard writes out of the output stream.
     osc52: Osc52Filter,
+    /// Daemon replies waiting for the client to answer a colour query first.
+    pub reply_hold: crate::reply_order::ReplyHold,
 }
 
 impl Pane {
@@ -90,6 +97,7 @@ impl Pane {
             output_seq: 0,
             no_persist: false,
             osc52: Osc52Filter::default(),
+            reply_hold: crate::reply_order::ReplyHold::default(),
         }
     }
 
@@ -189,9 +197,16 @@ impl Pane {
                 Some(cwd)
             }
         });
-        let pending_replies = self.screen.take_pending_replies();
+        let batch = self.screen.take_reply_batch();
         let clipboard_writes = self.osc52.take_writes();
-        FeedResult { new_cwd, new_title, pending_replies, clipboard_writes }
+        FeedResult {
+            new_cwd,
+            new_title,
+            pending_replies: batch.replies,
+            replies_before_client_query: batch.replies_before_client_query,
+            client_queries: batch.client_queries,
+            clipboard_writes,
+        }
     }
 
     /// Flush pending scrollback bytes to the log file on disk.
