@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-11-21
+
+### Fixed
+- Restore Flatpak builds by letting Flatpak Builder set the VTE library directory.
+- Fix release test failures when terminal output arrives before command replies.
+
 ## [1.1.3] - 2026-11-20
 
 ### Fixed
@@ -554,7 +560,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.0...v1.1.1
