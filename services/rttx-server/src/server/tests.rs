@@ -1377,3 +1377,160 @@ async fn connected_clients_gauge_tracks_lifecycle() {
     assert_eq!(metrics.connected_clients.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(metrics.client_disconnects.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
+
+// ── Reattach during disconnect cleanup ──────────────────────────
+
+/// Upper bound for any single step of the duplex-driven tests below.
+const STEP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A v3 client talking to `handle_client` over an in-memory duplex stream.
+struct DuplexClient {
+    stream: tokio::io::DuplexStream,
+    read_buf: bytes::BytesMut,
+    next_request_id: u64,
+}
+
+impl DuplexClient {
+    /// Open a connection served by `handle_client` and complete the handshake.
+    async fn connect(server: &Arc<Mutex<Server>>) -> (Self, tokio::task::JoinHandle<()>) {
+        let (server_half, client_half) = tokio::io::duplex(256 * 1024);
+        let conn = crate::ipc::ClientConnection::new(server_half);
+        let server = Arc::clone(server);
+        let session = tokio::spawn(async move {
+            let _ = super::handle_client(server, conn, None).await;
+        });
+        let mut client =
+            Self { stream: client_half, read_buf: bytes::BytesMut::new(), next_request_id: 1 };
+        let hello = rttx_proto::v3_handshake::build_client_hello(
+            Uuid::new_v4(),
+            "test-client",
+            "0.0.0",
+            rttx_proto::v3_handshake::CORE_CAPABILITIES,
+        );
+        let mut buf = bytes::BytesMut::new();
+        rttx_proto::encode_frame(&hello, &mut buf).unwrap();
+        client.stream.write_all(&buf).await.unwrap();
+        let _: v3::ServerHello = client.recv_frame().await;
+        (client, session)
+    }
+
+    async fn recv_frame<M: prost::Message + Default>(&mut self) -> M {
+        tokio::time::timeout(STEP_TIMEOUT, async {
+            loop {
+                match rttx_proto::decode_frame::<M>(&mut self.read_buf) {
+                    Ok(msg) => return msg,
+                    Err(rttx_proto::FrameError::Incomplete) => {}
+                    Err(e) => panic!("decode error: {e}"),
+                }
+                let n = self.stream.read_buf(&mut self.read_buf).await.unwrap();
+                assert!(n > 0, "unexpected EOF");
+            }
+        })
+        .await
+        .expect("timed out waiting for a server frame")
+    }
+
+    /// Request a read-write attach and return the server's answer to it.
+    async fn attach_rw(&mut self, runtime_id: Uuid) -> v3::server_envelope::Payload {
+        let request_id = self.next_request_id;
+        self.next_request_id += 1;
+        let env = v3::ClientEnvelope {
+            request_id,
+            command: Some(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
+                runtime_id: uuid_to_bytes(runtime_id),
+                attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
+            })),
+        };
+        let mut buf = bytes::BytesMut::new();
+        rttx_proto::encode_frame(&env, &mut buf).unwrap();
+        self.stream.write_all(&buf).await.unwrap();
+        loop {
+            let resp: v3::ServerEnvelope = self.recv_frame().await;
+            if resp.request_id == request_id {
+                return resp.payload.expect("attach response carries a payload");
+            }
+        }
+    }
+}
+
+async fn writer_of(server: &Arc<Mutex<Server>>, runtime_id: Uuid) -> Option<Uuid> {
+    let rt_lock = Arc::clone(&server.lock().await.workspaces[&runtime_id]);
+    rt_lock.lock().await.writer_client_id()
+}
+
+fn assert_attached_as_writer(payload: &v3::server_envelope::Payload, who: &str) {
+    match payload {
+        v3::server_envelope::Payload::WorkspaceSnapshot(snap) => {
+            assert_eq!(
+                snap.client_role,
+                v3::WorkspaceClientRole::Writer as i32,
+                "{who} should hold the write lease"
+            );
+        }
+        other => panic!("{who}: expected WorkspaceSnapshot, got {other:?}"),
+    }
+}
+
+fn assert_attach_blocked(payload: &v3::server_envelope::Payload, who: &str) {
+    assert!(
+        matches!(payload, v3::server_envelope::Payload::AttachBlocked(_)),
+        "{who}: expected AttachBlocked, got {payload:?}"
+    );
+}
+
+/// A client that reconnects while the daemon is still tearing down its old
+/// connection must get its workspace back: the old connection is already
+/// unregistered, so the write lease it left behind must not refuse the
+/// reattach. A writer whose connection is alive keeps blocking throughout.
+#[tokio::test]
+async fn reattach_succeeds_while_disconnect_cleanup_is_pending() {
+    let server = new_server();
+    let gate = Arc::new(DisconnectCleanupGate::default());
+    let runtime_id = {
+        let mut rt = Workspace::new("stranded".into());
+        rt.add_pane(Pane::new(Uuid::new_v4(), 80, 24));
+        let runtime_id = rt.id;
+        let mut s = server.lock().await;
+        s.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
+        s.disconnect_cleanup_gate = Some(Arc::clone(&gate));
+        runtime_id
+    };
+
+    let (mut old, old_session) = DuplexClient::connect(&server).await;
+    assert_attached_as_writer(&old.attach_rw(runtime_id).await, "original connection");
+    let old_writer = writer_of(&server, runtime_id).await.expect("original writer recorded");
+
+    // A live writer still blocks an ordinary attach from another connection.
+    let (mut rival, _rival_session) = DuplexClient::connect(&server).await;
+    assert_attach_blocked(&rival.attach_rw(runtime_id).await, "rival vs live writer");
+    assert_eq!(writer_of(&server, runtime_id).await, Some(old_writer));
+
+    // Drop the original connection and hold its cleanup in the window where
+    // it is unregistered but its lease is still recorded on the workspace.
+    drop(old);
+    tokio::time::timeout(STEP_TIMEOUT, gate.unregistered.notified())
+        .await
+        .expect("disconnect cleanup never reached the pause point");
+    assert_eq!(
+        writer_of(&server, runtime_id).await,
+        Some(old_writer),
+        "the stale lease must still be recorded while cleanup is paused"
+    );
+
+    let (mut replacement, _replacement_session) = DuplexClient::connect(&server).await;
+    assert_attached_as_writer(&replacement.attach_rw(runtime_id).await, "replacement connection");
+    let new_writer = writer_of(&server, runtime_id).await.expect("replacement writer recorded");
+    assert_ne!(new_writer, old_writer);
+
+    // The replacement is a live writer, so it blocks like any other.
+    assert_attach_blocked(&rival.attach_rw(runtime_id).await, "rival vs replacement");
+
+    // Letting the old cleanup finish must not disturb the new lease.
+    gate.resume.notify_one();
+    tokio::time::timeout(STEP_TIMEOUT, old_session)
+        .await
+        .expect("old session never finished cleanup")
+        .unwrap();
+    assert_eq!(writer_of(&server, runtime_id).await, Some(new_writer));
+    assert_attach_blocked(&rival.attach_rw(runtime_id).await, "rival after cleanup");
+}

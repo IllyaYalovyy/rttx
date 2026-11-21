@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- A workspace no longer stays disconnected after rttx recovers from a lost
+  daemon connection. If rttx reconnected while the daemon was still cleaning
+  up the old connection, that workspace was refused as "owned by another
+  client" and never retried; the daemon now hands it back straight away.
 - New local workspaces no longer print a false connection-lost warning while
   connecting. Real disconnects still show their warning and retry status.
 - "Add to Places" in a pane's context menu saves that pane's directory,
