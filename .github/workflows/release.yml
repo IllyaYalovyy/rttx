@@ -1,6 +1,11 @@
 name: Release
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/rttx/io.github.IllyaYalovyy.rttx.json"
+      - "packaging/rttx/flatpak/**"
   push:
     tags:
       - "v[0-9]*.*"
@@ -28,6 +33,7 @@ jobs:
             flatpak \
             flatpak-builder \
             elfutils \
+            libarchive-tools \
             librsvg2-common
 
       - name: Cache Flatpak runtimes
@@ -60,6 +66,7 @@ jobs:
 
   build-deb:
     name: Build DEB package
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     needs: quality
     steps:
@@ -117,6 +124,7 @@ jobs:
 
   build-rpm:
     name: Build RPM (SRPM + Fedora binary)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     needs: quality
     # Build inside Fedora so the RPM links against Fedora's GTK/VTE/glibc and
@@ -193,7 +201,7 @@ jobs:
   copr-submit:
     name: Submit to Fedora COPR
     runs-on: ubuntu-latest
-    needs: build-rpm
+    needs: github-release
     steps:
       - name: Download RPM artifact
         uses: actions/download-artifact@v4
