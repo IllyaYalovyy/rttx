@@ -990,13 +990,17 @@ impl Window {
             self.terminal_handle(&preferred_uuid).map(|terminal| (preferred_uuid, terminal))
         };
 
-        let Some((target_uuid, terminal)) = target else {
+        let Some((_, terminal)) = target else {
             return;
         };
         let win = self.clone();
         glib::idle_add_local_once(move || {
+            // Resolve the uuid now, not when the idle was queued: the daemon's
+            // pane-create ack can re-key the pane in between, and recording
+            // the client-minted uuid would leave the focus pointer dangling
+            // (paste and other focus-driven actions then silently no-op).
             if terminal.grab_focus() {
-                win.set_focused_terminal(Some(&target_uuid));
+                win.set_focused_terminal(Some(&terminal.uuid()));
             }
         });
     }

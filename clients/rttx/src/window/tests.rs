@@ -8577,3 +8577,56 @@ fn managed_context_place_uses_own_rekeyed_pane_not_stale_focus() {
     window.close();
     crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
 }
+
+// Regression: a new Local workspace queues its initial focus on an idle, and
+// the daemon's pane-create ack can re-key the pane before that idle runs. The
+// idle must record the pane's current uuid, not the client-minted one it was
+// queued with — otherwise the focus pointer dangles and focus-driven actions
+// (Ctrl+V paste) silently no-op until the workspace is re-focused.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn queued_session_focus_follows_pane_rekeyed_before_idle_runs() {
+    require_display!();
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path().join("config"));
+    crate::test_helpers::set_env("XDG_STATE_HOME", tmp.path().join("state"));
+    crate::test_helpers::set_env("XDG_CACHE_HOME", tmp.path().join("cache"));
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+    let app = adw::Application::builder().application_id("com.illya.rttx.rekey-idle-focus").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+    let window = Window::new(&app);
+    window.present();
+    pump_events(50);
+
+    let session =
+        WorkspaceState::new_managed_local("Local".into(), WorkspacePolicy::Persistent, None);
+    let old_uuid = session.layout.terminal_uuids()[0].clone();
+    window.imp().state.borrow_mut().workspaces.push(session.clone());
+    window.build_session(&session, false);
+    window.imp().session_stack.set_visible_child_name(&session.uuid);
+    pump_events(50);
+
+    // Queue the focus, then re-key before the idle gets to run.
+    window.set_focused_terminal(None);
+    window.focus_session_terminal(&session.uuid);
+    let rekey = window
+        .imp()
+        .state
+        .borrow_mut()
+        .apply_managed_pane_created(&session.uuid, &old_uuid, "runtime", "server-pane")
+        .unwrap();
+    window.rekey_terminal_widgets(&rekey);
+
+    assert!(
+        wait_until(1000, || window.focused_terminal_uuid().is_some()),
+        "queued focus should land on the pane"
+    );
+    assert_eq!(window.focused_terminal_uuid().as_deref(), Some("server-pane"));
+    assert!(
+        window.focused_terminal_uuid().and_then(|uuid| window.terminal_handle(&uuid)).is_some(),
+        "the focused pointer must resolve to a live pane so paste has a target"
+    );
+
+    window.close();
+    crate::test_helpers::remove_env("RTTX_DISABLE_SHELL_SPAWN");
+}
