@@ -150,6 +150,21 @@ pub struct Server {
     client_pane_sizes: HashMap<Uuid, HashMap<Uuid, (u16, u16)>>,
     /// Cooperative shutdown signal — set to `true` to stop the server.
     shutdown_tx: watch::Sender<bool>,
+    /// Test-only pause point between unregistering a disconnected client and
+    /// releasing its workspace leases.
+    #[cfg(test)]
+    disconnect_cleanup_gate: Option<Arc<DisconnectCleanupGate>>,
+}
+
+/// Test-only handshake that holds disconnect cleanup in the window where the
+/// connection is unregistered but its workspace leases are still recorded.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct DisconnectCleanupGate {
+    /// Signalled once the disconnected client has been unregistered.
+    unregistered: tokio::sync::Notify,
+    /// Cleanup waits here before it releases the client's leases.
+    resume: tokio::sync::Notify,
 }
 
 impl Server {
@@ -175,6 +190,8 @@ impl Server {
             pty_kill_senders: HashMap::new(),
             client_pane_sizes: HashMap::new(),
             shutdown_tx,
+            #[cfg(test)]
+            disconnect_cleanup_gate: None,
         }
     }
 
@@ -534,6 +551,17 @@ impl Server {
     /// Register a client's protocol version.
     pub fn set_client_protocol(&mut self, client_id: Uuid, protocol: ClientProtocol) {
         self.client_protocols.insert(client_id, protocol);
+    }
+
+    /// Whether the connection behind `client_id` is still being served.
+    ///
+    /// The response channel is registered when a connection is accepted and
+    /// removed only by that connection's own teardown, so a missing entry
+    /// means the connection is confirmed gone. Connection ids are minted per
+    /// connection and never reused, so the answer cannot flip back to `true`.
+    #[must_use]
+    pub fn is_client_connected(&self, client_id: Uuid) -> bool {
+        self.client_resp_senders.contains_key(&client_id)
     }
 
     /// Check whether a push sender is registered for a client.
@@ -1148,7 +1176,39 @@ impl Server {
             }
         };
         let mut rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
-        let attach_outcome = match rt.attach_client(client_id, attach_mode) {
+        let mut attach_result = rt.attach_client(client_id, attach_mode);
+        // Disconnect cleanup unregisters the connection first and releases its
+        // leases one workspace at a time afterwards. A client that reconnects
+        // inside that window would be refused by a lease nobody holds any
+        // more, so a writer whose connection is confirmed gone is released
+        // here instead of being allowed to block the attach.
+        if let Ok(AttachOutcome::Blocked { .. }) = attach_result
+            && let Some(blocking_writer) = rt.writer_client_id()
+        {
+            // The server lock is never taken while a workspace lock is held.
+            drop(rt);
+            let writer_connected = crate::instrument::lock_server(server, metrics)
+                .await
+                .is_client_connected(blocking_writer);
+            rt = crate::instrument::lock_workspace(&rt_lock, metrics).await;
+            if !writer_connected
+                && matches!(
+                    rt.detach_client(blocking_writer, DetachReason::Disconnect),
+                    DetachOutcome::Detached { .. }
+                )
+            {
+                tracing::info!(
+                    "Released write lease of disconnected client {} on workspace \"{}\" ({})",
+                    short_id(blocking_writer),
+                    rt.name,
+                    short_id(runtime_id),
+                );
+            }
+            // The workspace lock was released above, so decide again from
+            // the current state whether or not a lease was released.
+            attach_result = rt.attach_client(client_id, attach_mode);
+        }
+        let attach_outcome = match attach_result {
             Ok(outcome) => outcome,
             Err(AttachError::TakeoverNotEligible) => {
                 return Some(rttx_proto::v3_error::build_error_response(
@@ -2891,7 +2951,14 @@ where
         s.client_pane_sizes.remove(&client_id);
         if handshake_completed {
             let rt_locks: Vec<WorkspaceLock> = s.workspaces.values().cloned().collect();
+            #[cfg(test)]
+            let cleanup_gate = s.disconnect_cleanup_gate.clone();
             drop(s);
+            #[cfg(test)]
+            if let Some(gate) = cleanup_gate {
+                gate.unregistered.notify_one();
+                gate.resume.notified().await;
+            }
             for rt_lock in rt_locks {
                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
                 let _ = rt.detach_client(client_id, DetachReason::Disconnect);

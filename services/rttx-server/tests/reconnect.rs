@@ -343,3 +343,92 @@ async fn concurrent_reconnect_two_clients_same_session() {
     let snap = attach_ro(&mut c2, &sid).await;
     assert_eq!(snap.runtime_id, sid);
 }
+
+/// A client that lost its connection and comes straight back must get every
+/// workspace it owned, without waiting for the daemon to finish tearing the
+/// old connection down. The daemon releases the dead connection's write
+/// leases one workspace at a time, so the reattach starts the moment the
+/// first lease is seen released and must succeed for all the others too.
+/// A writer whose connection is alive keeps blocking an ordinary attach.
+///
+/// The teardown window is too short to hit reliably over a real socket; the
+/// paused-teardown case is pinned by the daemon unit test
+/// `reattach_succeeds_while_disconnect_cleanup_is_pending`.
+#[tokio::test]
+async fn reconnect_reclaims_all_workspaces_while_old_connection_is_torn_down() {
+    const WORKSPACES: usize = 24;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (sock, _handle) = start_test_server(tmp.path()).await;
+
+    let mut old = TestClient::connect(&sock).await;
+    old.handshake().await;
+    let mut runtime_ids = Vec::with_capacity(WORKSPACES);
+    for i in 0..WORKSPACES {
+        let id = create_workspace(&mut old, &format!("owned-{i}"), v3::WorkspacePolicy::Persistent)
+            .await;
+        attach_rw(&mut old, &id).await;
+        runtime_ids.push(id);
+    }
+
+    let mut rival = TestClient::connect(&sock).await;
+    rival.handshake().await;
+    expect_attach_blocked(&mut rival, &runtime_ids[0], "rival vs live original writer").await;
+
+    let mut replacement = TestClient::connect(&sock).await;
+    replacement.handshake().await;
+
+    // Lose the original connection, then reattach as soon as the daemon has
+    // started releasing its leases.
+    drop(old);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        // Asked directly: the shared helper drains pushes for 50 ms first,
+        // which would outlast the teardown this test wants to overlap.
+        replacement
+            .send_cmd(v3::client_envelope::Command::ListWorkspaces(v3::ListWorkspaces {}))
+            .await;
+        let listed = loop {
+            if let Some(v3::server_envelope::Payload::WorkspaceList(list)) =
+                replacement.recv_or_timeout().await.payload
+            {
+                break list.workspaces;
+            }
+        };
+        if listed.iter().any(|ws| !ws.has_write_owner) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "daemon never started releasing the dropped connection's leases"
+        );
+    }
+    for id in &runtime_ids {
+        let snap = attach_rw(&mut replacement, id).await;
+        assert_eq!(snap.client_role, v3::WorkspaceClientRole::Writer as i32);
+    }
+
+    // The replacement is a live writer and blocks like any other.
+    for id in &runtime_ids {
+        expect_attach_blocked(&mut rival, id, "rival vs replacement writer").await;
+    }
+}
+
+async fn expect_attach_blocked(client: &mut TestClient, runtime_id: &[u8], who: &str) {
+    client
+        .send_cmd(v3::client_envelope::Command::AttachWorkspace(v3::AttachWorkspace {
+            runtime_id: runtime_id.to_vec(),
+            attach_mode: v3::WorkspaceAttachMode::ReadWrite as i32,
+        }))
+        .await;
+    loop {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::AttachBlocked(blocked)) => {
+                assert_eq!(blocked.runtime_id, runtime_id, "{who}");
+                return;
+            }
+            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other => panic!("{who}: expected AttachBlocked, got {other:?}"),
+        }
+    }
+}
