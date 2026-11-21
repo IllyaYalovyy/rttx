@@ -48,6 +48,11 @@ struct ScreenPerformer {
     cwd: Option<String>,
     /// Pending replies to write back to the PTY (e.g. CPR for DSR).
     pending_replies: Vec<Vec<u8>>,
+    /// Colour queries seen since the last drain that only the attached
+    /// client's terminal widget can answer (see `reply_order`).
+    client_queries: u32,
+    /// How many `pending_replies` existed when the first such query was seen.
+    replies_before_client_query: Option<usize>,
     /// Whether bracketed paste mode (DECSET 2004) is active.
     bracketed_paste_mode: bool,
     /// Whether application cursor keys mode (DECSET 1) is active.
@@ -89,6 +94,8 @@ impl PaneScreen {
                 title: None,
                 cwd: None,
                 pending_replies: Vec::new(),
+                client_queries: 0,
+                replies_before_client_query: None,
                 bracketed_paste_mode: false,
                 application_cursor_keys: false,
                 application_keypad: false,
@@ -414,7 +421,17 @@ impl PaneScreen {
 
     /// Drain and return any pending replies (e.g. CPR for DSR).
     pub fn take_pending_replies(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.performer.pending_replies)
+        self.take_reply_batch().replies
+    }
+
+    /// Drain pending replies together with where client-answered colour
+    /// queries fell among them, so the caller can keep replies in query order.
+    pub fn take_reply_batch(&mut self) -> ReplyBatch {
+        let replies = std::mem::take(&mut self.performer.pending_replies);
+        let client_queries = std::mem::take(&mut self.performer.client_queries);
+        let replies_before_client_query =
+            self.performer.replies_before_client_query.take().unwrap_or(replies.len());
+        ReplyBatch { replies, replies_before_client_query, client_queries }
     }
 
     /// Whether bracketed paste mode (DECSET 2004) is currently active.
@@ -933,6 +950,14 @@ impl vte::Perform for ScreenPerformer {
         {
             self.cwd = Some(cwd);
         }
+
+        // Colour queries are answered by the client's terminal widget, not
+        // here. Note where they fall among the daemon's own replies.
+        let client_queries = crate::reply_order::client_answered_queries(params);
+        if client_queries > 0 {
+            self.replies_before_client_query.get_or_insert(self.pending_replies.len());
+            self.client_queries = self.client_queries.saturating_add(client_queries);
+        }
     }
 
     fn csi_dispatch(
@@ -1049,6 +1074,19 @@ impl vte::Perform for ScreenPerformer {
             _ => {}
         }
     }
+}
+
+/// Daemon replies produced by parsed output, in query order.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReplyBatch {
+    /// Replies to write back to the PTY (e.g. CPR for DSR).
+    pub replies: Vec<Vec<u8>>,
+    /// How many of `replies` were generated before the first colour query
+    /// that only the attached client can answer. Equals `replies.len()` when
+    /// there was no such query.
+    pub replies_before_client_query: usize,
+    /// Number of client-answered colour queries in the batch.
+    pub client_queries: u32,
 }
 
 /// Strip terminal query sequences that the daemon handles server-side.

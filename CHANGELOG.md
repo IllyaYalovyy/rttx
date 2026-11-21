@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Opening terminal search reliably focuses its entry after it is mapped.
 - Closing a window stops its background timers and releases pane maps
   immediately, even if GTK callbacks still hold references to the window.
+- Programs that probe the terminal's colours at startup — `gh auth login`,
+  and other tools built on the same prompt libraries — no longer fail with
+  "unexpected escape sequence from terminal" or show stray characters in a
+  managed pane. The colour answer now reaches the program before the cursor
+  position answer that follows it, in the order the program asked.
 
 ### Changed
 - A copy shortcut that comes up empty while the program in the pane is using
