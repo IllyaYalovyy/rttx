@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-11-20
+
 ### Fixed
+- Pasting in a newly created local workspace keeps the intended terminal as
+  its target.
 - A workspace no longer stays disconnected after rttx recovers from a lost
   daemon connection. If rttx reconnected while the daemon was still cleaning
   up the old connection, that workspace was refused as "owned by another
@@ -550,7 +554,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/IllyaYalovyy/rttx/compare/v1.0.1...v1.1.0
