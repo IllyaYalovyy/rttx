@@ -19,6 +19,19 @@ impl TerminalHandle {
         }
     }
 
+    /// The pane's current layout uuid.
+    ///
+    /// Read this at the point of use rather than capturing it early: a managed
+    /// pane is re-keyed from its client-minted uuid to the server pane id once
+    /// the daemon acknowledges the pane (RFC-031).
+    #[must_use]
+    pub fn uuid(&self) -> String {
+        match self {
+            Self::Direct(terminal) => terminal.uuid(),
+            Self::Managed(pane) => pane.uuid(),
+        }
+    }
+
     /// Capture the current VTE scroll position as a vadjustment value.
     #[must_use]
     pub fn scroll_position(&self) -> Option<f64> {

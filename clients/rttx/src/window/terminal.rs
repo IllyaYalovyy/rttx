@@ -149,10 +149,12 @@ impl Window {
         }
 
         let win = self.downgrade();
-        let uuid = term.uuid();
+        let focus_term = term.downgrade();
         let focus_controller = gtk4::EventControllerFocus::new();
         focus_controller.connect_enter(move |_| {
-            let Some(win) = win.upgrade() else { return };
+            let (Some(win), Some(term)) = (win.upgrade(), focus_term.upgrade()) else { return };
+            // Read the uuid on each focus change; it can be re-keyed.
+            let uuid = term.uuid();
             win.set_focused_terminal(Some(&uuid));
             let session_uuid = {
                 let mut state = win.imp().state.borrow_mut();

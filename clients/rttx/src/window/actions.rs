@@ -324,8 +324,9 @@ impl Window {
         if let Some(terminal) = self.terminal_handle(&target_uuid) {
             let win = self.clone();
             glib::idle_add_local_once(move || {
+                // The pane may be re-keyed before this idle runs.
                 if terminal.grab_focus() {
-                    win.set_focused_terminal(Some(&target_uuid));
+                    win.set_focused_terminal(Some(&terminal.uuid()));
                 }
             });
         }
