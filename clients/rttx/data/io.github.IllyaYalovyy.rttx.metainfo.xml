@@ -32,6 +32,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.4" date="2026-11-21">
+      <description>
+        <p>Restores Flatpak builds and fixes intermittent failures in the release tests.</p>
+      </description>
+    </release>
     <release version="1.1.3" date="2026-11-20">
       <description>
         <p>Fixes paste in newly created local workspaces and restores workspace access after a disconnect. Terminal query replies arrive in the order requested. Programs such as tmux can copy to the system clipboard, and rttx explains how to select text when an application is using the mouse.</p>
