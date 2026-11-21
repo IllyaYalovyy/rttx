@@ -116,9 +116,15 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
             })),
         })
         .await;
-    let snapshot = match client.recv_or_timeout().await.payload {
-        Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => snap,
-        other => panic!("expected Snapshot, got {other:?}"),
+    let mut early_output = Vec::new();
+    let snapshot = loop {
+        match client.recv_or_timeout().await.payload {
+            Some(v3::server_envelope::Payload::WorkspaceSnapshot(snap)) => break snap,
+            Some(v3::server_envelope::Payload::OutputDelta(delta)) => {
+                early_output.extend(delta.data);
+            }
+            other => panic!("expected Snapshot or Delta, got {other:?}"),
+        }
     };
 
     // The shell's first prompt can be emitted before this client finishes
@@ -132,23 +138,22 @@ async fn setup_attached_pane(client: &mut TestClient) -> (Vec<u8>, Vec<u8>) {
         .iter()
         .any(|pane| String::from_utf8_lossy(&pane.scrollback_tail).contains(PROMPT));
     if !prompt_already_visible {
-        wait_for_prompt(client).await;
+        wait_for_prompt(client, early_output).await;
     }
 
     (runtime_id, pane_id)
 }
 
-async fn wait_for_prompt(client: &mut TestClient) {
+async fn wait_for_prompt(client: &mut TestClient, mut output: Vec<u8>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline {
+        if String::from_utf8_lossy(&output).contains(PROMPT) {
+            return;
+        }
         if let Some(msg) = client.try_recv(Duration::from_millis(200)).await
             && let Some(v3::server_envelope::Payload::OutputDelta(delta)) = msg.payload
         {
             output.extend(delta.data);
-            if String::from_utf8_lossy(&output).contains(PROMPT) {
-                return;
-            }
         }
     }
     panic!("shell prompt did not arrive within 30 seconds");
@@ -331,7 +336,7 @@ async fn arrow_keys_navigate_shell_history() {
 
     // Run a command, then use Up arrow to recall it.
     send_input(&mut client, &sid, &pid, b"echo ARROW_TEST\r").await;
-    wait_for_prompt(&mut client).await;
+    wait_for_prompt(&mut client, Vec::new()).await;
 
     // Up arrow = \x1b[A, then Enter to re-execute.
     send_input(&mut client, &sid, &pid, b"\x1b[A\r").await;
@@ -453,7 +458,7 @@ async fn reconnect_allows_continued_input_after_reattach() {
     let (sid, pid) = setup_attached_pane(&mut client).await;
 
     send_input(&mut client, &sid, &pid, b"echo BEFORE\r").await;
-    wait_for_prompt(&mut client).await;
+    wait_for_prompt(&mut client, Vec::new()).await;
 
     // Detach and reattach.
     reattach_snapshot_text(&mut client, &sid, &pid).await;
