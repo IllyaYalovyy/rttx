@@ -31,8 +31,7 @@
                 "-Ddocs=false",
                 "-Dgir=false",
                 "-Dglade=false",
-                "-Dvapi=false",
-                "-Dlibdir=lib"
+                "-Dvapi=false"
             ],
             "sources": [
                 {
