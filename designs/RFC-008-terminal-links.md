@@ -99,7 +99,9 @@ The `configure_openable_matches()` function configures VTE with:
 
 - `set_allow_hyperlink(true)` for OSC 8 support
 - One PCRE2 regex for `http(s)` / `mailto:` / `file://` URIs
-- One PCRE2 regex for local-looking file paths (`/tmp/x`, `./x`, `../x`, `~/x`, `src/x`)
+- One PCRE2 regex for local-looking file paths (`/tmp/x`, `./x`, `../x`, `~/x`, `src/x`). The match
+  must end on a character that plausibly ends a path, so a shell prompt's `$`, `#` or `%` and
+  sentence punctuation after the path are not highlighted
 
 Regexes are registered with VTE's `match_add_regex` using PCRE2 flags matching VTE's internal
 defaults (`UTF`, `NO_UTF_CHECK`, `CASELESS`, `MULTILINE`, `DOTALL`). Matched regions show a
@@ -128,7 +130,13 @@ so that plain mouse events pass through to VTE for mouse-aware terminal apps (vi
 Plain right-click opens a context menu with "Open Link" and "Copy Link" actions.
 Shift+right-click is denied so VTE receives the event for mouse-aware apps. The menu resolves the
 link at the click position and enables/disables the link actions accordingly. "Copy Link"
-converts file URIs to filesystem paths via `display_text_for_uri()` for clipboard friendliness.
+copies a regex-matched link exactly as it appears on screen (`~` is not expanded and the working
+directory is not prepended). For an OSC 8 hyperlink it copies the target, converting file URIs to
+filesystem paths via `display_text_for_uri()`.
+
+In a workspace on a remote host, a matched path names a file on that host (see NG3), so it can be
+copied but "Open Link" and Ctrl+click are disabled for it. URLs and OSC 8 hyperlinks still open.
+A plain `ssh` session started by hand inside a local pane is not detected as remote.
 
 ### URI resolution
 

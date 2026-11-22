@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- "Copy Link" on a file path copies the path exactly as it appears in the
+  terminal. It no longer picks up the shell prompt's trailing `$`, `#` or `%`,
+  and no longer rewrites the path by expanding `~` or prepending the working
+  directory.
+- In a workspace on a remote host, file paths can be copied but are no longer
+  offered for opening: "Open Link" and Ctrl+click used to open whatever file
+  had the same path on the local machine. Web links still open as before.
+
 ## [1.1.5] - 2026-11-22
 
 ### Fixed

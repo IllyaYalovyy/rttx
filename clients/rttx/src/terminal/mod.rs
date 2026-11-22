@@ -139,6 +139,26 @@ pub const fn should_open_context_menu(mods: gtk4::gdk::ModifierType) -> bool {
     !mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
 }
 
+/// Where the paths printed in `widget`'s pane live.
+///
+/// A pane belongs to the visible workspace whenever the pointer can reach
+/// it, so that workspace's host decides. A widget outside a window (tests)
+/// counts as local.
+pub(crate) fn path_context_for(
+    widget: &impl IsA<gtk4::Widget>,
+    current_directory: Option<String>,
+) -> links::PathContext {
+    let on_local_host = widget
+        .root()
+        .and_then(|root| root.downcast::<crate::window::Window>().ok())
+        .is_none_or(|window| window.visible_session_host_key() == crate::host::LOCAL_KEY);
+    if on_local_host {
+        links::PathContext::Local { current_directory }
+    } else {
+        links::PathContext::Remote
+    }
+}
+
 /// Populate a `gio::Menu` with places visible on the given host key.
 ///
 /// Each item triggers `win.open-place` with the place path as parameter.
