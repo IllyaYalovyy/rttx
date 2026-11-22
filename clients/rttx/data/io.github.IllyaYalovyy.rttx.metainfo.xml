@@ -32,6 +32,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.5" date="2026-11-22">
+      <description>
+        <p>The window no longer freezes while rttx saves its state on a slow or busy disk.</p>
+      </description>
+    </release>
     <release version="1.1.4" date="2026-11-21">
       <description>
         <p>Restores Flatpak builds and fixes intermittent failures in the release tests.</p>
