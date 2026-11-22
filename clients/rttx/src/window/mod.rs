@@ -381,6 +381,8 @@ impl Window {
     }
 
     fn load_state(&self) {
+        // Another window may have a save in flight; read what it wrote.
+        crate::store::writer::flush();
         let store = crate::store::default_store();
 
         let ws_store = store.load_workspaces().into_value().unwrap_or_default();
@@ -462,6 +464,11 @@ impl Window {
         }
     }
 
+    /// Snapshot the window state and hand it to the background writer.
+    ///
+    /// The snapshot is taken here on the GTK thread; the file writes and
+    /// syncs happen on the writer thread so a stalled disk cannot freeze
+    /// input and repaint.
     pub fn save_state(&self) {
         let imp = self.imp();
         let mut state = imp.state.borrow().clone();
@@ -543,15 +550,17 @@ impl Window {
         let cache = crate::store::models::runtime_cache::RuntimeCache {
             dismissed_runtime_ids: state.dismissed_runtime_ids.clone(),
         };
-        if let Err(e) = store.save_workspaces(&ws_store) {
-            tracing::error!("Failed to save workspaces: {e}");
-        }
-        if let Err(e) = store.save_ui_state(&ui) {
-            tracing::error!("Failed to save UI state: {e}");
-        }
-        if let Err(e) = store.save_runtime_cache(&cache) {
-            tracing::error!("Failed to save runtime cache: {e}");
-        }
+        crate::store::writer::submit(
+            store,
+            crate::store::WindowStateDocuments { workspaces: ws_store, ui, runtime_cache: cache },
+        );
+    }
+
+    /// Save state and wait until it is on disk. Use only where the process
+    /// may exit, or an outside observer reads the files, right afterwards.
+    pub fn save_state_blocking(&self) {
+        self.save_state();
+        crate::store::writer::flush();
     }
 
     fn setup_signals(&self) {
@@ -599,7 +608,7 @@ impl Window {
 
         let win = self.clone();
         self.connect_close_request(move |_| {
-            win.save_state();
+            win.save_state_blocking();
             win.clear_live_resources();
             glib::Propagation::Proceed
         });

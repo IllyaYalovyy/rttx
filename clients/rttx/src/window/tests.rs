@@ -9,6 +9,7 @@ fn store() -> crate::store::ClientStore {
 
 /// Load workspace state from the new store, reconstructing `WindowState`.
 fn load_saved_window_state() -> WindowState {
+    crate::store::writer::flush();
     let store = store();
     let ws_store = store.load_workspaces().into_value().unwrap_or_default();
     let ui = store.load_ui_state().into_value().unwrap_or_default();
