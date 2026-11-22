@@ -286,7 +286,7 @@ pub fn run() -> glib::ExitCode {
         if let Some(win) = app_ref.active_window()
             && let Ok(win) = win.downcast::<Window>()
         {
-            win.save_state();
+            win.save_state_blocking();
         }
     });
     app.add_action(&save_state_action);

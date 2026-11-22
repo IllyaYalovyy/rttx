@@ -8,9 +8,10 @@ pub(crate) mod envelope;
 mod io;
 pub mod models;
 mod paths;
+pub mod writer;
 
 pub use envelope::{DocumentEnvelope, Schema};
-pub use io::{LoadOutcome, atomic_load, atomic_save};
+pub use io::{LoadOutcome, atomic_load, atomic_save, atomic_save_if_changed};
 pub use paths::StorePaths;
 
 use crate::commands::SavedCommand;
@@ -35,9 +36,17 @@ pub fn default_store() -> ClientStore {
 use gtk4;
 
 /// Client store providing typed document persistence with atomic I/O.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientStore {
     paths: StorePaths,
+}
+
+/// Snapshot of the documents persisted together as one window's state.
+#[derive(Debug, Clone)]
+pub struct WindowStateDocuments {
+    pub workspaces: models::workspaces::WorkspaceStore,
+    pub ui: models::ui::UiState,
+    pub runtime_cache: models::runtime_cache::RuntimeCache,
 }
 
 impl ClientStore {
@@ -206,6 +215,7 @@ impl ClientStore {
     }
 
     /// Save workspaces atomically with an envelope wrapper.
+    /// The write is skipped when the stored document is already current.
     ///
     /// # Errors
     ///
@@ -218,9 +228,9 @@ impl ClientStore {
         let envelope = DocumentEnvelope::new(
             models::workspaces::SCHEMA,
             models::workspaces::CURRENT_VERSION,
-            store.clone(),
+            store,
         );
-        atomic_save(&path, &envelope)
+        atomic_save_if_changed(&path, &envelope).map(drop)
     }
 
     // ── UI State ────────────────────────────────────────────
@@ -233,15 +243,15 @@ impl ClientStore {
     }
 
     /// Save UI state atomically with an envelope wrapper.
+    /// The write is skipped when the stored document is already current.
     ///
     /// # Errors
     ///
     /// Returns an I/O error if the atomic write fails.
     pub fn save_ui_state(&self, ui: &models::ui::UiState) -> std::io::Result<()> {
         let path = self.paths.state().join("ui.json");
-        let envelope =
-            DocumentEnvelope::new(models::ui::SCHEMA, models::ui::CURRENT_VERSION, ui.clone());
-        atomic_save(&path, &envelope)
+        let envelope = DocumentEnvelope::new(models::ui::SCHEMA, models::ui::CURRENT_VERSION, ui);
+        atomic_save_if_changed(&path, &envelope).map(drop)
     }
 
     // ── Runtime Cache ───────────────────────────────────────
@@ -259,6 +269,7 @@ impl ClientStore {
     }
 
     /// Save runtime cache atomically with an envelope wrapper.
+    /// The write is skipped when the stored document is already current.
     ///
     /// # Errors
     ///
@@ -271,9 +282,26 @@ impl ClientStore {
         let envelope = DocumentEnvelope::new(
             models::runtime_cache::SCHEMA,
             models::runtime_cache::CURRENT_VERSION,
-            cache.clone(),
+            cache,
         );
-        atomic_save(&path, &envelope)
+        atomic_save_if_changed(&path, &envelope).map(drop)
+    }
+
+    // ── Window state ────────────────────────────────────────
+
+    /// Save the three documents that make up a window's state, skipping any
+    /// whose stored content is already current. Failures are logged; one
+    /// failed document does not prevent the others from being saved.
+    pub fn save_window_state(&self, documents: &WindowStateDocuments) {
+        if let Err(e) = self.save_workspaces(&documents.workspaces) {
+            tracing::error!("Failed to save workspaces: {e}");
+        }
+        if let Err(e) = self.save_ui_state(&documents.ui) {
+            tracing::error!("Failed to save UI state: {e}");
+        }
+        if let Err(e) = self.save_runtime_cache(&documents.runtime_cache) {
+            tracing::error!("Failed to save runtime cache: {e}");
+        }
     }
 
     // ── Export / Import / Reset ──────────────────────────────

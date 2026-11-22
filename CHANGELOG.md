@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- The window no longer freezes while rttx saves its state on a slow or busy
+  disk. Saving now happens in the background, and state that has not changed
+  is no longer rewritten every 30 seconds.
+
 ## [1.1.4] - 2026-11-21
 
 ### Fixed

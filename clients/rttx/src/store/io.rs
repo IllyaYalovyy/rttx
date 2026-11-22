@@ -79,6 +79,51 @@ pub fn atomic_save<T: Serialize>(path: &Path, envelope: &DocumentEnvelope<T>) ->
     Ok(())
 }
 
+/// Write a document envelope atomically unless the stored document already
+/// holds the same content.
+///
+/// Every sync can stall for seconds on a busy filesystem, so periodic saves of
+/// unchanged state must not reach the disk. Only `written_at` is ignored by
+/// the comparison. Returns whether the document was written.
+///
+/// # Errors
+///
+/// Returns an I/O error if the write, fsync, or rename fails.
+pub fn atomic_save_if_changed<T: Serialize>(
+    path: &Path,
+    envelope: &DocumentEnvelope<T>,
+) -> io::Result<bool> {
+    if stored_matches(path, envelope) {
+        return Ok(false);
+    }
+    atomic_save(path, envelope)?;
+    Ok(true)
+}
+
+/// Whether the file at `path` is byte-identical to what `envelope` would
+/// serialize to if it carried the stored `written_at`.
+fn stored_matches<T: Serialize>(path: &Path, envelope: &DocumentEnvelope<T>) -> bool {
+    #[derive(Deserialize)]
+    struct WrittenAt {
+        written_at: String,
+    }
+
+    let Ok(stored_json) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(WrittenAt { written_at }) = serde_json::from_str(&stored_json) else {
+        return false;
+    };
+    let candidate = DocumentEnvelope {
+        schema: envelope.schema,
+        version: envelope.version,
+        app_version: envelope.app_version.clone(),
+        written_at,
+        data: &envelope.data,
+    };
+    serde_json::to_string_pretty(&candidate).is_ok_and(|json| json == stored_json)
+}
+
 /// Load a document with envelope validation and backup recovery.
 ///
 /// `backups_dir` is the directory where malformed files are preserved.
@@ -249,6 +294,44 @@ mod tests {
 
         let bak_content = fs::read_to_string(path.with_extension("bak")).unwrap();
         assert!(bak_content.contains("v1"));
+    }
+
+    #[test]
+    fn save_if_changed_skips_identical_content() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.json");
+        let first = make_envelope(Schema::Ui, 1, TestData { value: "same".into() });
+        assert!(atomic_save_if_changed(&path, &first).unwrap());
+        let stored = fs::read_to_string(&path).unwrap();
+
+        let mut later = make_envelope(Schema::Ui, 1, TestData { value: "same".into() });
+        later.written_at = "2026-06-01T00:00:00Z".into();
+        assert!(!atomic_save_if_changed(&path, &later).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), stored);
+        assert!(!path.with_extension("bak").exists());
+    }
+
+    #[test]
+    fn save_if_changed_writes_changed_content() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.json");
+        let first = make_envelope(Schema::Ui, 1, TestData { value: "v1".into() });
+        atomic_save_if_changed(&path, &first).unwrap();
+
+        let changed = make_envelope(Schema::Ui, 1, TestData { value: "v2".into() });
+        assert!(atomic_save_if_changed(&path, &changed).unwrap());
+        let mut upgraded = make_envelope(Schema::Ui, 1, TestData { value: "v2".into() });
+        upgraded.app_version = "9.9.9".into();
+        assert!(atomic_save_if_changed(&path, &upgraded).unwrap());
+    }
+
+    #[test]
+    fn save_if_changed_replaces_malformed_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.json");
+        fs::write(&path, "not json").unwrap();
+        let env = make_envelope(Schema::Ui, 1, TestData { value: "ok".into() });
+        assert!(atomic_save_if_changed(&path, &env).unwrap());
     }
 
     #[test]
