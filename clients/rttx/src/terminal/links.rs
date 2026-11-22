@@ -6,7 +6,33 @@ use vte4::prelude::*;
 
 const OPENABLE_URI_PREFIXES: &[&str] = &["http://", "https://", "mailto:", "file://"];
 const URI_MATCH_REGEX: &str = r#"(?:https?://|mailto:|file://)[^\s<>'"`)\]\}]+"#;
-const PATH_MATCH_REGEX: &str = r#"(?:~/|\.\.?/|/|[A-Za-z0-9._-]+/)[^\s<>'"`]+"#;
+// A path match must end on a character that plausibly ends a path, so that
+// the highlighted span excludes what follows it on screen: a shell prompt's
+// `$`, `#` or `%`, or sentence punctuation. `[:punct:]` is ASCII-only here
+// (no PCRE2_UCP), so non-ASCII file names still match in full.
+const PATH_MATCH_REGEX: &str =
+    r#"(?:~/|\.\.?/|/|[A-Za-z0-9._-]+/)[^\s<>'"`]*(?:[^\s[:punct:]]|[/_~+-])"#;
+
+/// Where the paths printed in a terminal live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PathContext {
+    /// The pane runs on this machine; relative paths resolve against its
+    /// working directory.
+    Local { current_directory: Option<String> },
+    /// The pane runs on another host, so its paths name files that are not
+    /// on this machine and cannot be opened here.
+    Remote,
+}
+
+/// A link under the pointer: the text the user sees and, when it can be
+/// opened from this machine, the URI to open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenableLink {
+    /// What "Copy Link" puts on the clipboard.
+    pub text: String,
+    /// What "Open Link" and Ctrl+click launch.
+    pub uri: Option<String>,
+}
 
 type TestUriLauncher = Box<dyn Fn(&str) -> bool>;
 
@@ -20,16 +46,16 @@ pub(crate) fn configure_openable_matches(vte: &vte4::Terminal) {
     register_openable_match(vte, PATH_MATCH_REGEX);
 }
 
-pub(crate) fn install_openable_link_controllers<F>(vte: &vte4::Terminal, current_directory: F)
+pub(crate) fn install_openable_link_controllers<F>(vte: &vte4::Terminal, path_context: F)
 where
-    F: Fn() -> Option<String> + 'static,
+    F: Fn() -> PathContext + 'static,
 {
-    let current_directory = Rc::new(current_directory);
+    let path_context = Rc::new(path_context);
 
     // Ctrl+click opens links. Plain click is denied so VTE receives the
     // event for mouse-aware apps (vim, htop, mc, etc.).
     let click_vte = vte.clone();
-    let click_current_directory = Rc::clone(&current_directory);
+    let click_path_context = Rc::clone(&path_context);
     let open_match_click = gtk4::GestureClick::new();
     open_match_click.set_button(1);
     open_match_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
@@ -43,8 +69,9 @@ where
             gesture.set_state(gtk4::EventSequenceState::Denied);
             return;
         }
-        let current_directory = click_current_directory();
-        let Some(uri) = openable_uri_at(&click_vte, x, y, current_directory.as_deref()) else {
+        let Some(uri) =
+            openable_link_at(&click_vte, x, y, &click_path_context()).and_then(|link| link.uri)
+        else {
             gesture.set_state(gtk4::EventSequenceState::Denied);
             return;
         };
@@ -58,15 +85,15 @@ where
     // Only call set_cursor_from_name on state transitions to avoid
     // fighting VTE's own cursor management on every motion event (#479).
     let hover_vte = vte.clone();
-    let hover_current_directory = Rc::clone(&current_directory);
+    let hover_path_context = Rc::clone(&path_context);
     let hover_controller = gtk4::EventControllerMotion::new();
     let showing_pointer = Rc::new(std::cell::Cell::new(false));
     let showing_pointer_motion = Rc::clone(&showing_pointer);
     hover_controller.connect_motion(move |ctrl, x, y| {
         let mods = ctrl.current_event_state();
-        let current_directory = hover_current_directory();
         let want_pointer = mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
-            && openable_uri_at(&hover_vte, x, y, current_directory.as_deref()).is_some();
+            && openable_link_at(&hover_vte, x, y, &hover_path_context())
+                .is_some_and(|link| link.uri.is_some());
         if want_pointer != showing_pointer_motion.get() {
             showing_pointer_motion.set(want_pointer);
             hover_vte.set_cursor_from_name(if want_pointer { Some("pointer") } else { None });
@@ -80,18 +107,20 @@ where
     vte.add_controller(hover_controller);
 }
 
-pub(crate) fn openable_uri_at(
+pub(crate) fn openable_link_at(
     vte: &vte4::Terminal,
     x: f64,
     y: f64,
-    current_directory: Option<&str>,
-) -> Option<String> {
+    path_context: &PathContext,
+) -> Option<OpenableLink> {
     if let Some(uri) = vte.check_hyperlink_at(x, y) {
-        return Some(uri.to_string());
+        // An OSC 8 hyperlink's visible label is not its target, so the
+        // target is what gets copied.
+        return Some(OpenableLink { text: display_text_for_uri(&uri), uri: Some(uri.to_string()) });
     }
 
     let (matched, _tag) = vte.check_match_at(x, y);
-    matched.as_deref().and_then(|text| openable_uri_from_match_text(text, current_directory))
+    matched.as_deref().and_then(|text| openable_link_from_match_text(text, path_context))
 }
 
 pub(crate) fn launch_uri(uri: &str) -> bool {
@@ -122,17 +151,23 @@ pub(crate) fn display_text_for_uri(uri: &str) -> String {
     parse_file_uri(uri).unwrap_or_else(|| uri.to_string())
 }
 
-pub(crate) fn openable_uri_from_match_text(
+/// Turn text matched by one of the link regexes into a link.
+///
+/// The link's text is the match as it appears on screen. A path is never
+/// rewritten for copying: expanding `~` or prepending the working directory
+/// would produce a path the user did not see, and a wrong one whenever the
+/// pane's shell runs on another host.
+pub(crate) fn openable_link_from_match_text(
     match_text: &str,
-    current_directory: Option<&str>,
-) -> Option<String> {
+    path_context: &PathContext,
+) -> Option<OpenableLink> {
     let trimmed = trim_openable_match(match_text);
     if trimmed.is_empty() {
         return None;
     }
 
     if OPENABLE_URI_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix)) {
-        return Some(trimmed.to_string());
+        return Some(OpenableLink { text: trimmed.to_string(), uri: Some(trimmed.to_string()) });
     }
 
     let path_text = strip_editor_position_suffix(trimmed);
@@ -140,8 +175,14 @@ pub(crate) fn openable_uri_from_match_text(
         return None;
     }
 
-    let path = resolve_openable_path(path_text, current_directory)?;
-    Some(gtk4::gio::File::for_path(path).uri().to_string())
+    let uri = match path_context {
+        PathContext::Local { current_directory } => {
+            resolve_openable_path(path_text, current_directory.as_deref())
+                .map(|path| gtk4::gio::File::for_path(path).uri().to_string())
+        }
+        PathContext::Remote => None,
+    };
+    Some(OpenableLink { text: trimmed.to_string(), uri })
 }
 
 fn register_openable_match(vte: &vte4::Terminal, pattern: &str) {
@@ -164,7 +205,7 @@ fn register_openable_match(vte: &vte4::Terminal, pattern: &str) {
 }
 
 fn trim_openable_match(match_text: &str) -> &str {
-    match_text.trim_end_matches(['.', ',', ';', '!', '?', ')', ']', '}', '>'])
+    match_text.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}', '>', '$', '#', '%'])
 }
 
 fn strip_editor_position_suffix(path: &str) -> &str {
@@ -235,11 +276,91 @@ pub fn with_test_uri_launcher<R>(
 
 #[cfg(test)]
 mod tests {
-    use super::{launch_uri, openable_uri_from_match_text, parse_file_uri, with_test_uri_launcher};
+    use super::{
+        OpenableLink, PathContext, launch_uri, openable_link_from_match_text, parse_file_uri,
+        with_test_uri_launcher,
+    };
     use gtk4::gio;
     use gtk4::prelude::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    fn local(current_directory: Option<&str>) -> PathContext {
+        PathContext::Local { current_directory: current_directory.map(str::to_string) }
+    }
+
+    fn openable_uri_from_match_text(
+        match_text: &str,
+        current_directory: Option<&str>,
+    ) -> Option<String> {
+        openable_link_from_match_text(match_text, &local(current_directory))
+            .and_then(|link| link.uri)
+    }
+
+    fn link_text(match_text: &str, path_context: &PathContext) -> Option<String> {
+        openable_link_from_match_text(match_text, path_context).map(|link| link.text)
+    }
+
+    /// Copy Link must copy the path as shown, not the local file it would
+    /// open: `~` stays `~`, and the shell prompt's `$` is not part of it.
+    #[test]
+    fn home_relative_path_copies_as_displayed() {
+        let link = openable_link_from_match_text("~/Projects/RetroWork$", &local(None))
+            .expect("prompt path is a link");
+        assert_eq!(link.text, "~/Projects/RetroWork");
+        let home = gtk4::glib::home_dir().join("Projects/RetroWork");
+        assert_eq!(link.uri, Some(gio::File::for_path(home).uri().to_string()));
+    }
+
+    #[test]
+    fn relative_path_copies_without_working_directory() {
+        assert_eq!(
+            link_text("src/main.rs:42:7", &local(Some("/workspace/rttx"))),
+            Some("src/main.rs:42:7".into())
+        );
+    }
+
+    #[test]
+    fn prompt_and_sentence_characters_are_not_part_of_a_path() {
+        for suffix in ["$", "#", "%", ":", ".", ","] {
+            assert_eq!(
+                link_text(&format!("/tmp/rttx.log{suffix}"), &local(None)),
+                Some("/tmp/rttx.log".into()),
+                "suffix {suffix:?}"
+            );
+        }
+    }
+
+    /// A path printed by a remote shell names a file on that host. It can be
+    /// copied, but must not open whatever sits at the same path locally.
+    #[test]
+    fn remote_path_can_be_copied_but_not_opened() {
+        for path in ["/etc/hosts", "~/notes.txt", "src/main.rs:42"] {
+            assert_eq!(
+                openable_link_from_match_text(path, &PathContext::Remote),
+                Some(OpenableLink { text: path.into(), uri: None }),
+            );
+        }
+    }
+
+    #[test]
+    fn remote_url_can_still_be_opened() {
+        assert_eq!(
+            openable_link_from_match_text("https://example.com/docs", &PathContext::Remote),
+            Some(OpenableLink {
+                text: "https://example.com/docs".into(),
+                uri: Some("https://example.com/docs".into()),
+            }),
+        );
+    }
+
+    #[test]
+    fn relative_path_without_working_directory_can_only_be_copied() {
+        assert_eq!(
+            openable_link_from_match_text("src/main.rs", &local(None)),
+            Some(OpenableLink { text: "src/main.rs".into(), uri: None }),
+        );
+    }
 
     #[test]
     fn parse_standard_vte_uri() {

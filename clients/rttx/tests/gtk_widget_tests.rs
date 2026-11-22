@@ -1218,6 +1218,28 @@ fn persistent_terminal_plain_click_does_not_launch_url() {
     window.close();
 }
 
+/// The highlighted path in a shell prompt must stop before the prompt
+/// character, so Copy Link and Ctrl+click act on the path alone.
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn path_match_excludes_trailing_prompt_character() {
+    require_display!();
+
+    let term = rttx::terminal::widget::TerminalWidget::new("prompt-link", None);
+    let window = present_widget(&term);
+    term.vte().feed(b"etf@host:~/Projects/RetroWork$ ls\r\n");
+
+    assert!(
+        wait_for_match_coords(term.vte(), "~/Projects/RetroWork", 1000).is_some(),
+        "prompt path must match without its trailing `$`"
+    );
+    assert!(
+        find_match_coords(term.vte(), "~/Projects/RetroWork$").is_none(),
+        "the prompt character must not be part of the match"
+    );
+    window.close();
+}
+
 // ── PersistentPaneView tests ─────────────────────────────────────
 
 #[test]

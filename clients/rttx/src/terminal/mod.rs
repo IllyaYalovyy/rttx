@@ -139,6 +139,32 @@ pub const fn should_open_context_menu(mods: gtk4::gdk::ModifierType) -> bool {
     !mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK)
 }
 
+/// Where the paths printed in `widget`'s pane live.
+///
+/// A pane belongs to the visible workspace whenever the pointer can reach
+/// it, so that workspace's host decides. A widget outside a window (tests)
+/// counts as local.
+pub(crate) fn path_context_for(
+    widget: &impl IsA<gtk4::Widget>,
+    current_directory: Option<String>,
+) -> links::PathContext {
+    let host_key = widget
+        .root()
+        .and_then(|root| root.downcast::<crate::window::Window>().ok())
+        .map_or_else(|| crate::host::LOCAL_KEY.into(), |window| window.visible_session_host_key());
+    path_context_for_host(&host_key, current_directory)
+}
+
+/// Paths in a pane on the local host resolve against its working directory;
+/// paths in a pane on any other host are not on this machine.
+fn path_context_for_host(host_key: &str, current_directory: Option<String>) -> links::PathContext {
+    if host_key == crate::host::LOCAL_KEY {
+        links::PathContext::Local { current_directory }
+    } else {
+        links::PathContext::Remote
+    }
+}
+
 /// Populate a `gio::Menu` with places visible on the given host key.
 ///
 /// Each item triggers `win.open-place` with the place path as parameter.
@@ -1845,6 +1871,24 @@ mod pane_passive_tests {
         let place = crate::places::Place::from_cwd("/home/user/projects/rttx", vec![]);
         assert_eq!(place.name, "rttx");
         assert_eq!(place.path, "/home/user/projects/rttx");
+    }
+
+    #[test]
+    fn local_host_paths_resolve_against_the_pane_directory() {
+        assert_eq!(
+            super::path_context_for_host(crate::host::LOCAL_KEY, Some("/workspace".into())),
+            super::links::PathContext::Local { current_directory: Some("/workspace".into()) }
+        );
+    }
+
+    /// A remote pane's working directory is a path on the remote host, so it
+    /// must not become a base for resolving local files.
+    #[test]
+    fn remote_host_paths_are_not_resolved_locally() {
+        assert_eq!(
+            super::path_context_for_host("user@example.com", Some("/workspace".into())),
+            super::links::PathContext::Remote
+        );
     }
 
     #[test]

@@ -69,7 +69,7 @@ mod imp {
         pub status_label: gtk4::Label,
         pub search_bar: gtk4::SearchBar,
         pub search_entry: gtk4::SearchEntry,
-        pub last_match_at_click: RefCell<Option<String>>,
+        pub last_match_at_click: RefCell<Option<links::OpenableLink>>,
         pub places_submenu: gtk4::gio::Menu,
         pub context_menu: RefCell<Option<gtk4::PopoverMenu>>,
     }
@@ -206,7 +206,9 @@ mod imp {
             links::configure_openable_matches(&self.vte);
             let link_target = obj.downgrade();
             links::install_openable_link_controllers(&self.vte, move || {
-                link_target.upgrade().and_then(|pane| pane.current_directory())
+                link_target.upgrade().map_or(links::PathContext::Remote, |pane| {
+                    crate::terminal::path_context_for(&pane, pane.current_directory())
+                })
             });
 
             // Hold output while button 1 drags a selection (#1108). A legacy
@@ -278,10 +280,10 @@ mod imp {
             copy_link_action.connect_activate(move |_, _| {
                 let Some(obj) = obj_weak.upgrade() else { return };
                 let matched = obj.imp().last_match_at_click.borrow().clone();
-                if let Some(uri) = matched
+                if let Some(link) = matched
                     && let Some(display) = gtk4::gdk::Display::default()
                 {
-                    display.clipboard().set_text(&links::display_text_for_uri(&uri));
+                    display.clipboard().set_text(&link.text);
                 }
             });
 
@@ -289,7 +291,7 @@ mod imp {
             open_link_action.connect_activate(move |_, _| {
                 let Some(obj) = obj_weak.upgrade() else { return };
                 let matched = obj.imp().last_match_at_click.borrow().clone();
-                if let Some(uri) = matched {
+                if let Some(uri) = matched.and_then(|link| link.uri) {
                     links::launch_uri(&uri);
                 }
             });
@@ -351,15 +353,12 @@ mod imp {
                     return;
                 }
                 if let Some(obj) = obj_weak.upgrade() {
-                    let matched = links::openable_uri_at(
-                        &obj.imp().vte,
-                        x,
-                        y,
-                        obj.current_directory().as_deref(),
-                    );
-                    let has_link = matched.is_some();
-                    copy_link_ref.set_enabled(has_link);
-                    open_link_ref.set_enabled(has_link);
+                    let path_context =
+                        crate::terminal::path_context_for(&obj, obj.current_directory());
+                    let matched = links::openable_link_at(&obj.imp().vte, x, y, &path_context);
+                    copy_link_ref.set_enabled(matched.is_some());
+                    open_link_ref
+                        .set_enabled(matched.as_ref().is_some_and(|link| link.uri.is_some()));
                     obj.imp().last_match_at_click.replace(matched);
 
                     let host_key = obj
