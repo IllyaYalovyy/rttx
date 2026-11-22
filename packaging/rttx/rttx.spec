@@ -11,7 +11,7 @@
 %global app_id io.github.IllyaYalovyy.rttx
 
 Name:           rttx
-Version:        1.1.4
+Version:        1.1.5
 # build-srpm.sh injects `%%global snapinfo .YYYYMMDDgitHASH` (and %%rttx_commit)
 # at the top of the spec it packs into the SRPM for untagged snapshot builds.
 Release:        1%{?snapinfo}%{?dist}
@@ -110,6 +110,9 @@ RUST_TEST_THREADS=5 %cargo_test -- -p rttx-proto -p rttx-server
 %{_mandir}/man1/rttx-server.1*
 
 %changelog
+* Sun Nov 22 2026 Illya Yalovyy <1623643+IllyaYalovyy@users.noreply.github.com> - 1.1.5-1
+- Save window state in the background so a slow disk cannot freeze the window.
+
 * Sat Nov 21 2026 Illya Yalovyy <1623643+IllyaYalovyy@users.noreply.github.com> - 1.1.4-1
 - Restore the Flatpak build and stabilize the release tests.
 
