@@ -32,6 +32,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.6" date="2026-11-22">
+      <description>
+        <p>"Copy Link" on a file path copies the path exactly as it appears in the terminal, without the shell prompt's trailing character and without rewriting the path. In a workspace on a remote host, file paths can be copied but no longer open a local file of the same name.</p>
+      </description>
+    </release>
     <release version="1.1.5" date="2026-11-22">
       <description>
         <p>The window no longer freezes while rttx saves its state on a slow or busy disk.</p>
