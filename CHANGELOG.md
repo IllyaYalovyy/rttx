@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-11-22
+
 ### Fixed
 - "Copy Link" on a file path copies the path exactly as it appears in the
   terminal. It no longer picks up the shell prompt's trailing `$`, `#` or `%`,
@@ -576,7 +578,8 @@ Initial release — a tiling terminal emulator for GNOME built with Rust, GTK4, 
 - Workspace state persists locally only — no remote sync
 - Single window only — multi-window support planned for a future release
 
-[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/IllyaYalovyy/rttx/compare/v1.1.2...v1.1.3
