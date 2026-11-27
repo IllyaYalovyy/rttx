@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Restore the visibility and width of both sidebars after restarting rttx, and
+  keep their header buttons in sync with keyboard shortcuts.
+
 ## [1.1.6] - 2026-11-22
 
 ### Fixed

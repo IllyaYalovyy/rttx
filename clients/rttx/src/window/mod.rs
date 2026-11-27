@@ -26,7 +26,9 @@ use crate::workspace::{
     self, Direction, LayoutNode, MAX_SPLIT_DEPTH, PaneRecovery, PaneSource, SplitOrientation,
     StartupStep, WindowState, WorkspaceColor, WorkspaceState,
 };
-use crate::workspace_state::{EndpointEventTransition, PaneRekey, WorkspacePaneRestore};
+use crate::workspace_state::{
+    EndpointEventTransition, PaneRekey, WorkspacePaneRestore, capture_sidebar_width,
+};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -47,6 +49,8 @@ mod imp {
     pub struct Window {
         pub left_paned: gtk4::Paned,
         pub right_paned: gtk4::Paned,
+        pub left_sidebar_toggle: gtk4::ToggleButton,
+        pub right_sidebar_toggle: gtk4::ToggleButton,
         pub devel_badge: gtk4::Label,
         pub sidebar_list: gtk4::ListBox,
         pub session_stack: gtk4::Stack,
@@ -108,11 +112,11 @@ mod imp {
             obj.set_icon_name(Some(config::icon_name()));
 
             let header = adw::HeaderBar::new();
-            let toggle_sidebar = gtk4::ToggleButton::new();
+            let toggle_sidebar = &self.left_sidebar_toggle;
             toggle_sidebar.set_icon_name("sidebar-show-symbolic");
             toggle_sidebar.set_tooltip_text(Some("Toggle sidebar"));
             toggle_sidebar.set_active(true);
-            header.pack_start(&toggle_sidebar);
+            header.pack_start(toggle_sidebar);
 
             self.new_button.set_icon_name("list-add-symbolic");
             self.new_button.set_tooltip_text(Some("New workspace"));
@@ -144,11 +148,12 @@ mod imp {
                 header.pack_start(&self.devel_badge);
             }
 
-            let toggle_utility_sidebar = gtk4::ToggleButton::with_label("Tools");
+            let toggle_utility_sidebar = &self.right_sidebar_toggle;
+            toggle_utility_sidebar.set_label("Tools");
             toggle_utility_sidebar.set_tooltip_text(Some("Toggle tools sidebar"));
             toggle_utility_sidebar.set_active(true);
             toggle_utility_sidebar.add_css_class("flat");
-            header.pack_end(&toggle_utility_sidebar);
+            header.pack_end(toggle_utility_sidebar);
 
             let menu_button = gtk4::MenuButton::new();
             menu_button.set_icon_name("open-menu-symbolic");
@@ -340,12 +345,17 @@ mod imp {
             self.left_paned.set_shrink_end_child(false);
             self.left_paned.set_position(220);
 
-            let utility_panel = self.utility_sidebar_box.clone();
+            let window = obj.downgrade();
             toggle_sidebar.connect_toggled(move |btn| {
-                sidebar_scroll.set_visible(btn.is_active());
+                if let Some(window) = window.upgrade() {
+                    window.update_sidebar_visibility(true, btn.is_active());
+                }
             });
+            let window = obj.downgrade();
             toggle_utility_sidebar.connect_toggled(move |btn| {
-                utility_panel.set_visible(btn.is_active());
+                if let Some(window) = window.upgrade() {
+                    window.update_sidebar_visibility(false, btn.is_active());
+                }
             });
 
             let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
@@ -400,7 +410,11 @@ impl Window {
             .and_then(|id| workspaces.iter().position(|ws| ws.uuid == *id))
             .unwrap_or(0);
         let mut state = if workspaces.is_empty() {
-            WindowState::default()
+            WindowState {
+                left_sidebar_width: ui.left_sidebar_width,
+                right_sidebar_width: ui.right_sidebar_width,
+                ..WindowState::default()
+            }
         } else {
             WindowState {
                 workspaces,
@@ -438,13 +452,11 @@ impl Window {
 
         self.imp().left_paned.set_position(left_sidebar_width);
 
-        let right_paned = self.imp().right_paned.clone();
-        right_paned.connect_realize(move |paned| {
-            let total = paned.width();
-            if total > 0 {
-                paned.set_position((total - right_sidebar_width).max(0));
-            }
-        });
+        self.imp().left_sidebar_toggle.set_active(ui.left_sidebar_visible);
+        self.imp().right_sidebar_toggle.set_active(ui.right_sidebar_visible);
+        if ui.right_sidebar_visible {
+            Self::restore_sidebar_width(&self.imp().right_paned, false, right_sidebar_width);
+        }
 
         if let Some(row) = self.imp().sidebar_list.row_at_index(active_index as i32) {
             self.imp().sidebar_list.select_row(Some(&row));
@@ -464,6 +476,45 @@ impl Window {
         }
     }
 
+    fn update_sidebar_visibility(&self, left: bool, visible: bool) {
+        let imp = self.imp();
+        let (paned, panel) = if left {
+            (&imp.left_paned, imp.left_paned.start_child().expect("left sidebar panel"))
+        } else {
+            (&imp.right_paned, imp.utility_sidebar_box.clone().upcast())
+        };
+        let measured = if left { paned.position() } else { paned.width() - paned.position() };
+        let width = {
+            let mut state = imp.state.borrow_mut();
+            let width =
+                if left { &mut state.left_sidebar_width } else { &mut state.right_sidebar_width };
+            *width =
+                capture_sidebar_width(*width, measured, panel.is_visible() && paned.is_realized());
+            *width
+        };
+        panel.set_visible(visible);
+        if visible && paned.is_realized() {
+            Self::restore_sidebar_width(paned, left, width);
+        }
+    }
+
+    fn restore_sidebar_width(paned: &gtk4::Paned, left: bool, width: i32) {
+        // Showing a sidebar reallocates both paned widgets. Wait for a layout
+        // pass before computing the right divider from its new total width.
+        let pending_layout = std::cell::Cell::new(true);
+        paned.add_tick_callback(move |paned, _| {
+            let panel = if left { paned.start_child() } else { paned.end_child() };
+            if !panel.is_some_and(|panel| panel.is_visible()) {
+                return glib::ControlFlow::Break;
+            }
+            if paned.width() <= 0 || pending_layout.replace(false) {
+                return glib::ControlFlow::Continue;
+            }
+            paned.set_position(if left { width } else { (paned.width() - width).max(0) });
+            glib::ControlFlow::Break
+        });
+    }
+
     /// Snapshot the window state and hand it to the background writer.
     ///
     /// The snapshot is taken here on the GTK thread; the file writes and
@@ -477,12 +528,20 @@ impl Window {
         state.width = width;
         state.height = height;
         state.is_maximized = self.is_maximized();
-        state.left_sidebar_width = imp.left_paned.position();
+        let left_visible = imp.left_sidebar_toggle.is_active();
+        let right_visible = imp.right_sidebar_toggle.is_active();
+        state.left_sidebar_width = capture_sidebar_width(
+            state.left_sidebar_width,
+            imp.left_paned.position(),
+            left_visible && imp.left_paned.is_realized(),
+        );
         let right_total = imp.right_paned.width();
         let right_pos = imp.right_paned.position();
-        if right_total > 0 && imp.utility_sidebar_box.is_visible() {
-            state.right_sidebar_width = (right_total - right_pos).max(0);
-        }
+        state.right_sidebar_width = capture_sidebar_width(
+            state.right_sidebar_width,
+            right_total - right_pos,
+            right_visible && imp.right_paned.is_realized(),
+        );
 
         let active_index = imp.sidebar_list.selected_row().map_or(0, |r| r.index() as usize);
         state.active_workspace_index = active_index;
@@ -545,6 +604,8 @@ impl Window {
             is_maximized: state.is_maximized,
             left_sidebar_width: state.left_sidebar_width,
             right_sidebar_width: state.right_sidebar_width,
+            left_sidebar_visible: left_visible,
+            right_sidebar_visible: right_visible,
             ..Default::default()
         };
         let cache = crate::store::models::runtime_cache::RuntimeCache {

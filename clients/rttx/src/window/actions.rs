@@ -25,8 +25,8 @@ impl Window {
             ("prev-session", |w| w.cycle_session(-1)),
             ("next-session", |w| w.cycle_session(1)),
             ("toggle-sidebar", |w| {
-                let panel = w.imp().left_paned.start_child().expect("left sidebar panel");
-                panel.set_visible(!panel.is_visible());
+                let toggle = &w.imp().left_sidebar_toggle;
+                toggle.set_active(!toggle.is_active());
             }),
             ("fullscreen", |w| {
                 if w.is_fullscreen() {
@@ -55,8 +55,8 @@ impl Window {
                 w.add_direct_session();
             }),
             ("toggle-utility-sidebar", |w| {
-                let sidebar = &w.imp().utility_sidebar_box;
-                sidebar.set_visible(!sidebar.is_visible());
+                let toggle = &w.imp().right_sidebar_toggle;
+                toggle.set_active(!toggle.is_active());
             }),
             ("add-current-host", Self::do_add_current_host),
             ("add-current-place", Self::do_add_current_path_to_places),

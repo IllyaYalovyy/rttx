@@ -239,7 +239,13 @@ impl ClientStore {
     #[must_use]
     pub fn load_ui_state(&self) -> LoadOutcome<models::ui::UiState> {
         let path = self.paths.state().join("ui.json");
-        atomic_load(&path, models::ui::SCHEMA, models::ui::CURRENT_VERSION, &self.paths.backups())
+        io::atomic_load_with_migration(
+            &path,
+            models::ui::SCHEMA,
+            models::ui::CURRENT_VERSION,
+            &self.paths.backups(),
+            models::ui::migrate,
+        )
     }
 
     /// Save UI state atomically with an envelope wrapper.
@@ -805,6 +811,71 @@ mod tests {
         let ui = outcome.into_value().unwrap();
         assert_eq!(ui.window_width, 900);
         assert_eq!(ui.window_height, 600);
+        assert!(ui.left_sidebar_visible && ui.right_sidebar_visible);
+    }
+
+    #[test]
+    fn ui_sidebar_visibility_round_trips_all_combinations() {
+        let (_tmp, store) = test_store();
+        for (left, right) in [(true, true), (false, true), (true, false), (false, false)] {
+            let ui = models::ui::UiState {
+                left_sidebar_visible: left,
+                right_sidebar_visible: right,
+                ..Default::default()
+            };
+            store.save_ui_state(&ui).unwrap();
+            assert_eq!(store.load_ui_state().into_value().unwrap(), ui);
+        }
+    }
+
+    #[test]
+    fn ui_v1_sidebar_visibility_migrates_without_losing_geometry() {
+        let (_tmp, store) = test_store();
+        let ui = models::ui::UiState {
+            window_width: 1400,
+            left_sidebar_width: 280,
+            right_sidebar_width: 400,
+            left_sidebar_visible: false,
+            right_sidebar_visible: false,
+            ..Default::default()
+        };
+        let path = store.paths.state().join("ui.json");
+        let envelope = DocumentEnvelope::new(models::ui::SCHEMA, 1, &ui);
+        io::atomic_save(&path, &envelope).unwrap();
+        let migrated = store.load_ui_state().into_value().unwrap();
+        assert_eq!(
+            migrated,
+            models::ui::UiState {
+                left_sidebar_visible: true,
+                right_sidebar_visible: true,
+                ..ui.clone()
+            }
+        );
+
+        // A deliberately hidden V2 sidebar must not be reset on the next launch.
+        store.save_ui_state(&ui).unwrap();
+        assert_eq!(store.load_ui_state().into_value().unwrap(), ui);
+    }
+
+    #[test]
+    fn ui_v1_backup_migrates_when_primary_is_malformed() {
+        let (_tmp, store) = test_store();
+        let path = store.paths.state().join("ui.json");
+        let ui = models::ui::UiState {
+            left_sidebar_visible: false,
+            right_sidebar_visible: false,
+            ..Default::default()
+        };
+        io::atomic_save(
+            &path.with_extension("bak"),
+            &DocumentEnvelope::new(models::ui::SCHEMA, 1, ui),
+        )
+        .unwrap();
+        std::fs::write(&path, "bad json").unwrap();
+        let outcome = store.load_ui_state();
+        assert!(matches!(outcome, LoadOutcome::Recovered(_)));
+        let recovered = outcome.into_value().unwrap();
+        assert!(recovered.left_sidebar_visible && recovered.right_sidebar_visible);
     }
 
     #[test]

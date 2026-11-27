@@ -134,23 +134,35 @@ pub fn atomic_load<T: for<'de> Deserialize<'de> + Default>(
     max_version: u32,
     backups_dir: &Path,
 ) -> LoadOutcome<T> {
+    atomic_load_with_migration(path, expected_schema, max_version, backups_dir, |data, _| data)
+}
+
+/// Apply a document-specific migration using the version of the actual file read,
+/// including when a malformed primary is recovered from its backup.
+pub(super) fn atomic_load_with_migration<T: for<'de> Deserialize<'de> + Default>(
+    path: &Path,
+    expected_schema: Schema,
+    max_version: u32,
+    backups_dir: &Path,
+    migrate: fn(T, u32) -> T,
+) -> LoadOutcome<T> {
     let Ok(primary_json) = fs::read_to_string(path) else {
         // Distinguish "not found" (normal first run) from other read errors.
         return if path.exists() {
-            try_backup_or_default(path, expected_schema, max_version)
+            try_backup_or_default(path, expected_schema, max_version, migrate)
         } else {
             LoadOutcome::Default(T::default())
         };
     };
 
-    match try_parse::<T>(&primary_json, expected_schema, max_version) {
+    match try_parse::<T>(&primary_json, expected_schema, max_version, migrate) {
         ParseResult::Ok(data) => LoadOutcome::Loaded(data),
         ParseResult::UnsupportedVersion { found, max_supported } => {
             LoadOutcome::UnsupportedVersion { found, max_supported }
         }
         ParseResult::Malformed => {
             preserve_malformed(path, backups_dir);
-            try_backup_or_default(path, expected_schema, max_version)
+            try_backup_or_default(path, expected_schema, max_version, migrate)
         }
     }
 }
@@ -165,6 +177,7 @@ fn try_parse<T: for<'de> Deserialize<'de>>(
     json: &str,
     expected_schema: Schema,
     max_version: u32,
+    migrate: fn(T, u32) -> T,
 ) -> ParseResult<T> {
     let Ok(header) = peek_header(json) else {
         return ParseResult::Malformed;
@@ -180,7 +193,7 @@ fn try_parse<T: for<'de> Deserialize<'de>>(
     }
 
     match serde_json::from_str::<DocumentEnvelope<T>>(json) {
-        Ok(env) => ParseResult::Ok(env.data),
+        Ok(env) => ParseResult::Ok(migrate(env.data, env.version)),
         Err(_) => ParseResult::Malformed,
     }
 }
@@ -189,9 +202,11 @@ fn try_backup_or_default<T: for<'de> Deserialize<'de> + Default>(
     path: &Path,
     expected_schema: Schema,
     max_version: u32,
+    migrate: fn(T, u32) -> T,
 ) -> LoadOutcome<T> {
     if let Ok(bak_json) = fs::read_to_string(path.with_extension("bak"))
-        && let ParseResult::Ok(data) = try_parse::<T>(&bak_json, expected_schema, max_version)
+        && let ParseResult::Ok(data) =
+            try_parse::<T>(&bak_json, expected_schema, max_version, migrate)
     {
         return LoadOutcome::Recovered(data);
     }

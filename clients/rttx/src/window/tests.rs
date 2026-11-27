@@ -73,6 +73,62 @@ macro_rules! require_display {
     };
 }
 
+#[test]
+#[ignore = "requires isolated GTK harness"]
+fn sidebar_actions_and_widths_survive_window_restart() {
+    require_display!();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    crate::test_helpers::set_env("XDG_CONFIG_HOME", tmp.path());
+    crate::test_helpers::set_env("XDG_STATE_HOME", tmp.path());
+    crate::test_helpers::set_env("XDG_CACHE_HOME", tmp.path());
+    crate::test_helpers::set_env("RTTX_DISABLE_SHELL_SPAWN", "1");
+
+    let app = adw::Application::builder().application_id("com.illya.rttx.sidebar-tests").build();
+    app.register(gtk4::gio::Cancellable::NONE).unwrap();
+    let window = Window::new(&app);
+    window.present();
+    pump_events(150);
+    let imp = window.imp();
+    imp.left_paned.set_position(250);
+    imp.right_paned.set_position(imp.right_paned.width() - 340);
+    pump_events(150);
+    let left_width = imp.left_paned.position();
+    let right_width = imp.right_paned.width() - imp.right_paned.position();
+    assert!(left_width > 0 && right_width > 0);
+
+    window.lookup_action("toggle-sidebar").unwrap().activate(None);
+    window.lookup_action("toggle-utility-sidebar").unwrap().activate(None);
+    pump_events(150);
+    assert!(!imp.left_sidebar_toggle.is_active());
+    assert!(!imp.right_sidebar_toggle.is_active());
+    assert!(!imp.left_paned.start_child().unwrap().is_visible());
+    assert!(!imp.utility_sidebar_box.is_visible());
+    window.close();
+
+    let saved = store().load_ui_state().into_value().unwrap();
+    assert_eq!((saved.left_sidebar_width, saved.right_sidebar_width), (left_width, right_width));
+    assert!(!saved.left_sidebar_visible && !saved.right_sidebar_visible);
+
+    let restored = Window::new(&app);
+    restored.present();
+    pump_events(150);
+    let imp = restored.imp();
+    assert!(!imp.left_sidebar_toggle.is_active());
+    assert!(!imp.right_sidebar_toggle.is_active());
+    assert!(!imp.left_paned.start_child().unwrap().is_visible());
+    assert!(!imp.utility_sidebar_box.is_visible());
+    restored.lookup_action("toggle-sidebar").unwrap().activate(None);
+    restored.lookup_action("toggle-utility-sidebar").unwrap().activate(None);
+    pump_events(150);
+    assert!(imp.left_sidebar_toggle.is_active() && imp.right_sidebar_toggle.is_active());
+    assert!(imp.left_paned.start_child().unwrap().is_visible());
+    assert!(imp.utility_sidebar_box.is_visible());
+    assert_eq!(imp.left_paned.position(), left_width);
+    assert_eq!(imp.right_paned.width() - imp.right_paned.position(), right_width);
+    restored.close();
+}
+
 fn pump_events(max_ms: u64) {
     let ctx = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_millis(max_ms);
