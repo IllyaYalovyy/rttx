@@ -284,8 +284,10 @@ Daemon state lives under `$XDG_STATE_HOME/rttx/daemon/` (default `~/.local/state
 not in the cache directory, so it survives cache cleanup.
 
 On daemon restart: metadata is loaded, screen snapshots restore the visible viewport, and fresh
-shells are spawned in saved working directories. Clients attaching after restart receive a snapshot
-containing the restored screen plus live output from the new shell.
+shells are spawned in saved working directories. A pane whose saved directory is missing or cannot be
+entered starts in the home directory (or `/` if that is unavailable too) and says so in the terminal.
+Clients attaching after restart receive a snapshot containing the restored screen plus live output
+from the new shell.
 
 ### Wire protocol
 

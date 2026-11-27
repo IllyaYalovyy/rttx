@@ -16,6 +16,7 @@ pub mod profiling;
 pub mod protocol;
 pub mod pty;
 pub mod reply_order;
+pub mod restore_cwd;
 pub mod screen;
 pub mod server;
 pub mod shell_init;

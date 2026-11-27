@@ -145,9 +145,8 @@ impl PaneScreen {
     /// Store raw bytes for snapshot replay without running the VTE parser.
     ///
     /// This is the cheap half of [`feed`]: a memcpy into the scrollback
-    /// buffer, safe to call while holding a contended lock. Call [`parse`]
-    /// separately (potentially after releasing the lock) to run the
-    /// expensive byte-by-byte VTE state machine.
+    /// buffer. Call [`parse`] with the same bytes to run the expensive
+    /// byte-by-byte VTE state machine.
     pub fn accept_raw(&mut self, data: &[u8]) {
         self.performer.raw_bytes.extend_from_slice(data);
         if self.performer.raw_bytes.len() > self.performer.max_bytes {
@@ -160,9 +159,7 @@ impl PaneScreen {
     /// Run the VTE parser over `data`, updating cursor, modes, title, and CWD.
     ///
     /// This is the expensive half of [`feed`]: it advances the VTE state
-    /// machine byte-by-byte. Callers that need to minimize lock hold time
-    /// should call [`accept_raw`] under the lock and defer [`parse`] until
-    /// after releasing it.
+    /// machine byte-by-byte over bytes already given to [`accept_raw`].
     pub fn parse(&mut self, data: &[u8]) {
         for &byte in data {
             self.parser.advance(&mut self.performer, byte);
@@ -387,6 +384,12 @@ impl PaneScreen {
     #[must_use]
     pub fn cwd(&self) -> Option<&str> {
         self.performer.cwd.as_deref()
+    }
+
+    /// Drop the reported working directory, for when it no longer describes
+    /// the process writing to this screen.
+    pub fn forget_cwd(&mut self) {
+        self.performer.cwd = None;
     }
 
     /// Return cursor position (row, col), from the cell grid.

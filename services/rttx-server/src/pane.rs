@@ -3,6 +3,7 @@
 //! Each pane represents a single terminal within a session, backed by a PTY
 //! process and an in-memory screen state.
 
+use crate::restore_cwd::Fallback;
 use crate::screen::{ClipboardWrite, Osc52Filter, PaneScreen, strip_client_queries};
 use crate::state::layout::scrollback_log;
 use crate::state::types::{SCREEN_SNAPSHOT_SCHEMA_VERSION, ScreenSnapshotV1, TerminalModeSnapshot};
@@ -103,9 +104,9 @@ impl Pane {
 
     /// Feed PTY output into the screen state.
     ///
-    /// Combines [`accept_output`] and [`parse_and_extract`] in a single
-    /// call. Callers that need to minimize lock hold time should use the
-    /// two-phase API instead.
+    /// Filters clipboard writes, then runs [`accept_output`] and
+    /// [`parse_and_extract`]. The PTY read loop takes those steps itself
+    /// because it also sends the filtered bytes to clients.
     pub fn feed_output(&mut self, data: &[u8]) -> FeedResult {
         let clean = self.filter_clipboard_writes(data);
         self.accept_output(&clean);
@@ -132,8 +133,9 @@ impl Pane {
     /// without re-stripping. The fast path (no ESC byte) avoids any
     /// allocation beyond the `extend_from_slice` memcpy.
     ///
-    /// Call [`parse_and_extract`] afterwards (potentially after releasing
-    /// the lock) to run the expensive VTE state machine.
+    /// Call [`parse_and_extract`] with the same bytes before releasing the
+    /// workspace lock: snapshots rely on the screen having parsed all of its
+    /// raw bytes.
     pub fn accept_output(&mut self, data: &[u8]) {
         self.screen.accept_raw(data);
         if data.contains(&0x1b) {
@@ -149,30 +151,11 @@ impl Pane {
         }
     }
 
-    /// Temporarily take the screen out of this pane for out-of-lock parsing.
-    ///
-    /// Returns the screen, replacing it with a default instance. The caller
-    /// must call [`return_screen`] to put it back after parsing.
-    #[must_use]
-    pub fn take_screen(&mut self) -> PaneScreen {
-        std::mem::replace(&mut self.screen, PaneScreen::new(DEFAULT_MAX_SCROLLBACK))
-    }
-
-    /// Return a previously taken screen and extract metadata changes.
-    ///
-    /// The screen is placed back into the pane and any CWD, title, or
-    /// pending-reply changes are returned.
-    pub fn return_screen(&mut self, screen: PaneScreen) -> FeedResult {
-        self.screen = screen;
-        self.extract_metadata()
-    }
-
     /// Run the VTE parser and extract metadata changes.
     ///
     /// This is the expensive half of [`feed_output`]: it advances the VTE
     /// state machine byte-by-byte and returns any CWD, title, or DSR
-    /// reply changes. Callers that split the two phases should call this
-    /// after releasing the contended lock.
+    /// reply changes.
     pub fn parse_and_extract(&mut self, data: &[u8]) -> FeedResult {
         self.screen.parse(data);
         self.extract_metadata()
@@ -385,6 +368,16 @@ impl Pane {
             screen_bytes,
             confidential: self.no_persist,
         }
+    }
+
+    /// Record that a restored pane's shell started somewhere other than its
+    /// saved directory, and say why in the pane's terminal.
+    pub fn apply_cwd_fallback(&mut self, fallback: &Fallback) {
+        let _ = self.feed_output(fallback.notice.as_bytes());
+        // Replayed history may have reported the directory just left, which
+        // the next shell output would otherwise bring back.
+        self.screen.forget_cwd();
+        self.cwd = Some(fallback.cwd.clone());
     }
 
     /// Restore canonical pane state from a persisted screen snapshot.
@@ -1355,6 +1348,19 @@ mod tests {
     }
 
     #[test]
+    fn cwd_fallback_is_not_undone_by_a_directory_reported_in_replayed_history() {
+        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+        pane.screen.feed(b"\x1b]7;file://localhost/mnt/gone\x07");
+
+        pane.apply_cwd_fallback(&Fallback { cwd: "/home/u".into(), notice: "moved\r\n".into() });
+        let result = pane.feed_output(b"$ ");
+
+        assert_eq!(result.new_cwd, None);
+        assert_eq!(pane.cwd.as_deref(), Some("/home/u"));
+        assert!(pane.has_pending_flush(), "the notice must reach the scrollback log");
+    }
+
+    #[test]
     fn accept_output_strips_queries_from_pending_flush() {
         let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
         let data = b"hello\x1b[6nworld\x1b[c";
@@ -1389,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn take_screen_and_return_screen_equivalent_to_feed_output() {
+    fn accept_then_parse_equivalent_to_feed_output() {
         // feed_output path
         let mut pane_a = Pane::new(Uuid::new_v4(), 80, 24);
         let data = b"\x1b]0;my-title\x07\x1b]7;file://localhost/home/user\x07hello\r\n\x1b[6n";
@@ -1398,9 +1404,7 @@ mod tests {
         // two-phase path
         let mut pane_b = Pane::new(Uuid::new_v4(), 80, 24);
         pane_b.accept_output(data);
-        let mut screen = pane_b.take_screen();
-        screen.parse(data);
-        let result_b = pane_b.return_screen(screen);
+        let result_b = pane_b.parse_and_extract(data);
 
         assert_eq!(result_a.new_cwd, result_b.new_cwd);
         assert_eq!(result_a.new_title, result_b.new_title);
@@ -1408,32 +1412,6 @@ mod tests {
         assert_eq!(pane_a.cwd, pane_b.cwd);
         assert_eq!(pane_a.title, pane_b.title);
         assert_eq!(pane_a.output_seq, pane_b.output_seq);
-    }
-
-    #[test]
-    fn take_screen_returns_screen_with_accumulated_state() {
-        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
-        pane.feed_output(b"line1\r\nline2\r\n");
-        let screen = pane.take_screen();
-        assert_eq!(screen.cursor_position(), (2, 0));
-        assert!(!screen.raw_bytes().is_empty());
-    }
-
-    #[test]
-    fn return_screen_restores_screen_state() {
-        let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
-        pane.feed_output(b"hello");
-
-        let mut screen = pane.take_screen();
-        // Pane now has a fresh empty screen.
-        assert!(pane.screen.raw_bytes().is_empty());
-
-        screen.parse(b" world");
-        pane.return_screen(screen);
-
-        // Screen is restored with all accumulated state.
-        assert!(!pane.screen.raw_bytes().is_empty());
-        assert_eq!(pane.screen.cursor_position(), (0, 11));
     }
 
     #[test]
