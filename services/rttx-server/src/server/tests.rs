@@ -1534,3 +1534,44 @@ async fn reattach_succeeds_while_disconnect_cleanup_is_pending() {
     assert_eq!(writer_of(&server, runtime_id).await, Some(new_writer));
     assert_attach_blocked(&rival.attach_rw(runtime_id).await, "rival after cleanup");
 }
+
+/// Falling back to another directory must not hide a shell or PTY that fails
+/// to start: the pane stays marked as dead, keeps its saved directory and is
+/// not told that a shell started.
+#[tokio::test]
+#[traced_test]
+async fn restore_reports_spawn_failure_of_a_pane_with_an_unusable_directory() {
+    struct NoPtyEngine;
+    impl Engine for NoPtyEngine {
+        fn spawn_pane(
+            &self,
+            _pane_id: Uuid,
+            _config: &PaneSpawnConfig,
+        ) -> Result<crate::pty::Pty, crate::pty::PtyError> {
+            Err(std::io::Error::other("out of pty devices").into())
+        }
+    }
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let saved = tmp.path().join("gone").to_str().unwrap().to_string();
+    let mut server = Server::new(Box::new(temp_os(tmp.path())), test_metrics(), test_ring());
+    server.engine = Box::new(NoPtyEngine);
+    let mut rt = Workspace::new("restore".into());
+    let runtime_id = rt.id;
+    let mut pane = Pane::new(Uuid::new_v4(), 80, 24);
+    let pane_id = pane.id;
+    pane.cwd = Some(saved.clone());
+    rt.add_pane(pane);
+    server.workspaces.insert(runtime_id, Arc::new(Mutex::new(rt)));
+    let server = Arc::new(Mutex::new(server));
+
+    Server::reconstruct_workspaces(&server).await;
+
+    let server = server.lock().await;
+    let rt = server.workspaces[&runtime_id].lock().await;
+    let pane = &rt.panes[&pane_id];
+    assert_eq!(pane.exit_status, Some(-1));
+    assert_eq!(pane.cwd.as_deref(), Some(saved.as_str()));
+    assert!(pane.screen.raw_bytes().is_empty());
+    assert!(logs_contain("out of pty devices"));
+}

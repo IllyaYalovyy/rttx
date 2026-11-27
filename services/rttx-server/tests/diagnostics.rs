@@ -45,7 +45,12 @@ async fn diagnostics_with_session_and_pane() {
 
     let sid = create_workspace(&mut client, "diag-test", v3::WorkspacePolicy::Persistent).await;
     attach_rw(&mut client, &sid).await;
-    let _pane_id = create_pane(&mut client, &sid).await;
+    // The daemon names a workspace after its shell's directory as soon as the
+    // shell reports one, so give the pane a directory of the same name.
+    let cwd = tmp.path().join("diag-test");
+    std::fs::create_dir(&cwd).unwrap();
+    let cwd = cwd.to_str().map(str::to_string);
+    let _pane_id = create_pane_with_cwd(&mut client, &sid, cwd).await;
 
     // Let the pane produce some output.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -61,7 +66,7 @@ async fn diagnostics_with_session_and_pane() {
     let resp = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -96,7 +101,7 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
     let before = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -114,7 +119,7 @@ async fn diagnostics_reflects_cleanup_after_terminate() {
     let after = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -146,7 +151,7 @@ async fn diagnostics_workspace_reports_current_pane_fields() {
     let report = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };
@@ -189,7 +194,7 @@ async fn diagnostics_totals_track_multiple_workspaces() {
     let report = loop {
         match client.recv_or_timeout().await.payload {
             Some(v3::server_envelope::Payload::DiagnosticsReport(r)) => break r,
-            Some(v3::server_envelope::Payload::OutputDelta(_)) => {}
+            other if is_incidental_push(other.as_ref()) => {}
             other => panic!("expected DiagnosticsReport, got {other:?}"),
         }
     };

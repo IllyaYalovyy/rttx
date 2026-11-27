@@ -38,6 +38,10 @@ cleanup() {
 }
 
 start_test_display() {
+    # Render in software on every display. Each test gets an empty cache, so a
+    # GPU renderer recompiles its shaders before the first frame, which takes
+    # longer than behavioral tests wait for a pane to react.
+    export GSK_RENDERER="${GSK_RENDERER:-cairo}"
     # Honor an explicitly supplied display (for local interactive debugging).
     if [[ -n "${GDK_BACKEND:-}" ]]; then
         return
@@ -47,7 +51,6 @@ start_test_display() {
         chmod 700 "${display_runtime}"
         export XDG_RUNTIME_DIR="${display_runtime}"
         export GDK_BACKEND=wayland
-        export GSK_RENDERER=cairo
         export WAYLAND_DISPLAY="${display_runtime}/rttx-tests"
         weston --no-config --backend=headless --renderer=pixman \
             --width=1280 --height=1024 --idle-time=0 --socket=rttx-tests \

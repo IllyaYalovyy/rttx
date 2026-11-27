@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- A daemon restart no longer leaves a pane without a shell when its saved
+  directory is missing, is no longer a directory, or cannot be entered. The
+  shell starts in your home directory, and the pane keeps its scrollback and
+  says which directory was unavailable and why.
+- A pane that was printing output while a client attached, or while the daemon
+  saved its state, can no longer come back with a blank screen and lose its
+  scrollback.
+
 ## [1.1.6] - 2026-11-22
 
 ### Fixed

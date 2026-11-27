@@ -3,7 +3,7 @@
 //! Wraps `pty-process` to provide async PTY creation, read/write, resize,
 //! and child process lifecycle management.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
@@ -64,7 +64,7 @@ impl Pty {
             cmd = cmd.arg0(login_shell_arg0(&config.command[0]));
         }
         let effective_cwd =
-            config.cwd.as_ref().map(resolve_cwd).or_else(home_dir).filter(|p| p.is_dir());
+            config.cwd.as_deref().map(resolve_cwd).or_else(home_dir).filter(|p| p.is_dir());
         if let Some(ref cwd) = effective_cwd {
             cmd = cmd.current_dir(cwd);
         }
@@ -154,7 +154,7 @@ fn login_shell_arg0(shell_path: &str) -> String {
 }
 
 /// Resolve the user's home directory from the environment.
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
 }
 
@@ -164,18 +164,18 @@ fn home_dir() -> Option<PathBuf> {
 /// - bare `~` → `$HOME`
 /// - relative paths (no leading `/`) → `$HOME/path`
 /// - absolute paths → unchanged
-fn resolve_cwd(path: &PathBuf) -> PathBuf {
+pub(crate) fn resolve_cwd(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     if s == "~" {
-        return home_dir().unwrap_or_else(|| path.clone());
+        return home_dir().unwrap_or_else(|| path.to_path_buf());
     }
     if let Some(rest) = s.strip_prefix("~/") {
-        return home_dir().map_or_else(|| path.clone(), |h| h.join(rest));
+        return home_dir().map_or_else(|| path.to_path_buf(), |h| h.join(rest));
     }
     if path.is_relative() {
-        return home_dir().map_or_else(|| path.clone(), |h| h.join(path));
+        return home_dir().map_or_else(|| path.to_path_buf(), |h| h.join(path));
     }
-    path.clone()
+    path.to_path_buf()
 }
 
 #[cfg(test)]

@@ -4,6 +4,8 @@ mod common;
 
 use common::*;
 use rttx_proto::v3;
+use rttx_server::screen::restart_safe_scrollback;
+use rttx_server::state::types::ScreenSnapshotV1;
 use std::time::Duration;
 
 /// Create a session with a pane, write to it, stop the server, restart,
@@ -78,9 +80,7 @@ async fn reconstruct_session_after_restart() {
         };
         client.send(&input).await;
 
-        // Wait for output and serialization tick (>1s).
-        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
-            .await;
+        wait_for_persisted_screen(tmp.path(), "RECONSTRUCT_MARKER").await;
 
         // Drain any pending deltas.
         let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
@@ -138,6 +138,34 @@ async fn reconstruct_session_after_restart() {
 
         // The pane should not be exited (fresh shell was spawned).
         assert!(panes[0].exit_status.is_none(), "reconstructed pane should have a live shell");
+    }
+}
+
+/// Wait until a persisted screen holds `needle` on a line a restart keeps.
+///
+/// Output alone does not mark a workspace dirty, so the snapshot showing it
+/// can lag by the periodic snapshot interval of 30 seconds.
+async fn wait_for_persisted_screen(base_dir: &std::path::Path, needle: &str) {
+    let workspaces = base_dir.join("state/rttx/daemon/workspaces");
+    let shows_needle = |path: std::path::PathBuf| {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|json| serde_json::from_str::<ScreenSnapshotV1>(&json).ok())
+            .is_some_and(|snap| {
+                String::from_utf8_lossy(restart_safe_scrollback(&snap.screen_bytes))
+                    .contains(needle)
+            })
+    };
+    let entries = |dir: std::path::PathBuf| {
+        std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path())
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    while !entries(workspaces.clone())
+        .flat_map(|workspace| entries(workspace.join("screen")))
+        .any(shows_needle)
+    {
+        assert!(tokio::time::Instant::now() < deadline, "screen never persisted '{needle}'");
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -218,8 +246,7 @@ async fn reconstruct_session_respawns_shell_in_last_reported_cwd() {
             })
             .await;
 
-        wait_for_state_containing(tmp.path(), &uuid_str(&runtime_id), Duration::from_secs(10))
-            .await;
+        wait_for_state_containing(tmp.path(), &project_dir_string, Duration::from_secs(10)).await;
         let _ = tokio::time::timeout(Duration::from_millis(200), client.recv()).await;
 
         handle.abort();

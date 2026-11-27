@@ -429,6 +429,10 @@ impl Server {
         {
             let workspace_label = format!("\"{}\" ({})", workspace_name, short_id(runtime_id));
             let pane_short = short_id(pane_id);
+            let fallback = cwd.as_deref().and_then(|saved| {
+                crate::restore_cwd::fallback_for(saved, crate::pty::home_dir().as_deref())
+            });
+            let cwd = fallback.as_ref().map(|f| f.cwd.clone()).or(cwd);
             let pty_result = {
                 let s = crate::instrument::lock_server(server, &metrics).await;
                 let (command, env) =
@@ -451,6 +455,19 @@ impl Server {
                             let _ = rt.set_pane_exit_status(pane_id, None);
                             if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                 pane.child_pid = child_pid;
+                            }
+                            // Before the read loop starts, so the notice
+                            // precedes anything the new shell prints.
+                            if let Some(fallback) = &fallback {
+                                tracing::warn!(
+                                    "Saved directory of pane {pane_short} in workspace {workspace_label} is unavailable; shell started in {}",
+                                    fallback.cwd,
+                                );
+                                if let Some(pane) = rt.panes.get_mut(&pane_id) {
+                                    pane.apply_cwd_fallback(fallback);
+                                    let _ = rt.set_pane_cwd(pane_id, &fallback.cwd);
+                                    let _ = rt.refresh_auto_name();
+                                }
                             }
                         }
                     }
@@ -2164,7 +2181,7 @@ const CWD_POLL_INTERVAL_TICKS: u64 = 5;
 
 /// How long a PTY read loop yields after detecting mutex contention.
 ///
-/// When the Phase 1 lock hold exceeds [`MUTEX_HOLD_WARN_THRESHOLD`], the
+/// When taking the server mutex exceeds [`MUTEX_HOLD_WARN_THRESHOLD`], the
 /// read loop sleeps for this duration before continuing. This breaks the
 /// convoy effect where N read loops continuously re-acquire the mutex,
 /// starving input handlers and the serialization loop.
@@ -2283,13 +2300,27 @@ fn spawn_pty_read_loop(
                             let mut pane_context = [0u8; 16];
                             pane_context[..16].copy_from_slice(pane_id.as_bytes());
 
-                            // Phase 1: accept raw bytes under the per-workspace lock
-                            // (fast memcpy, no VTE parsing).  The server mutex is
-                            // only touched briefly to collect client senders.
-                            let (mut taken_screen, senders, writer_client, output_seq, contended, data) = {
-                                let lock_start = std::time::Instant::now();
+                            // Phase 1: accept and parse the batch in one critical
+                            // section of the per-workspace lock. Anyone else who
+                            // reads the screen therefore finds it whole, and a
+                            // client either receives this batch as a delta or finds
+                            // it in its snapshot. The server mutex is not held.
+                            let (
+                                client_ids,
+                                writer_client,
+                                output_seq,
+                                data,
+                                new_cwd,
+                                new_name,
+                                new_title,
+                                pending_replies,
+                                clipboard_writes,
+                            ) = {
                                 let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
-                                let (screen, seq, data) = if let Some(pane) = rt.panes.get_mut(&pane_id) {
+                                let client_ids: Vec<Uuid> =
+                                    rt.attached_clients.keys().copied().collect();
+                                let writer_client = rt.writer_client_id();
+                                if let Some(pane) = rt.panes.get_mut(&pane_id) {
                                     // Drop stray alternate-screen exits before anything
                                     // sees the batch: the log, the grid and every client
                                     // must agree (see PaneScreen::sanitize_output).
@@ -2304,58 +2335,18 @@ fn spawn_pty_read_loop(
                                         std::borrow::Cow::Borrowed(_) => data.clone(),
                                         std::borrow::Cow::Owned(clean) => bytes::Bytes::from(clean),
                                     };
-                                    pane.accept_output(&data);
-                                    (Some(pane.take_screen()), pane.output_seq, data)
-                                } else {
-                                    (None, 0, raw.clone())
-                                };
-                                let client_ids: Vec<Uuid> =
-                                    rt.attached_clients.keys().copied().collect();
-                                let writer_client = rt.writer_client_id();
-                                drop(rt);
-                                let s = crate::instrument::lock_server(&server, &metrics).await;
-                                let senders = s.collect_senders_for_clients(&client_ids);
-                                drop(s);
-                                let hold = lock_start.elapsed();
-                                if hold > MUTEX_HOLD_WARN_THRESHOLD {
-                                    tracing::warn!(
-                                        hold_ms = hold.as_millis() as u64,
-                                        pane = %pane_short,
-                                        workspace = %workspace_label,
-                                        "mutex held too long in PTY read loop",
-                                    );
-                                }
-                                (screen, senders, writer_client, seq, hold > MUTEX_HOLD_WARN_THRESHOLD, data)
-                            };
-
-                            // Adaptive throttle: yield when contention is detected
-                            // so other tasks (input, serialization) can acquire the
-                            // mutex instead of being starved by N read loops.
-                            if contended {
-                                tokio::time::sleep(CONTENTION_BACKOFF).await;
-                            }
-
-                            // Phase 2: VTE parsing outside any lock.
-                            if let Some(ref mut screen) = taken_screen {
-                                let _vte_span = tracing::info_span!(
-                                    target: "rttx_profile",
-                                    "vte.parse",
-                                    span_kind = "vte_parse",
-                                    pane_id = %pane_short,
-                                    bytes_parsed = batch_len,
-                                ).entered();
-                                screen.parse(&data);
-                            }
-
-                            // Phase 3: return parsed screen under per-workspace lock,
-                            // collect PTY writer from server.
-                            let (new_cwd, new_name, new_title, pending_replies, clipboard_writes, pty_writer) = {
-                                let mut rt = crate::instrument::lock_workspace(&rt_lock, &metrics).await;
-                                let client_can_answer = rt.writer_client_id().is_some();
-                                if let Some(screen) = taken_screen
-                                    && let Some(pane) = rt.panes.get_mut(&pane_id)
-                                {
-                                    let mut result = pane.return_screen(screen);
+                                    let mut result = {
+                                        let _vte_span = tracing::info_span!(
+                                            target: "rttx_profile",
+                                            "vte.parse",
+                                            span_kind = "vte_parse",
+                                            pane_id = %pane_short,
+                                            bytes_parsed = batch_len,
+                                        ).entered();
+                                        pane.accept_output(&data);
+                                        pane.parse_and_extract(&data)
+                                    };
+                                    let output_seq = pane.output_seq;
                                     // A colour query is answered by the client a round
                                     // trip later; replies the daemon generated after it
                                     // wait so the program sees them in query order.
@@ -2363,10 +2354,9 @@ fn spawn_pty_read_loop(
                                         std::mem::take(&mut result.pending_replies),
                                         result.replies_before_client_query,
                                         result.client_queries,
-                                        client_can_answer,
+                                        writer_client.is_some(),
                                         std::time::Instant::now(),
                                     );
-                                    result.pending_replies = routed.write_now;
                                     if routed.wait_started {
                                         tokio::spawn(release_held_replies_at_deadline(
                                             Arc::clone(&server),
@@ -2390,21 +2380,64 @@ fn spawn_pty_read_loop(
                                         let rev = rt.set_pane_title(pane_id, title.clone())?;
                                         Some((title, rev))
                                     });
-                                    let needs_writer = !result.pending_replies.is_empty();
-                                    drop(rt);
-                                    let writer = if needs_writer {
-                                        let s = crate::instrument::lock_server(&server, &metrics).await;
-                                        s.pty_writers.get(&pane_id).cloned()
-                                    } else {
-                                        None
-                                    };
-                                    (cwd, renamed, title, result.pending_replies, result.clipboard_writes, writer)
+                                    (
+                                        client_ids,
+                                        writer_client,
+                                        output_seq,
+                                        data,
+                                        cwd,
+                                        renamed,
+                                        title,
+                                        routed.write_now,
+                                        result.clipboard_writes,
+                                    )
                                 } else {
-                                    (None, None, None, Vec::new(), Vec::new(), None)
+                                    (
+                                        client_ids,
+                                        writer_client,
+                                        0,
+                                        raw.clone(),
+                                        None,
+                                        None,
+                                        None,
+                                        Vec::new(),
+                                        Vec::new(),
+                                    )
                                 }
                             };
 
-                            // Phase 4: write DSR replies without any lock.
+                            // Phase 2: the server mutex is only touched briefly, for
+                            // the client senders and the PTY writer.
+                            let (senders, pty_writer, contended) = {
+                                let lock_start = std::time::Instant::now();
+                                let s = crate::instrument::lock_server(&server, &metrics).await;
+                                let senders = s.collect_senders_for_clients(&client_ids);
+                                let writer = if pending_replies.is_empty() {
+                                    None
+                                } else {
+                                    s.pty_writers.get(&pane_id).cloned()
+                                };
+                                drop(s);
+                                let hold = lock_start.elapsed();
+                                if hold > MUTEX_HOLD_WARN_THRESHOLD {
+                                    tracing::warn!(
+                                        hold_ms = hold.as_millis() as u64,
+                                        pane = %pane_short,
+                                        workspace = %workspace_label,
+                                        "mutex held too long in PTY read loop",
+                                    );
+                                }
+                                (senders, writer, hold > MUTEX_HOLD_WARN_THRESHOLD)
+                            };
+
+                            // Adaptive throttle: yield when contention is detected
+                            // so other tasks (input, serialization) can acquire the
+                            // mutex instead of being starved by N read loops.
+                            if contended {
+                                tokio::time::sleep(CONTENTION_BACKOFF).await;
+                            }
+
+                            // Phase 3: write DSR replies without any lock.
                             if let Some(writer) = pty_writer {
                                 let mut w = writer.lock().await;
                                 for reply in &pending_replies {
@@ -2421,7 +2454,7 @@ fn spawn_pty_read_loop(
                                 }
                             }
 
-                            // Phase 5: broadcast to clients without any lock.
+                            // Phase 4: broadcast to clients without any lock.
                             let client_data = crate::screen::strip_client_queries(&data);
                             let mut all_overflows = Vec::new();
                             if !client_data.is_empty() {
