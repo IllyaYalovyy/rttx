@@ -44,6 +44,13 @@ class TestSidebar(unittest.TestCase):
         self.assertIsNotNone(btn, "'Tools' toggle button not found in AT-SPI tree")
         return btn
 
+    def _workspace_toggle_button(self) -> Atspi.Accessible:
+        btn = find_by_role_and_name(
+            self.fixture.atspi_app, Atspi.Role.TOGGLE_BUTTON, "Toggle sidebar"
+        )
+        self.assertIsNotNone(btn, "Workspace sidebar toggle not found")
+        return btn
+
     def test_sidebar_vertical_layout(self) -> None:
         """The utility sidebar content must sit below the tab bar, not beside it.
 
@@ -124,6 +131,52 @@ class TestSidebar(unittest.TestCase):
             "Terminal width did not increase after hiding the tools sidebar.\n"
             f"Before: {w_before}px, After: {w_after}px",
         )
+
+    def test_hidden_tools_sidebar_survives_restart(self) -> None:
+        """A hidden Tools sidebar must stay hidden after saving and restarting."""
+        def terminal_width() -> int:
+            terminals = wait_for_role(self.fixture.atspi_app, Atspi.Role.TERMINAL, count=1)
+            self.assertTrue(terminals)
+            extents = get_extents(terminals[0])
+            self.assertIsNotNone(extents)
+            return extents[2]
+
+        visible_width = terminal_width()
+        click(self._tools_toggle_button())
+        time.sleep(0.6)
+        self.assertGreater(terminal_width(), visible_width)
+        self.fixture.activate_action("save-state")
+        self.fixture.restart_app()
+        wait_for_role(self.fixture.atspi_app, Atspi.Role.TERMINAL, count=1)
+        time.sleep(0.6)
+
+        self.assertGreater(
+            terminal_width(), visible_width,
+            "Tools sidebar became visible again after restart",
+        )
+
+    def test_sidebar_visibility_combinations_survive_restart(self) -> None:
+        """Both sidebar toggles must reflect the independently restored panels."""
+        for left, right in [(False, True), (False, False), (True, False), (True, True)]:
+            with self.subTest(left=left, right=right):
+                for button, visible in [
+                    (self._workspace_toggle_button(), left),
+                    (self._tools_toggle_button(), right),
+                ]:
+                    if button.get_state_set().contains(Atspi.StateType.PRESSED) != visible:
+                        click(button)
+                time.sleep(0.4)
+                self.fixture.activate_action("save-state")
+                self.fixture.restart_app()
+                wait_for_role(self.fixture.atspi_app, Atspi.Role.TERMINAL, count=1)
+                self.assertEqual(
+                    self._workspace_toggle_button().get_state_set().contains(Atspi.StateType.PRESSED),
+                    left,
+                )
+                self.assertEqual(
+                    self._tools_toggle_button().get_state_set().contains(Atspi.StateType.PRESSED),
+                    right,
+                )
 
 
 if __name__ == "__main__":

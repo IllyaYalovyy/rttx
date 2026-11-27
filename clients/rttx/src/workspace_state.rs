@@ -6,6 +6,11 @@ use crate::workspace::{
 use rttx_proto::v3;
 use std::collections::BTreeSet;
 
+/// A hidden or not-yet-allocated sidebar has no meaningful measured width.
+pub(crate) const fn capture_sidebar_width(previous: i32, measured: i32, visible: bool) -> i32 {
+    if visible && measured > 0 { measured } else { previous }
+}
+
 /// Routing metadata for a daemon-managed terminal pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedTerminalBinding {
@@ -697,6 +702,15 @@ mod tests {
     use crate::test_helpers::{
         hsplit, managed_session, managed_session_with_runtime, term, window_state, workspace,
     };
+
+    #[test]
+    fn sidebar_width_preserves_last_visible_measurement() {
+        let resized = capture_sidebar_width(220, 380, true);
+        assert_eq!(resized, 380);
+        assert_eq!(capture_sidebar_width(resized, 0, false), resized);
+        assert_eq!(capture_sidebar_width(resized, 900, false), resized);
+        assert_eq!(capture_sidebar_width(resized, 0, true), resized);
+    }
 
     fn pane_snapshot(pane_id: &str, title: &str, cwd: &str, scrollback: &[u8]) -> v3::PaneSnapshot {
         v3::PaneSnapshot {

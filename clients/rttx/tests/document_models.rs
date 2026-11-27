@@ -457,7 +457,7 @@ fn ui_rejects_future_version() {
 
     let outcome: LoadOutcome<UiState> =
         atomic_load(&path, ui::SCHEMA, ui::CURRENT_VERSION, &backups);
-    assert!(matches!(outcome, LoadOutcome::UnsupportedVersion { found: 10, max_supported: 1 }));
+    assert!(matches!(outcome, LoadOutcome::UnsupportedVersion { found: 10, max_supported: 2 }));
 }
 
 #[test]
